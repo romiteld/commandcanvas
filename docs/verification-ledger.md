@@ -48,6 +48,9 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 | 2026-08-27 | 2 | ESLint, TypeScript, 23 Vitest tests, and optimized Next.js build completed with zero failures | WORKING |
 | 2026-08-27 | 2 | Production server plus Playwright Chromium projects: 8 passed, 6 deliberately project-skipped, 0 failed | VERIFIED IN BROWSER |
 | 2026-08-27 | 2 | Supabase project status read-back returned `ACTIVE_HEALTHY` on Postgres 17 in `us-east-1` | RESOURCE READY; DATA PATH UNVERIFIED |
+| 2026-08-27 | 3 | ESLint, TypeScript, 57 Vitest tests, and optimized Next.js build completed with zero failures | WORKING |
+| 2026-08-27 | 3 | Three Playwright projects: 10 passed, 9 deliberately project-skipped, 0 failed | VERIFIED IN BROWSER |
+| 2026-08-27 | 3 | Chrome 152 testing feature exposed native `document.modelContext`; `getTools()` returned the exact eight-tool catalog with no page errors | VERIFIED IN CHROME 152 TEST MODE |
 
 ## Checkpoint 1 — local semantic canvas
 
@@ -105,6 +108,38 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 - Direct creation of sketch and diagram objects in the browser; these types are schema- and renderer-covered only until the sketch checkpoint.
 - Every integration listed as unverified in Checkpoint 1 unless explicitly updated above.
+
+### CUT
+
+- The checkpoint introduced none of the globally locked CUT features.
+
+## Checkpoint 3 — WebMCP-native canvas operations
+
+### WORKING
+
+- A central phase table controls eight stable tools: canvas read, object create/transform/state/discard, sketch transformation, packet preparation, and staged packet-send request.
+- Static mode registers the full stable catalog once. Dynamic mode adds or abort-unregisters the same stable descriptors by phase behind `NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION=true`.
+- Both modes call the same execute-time Zod, room-phase, membership, mutation-permission, and host-role guards.
+- Registrations use one lifecycle `AbortController` each; invocation callbacks receive and propagate the browser-provided cancellation signal.
+- Registered descriptors contain the current supported fields only: `name`, `description`, `inputSchema`, `annotations`, and `execute`.
+- `readOnlyHint` and `untrustedContentHint` are set intentionally. No deprecated `navigator.modelContext`, `outputSchema`, `updateTool`, or `unregisterTool` surface is assumed.
+- `request_packet_send` accepts only a packet ID and delegates only to a staging adapter; it cannot accept recipient overrides or perform delivery.
+- Local object tools route through the canonical mutation pipeline with actor `ChatGPT`, source `webmcp`, one revision, and one visible receipt.
+- Ordinary browsers display `Site Tools unavailable` while keeping every pointer and toolbar path functional.
+
+### VERIFIED IN BROWSER
+
+- An injected standards-shaped `document.modelContext` registered all eight descriptors, then invoked `create_object`; the exact live page rendered the object and an agent-attributed `R1 · webmcp` receipt.
+- Installed Google Chrome 152.0.7977.64 launched with its WebMCP testing feature, exposed the native `document.modelContext` surface, displayed `8 Site Tools registered`, and returned the exact catalog from native `getTools()` with no page errors.
+- Ordinary Playwright Chromium without WebMCP displayed the honest fallback and retained the full canvas interaction suite.
+
+### UNVERIFIED
+
+- ChatGPT built-in-browser discovery and invocation against this deployed page.
+- Chrome 153’s non-disruptive registration-lifecycle behavior; the installed target is Chrome 152.
+- Actual agent- or user-triggered invocation cancellation across a network operation; signal identity and refusal behavior are unit-verified only.
+- Dynamic registration churn on native Chrome or ChatGPT; static registration remains the default.
+- Sketch, packet, and send adapters beyond their guarded/staged contracts.
 
 ### CUT
 

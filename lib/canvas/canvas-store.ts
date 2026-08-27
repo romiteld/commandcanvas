@@ -25,7 +25,11 @@ export interface CanvasStoreState {
   selectedObjectId: string | null;
   viewport: CanvasViewport;
   lastError: CommandError | null;
-  dispatch: (command: CanvasCommand, source: CanvasCommandSource) => CommandResult;
+  dispatch: (
+    command: CanvasCommand,
+    source: CanvasCommandSource,
+    actorOverride?: CanvasActor,
+  ) => CommandResult;
   selectObject: (objectId: string | null) => void;
   setViewport: (viewport: CanvasViewport) => void;
 }
@@ -39,7 +43,7 @@ export function createCanvasStore(
     selectedObjectId: null,
     viewport: { x: 0, y: 0, scale: 1 },
     lastError: null,
-    dispatch(command, source) {
+    dispatch(command, source, actorOverride) {
       const current = get().canvas;
       const result = applyCanvasCommand(
         current,
@@ -48,7 +52,7 @@ export function createCanvasStore(
           roomId,
           baseRevision: current.revision,
           issuedAt: dependencies.now(),
-          actor: dependencies.actor,
+          actor: actorOverride ?? dependencies.actor,
           source,
           command,
         },

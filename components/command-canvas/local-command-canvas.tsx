@@ -1,11 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { CommandCanvasRoom } from "@/components/command-canvas/command-canvas-room";
-import { createCanvasStore } from "@/lib/canvas/canvas-store";
+import {
+  createCanvasStore,
+  type CanvasStoreState,
+} from "@/lib/canvas/canvas-store";
+import { createCanvasWebMcpAdapters } from "@/lib/webmcp/canvas-adapters";
+import { resolveDocumentWebMcpTarget } from "@/lib/webmcp/document-target";
+import type { WebMcpExecutionContext } from "@/lib/webmcp/phase-guards";
+import { WebMcpRegistry } from "@/lib/webmcp/registry";
 
 export function LocalCommandCanvas() {
+  const [webMcpStatus, setWebMcpStatus] = useState<{
+    value: string;
+    tone: "idle" | "working" | "ready";
+  }>({ value: "Checking Site Tools…", tone: "working" });
   const [store] = useState(() =>
     createCanvasStore("room-local", {
       actor: {
@@ -18,7 +29,88 @@ export function LocalCommandCanvas() {
     }),
   );
 
-  return <CommandCanvasRoom store={store} />;
+  useEffect(() => {
+    let active = true;
+    const target = resolveDocumentWebMcpTarget(document);
+    if (!target) {
+      queueMicrotask(() => {
+        if (active)
+          setWebMcpStatus({ value: "Site Tools unavailable", tone: "idle" });
+      });
+      return () => {
+        active = false;
+      };
+    }
+
+    const mode =
+      process.env.NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION === "true"
+        ? "dynamic"
+        : "static";
+    const registry = new WebMcpRegistry({
+      mode,
+      target,
+      getContext: () => localWebMcpContext(store.getState()),
+      adapters: createCanvasWebMcpAdapters({ store }),
+    });
+
+    const sync = async () => {
+      try {
+        await registry.sync();
+        if (active)
+          setWebMcpStatus({
+            value: `${registry.registeredToolNames().length} Site Tools registered`,
+            tone: "ready",
+          });
+      } catch {
+        if (active)
+          setWebMcpStatus({
+            value: "Site Tools registration failed",
+            tone: "idle",
+          });
+      }
+    };
+
+    void sync();
+    const unsubscribe =
+      mode === "dynamic" ? store.subscribe(() => void sync()) : () => undefined;
+
+    return () => {
+      active = false;
+      unsubscribe();
+      registry.dispose();
+    };
+  }, [store]);
+
+  return (
+    <CommandCanvasRoom
+      store={store}
+      serviceStatus={{ webMcp: webMcpStatus }}
+    />
+  );
+}
+
+function localWebMcpContext(state: CanvasStoreState): WebMcpExecutionContext {
+  const objects = Object.values(state.canvas.objects).filter(
+    (object) => !object.deletedAt,
+  );
+  const selected = state.selectedObjectId
+    ? state.canvas.objects[state.selectedObjectId]
+    : undefined;
+  return {
+    phase: {
+      roomActive: true,
+      hasContent: objects.length > 0,
+      selection: selected
+        ? selected.type === "sketch"
+          ? "sketch"
+          : "object"
+        : "none",
+      collaboratorCount: 1,
+      packet: "none",
+    },
+    actor: { participantId: "participant-local-host", role: "host" },
+    canMutate: true,
+  };
 }
 
 function createId(prefix: string) {

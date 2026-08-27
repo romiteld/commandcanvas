@@ -2,7 +2,7 @@
 
 CommandCanvas is a shared spatial command surface where people, collaborators, and an agent manipulate the same live collection of semantic objects. Every supported input resolves through one validated mutation pipeline, producing visible, attributable, reversible receipts.
 
-This repository is under active implementation for the 2026 Devpost WebMCP Challenge. The current checkpoint is a verified local semantic-canvas slice; WebMCP, Supabase Realtime, camera tracking, vision transformation, Resend, and the public no-signup `/demo` remain explicitly unverified until their integration checkpoints are exercised.
+This repository is under active implementation for the 2026 Devpost WebMCP Challenge. The current checkpoint includes a verified local semantic canvas and native Chrome WebMCP registration; ChatGPT Site Tools invocation, Supabase Realtime, camera tracking, vision transformation, Resend, and the public no-signup `/demo` remain explicitly unverified until their integration checkpoints are exercised.
 
 ## Current working slice
 
@@ -17,6 +17,10 @@ This repository is under active implementation for the 2026 Devpost WebMCP Chall
 - Responsive desktop/mobile shell with non-gesture controls
 - Honest service-status states for integrations not yet exercised
 - Runtime rejection of malformed external commands before state or receipts change
+- Eight stable WebMCP tools registered through `document.modelContext`
+- Static registration by default with dynamic phase registration behind one flag
+- Identical execute-time phase, role, and schema guards in both registration modes
+- WebMCP object mutations attributed to ChatGPT in the same receipt stream
 
 The running evidence ledger is in [`docs/verification-ledger.md`](docs/verification-ledger.md).
 
@@ -69,6 +73,8 @@ npm run test:e2e
 ```
 
 The Playwright suite runs desktop and mobile Chromium projects. Integration tests will be added alongside each service boundary; a unit test or mock will never be presented as proof that a live service worked.
+
+The WebMCP browser project uses the installed Chrome testing feature and verifies that the browser’s native `document.modelContext.getTools()` surface discovers the exact registered catalog. It does not claim ChatGPT Site Tools invocation or Chrome 153 lifecycle behavior until those environments are exercised.
 
 ## Safety boundaries
 

@@ -105,4 +105,24 @@ describe("canvas store", () => {
     expect(store.getState().selectedObjectId).toBe("note-1");
     expect(store.getState().viewport).toEqual({ x: 72, y: 44, scale: 1.25 });
   });
+
+  it("attributes WebMCP mutations to the agent while using the same store pipeline", () => {
+    const store = createCanvasStore("room-demo", dependencies());
+
+    const result = store.getState().dispatch(newNote, "webmcp", {
+      id: "agent-chatgpt",
+      displayName: "ChatGPT",
+      type: "agent",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(store.getState().canvas.receipts[0]).toMatchObject({
+      source: "webmcp",
+      actor: {
+        id: "agent-chatgpt",
+        displayName: "ChatGPT",
+        type: "agent",
+      },
+    });
+  });
 });

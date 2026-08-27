@@ -10,9 +10,21 @@ import { zoomViewportAt } from "@/lib/canvas/coordinates";
 
 export interface CommandCanvasRoomProps {
   store: StoreApi<CanvasStoreState>;
+  serviceStatus?: CommandCanvasServiceStatus;
 }
 
-export function CommandCanvasRoom({ store }: CommandCanvasRoomProps) {
+type ServiceTone = "idle" | "working" | "ready";
+
+export interface CommandCanvasServiceStatus {
+  webMcp?: { value: string; tone: ServiceTone };
+  collaboration?: { value: string; tone: ServiceTone };
+  spatialInput?: { value: string; tone: ServiceTone };
+}
+
+export function CommandCanvasRoom({
+  store,
+  serviceStatus,
+}: CommandCanvasRoomProps) {
   const [objectPreviews, setObjectPreviews] = useState<
     Record<string, ObjectTransformPreview>
   >({});
@@ -516,13 +528,23 @@ export function CommandCanvasRoom({ store }: CommandCanvasRoomProps) {
           </div>
 
           <section className="service-stack" aria-label="Service status">
-            <ServiceState label="WebMCP" value="WebMCP not exercised" tone="idle" />
+            <ServiceState
+              label="WebMCP"
+              value={serviceStatus?.webMcp?.value ?? "WebMCP not exercised"}
+              tone={serviceStatus?.webMcp?.tone ?? "idle"}
+            />
             <ServiceState
               label="Collaboration"
-              value="Realtime not connected"
-              tone="idle"
+              value={
+                serviceStatus?.collaboration?.value ?? "Realtime not connected"
+              }
+              tone={serviceStatus?.collaboration?.tone ?? "idle"}
             />
-            <ServiceState label="Spatial input" value="Camera off" tone="idle" />
+            <ServiceState
+              label="Spatial input"
+              value={serviceStatus?.spatialInput?.value ?? "Camera off"}
+              tone={serviceStatus?.spatialInput?.tone ?? "idle"}
+            />
           </section>
 
           {lastError ? (
@@ -804,7 +826,7 @@ function objectResizeTransform(
 interface ServiceStateProps {
   label: string;
   value: string;
-  tone: "idle" | "working" | "ready";
+  tone: ServiceTone;
 }
 
 function ServiceState({ label, value, tone }: ServiceStateProps) {

@@ -26,6 +26,16 @@ export default defineConfig({
       name: "chromium-mobile",
       use: { ...devices["Pixel 7"] },
     },
+    {
+      name: "chrome-webmcp",
+      testMatch: /webmcp-native\.spec\.ts/,
+      use: {
+        ...devices["Desktop Chrome"],
+        channel: "chrome",
+        viewport: { width: 1440, height: 900 },
+        launchOptions: { args: ["--enable-features=WebMCP"] },
+      },
+    },
   ],
   webServer: {
     command: "npm run dev -- --hostname 127.0.0.1",

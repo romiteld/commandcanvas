@@ -12,7 +12,7 @@ test("creates, pins, and undoes one semantic object with visible receipts", asyn
   await expect(
     page.getByRole("heading", { name: "Spatial command surface" }),
   ).toBeVisible();
-  await expect(page.getByText("WebMCP not exercised")).toBeVisible();
+  await expect(page.getByText("Site Tools unavailable")).toBeVisible();
   await expect(page.getByText("Realtime not connected")).toBeVisible();
 
   await page.getByRole("button", { name: "Create note" }).click();
@@ -33,6 +33,87 @@ test("creates, pins, and undoes one semantic object with visible receipts", asyn
     });
 
   expect(browserErrors).toEqual([]);
+});
+
+test("bridges a document.modelContext invocation into the live canvas", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-desktop");
+  await page.addInitScript(() => {
+    const registrations: Array<{
+      tool: {
+        name: string;
+        execute: (
+          input: unknown,
+          options: { signal: AbortSignal },
+        ) => Promise<unknown>;
+      };
+      signal: AbortSignal;
+    }> = [];
+    Object.defineProperty(document, "modelContext", {
+      configurable: true,
+      value: {
+        registerTool: async (
+          tool: (typeof registrations)[number]["tool"],
+          options: { signal: AbortSignal },
+        ) => {
+          registrations.push({ tool, signal: options.signal });
+        },
+      },
+    });
+    Object.defineProperty(window, "__commandCanvasRegistrations", {
+      value: registrations,
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.getByText("8 Site Tools registered")).toBeVisible();
+
+  const result = await page.evaluate(async () => {
+    const registrations = (
+      window as unknown as {
+        __commandCanvasRegistrations: Array<{
+          tool: {
+            name: string;
+            execute: (
+              input: unknown,
+              options: { signal: AbortSignal },
+            ) => Promise<unknown>;
+          };
+        }>;
+      }
+    ).__commandCanvasRegistrations;
+    const registration = registrations.find(
+      ({ tool }) => tool.name === "create_object",
+    );
+    if (!registration) throw new Error("create_object is not registered");
+    return registration.tool.execute(
+      {
+        object: {
+          id: "note-browser-agent",
+          type: "note",
+          title: "Browser agent action",
+          x: 300,
+          y: 190,
+          width: 280,
+          height: 190,
+          zIndex: 1,
+          payload: {
+            text: "The registered tool changed this exact page.",
+            tone: "sky",
+          },
+        },
+      },
+      { signal: new AbortController().signal },
+    );
+  });
+
+  expect(result).toMatchObject({ ok: true, status: "completed" });
+  await expect(
+    page.getByRole("button", { name: "Select Browser agent action" }),
+  ).toBeVisible();
+  await expect(page.getByText("ChatGPT created “Browser agent action”.")).toBeVisible();
+  await expect(page.getByText("R1 · webmcp")).toBeVisible();
 });
 
 test("keeps the canvas and primary action usable at a mobile viewport", async ({
