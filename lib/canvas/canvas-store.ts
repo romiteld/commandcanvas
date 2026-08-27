@@ -30,6 +30,7 @@ export interface CanvasStoreState {
     source: CanvasCommandSource,
     actorOverride?: CanvasActor,
   ) => CommandResult;
+  hydrateCanvas: (canvas: CanvasState) => boolean;
   selectObject: (objectId: string | null) => void;
   setViewport: (viewport: CanvasViewport) => void;
 }
@@ -63,6 +64,25 @@ export function createCanvasStore(
       else set({ lastError: result.error });
 
       return result;
+    },
+    hydrateCanvas(canvas) {
+      const current = get();
+      if (
+        canvas.roomId !== roomId ||
+        canvas.revision < current.canvas.revision
+      )
+        return false;
+
+      const selected = current.selectedObjectId
+        ? canvas.objects[current.selectedObjectId]
+        : undefined;
+      set({
+        canvas,
+        selectedObjectId:
+          selected && !selected.deletedAt ? current.selectedObjectId : null,
+        lastError: null,
+      });
+      return true;
     },
     selectObject(selectedObjectId) {
       set({ selectedObjectId });

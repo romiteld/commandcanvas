@@ -21,6 +21,10 @@ const WEBMCP_AGENT = {
 
 export interface CanvasWebMcpAdapterOptions {
   store: StoreApi<CanvasStoreState>;
+  dispatchMutation?: (
+    command: CanvasCommand,
+    signal: AbortSignal,
+  ) => Promise<WebMcpToolResult>;
   transformSketch?: (
     request: Extract<WebMcpAdapterRequest, { toolName: "transform_sketch" }>,
   ) => Promise<WebMcpToolResult>;
@@ -46,27 +50,43 @@ export function createCanvasWebMcpAdapters(
         case "get_canvas_state":
           return readCanvasState(options.store, request.input);
         case "create_object":
-          return dispatchMutation(options.store, {
-            type: "object.create",
-            object: request.input.object,
-          });
+          return executeMutation(
+            options,
+            {
+              type: "object.create",
+              object: request.input.object,
+            },
+            request.signal,
+          );
         case "transform_object":
-          return dispatchMutation(options.store, {
-            type: "object.transform",
-            objectId: request.input.objectId,
-            transform: request.input.transform,
-          });
+          return executeMutation(
+            options,
+            {
+              type: "object.transform",
+              objectId: request.input.objectId,
+              transform: request.input.transform,
+            },
+            request.signal,
+          );
         case "set_object_state":
-          return dispatchMutation(options.store, {
-            type: "object.set_flags",
-            objectId: request.input.objectId,
-            flags: request.input.state,
-          });
+          return executeMutation(
+            options,
+            {
+              type: "object.set_flags",
+              objectId: request.input.objectId,
+              flags: request.input.state,
+            },
+            request.signal,
+          );
         case "discard_object":
-          return dispatchMutation(options.store, {
-            type: "object.discard",
-            objectId: request.input.objectId,
-          });
+          return executeMutation(
+            options,
+            {
+              type: "object.discard",
+              objectId: request.input.objectId,
+            },
+            request.signal,
+          );
         case "transform_sketch":
           return options.transformSketch
             ? options.transformSketch(request)
@@ -84,6 +104,16 @@ export function createCanvasWebMcpAdapters(
         : unavailable("meeting packet delivery staging is not ready");
     },
   };
+}
+
+function executeMutation(
+  options: CanvasWebMcpAdapterOptions,
+  command: CanvasCommand,
+  signal: AbortSignal,
+) {
+  return options.dispatchMutation
+    ? options.dispatchMutation(command, signal)
+    : dispatchLocalMutation(options.store, command);
 }
 
 function readCanvasState(
@@ -113,7 +143,7 @@ function readCanvasState(
   };
 }
 
-function dispatchMutation(
+function dispatchLocalMutation(
   store: StoreApi<CanvasStoreState>,
   command: CanvasCommand,
 ): WebMcpToolResult {

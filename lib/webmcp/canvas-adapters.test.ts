@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createCanvasStore } from "@/lib/canvas/canvas-store";
 import { createCanvasWebMcpAdapters } from "@/lib/webmcp/canvas-adapters";
@@ -141,5 +141,51 @@ describe("canvas WebMCP adapters", () => {
       message: "Unpin “Pinned context” before moving or resizing it.",
     });
     expect(store.getState().canvas.revision).toBe(2);
+  });
+
+  it("delegates stable mutations to an injected durable room dispatcher", async () => {
+    const { store } = fixture();
+    const signal = new AbortController().signal;
+    const dispatchMutation = vi.fn().mockResolvedValue({
+      ok: true,
+      status: "completed",
+      message: "CommandCanvas agent created “Durable proposal”.",
+      receiptId: "ccf31a6b-48cb-4edc-90a4-889d45ec74aa",
+      data: { revision: 7, affectedObjectIds: ["note-durable"] },
+    });
+    const adapters = createCanvasWebMcpAdapters({ store, dispatchMutation });
+
+    const result = await adapters.executeTool({
+      toolName: "create_object",
+      input: {
+        object: {
+          id: "note-durable",
+          type: "note",
+          title: "Durable proposal",
+          x: 420,
+          y: 220,
+          width: 280,
+          height: 190,
+          zIndex: 7,
+          payload: { text: "Persist this through the room API.", tone: "sky" },
+        },
+      },
+      signal,
+      context,
+    });
+
+    expect(dispatchMutation).toHaveBeenCalledWith(
+      {
+        type: "object.create",
+        object: expect.objectContaining({ id: "note-durable" }),
+      },
+      signal,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      status: "completed",
+      receiptId: "ccf31a6b-48cb-4edc-90a4-889d45ec74aa",
+    });
+    expect(store.getState().canvas.revision).toBe(0);
   });
 });

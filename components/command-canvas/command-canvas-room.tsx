@@ -5,13 +5,53 @@ import type { StoreApi } from "zustand";
 import { useStore } from "zustand";
 
 import type { CanvasStoreState } from "@/lib/canvas/canvas-store";
-import type { CanvasObject } from "@/lib/canvas/command-engine";
-import { zoomViewportAt } from "@/lib/canvas/coordinates";
+import type {
+  CanvasCommand,
+  CanvasCommandSource,
+  CanvasObject,
+  CommandResult,
+} from "@/lib/canvas/command-engine";
+import {
+  screenToWorld,
+  worldToScreen,
+  zoomViewportAt,
+  type CanvasPoint,
+} from "@/lib/canvas/coordinates";
 
 export interface CommandCanvasRoomProps {
   store: StoreApi<CanvasStoreState>;
   serviceStatus?: CommandCanvasServiceStatus;
+  roomLabel?: string;
+  roomStatus?: CommandCanvasRoomStatus;
+  participants?: readonly CommandCanvasParticipant[];
+  remoteCursors?: readonly CommandCanvasRemoteCursor[];
+  onCommand?: CommandCanvasCommandHandler;
+  onCanvasPointerWorldMove?: (point: CanvasPoint) => void;
 }
+
+export type CommandCanvasRoomStatus =
+  | "local"
+  | "connecting"
+  | "live"
+  | "offline";
+
+export interface CommandCanvasParticipant {
+  id: string;
+  displayName: string;
+  color?: string;
+  role?: "host" | "participant" | "agent";
+}
+
+export interface CommandCanvasRemoteCursor extends CanvasPoint {
+  participantId: string;
+  displayName: string;
+  color: string;
+}
+
+export type CommandCanvasCommandHandler = (
+  command: CanvasCommand,
+  source: CanvasCommandSource,
+) => void | CommandResult | Promise<void | CommandResult>;
 
 type ServiceTone = "idle" | "working" | "ready";
 
@@ -24,6 +64,12 @@ export interface CommandCanvasServiceStatus {
 export function CommandCanvasRoom({
   store,
   serviceStatus,
+  roomLabel = "Local room",
+  roomStatus = "local",
+  participants = [],
+  remoteCursors = [],
+  onCommand,
+  onCanvasPointerWorldMove,
 }: CommandCanvasRoomProps) {
   const [objectPreviews, setObjectPreviews] = useState<
     Record<string, ObjectTransformPreview>
@@ -31,6 +77,8 @@ export function CommandCanvasRoom({
   const [drag, setDrag] = useState<ObjectDragState | null>(null);
   const [resize, setResize] = useState<ObjectResizeState | null>(null);
   const [pan, setPan] = useState<CanvasPanState | null>(null);
+  const [commandExecution, setCommandExecution] =
+    useState<CommandExecutionState>({ status: "idle" });
   const canvas = useStore(store, (state) => state.canvas);
   const selectedObjectId = useStore(store, (state) => state.selectedObjectId);
   const viewport = useStore(store, (state) => state.viewport);
@@ -44,9 +92,48 @@ export function CommandCanvasRoom({
   const selectedObject = selectedObjectId
     ? canvas.objects[selectedObjectId]
     : undefined;
+  const commandPending = commandExecution.status === "pending";
+
+  function runCommand(command: CanvasCommand, source: CanvasCommandSource) {
+    if (!onCommand) {
+      dispatch(command, source);
+      return;
+    }
+    if (commandPending) return;
+
+    setCommandExecution({ status: "pending" });
+    let execution: void | CommandResult | Promise<void | CommandResult>;
+    try {
+      execution = onCommand(command, source);
+    } catch (error) {
+      setCommandExecution(commandRefusal(error));
+      return;
+    }
+
+    if (!isPromiseLike(execution)) {
+      finishRemoteCommand(execution);
+      return;
+    }
+
+    void Promise.resolve(execution).then(finishRemoteCommand, (error) => {
+      setCommandExecution(commandRefusal(error));
+    });
+  }
+
+  function finishRemoteCommand(result: void | CommandResult) {
+    if (result && !result.ok) {
+      setCommandExecution({
+        status: "refused",
+        message: result.error.message,
+      });
+      return;
+    }
+    if (result?.ok) store.getState().hydrateCanvas(result.state);
+    setCommandExecution({ status: "idle" });
+  }
 
   function createNote() {
-    dispatch(
+    runCommand(
       {
         type: "object.create",
         object: {
@@ -69,7 +156,7 @@ export function CommandCanvasRoom({
   }
 
   function createTaskBoard() {
-    dispatch(
+    runCommand(
       {
         type: "object.create",
         object: {
@@ -121,7 +208,7 @@ export function CommandCanvasRoom({
   }
 
   function createSchedule() {
-    dispatch(
+    runCommand(
       {
         type: "object.create",
         object: {
@@ -174,7 +261,7 @@ export function CommandCanvasRoom({
   ) {
     event.stopPropagation();
     selectObject(object.id);
-    if (object.pinned) return;
+    if (object.pinned || commandPending) return;
 
     event.preventDefault();
     if (typeof event.currentTarget.setPointerCapture === "function")
@@ -219,7 +306,7 @@ export function CommandCanvasRoom({
     setDrag(null);
 
     if (transform.x === drag.initialX && transform.y === drag.initialY) return;
-    dispatch(
+    runCommand(
       {
         type: "object.transform",
         objectId: drag.objectId,
@@ -245,6 +332,7 @@ export function CommandCanvasRoom({
   ) {
     event.preventDefault();
     event.stopPropagation();
+    if (commandPending) return;
     if (typeof event.currentTarget.setPointerCapture === "function")
       event.currentTarget.setPointerCapture(event.pointerId);
     setResize({
@@ -292,7 +380,7 @@ export function CommandCanvasRoom({
       transform.height === resize.initialHeight
     )
       return;
-    dispatch(
+    runCommand(
       {
         type: "object.transform",
         objectId: resize.objectId,
@@ -332,6 +420,16 @@ export function CommandCanvasRoom({
   }
 
   function updateCanvasPan(event: ReactPointerEvent<HTMLDivElement>) {
+    if (onCanvasPointerWorldMove) {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      onCanvasPointerWorldMove(
+        screenToWorld(
+          { x: event.clientX, y: event.clientY },
+          viewport,
+          { left: bounds.left, top: bounds.top },
+        ),
+      );
+    }
     if (!pan || pan.pointerId !== event.pointerId) return;
     setViewport({
       ...viewport,
@@ -351,27 +449,57 @@ export function CommandCanvasRoom({
   }
 
   return (
-    <main className="command-canvas-shell">
+    <main className="command-canvas-shell" aria-busy={commandPending}>
       <header className="room-header">
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true">
             CC
           </span>
           <div>
-            <p className="eyebrow">CommandCanvas / local checkpoint</p>
+            <p className="eyebrow">
+              CommandCanvas / {roomStatus === "local" ? "local checkpoint" : "shared room"}
+            </p>
             <h1>Spatial command surface</h1>
           </div>
         </div>
         <div className="room-badges" aria-label="Room status">
-          <span className="status-dot status-dot-local" aria-hidden="true" />
-          <strong>Local room</strong>
+          <span
+            className={`status-dot status-dot-${roomStatus}`}
+            aria-hidden="true"
+          />
+          <strong>{roomLabel}</strong>
           <span>r{canvas.revision}</span>
+          {participants.length > 0 ? (
+            <div
+              className="presence-stack"
+              aria-label={`${participants.length} ${participants.length === 1 ? "participant" : "participants"} present`}
+            >
+              {participants.map((participant) => (
+                <span
+                  key={participant.id}
+                  className="presence-token"
+                  title={`${participant.displayName} · ${participant.role ?? "participant"}`}
+                  style={{
+                    background: participant.color ?? "#74859a",
+                    color: "#081016",
+                  }}
+                >
+                  {initials(participant.displayName)}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
       </header>
 
       <section className="workspace-grid" aria-label="CommandCanvas workspace">
         <aside className="tool-dock" aria-label="Object tools">
-          <button type="button" onClick={createNote} aria-label="Create note">
+          <button
+            type="button"
+            onClick={createNote}
+            aria-label="Create note"
+            disabled={commandPending}
+          >
             <span aria-hidden="true">＋</span>
             <small>Note</small>
           </button>
@@ -379,6 +507,7 @@ export function CommandCanvasRoom({
             type="button"
             onClick={createTaskBoard}
             aria-label="Create task board"
+            disabled={commandPending}
           >
             <span aria-hidden="true">▦</span>
             <small>Board</small>
@@ -387,6 +516,7 @@ export function CommandCanvasRoom({
             type="button"
             onClick={createSchedule}
             aria-label="Create schedule"
+            disabled={commandPending}
           >
             <span aria-hidden="true">31</span>
             <small>Schedule</small>
@@ -394,8 +524,8 @@ export function CommandCanvasRoom({
           <button
             type="button"
             aria-label="Undo last change"
-            disabled={canvas.receipts.length === 0}
-            onClick={() => dispatch({ type: "history.undo" }, "typed")}
+            disabled={commandPending || canvas.receipts.length === 0}
+            onClick={() => runCommand({ type: "history.undo" }, "typed")}
           >
             <span aria-hidden="true">↶</span>
             <small>Undo</small>
@@ -452,9 +582,55 @@ export function CommandCanvasRoom({
                   onResizePointerMove={updateObjectResize}
                   onResizePointerUp={finishObjectResize}
                   onResizePointerCancel={cancelObjectResize}
+                  commandsDisabled={commandPending}
                 />
               ))}
             </div>
+            {remoteCursors.map((cursor) => {
+              const screenPoint = worldToScreen(cursor, viewport);
+              return (
+                <div
+                  key={cursor.participantId}
+                  className="remote-cursor"
+                  data-remote-cursor={cursor.participantId}
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    left: screenPoint.x,
+                    top: screenPoint.y,
+                    zIndex: 100_000,
+                    pointerEvents: "none",
+                    color: cursor.color,
+                    transform: "translate(-3px, -3px)",
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "block",
+                      width: 0,
+                      height: 0,
+                      borderTop: "13px solid currentColor",
+                      borderRight: "8px solid transparent",
+                    }}
+                  />
+                  <span
+                    style={{
+                      display: "inline-block",
+                      marginLeft: 10,
+                      padding: "2px 7px",
+                      borderRadius: 999,
+                      background: cursor.color,
+                      color: "#081016",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {cursor.displayName}
+                  </span>
+                </div>
+              );
+            })}
             {objects.length === 0 ? (
               <div className="canvas-empty-state">
                 <span className="empty-crosshair" aria-hidden="true" />
@@ -470,8 +646,9 @@ export function CommandCanvasRoom({
               <button
                 type="button"
                 aria-label={selectedObject.pinned ? "Unpin object" : "Pin object"}
+                disabled={commandPending}
                 onClick={() =>
-                  dispatch(
+                  runCommand(
                     {
                       type: "object.set_flags",
                       objectId: selectedObject.id,
@@ -488,8 +665,9 @@ export function CommandCanvasRoom({
                 aria-label={
                   selectedObject.minimized ? "Restore object" : "Minimize object"
                 }
+                disabled={commandPending}
                 onClick={() =>
-                  dispatch(
+                  runCommand(
                     {
                       type: "object.set_flags",
                       objectId: selectedObject.id,
@@ -505,8 +683,9 @@ export function CommandCanvasRoom({
                 type="button"
                 className="danger-action"
                 aria-label="Move object to trash"
+                disabled={commandPending}
                 onClick={() =>
-                  dispatch(
+                  runCommand(
                     { type: "object.discard", objectId: selectedObject.id },
                     "pointer",
                   )
@@ -524,7 +703,7 @@ export function CommandCanvasRoom({
               <p className="eyebrow">Shared provenance</p>
               <h2>Command rail</h2>
             </div>
-            <span className="live-pill">LOCAL</span>
+            <span className="live-pill">{roomStatus.toUpperCase()}</span>
           </div>
 
           <section className="service-stack" aria-label="Service status">
@@ -546,6 +725,20 @@ export function CommandCanvasRoom({
               tone={serviceStatus?.spatialInput?.tone ?? "idle"}
             />
           </section>
+
+          {commandExecution.status === "pending" ? (
+            <div className="command-error" role="status" aria-live="polite">
+              <strong>Applying command…</strong>
+              <span>Waiting for the shared canvas to confirm the change.</span>
+            </div>
+          ) : null}
+
+          {commandExecution.status === "refused" ? (
+            <div className="command-error" role="status" aria-live="polite">
+              <strong>Command refused</strong>
+              <span>{commandExecution.message}</span>
+            </div>
+          ) : null}
 
           {lastError ? (
             <div className="command-error" role="status">
@@ -603,6 +796,7 @@ interface CanvasObjectCardProps {
   onResizePointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onResizePointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onResizePointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  commandsDisabled: boolean;
 }
 
 function CanvasObjectCard({
@@ -618,6 +812,7 @@ function CanvasObjectCard({
   onResizePointerMove,
   onResizePointerUp,
   onResizePointerCancel,
+  commandsDisabled,
 }: CanvasObjectCardProps) {
   const typeClass = objectTypeClass(object);
 
@@ -654,6 +849,7 @@ function CanvasObjectCard({
           type="button"
           className="resize-handle"
           aria-label={`Resize ${object.title}`}
+          disabled={commandsDisabled}
           onPointerDown={onResizePointerDown}
           onPointerMove={onResizePointerMove}
           onPointerUp={onResizePointerUp}
@@ -765,6 +961,32 @@ interface ObjectTransformPreview {
   y?: number;
   width?: number;
   height?: number;
+}
+
+type CommandExecutionState =
+  | { status: "idle" }
+  | { status: "pending" }
+  | { status: "refused"; message: string };
+
+function isPromiseLike(
+  value: void | CommandResult | Promise<void | CommandResult>,
+): value is Promise<void | CommandResult> {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      "then" in value &&
+      typeof value.then === "function",
+  );
+}
+
+function commandRefusal(error: unknown): CommandExecutionState {
+  return {
+    status: "refused",
+    message:
+      error instanceof Error && error.message.trim()
+        ? error.message
+        : "The shared canvas did not apply this command.",
+  };
 }
 
 interface ObjectResizeState {

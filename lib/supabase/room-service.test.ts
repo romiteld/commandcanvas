@@ -1,0 +1,932 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type { CommandRequest } from "@/lib/supabase/room-contracts";
+import {
+  createRoomService,
+  type RoomServiceClient,
+  type RoomServiceDependencies,
+} from "@/lib/supabase/room-service";
+
+const ROOM_ID = "11111111-1111-4111-8111-111111111111";
+const HOST_ID = "22222222-2222-4222-8222-222222222222";
+const PARTICIPANT_ID = "33333333-3333-4333-8333-333333333333";
+const OUTSIDER_ID = "44444444-4444-4444-8444-444444444444";
+const COMMAND_ID = "55555555-5555-4555-8555-555555555555";
+const CREATED_AT = "2026-08-27T16:00:00.000Z";
+const SLUG = "room-2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a";
+const JOIN_TOKEN =
+  "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s";
+
+type QueryResult = { data: unknown; error: unknown };
+
+interface QueryTrace {
+  table: string;
+  select?: string;
+  filters: Array<[string, unknown]>;
+  orders: Array<[string, { ascending: boolean }]>;
+  cardinality?: "maybeSingle";
+}
+
+function createClient(input?: {
+  tableResults?: Partial<Record<string, QueryResult[]>>;
+  rpcResults?: QueryResult[];
+}) {
+  const queues = new Map(
+    Object.entries(input?.tableResults ?? {}).map(([table, values]) => [
+      table,
+      [...(values ?? [])],
+    ]),
+  );
+  const traces: QueryTrace[] = [];
+  const rpcResults = [...(input?.rpcResults ?? [])];
+
+  function take(table: string): QueryResult {
+    return queues.get(table)?.shift() ?? { data: null, error: null };
+  }
+
+  const client = {
+    from: vi.fn((table: string) => {
+      const trace: QueryTrace = { table, filters: [], orders: [] };
+      traces.push(trace);
+      const builder = {
+        select(columns: string) {
+          trace.select = columns;
+          return builder;
+        },
+        eq(column: string, value: unknown) {
+          trace.filters.push([column, value]);
+          return builder;
+        },
+        order(column: string, options: { ascending: boolean }) {
+          trace.orders.push([column, options]);
+          return builder;
+        },
+        maybeSingle() {
+          trace.cardinality = "maybeSingle";
+          return Promise.resolve(take(table));
+        },
+        then<TResult1 = QueryResult, TResult2 = never>(
+          onfulfilled?:
+            | ((value: QueryResult) => TResult1 | PromiseLike<TResult1>)
+            | null,
+          onrejected?:
+            | ((reason: unknown) => TResult2 | PromiseLike<TResult2>)
+            | null,
+        ) {
+          return Promise.resolve(take(table)).then(onfulfilled, onrejected);
+        },
+      };
+      return builder;
+    }),
+    rpc: vi.fn(async () =>
+      rpcResults.shift() ?? { data: null, error: null },
+    ),
+  };
+
+  return {
+    client: client as unknown as RoomServiceClient,
+    rawClient: client,
+    traces,
+  };
+}
+
+const dependencies: RoomServiceDependencies = {
+  createUuid: () => ROOM_ID,
+  randomBytes: (size) => {
+    if (size === 16) return new Uint8Array(16).fill(0x2a);
+    if (size === 32) return new Uint8Array(32).fill(0xab);
+    throw new Error(`Unexpected random byte count: ${size}`);
+  },
+  now: () => new Date(CREATED_AT),
+};
+
+const emptyRoomRow = {
+  id: ROOM_ID,
+  slug: SLUG,
+  name: "Launch room",
+  mode: "demo",
+  revision: 0,
+  created_by: HOST_ID,
+  created_at: CREATED_AT,
+  updated_at: CREATED_AT,
+};
+
+function memberRow(
+  role: "host" | "participant",
+  displayName = role === "host" ? "Danny" : "Sarah",
+) {
+  return { role, display_name: displayName };
+}
+
+function createNoteRequest(
+  source: CommandRequest["source"] = "typed",
+): CommandRequest {
+  return {
+    commandId: COMMAND_ID,
+    roomId: ROOM_ID,
+    baseRevision: 0,
+    source,
+    command: {
+      type: "object.create",
+      object: {
+        id: "note-launch",
+        type: "note",
+        title: "Launch decision",
+        x: 120,
+        y: 80,
+        width: 280,
+        height: 190,
+        zIndex: 1,
+        payload: {
+          text: "Prove the shared spatial workflow.",
+          tone: "sky",
+        },
+      },
+    },
+  };
+}
+
+function createdObjectRow(actorUserId: string) {
+  return {
+    id: "note-launch",
+    room_id: ROOM_ID,
+    object_type: "note",
+    title: "Launch decision",
+    x: 120,
+    y: 80,
+    width: 280,
+    height: 190,
+    z_index: 1,
+    minimized: false,
+    pinned: false,
+    created_by: actorUserId,
+    created_at: CREATED_AT,
+    updated_at: CREATED_AT,
+    deleted_at: null,
+    version: 1,
+    revision: 1,
+    metadata: {},
+    payload: {
+      text: "Prove the shared spatial workflow.",
+      tone: "sky",
+    },
+  };
+}
+
+function createdSnapshot(actorUserId: string) {
+  return {
+    id: "note-launch",
+    roomId: ROOM_ID,
+    type: "note",
+    title: "Launch decision",
+    x: 120,
+    y: 80,
+    width: 280,
+    height: 190,
+    zIndex: 1,
+    minimized: false,
+    pinned: false,
+    createdBy: actorUserId,
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+    deletedAt: null,
+    version: 1,
+    revision: 1,
+    metadata: {},
+    payload: {
+      text: "Prove the shared spatial workflow.",
+      tone: "sky",
+    },
+  };
+}
+
+function createdReceiptRow(input: {
+  actorUserId: string;
+  actorType: "human" | "participant" | "agent";
+  actorDisplayName: string;
+}) {
+  return {
+    id: COMMAND_ID,
+    room_id: ROOM_ID,
+    revision: 1,
+    occurred_at: CREATED_AT,
+    actor_user_id: input.actorUserId,
+    actor_type: input.actorType,
+    actor_display_name: input.actorDisplayName,
+    action: "create",
+    affected_object_ids: ["note-launch"],
+    previous_state: [{ objectId: "note-launch", state: null }],
+    resulting_state: [
+      { objectId: "note-launch", state: createdSnapshot(input.actorUserId) },
+    ],
+    inverse_command: { schemaVersion: 1, changes: [] },
+    reversible: true,
+    undoes_receipt_id: null,
+    description: `${input.actorDisplayName} created “Launch decision”.`,
+  };
+}
+
+function successfulCommitClient(input: {
+  member: ReturnType<typeof memberRow>;
+  actorUserId: string;
+  actorType: "human" | "participant" | "agent";
+  actorDisplayName: string;
+}) {
+  return createClient({
+    tableResults: {
+      room_members: [{ data: input.member, error: null }],
+      rooms: [
+        { data: emptyRoomRow, error: null },
+        { data: emptyRoomRow, error: null },
+        {
+          data: {
+            ...emptyRoomRow,
+            revision: 1,
+            updated_at: CREATED_AT,
+          },
+          error: null,
+        },
+        {
+          data: {
+            ...emptyRoomRow,
+            revision: 1,
+            updated_at: CREATED_AT,
+          },
+          error: null,
+        },
+      ],
+      canvas_objects: [
+        { data: [], error: null },
+        { data: [createdObjectRow(input.actorUserId)], error: null },
+      ],
+      receipts: [
+        { data: [], error: null },
+        {
+          data: [
+            createdReceiptRow({
+              actorUserId: input.actorUserId,
+              actorType: input.actorType,
+              actorDisplayName: input.actorDisplayName,
+            }),
+          ],
+          error: null,
+        },
+      ],
+    },
+    rpcResults: [
+      {
+        data: {
+          receiptId: COMMAND_ID,
+          revision: 1,
+          action: "create",
+          affectedObjectIds: ["note-launch"],
+        },
+        error: null,
+      },
+    ],
+  });
+}
+
+describe("CommandCanvas room service", () => {
+  it("creates a room with a 128-bit slug and exactly 32 random token bytes", async () => {
+    const harness = createClient({
+      rpcResults: [
+        {
+          data: {
+            roomId: ROOM_ID,
+            slug: SLUG,
+            role: "host",
+            joined: true,
+          },
+          error: null,
+        },
+      ],
+    });
+    const service = createRoomService(harness.client, dependencies);
+
+    const result = await service.createRoom(HOST_ID, {
+      mode: "demo",
+      name: "Launch room",
+      displayName: "Danny",
+      color: "#275ed7",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        roomId: ROOM_ID,
+        slug: SLUG,
+        joinToken: JOIN_TOKEN,
+        role: "host",
+        joined: true,
+      },
+    });
+    expect(JOIN_TOKEN).toHaveLength(43);
+    expect(harness.rawClient.rpc).toHaveBeenCalledWith(
+      "create_room_with_host",
+      {
+        p_room_id: ROOM_ID,
+        p_slug: SLUG,
+        p_name: "Launch room",
+        p_mode: "demo",
+        p_host_user_id: HOST_ID,
+        p_display_name: "Danny",
+        p_color: "#275ed7",
+        p_join_token: JOIN_TOKEN,
+      },
+    );
+  });
+
+  it("never returns the raw join token when room creation fails", async () => {
+    const harness = createClient({
+      rpcResults: [
+        {
+          data: null,
+          error: {
+            code: "P0001",
+            message: `room_create_conflict:${JOIN_TOKEN}`,
+          },
+        },
+      ],
+    });
+    const service = createRoomService(harness.client, dependencies);
+
+    const result = await service.createRoom(HOST_ID, {
+      mode: "demo",
+      name: "Launch room",
+      displayName: "Danny",
+      color: "#275ed7",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "create_unavailable",
+        message: "Room could not be created.",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(JOIN_TOKEN);
+  });
+
+  it("collapses a missing slug and token mismatch into the same join error", async () => {
+    const missingHarness = createClient({
+      tableResults: {
+        rooms: [{ data: null, error: null }],
+      },
+    });
+    const mismatchHarness = createClient({
+      tableResults: {
+        rooms: [{ data: { id: ROOM_ID }, error: null }],
+      },
+      rpcResults: [
+        {
+          data: null,
+          error: { code: "P0001", message: "room_join_token_mismatch" },
+        },
+      ],
+    });
+    const input = {
+      slug: SLUG,
+      joinToken: JOIN_TOKEN,
+      displayName: "Sarah",
+      color: "#7558cf",
+    } as const;
+
+    const missing = await createRoomService(
+      missingHarness.client,
+      dependencies,
+    ).joinRoom(PARTICIPANT_ID, input);
+    const mismatch = await createRoomService(
+      mismatchHarness.client,
+      dependencies,
+    ).joinRoom(PARTICIPANT_ID, input);
+
+    expect(missing).toEqual({
+      ok: false,
+      error: {
+        code: "join_unavailable",
+        message: "Room is unavailable or the join link is invalid.",
+      },
+    });
+    expect(mismatch).toEqual(missing);
+    expect(mismatchHarness.rawClient.rpc).toHaveBeenCalledWith(
+      "join_room_as_participant",
+      {
+        p_room_id: ROOM_ID,
+        p_user_id: PARTICIPANT_ID,
+        p_display_name: "Sarah",
+        p_color: "#7558cf",
+        p_join_token: JOIN_TOKEN,
+        p_requested_role: "participant",
+      },
+    );
+  });
+
+  it("loads one exact room, all objects, and receipts in ascending revision order", async () => {
+    const harness = createClient({
+      tableResults: {
+        rooms: [
+          { data: emptyRoomRow, error: null },
+          { data: emptyRoomRow, error: null },
+        ],
+        canvas_objects: [{ data: [], error: null }],
+        receipts: [{ data: [], error: null }],
+      },
+    });
+    const service = createRoomService(harness.client, dependencies);
+
+    const result = await service.loadCanvas(ROOM_ID);
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        roomId: ROOM_ID,
+        revision: 0,
+        objects: {},
+        receipts: [],
+        undoneReceiptIds: [],
+      },
+    });
+    expect(harness.traces).toEqual([
+      {
+        table: "rooms",
+        select: "*",
+        filters: [["id", ROOM_ID]],
+        orders: [],
+        cardinality: "maybeSingle",
+      },
+      {
+        table: "canvas_objects",
+        select: "*",
+        filters: [["room_id", ROOM_ID]],
+        orders: [["id", { ascending: true }]],
+      },
+      {
+        table: "receipts",
+        select: "*",
+        filters: [["room_id", ROOM_ID]],
+        orders: [["revision", { ascending: true }]],
+      },
+      {
+        table: "rooms",
+        select: "*",
+        filters: [["id", ROOM_ID]],
+        orders: [],
+        cardinality: "maybeSingle",
+      },
+    ]);
+  });
+
+  it("refuses a valid room row that does not match the requested room ID", async () => {
+    const wrongRoom = { ...emptyRoomRow, id: OUTSIDER_ID };
+    const harness = createClient({
+      tableResults: {
+        rooms: [
+          { data: wrongRoom, error: null },
+          { data: wrongRoom, error: null },
+        ],
+        canvas_objects: [{ data: [], error: null }],
+        receipts: [{ data: [], error: null }],
+      },
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).loadCanvas(ROOM_ID);
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "invalid_persisted_state",
+        message: "Canvas state could not be verified.",
+      },
+    });
+  });
+
+  it("returns a compact failure instead of exposing a malformed persisted row", async () => {
+    const harness = createClient({
+      tableResults: {
+        rooms: [
+          { data: emptyRoomRow, error: null },
+          { data: emptyRoomRow, error: null },
+        ],
+        canvas_objects: [
+          {
+            data: [{ id: "malformed", secret_column: "do-not-expose" }],
+            error: null,
+          },
+        ],
+        receipts: [{ data: [], error: null }],
+      },
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).loadCanvas(ROOM_ID);
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "invalid_persisted_state",
+        message: "Canvas state could not be verified.",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("secret_column");
+  });
+
+  it("retries one torn snapshot and returns the second stable room revision", async () => {
+    const revisionOneRoom = {
+      ...emptyRoomRow,
+      revision: 1,
+      updated_at: "2026-08-27T16:01:00.000Z",
+    };
+    const harness = createClient({
+      tableResults: {
+        rooms: [
+          { data: emptyRoomRow, error: null },
+          { data: revisionOneRoom, error: null },
+          { data: revisionOneRoom, error: null },
+          { data: revisionOneRoom, error: null },
+        ],
+        canvas_objects: [
+          { data: [], error: null },
+          { data: [], error: null },
+        ],
+        receipts: [
+          { data: [], error: null },
+          { data: [], error: null },
+        ],
+      },
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).loadCanvas(ROOM_ID);
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        roomId: ROOM_ID,
+        revision: 1,
+        objects: {},
+        receipts: [],
+        undoneReceiptIds: [],
+      },
+    });
+    expect(harness.traces.filter(({ table }) => table === "rooms")).toHaveLength(
+      4,
+    );
+    expect(
+      harness.traces.filter(({ table }) => table === "canvas_objects"),
+    ).toHaveLength(2);
+    expect(
+      harness.traces.filter(({ table }) => table === "receipts"),
+    ).toHaveLength(2);
+  });
+
+  it("returns compact unavailable when the one snapshot retry is also torn", async () => {
+    const harness = createClient({
+      tableResults: {
+        rooms: [
+          { data: emptyRoomRow, error: null },
+          { data: { ...emptyRoomRow, revision: 1 }, error: null },
+          { data: { ...emptyRoomRow, revision: 1 }, error: null },
+          { data: { ...emptyRoomRow, revision: 2 }, error: null },
+        ],
+        canvas_objects: [
+          { data: [], error: null },
+          { data: [], error: null },
+        ],
+        receipts: [
+          { data: [], error: null },
+          { data: [], error: null },
+        ],
+      },
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).loadCanvas(ROOM_ID);
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "room_unavailable",
+        message: "Room is unavailable.",
+      },
+    });
+    expect(harness.traces.filter(({ table }) => table === "rooms")).toHaveLength(
+      4,
+    );
+  });
+
+  it("refuses a nonmember before loading state or invoking the mutation RPC", async () => {
+    const harness = createClient({
+      tableResults: {
+        room_members: [{ data: null, error: null }],
+      },
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).commitCommand(OUTSIDER_ID, createNoteRequest());
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "member_required",
+        message: "Join this room before changing its canvas.",
+      },
+    });
+    expect(harness.rawClient.rpc).not.toHaveBeenCalled();
+    expect(harness.rawClient.from).toHaveBeenCalledOnce();
+  });
+
+  it("refuses participant WebMCP authority before invoking the mutation RPC", async () => {
+    const harness = createClient({
+      tableResults: {
+        room_members: [
+          { data: memberRow("participant", "Sarah"), error: null },
+        ],
+      },
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).commitCommand(PARTICIPANT_ID, createNoteRequest("webmcp"));
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "host_required",
+        message: "Only the room host can authorize WebMCP mutations.",
+      },
+    });
+    expect(harness.rawClient.rpc).not.toHaveBeenCalled();
+  });
+
+  it("requires the client base revision to equal authoritative room revision", async () => {
+    const harness = createClient({
+      tableResults: {
+        room_members: [{ data: memberRow("host"), error: null }],
+        rooms: [
+          { data: { ...emptyRoomRow, revision: 3 }, error: null },
+          { data: { ...emptyRoomRow, revision: 3 }, error: null },
+        ],
+        canvas_objects: [{ data: [], error: null }],
+        receipts: [{ data: [], error: null }],
+      },
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).commitCommand(HOST_ID, createNoteRequest());
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "stale_revision",
+        message: "Canvas changed. Reload and try again.",
+      },
+    });
+    expect(harness.rawClient.rpc).not.toHaveBeenCalled();
+  });
+
+  it("enforces the canonical pinned-object transform guard before RPC", async () => {
+    const pinnedObject = {
+      ...createdObjectRow(HOST_ID),
+      pinned: true,
+    };
+    const pinnedSnapshot = {
+      ...createdSnapshot(HOST_ID),
+      pinned: true,
+    };
+    const harness = createClient({
+      tableResults: {
+        room_members: [{ data: memberRow("host"), error: null }],
+        rooms: [
+          {
+            data: { ...emptyRoomRow, revision: 1 },
+            error: null,
+          },
+          {
+            data: { ...emptyRoomRow, revision: 1 },
+            error: null,
+          },
+        ],
+        canvas_objects: [{ data: [pinnedObject], error: null }],
+        receipts: [
+          {
+            data: [
+              {
+                ...createdReceiptRow({
+                  actorUserId: HOST_ID,
+                  actorType: "human",
+                  actorDisplayName: "Danny",
+                }),
+                resulting_state: [
+                  { objectId: "note-launch", state: pinnedSnapshot },
+                ],
+              },
+            ],
+            error: null,
+          },
+        ],
+      },
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).commitCommand(HOST_ID, {
+      commandId: COMMAND_ID,
+      roomId: ROOM_ID,
+      baseRevision: 1,
+      source: "pointer",
+      command: {
+        type: "object.transform",
+        objectId: "note-launch",
+        transform: { x: 400 },
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "object_pinned",
+        message: "Unpin the object before moving or resizing it.",
+      },
+    });
+    expect(harness.rawClient.rpc).not.toHaveBeenCalled();
+  });
+
+  it("derives a host human actor and sends only the canonical mutation plan", async () => {
+    const harness = successfulCommitClient({
+      member: memberRow("host", "Danny"),
+      actorUserId: HOST_ID,
+      actorType: "human",
+      actorDisplayName: "Danny",
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).commitCommand(HOST_ID, createNoteRequest("typed"));
+
+    expect(harness.rawClient.rpc).toHaveBeenCalledWith(
+      "commit_canvas_mutation_at_revision",
+      {
+        p_room_id: ROOM_ID,
+        p_expected_room_revision: 0,
+        p_actor_user_id: HOST_ID,
+        p_actor_type: "human",
+        p_action: "create",
+        p_description: "Danny created “Launch decision”.",
+        p_changes: [
+          {
+            objectId: "note-launch",
+            expectedVersion: null,
+            after: {
+              type: "note",
+              title: "Launch decision",
+              x: 120,
+              y: 80,
+              width: 280,
+              height: 190,
+              zIndex: 1,
+              minimized: false,
+              pinned: false,
+              deletedAt: null,
+              metadata: {},
+              payload: {
+                text: "Prove the shared spatial workflow.",
+                tone: "sky",
+              },
+            },
+          },
+        ],
+        p_inverse_command: null,
+        p_reversible: true,
+        p_undoes_receipt_id: null,
+        p_receipt_id: COMMAND_ID,
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error.message);
+    expect(result.value).toEqual({
+      roomId: ROOM_ID,
+      revision: 1,
+      receiptId: COMMAND_ID,
+      state: expect.objectContaining({
+        roomId: ROOM_ID,
+        revision: 1,
+        objects: {
+          "note-launch": expect.objectContaining({
+            id: "note-launch",
+            createdBy: HOST_ID,
+          }),
+        },
+      }),
+    });
+    expect(result.value.state.receipts.at(-1)).toEqual(
+      expect.objectContaining({
+        id: COMMAND_ID,
+        commandId: COMMAND_ID,
+        source: "typed",
+        actor: { id: HOST_ID, displayName: "Danny", type: "human" },
+      }),
+    );
+  });
+
+  it("derives participant and host-WebMCP actors from membership and source", async () => {
+    const participantHarness = successfulCommitClient({
+      member: memberRow("participant", "Sarah"),
+      actorUserId: PARTICIPANT_ID,
+      actorType: "participant",
+      actorDisplayName: "Sarah",
+    });
+    const agentHarness = successfulCommitClient({
+      member: memberRow("host", "Danny"),
+      actorUserId: HOST_ID,
+      actorType: "agent",
+      actorDisplayName: "CommandCanvas agent",
+    });
+
+    const participant = await createRoomService(
+      participantHarness.client,
+      dependencies,
+    ).commitCommand(PARTICIPANT_ID, createNoteRequest("pointer"));
+    const agent = await createRoomService(
+      agentHarness.client,
+      dependencies,
+    ).commitCommand(HOST_ID, createNoteRequest("webmcp"));
+
+    expect(participant.ok).toBe(true);
+    expect(agent.ok).toBe(true);
+    expect(participantHarness.rawClient.rpc).toHaveBeenCalledWith(
+      "commit_canvas_mutation_at_revision",
+      expect.objectContaining({
+        p_expected_room_revision: 0,
+        p_actor_user_id: PARTICIPANT_ID,
+        p_actor_type: "participant",
+        p_description: "Sarah created “Launch decision”.",
+      }),
+    );
+    expect(agentHarness.rawClient.rpc).toHaveBeenCalledWith(
+      "commit_canvas_mutation_at_revision",
+      expect.objectContaining({
+        p_expected_room_revision: 0,
+        p_actor_user_id: HOST_ID,
+        p_actor_type: "agent",
+        p_description: "CommandCanvas agent created “Launch decision”.",
+      }),
+    );
+    if (!participant.ok || !agent.ok) throw new Error("Expected both commits.");
+    expect(participant.value.state.receipts.at(-1)?.source).toBe("collaborator");
+    expect(agent.value.state.receipts.at(-1)?.source).toBe("webmcp");
+  });
+
+  it("maps database conflicts to a compact typed error without raw details", async () => {
+    const harness = createClient({
+      tableResults: {
+        room_members: [{ data: memberRow("host"), error: null }],
+        rooms: [
+          { data: emptyRoomRow, error: null },
+          { data: emptyRoomRow, error: null },
+        ],
+        canvas_objects: [{ data: [], error: null }],
+        receipts: [{ data: [], error: null }],
+      },
+      rpcResults: [
+        {
+          data: null,
+          error: {
+            code: "P0001",
+            message: "canvas_object_version_conflict:private-row-detail",
+          },
+        },
+      ],
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).commitCommand(HOST_ID, createNoteRequest());
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "command_conflict",
+        message: "Canvas changed before the command could be committed.",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("private-row-detail");
+  });
+});

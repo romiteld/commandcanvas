@@ -125,4 +125,51 @@ describe("canvas store", () => {
       },
     });
   });
+
+  it("hydrates a newer authoritative room snapshot without resetting the viewport", () => {
+    const remote = createCanvasStore("room-demo", dependencies());
+    remote.getState().dispatch(newNote, "collaborator");
+    const local = createCanvasStore("room-demo", dependencies());
+    local.getState().setViewport({ x: 80, y: -24, scale: 1.4 });
+
+    const hydrated = local.getState().hydrateCanvas(remote.getState().canvas);
+
+    expect(hydrated).toBe(true);
+    expect(local.getState().canvas.revision).toBe(1);
+    expect(local.getState().canvas.objects["note-1"]?.title).toBe("Decision");
+    expect(local.getState().viewport).toEqual({ x: 80, y: -24, scale: 1.4 });
+  });
+
+  it("refuses cross-room and stale hydration snapshots", () => {
+    const local = createCanvasStore("room-demo", dependencies());
+    local.getState().dispatch(newNote, "pointer");
+    const current = local.getState().canvas;
+
+    expect(
+      local.getState().hydrateCanvas({ ...current, roomId: "other-room", revision: 2 }),
+    ).toBe(false);
+    expect(
+      local.getState().hydrateCanvas({ ...current, revision: current.revision - 1 }),
+    ).toBe(false);
+    expect(local.getState().canvas).toBe(current);
+  });
+
+  it("clears a selection when authoritative hydration marks that object deleted", () => {
+    const local = createCanvasStore("room-demo", dependencies());
+    local.getState().dispatch(newNote, "pointer");
+    local.getState().selectObject("note-1");
+    const current = local.getState().canvas;
+    const object = current.objects["note-1"];
+
+    local.getState().hydrateCanvas({
+      ...current,
+      revision: 2,
+      objects: {
+        ...current.objects,
+        "note-1": { ...object, deletedAt: "2026-08-27T14:00:00.000Z" },
+      },
+    });
+
+    expect(local.getState().selectedObjectId).toBeNull();
+  });
 });

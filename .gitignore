@@ -38,6 +38,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# Supabase CLI scratch state
+/supabase/.temp/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
