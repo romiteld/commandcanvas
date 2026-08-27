@@ -10,6 +10,12 @@ import type { StoreApi } from "zustand";
 import { useStore } from "zustand";
 
 import { DiagramPreview } from "@/components/command-canvas/diagram-preview";
+import {
+  HumanCommandControl,
+  type HumanCommandObjectSnapshot,
+  type HumanCommandResult,
+  type HumanCommandSource,
+} from "@/components/command-canvas/human-command-control";
 import { SketchComposer } from "@/components/command-canvas/sketch-composer";
 import { SketchPreview } from "@/components/command-canvas/sketch-preview";
 import { SpatialCameraControl } from "@/components/command-canvas/spatial-camera-control";
@@ -28,6 +34,7 @@ import {
   zoomViewportAt,
   type CanvasPoint,
 } from "@/lib/canvas/coordinates";
+import type { DirectCanvasIntent } from "@/lib/canvas/direct-command";
 import type {
   HandTrackingController,
   HandTrackingObservation,
@@ -181,7 +188,9 @@ export function CommandCanvasRoom({
     );
   }
 
-  async function transformSelectedSketch() {
+  async function transformSelectedSketch(
+    source: CanvasCommandSource = UI_SKETCH_TRANSFORM_SOURCE,
+  ) {
     if (
       !onTransformSketch ||
       interactionPending ||
@@ -197,7 +206,7 @@ export function CommandCanvasRoom({
         sketchObjectId: selectedObject.id,
         instruction: UI_SKETCH_TRANSFORM_INSTRUCTION,
         outputKind: "architecture",
-        source: UI_SKETCH_TRANSFORM_SOURCE,
+        source,
       });
       if (!result.ok) {
         setSketchTransformExecution({
@@ -381,7 +390,10 @@ export function CommandCanvasRoom({
     onApplied?.();
   }
 
-  function createNote() {
+  function createNote(
+    source: CanvasCommandSource = "pointer",
+    text?: string,
+  ) {
     runCommand(
       {
         type: "object.create",
@@ -395,16 +407,18 @@ export function CommandCanvasRoom({
           height: 190,
           zIndex: canvas.revision + 1,
           payload: {
-            text: "Capture the decision while everyone can still see the context.",
+            text:
+              text ??
+              "Capture the decision while everyone can still see the context.",
             tone: "coral",
           },
         },
       },
-      "pointer",
+      source,
     );
   }
 
-  function createTaskBoard() {
+  function createTaskBoard(source: CanvasCommandSource = "pointer") {
     runCommand(
       {
         type: "object.create",
@@ -452,11 +466,11 @@ export function CommandCanvasRoom({
           },
         },
       },
-      "pointer",
+      source,
     );
   }
 
-  function createSchedule() {
+  function createSchedule(source: CanvasCommandSource = "pointer") {
     runCommand(
       {
         type: "object.create",
@@ -500,8 +514,124 @@ export function CommandCanvasRoom({
           },
         },
       },
-      "pointer",
+      source,
     );
+  }
+
+  function handleDirectIntent(
+    intent: DirectCanvasIntent,
+    source: HumanCommandSource,
+    target?: HumanCommandObjectSnapshot,
+  ): HumanCommandResult {
+    if (interactionPending)
+      return {
+        ok: false,
+        message: "Wait for the current canvas action to finish.",
+      };
+
+    switch (intent.type) {
+      case "create_note":
+        createNote(source, intent.text);
+        return { ok: true, message: "Note command submitted." };
+      case "create_board":
+        createTaskBoard(source);
+        return { ok: true, message: "Board command submitted." };
+      case "create_schedule":
+        createSchedule(source);
+        return { ok: true, message: "Schedule command submitted." };
+      case "open_sketch":
+        setSketchComposerOpen(true);
+        return { ok: true, message: "Sketch surface opened." };
+      case "transform_selected_sketch":
+        if (
+          !selectedObject ||
+          selectedObject.deletedAt ||
+          selectedObject.type !== "sketch"
+        )
+          return {
+            ok: false,
+            message: "Select an active sketch first.",
+          };
+        if (!onTransformSketch)
+          return {
+            ok: false,
+            message: "Sketch interpretation is unavailable in this room.",
+          };
+        void transformSelectedSketch(source);
+        return { ok: true, message: "Sketch interpretation submitted." };
+      case "undo":
+        if (canvas.receipts.length === 0)
+          return { ok: false, message: "There is no canvas change to undo." };
+        runCommand({ type: "history.undo" }, source);
+        return { ok: true, message: "Undo command submitted." };
+      case "pin_selected":
+        return setSelectedFlagFromHuman(source, "pinned", true, "Pin");
+      case "unpin_selected":
+        return setSelectedFlagFromHuman(source, "pinned", false, "Unpin");
+      case "minimize_selected":
+        return setSelectedFlagFromHuman(
+          source,
+          "minimized",
+          true,
+          "Minimize",
+        );
+      case "restore_selected":
+        return setSelectedFlagFromHuman(
+          source,
+          "minimized",
+          false,
+          "Restore",
+        );
+      case "discard_selected":
+        if (!target)
+          return { ok: false, message: "Select an active object first." };
+        const targetObject = canvas.objects[target.objectId];
+        if (!targetObject || targetObject.deletedAt)
+          return {
+            ok: false,
+            message: `Discard cancelled because “${target.title}” is no longer active.`,
+          };
+        if (
+          targetObject.version !== target.version ||
+          targetObject.title !== target.title
+        )
+          return {
+            ok: false,
+            message: `Discard cancelled because “${target.title}” changed. Review it and try again.`,
+          };
+        runCommand(
+          { type: "object.discard", objectId: target.objectId },
+          source,
+        );
+        return {
+          ok: true,
+          message: "Recoverable discard command submitted.",
+        };
+    }
+  }
+
+  function setSelectedFlagFromHuman(
+    source: HumanCommandSource,
+    flag: "pinned" | "minimized",
+    value: boolean,
+    actionLabel: string,
+  ): HumanCommandResult {
+    if (!selectedObject || selectedObject.deletedAt)
+      return { ok: false, message: "Select an active object first." };
+    if (selectedObject[flag] === value)
+      return {
+        ok: false,
+        message: `“${selectedObject.title}” is already ${flag === "pinned" ? (value ? "pinned" : "unpinned") : value ? "minimized" : "restored"}.`,
+      };
+    runCommand(
+      {
+        type: "object.set_flags",
+        objectId: selectedObject.id,
+        flags: { [flag]: value },
+      },
+      source,
+    );
+    return { ok: true, message: `${actionLabel} command submitted.` };
   }
 
   function createSketch(
@@ -864,7 +994,7 @@ export function CommandCanvasRoom({
         <aside className="tool-dock" aria-label="Object tools">
           <button
             type="button"
-            onClick={createNote}
+            onClick={() => createNote()}
             aria-label="Create note"
             disabled={interactionPending}
           >
@@ -873,7 +1003,7 @@ export function CommandCanvasRoom({
           </button>
           <button
             type="button"
-            onClick={createTaskBoard}
+            onClick={() => createTaskBoard()}
             aria-label="Create task board"
             disabled={interactionPending}
           >
@@ -882,7 +1012,7 @@ export function CommandCanvasRoom({
           </button>
           <button
             type="button"
-            onClick={createSchedule}
+            onClick={() => createSchedule()}
             aria-label="Create schedule"
             disabled={interactionPending}
           >
@@ -1044,7 +1174,7 @@ export function CommandCanvasRoom({
                         : "Make usable"
                     }
                     disabled={interactionPending}
-                    onClick={transformSelectedSketch}
+                    onClick={() => void transformSelectedSketch()}
                   >
                     {sketchTransformPending
                       ? "Interpreting sketch…"
@@ -1138,6 +1268,7 @@ export function CommandCanvasRoom({
                 serviceStatus?.collaboration?.value ?? "Realtime not connected"
               }
               tone={serviceStatus?.collaboration?.tone ?? "idle"}
+              announce
             />
             <ServiceState
               label="Spatial input"
@@ -1150,6 +1281,20 @@ export function CommandCanvasRoom({
             createController={createHandTrackingController}
             onObservation={handleHandObservation}
             onStatusChange={setHandTrackingStatus}
+          />
+
+          <HumanCommandControl
+            disabled={interactionPending}
+            onIntent={handleDirectIntent}
+            selectedObject={
+              selectedObject && !selectedObject.deletedAt
+                ? {
+                    objectId: selectedObject.id,
+                    title: selectedObject.title,
+                    version: selectedObject.version,
+                  }
+                : null
+            }
           />
 
           {meetingPacketPanel}
@@ -1520,15 +1665,27 @@ interface ServiceStateProps {
   label: string;
   value: string;
   tone: ServiceTone;
+  announce?: boolean;
 }
 
-function ServiceState({ label, value, tone }: ServiceStateProps) {
+function ServiceState({
+  label,
+  value,
+  tone,
+  announce = false,
+}: ServiceStateProps) {
   return (
     <div className="service-state">
       <span className={`service-orb service-${tone}`} aria-hidden="true" />
       <div>
         <strong>{label}</strong>
-        <span>{value}</span>
+        <span
+          role={announce ? "status" : undefined}
+          aria-live={announce ? "polite" : undefined}
+          aria-atomic={announce ? "true" : undefined}
+        >
+          {value}
+        </span>
       </div>
     </div>
   );

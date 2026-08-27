@@ -63,6 +63,29 @@ function seedSketch(store: ReturnType<typeof createCanvasStore>) {
   );
 }
 
+function seedNote(
+  store: ReturnType<typeof createCanvasStore>,
+  input: { id: string; title: string; x: number },
+) {
+  store.getState().dispatch(
+    {
+      type: "object.create",
+      object: {
+        id: input.id,
+        type: "note",
+        title: input.title,
+        x: input.x,
+        y: 30,
+        width: 280,
+        height: 190,
+        zIndex: input.x,
+        payload: { text: input.title, tone: "sky" },
+      },
+    },
+    "system",
+  );
+}
+
 function fakeHandController() {
   let status: HandTrackingStatus = { state: "off" };
   const statusListeners = new Set<(next: HandTrackingStatus) => void>();
@@ -837,7 +860,14 @@ describe("CommandCanvasRoom", () => {
 
     expect(screen.getByText("Local room")).toBeInTheDocument();
     expect(screen.getByText("WebMCP not exercised")).toBeInTheDocument();
-    expect(screen.getByText("Realtime not connected")).toBeInTheDocument();
+    expect(screen.getByText("Realtime not connected")).toHaveAttribute(
+      "role",
+      "status",
+    );
+    expect(screen.getByText("Realtime not connected")).toHaveAttribute(
+      "aria-live",
+      "polite",
+    );
     expect(screen.getByText("Camera off")).toBeInTheDocument();
   });
 
@@ -956,6 +986,148 @@ describe("CommandCanvasRoom", () => {
     expect(received[3]).toMatchObject({ flags: { pinned: true } });
     expect(received[4]).toMatchObject({ flags: { minimized: true } });
     expect(store.getState().canvas.revision).toBe(1);
+  });
+
+  it("routes bounded typed commands through the same canonical human source", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    render(<CommandCanvasRoom store={store} />);
+    const input = screen.getByRole("textbox", {
+      name: "Direct canvas command",
+    });
+
+    await user.type(input, "Bring in our project board");
+    await user.click(screen.getByRole("button", { name: "Run direct command" }));
+
+    const board = Object.values(store.getState().canvas.objects).find(
+      (object) => object.type === "task_board",
+    );
+    expect(board).toBeDefined();
+    expect(store.getState().canvas.receipts.at(-1)?.source).toBe("typed");
+    expect(screen.getByText("Board command submitted.")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Select Launch board" }));
+    await user.type(input, "minimize it");
+    await user.click(screen.getByRole("button", { name: "Run direct command" }));
+
+    expect(store.getState().canvas.objects[board!.id]?.minimized).toBe(true);
+    expect(store.getState().canvas.receipts.at(-1)?.source).toBe("typed");
+  });
+
+  it("uses direct note content and refuses selected-object language without a selection", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    render(<CommandCanvasRoom store={store} />);
+    const input = screen.getByRole("textbox", {
+      name: "Direct canvas command",
+    });
+
+    await user.type(input, "pin this");
+    await user.click(screen.getByRole("button", { name: "Run direct command" }));
+    expect(screen.getByText("Select an active object first.")).toBeVisible();
+
+    await user.clear(input);
+    await user.type(input, "Make a note: Launch date is Friday");
+    await user.click(screen.getByRole("button", { name: "Run direct command" }));
+
+    const note = Object.values(store.getState().canvas.objects).find(
+      (object) => object.type === "note",
+    );
+    expect(note?.type === "note" ? note.payload.text : undefined).toBe(
+      "Launch date is Friday",
+    );
+  });
+
+  it("discards the exact object staged before the selection changes", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
+    seedNote(store, { id: "note-risk", title: "Risk note", x: 340 });
+    render(<CommandCanvasRoom store={store} />);
+
+    await user.click(screen.getByRole("button", { name: "Select Launch note" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Direct canvas command" }),
+      "discard this",
+    );
+    await user.click(screen.getByRole("button", { name: "Run direct command" }));
+    await user.click(screen.getByRole("button", { name: "Select Risk note" }));
+    await user.click(
+      screen.getByRole("button", { name: "Confirm recoverable discard" }),
+    );
+
+    expect(store.getState().canvas.objects["note-launch"]?.deletedAt).not.toBeNull();
+    expect(store.getState().canvas.objects["note-risk"]?.deletedAt).toBeNull();
+    expect(store.getState().canvas.receipts.at(-1)).toMatchObject({
+      source: "typed",
+      action: "discard",
+      affectedObjectIds: ["note-launch"],
+    });
+  });
+
+  it("refuses a staged discard when that object changed before confirmation", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
+    render(<CommandCanvasRoom store={store} />);
+
+    await user.click(screen.getByRole("button", { name: "Select Launch note" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Direct canvas command" }),
+      "discard this",
+    );
+    await user.click(screen.getByRole("button", { name: "Run direct command" }));
+    store.getState().dispatch(
+      {
+        type: "object.transform",
+        objectId: "note-launch",
+        transform: { x: 80 },
+      },
+      "collaborator",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Confirm recoverable discard" }),
+    );
+
+    expect(store.getState().canvas.objects["note-launch"]).toMatchObject({
+      deletedAt: null,
+      version: 2,
+      x: 80,
+    });
+    expect(
+      screen.getByText(
+        "Discard cancelled because “Launch note” changed. Review it and try again.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("refuses a staged discard when that object was already deleted", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
+    render(<CommandCanvasRoom store={store} />);
+
+    await user.click(screen.getByRole("button", { name: "Select Launch note" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Direct canvas command" }),
+      "discard this",
+    );
+    await user.click(screen.getByRole("button", { name: "Run direct command" }));
+    store.getState().dispatch(
+      { type: "object.discard", objectId: "note-launch" },
+      "collaborator",
+    );
+    const revisionBeforeConfirmation = store.getState().canvas.revision;
+    await user.click(
+      screen.getByRole("button", { name: "Confirm recoverable discard" }),
+    );
+
+    expect(store.getState().canvas.revision).toBe(revisionBeforeConfirmation);
+    expect(
+      screen.getByText(
+        "Discard cancelled because “Launch note” is no longer active.",
+      ),
+    ).toBeVisible();
   });
 
   it("routes completed drag and resize previews through the remote handler", () => {

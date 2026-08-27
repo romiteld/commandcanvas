@@ -30,6 +30,11 @@ const SESSION: NoSignupSession = {
   user: { id: USER_ID, is_anonymous: true },
 };
 
+const REFRESHED_SESSION: NoSignupSession = {
+  access_token: "refreshed.payload.signature",
+  user: { id: USER_ID, is_anonymous: true },
+};
+
 const SKETCH_INPUT: Omit<SketchTransformRequest, "roomId"> = {
   sketchObjectId: "sketch-source",
   sourceVersion: 1,
@@ -82,6 +87,10 @@ function createHarness(options?: {
   hydrateCanvas?: DemoRoomSessionDependencies["hydrateCanvas"];
   createSketchTransformApi?: SketchTransformFactory;
   createPacketApi?: PacketApiFactory;
+  roomApiForToken?: (
+    accessToken: string,
+    defaultApi: BrowserRoomApi,
+  ) => BrowserRoomApi;
 }) {
   let realtimeOptions:
     | Parameters<DemoRoomSessionDependencies["createRealtime"]>[0]
@@ -136,7 +145,33 @@ function createHarness(options?: {
     commitCommand,
     ...options?.api,
   };
-  const createRoomApi = vi.fn(() => roomApi);
+  const createRoomApi = vi.fn((accessToken: string) =>
+    options?.roomApiForToken?.(accessToken, roomApi) ?? roomApi,
+  );
+  let authStateChange:
+    | ((event: string, session: NoSignupSession | null) => void)
+    | null = null;
+  const authUnsubscribe = vi.fn();
+  const authClient = {
+    auth: {
+      getSession: vi.fn(async () => ({
+        data: { session: SESSION },
+        error: null,
+      })),
+      signInAnonymously: vi.fn(async () => ({
+        data: { session: SESSION },
+        error: null,
+      })),
+      onAuthStateChange: vi.fn(
+        (
+          callback: (event: string, session: NoSignupSession | null) => void,
+        ) => {
+          authStateChange = callback;
+          return { data: { subscription: { unsubscribe: authUnsubscribe } } };
+        },
+      ),
+    },
+  };
   const ensureSession = vi.fn(async () => ({
     ok: true as const,
     session: SESSION,
@@ -156,7 +191,7 @@ function createHarness(options?: {
     }));
   const hydrateCanvas = options?.hydrateCanvas ?? vi.fn(() => true);
   const dependencies = {
-    authClient: {} as DemoRoomSessionDependencies["authClient"],
+    authClient,
     roomDataClient: {} as DemoRoomSessionDependencies["roomDataClient"],
     realtimeClient: {} as DemoRoomSessionDependencies["realtimeClient"],
     createRoomApi,
@@ -194,8 +229,123 @@ function createHarness(options?: {
     publishCursor,
     realtimeDispose,
     getRealtimeOptions: () => realtimeOptions,
+    emitAuthStateChange: (event: string, session: NoSignupSession | null) =>
+      authStateChange?.(event, session),
+    authUnsubscribe,
   };
 }
+
+describe("authenticated token rotation", () => {
+  it("uses a refreshed token for room, vision, packet, and Realtime recovery work", async () => {
+    const refreshedCommit = vi.fn<BrowserRoomApi["commitCommand"]>(async () => ({
+      ok: true as const,
+      value: {
+        roomId: ROOM_ID,
+        revision: 1,
+        receiptId: RECEIPT_ID,
+        state: canvas(1),
+      },
+    }));
+    const refreshedTransform = vi.fn<BrowserSketchTransformApi["transform"]>(
+      async () => ({
+        ok: false as const,
+        error: {
+          code: "model_unavailable",
+          message: "Interpretation is temporarily unavailable.",
+        },
+      }),
+    );
+    const initialTransform = vi.fn<BrowserSketchTransformApi["transform"]>();
+    const refreshedLoadLatest = vi.fn<BrowserPacketApi["loadLatest"]>(async () => ({
+      ok: true as const,
+      value: { packet: null, latestSend: null, activity: [] },
+    }));
+    const packetApi = (loadLatest: BrowserPacketApi["loadLatest"]): BrowserPacketApi => ({
+      loadLatest,
+      prepare: vi.fn(),
+      update: vi.fn(),
+      approve: vi.fn(),
+      stageSend: vi.fn(),
+      cancelSend: vi.fn(),
+      executeSend: vi.fn(),
+    });
+    const initialLoadLatest = vi.fn<BrowserPacketApi["loadLatest"]>();
+    const createSketchTransformApi = vi.fn<SketchTransformFactory>(
+      (accessToken) => ({
+        transform:
+          accessToken === REFRESHED_SESSION.access_token
+            ? refreshedTransform
+            : initialTransform,
+      }),
+    );
+    const createPacketApi = vi.fn<PacketApiFactory>((accessToken) =>
+      packetApi(
+        accessToken === REFRESHED_SESSION.access_token
+          ? refreshedLoadLatest
+          : initialLoadLatest,
+      ),
+    );
+    const harness = createHarness({
+      roomApiForToken: (accessToken, defaultApi) =>
+        accessToken === REFRESHED_SESSION.access_token
+          ? { ...defaultApi, commitCommand: refreshedCommit }
+          : defaultApi,
+      createSketchTransformApi,
+      createPacketApi,
+    });
+
+    await harness.session.start({
+      kind: "host",
+      roomName: "Architecture review",
+      displayName: "Danny",
+      color: "#0ea5e9",
+    });
+    harness.emitAuthStateChange("TOKEN_REFRESHED", REFRESHED_SESSION);
+
+    await expect(
+      harness.session.submitCommand(
+        {
+          type: "object.create",
+          object: {
+            id: "note-refresh",
+            type: "note",
+            title: "Fresh token",
+            x: 40,
+            y: 40,
+            width: 280,
+            height: 190,
+            zIndex: 1,
+            payload: { text: "Use the rotated credential.", tone: "sky" },
+          },
+        },
+        "typed",
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    await harness.session.transformSketch(SKETCH_INPUT);
+    await harness.session.loadLatestPacketWorkflow();
+
+    expect(harness.createRoomApi).toHaveBeenLastCalledWith(
+      REFRESHED_SESSION.access_token,
+    );
+    expect(createSketchTransformApi).toHaveBeenLastCalledWith(
+      REFRESHED_SESSION.access_token,
+    );
+    expect(createPacketApi).toHaveBeenLastCalledWith(
+      REFRESHED_SESSION.access_token,
+    );
+    expect(refreshedCommit).toHaveBeenCalledOnce();
+    expect(refreshedTransform).toHaveBeenCalledOnce();
+    expect(refreshedLoadLatest).toHaveBeenCalledOnce();
+    expect(initialTransform).not.toHaveBeenCalled();
+    expect(initialLoadLatest).not.toHaveBeenCalled();
+    expect(harness.getRealtimeOptions()?.accessToken).toBe(
+      REFRESHED_SESSION.access_token,
+    );
+
+    await harness.session.dispose();
+    expect(harness.authUnsubscribe).toHaveBeenCalledOnce();
+  });
+});
 
 describe("authenticated packet workflow bridge", () => {
   it("creates one authenticated packet API and injects the verified room ID", async () => {

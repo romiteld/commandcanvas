@@ -160,6 +160,90 @@ test("creates semantic project-board and schedule objects from the toolbar", asy
   expect(browserErrors).toEqual([]);
 });
 
+test("reviews a deterministic browser speech transcript before a canonical voice command", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-desktop");
+  await page.addInitScript(() => {
+    class DeterministicSpeechRecognition {
+      lang = "";
+      continuous = true;
+      interimResults = true;
+      maxAlternatives = 0;
+      onstart: ((event: Event) => void) | null = null;
+      onresult: ((event: unknown) => void) | null = null;
+      onerror: ((event: unknown) => void) | null = null;
+      onend: ((event: Event) => void) | null = null;
+
+      start() {
+        this.onstart?.(new Event("start"));
+        queueMicrotask(() => {
+          this.onresult?.({
+            resultIndex: 0,
+            results: {
+              length: 1,
+              0: {
+                isFinal: true,
+                length: 1,
+                0: {
+                  transcript: "Bring in our project board",
+                  confidence: 1,
+                },
+              },
+            },
+          });
+          this.onend?.(new Event("end"));
+        });
+      }
+
+      stop() {}
+
+      abort() {}
+    }
+
+    for (const name of ["SpeechRecognition", "webkitSpeechRecognition"])
+      Object.defineProperty(globalThis, name, {
+        configurable: true,
+        value: DeterministicSpeechRecognition,
+      });
+  });
+
+  await page.goto("/");
+  expect(
+    await page.evaluate(
+      () =>
+        (
+          globalThis as typeof globalThis & {
+            webkitSpeechRecognition?: { name?: string };
+          }
+        ).webkitSpeechRecognition?.name,
+    ),
+  ).toBe("DeterministicSpeechRecognition");
+  await expect(
+    page.getByText(
+      "Direct shortcuts use the human command path. Agent actions arrive through WebMCP.",
+    ),
+  ).toBeVisible();
+
+  await page
+    .getByRole("button", { name: "Start voice transcription" })
+    .click();
+  const input = page.getByRole("textbox", { name: "Direct canvas command" });
+  await expect(input).toHaveValue("Bring in our project board");
+  await expect(
+    page.getByText("Transcript ready. Review it, then run the direct command."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Select Launch board" }),
+  ).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Run direct command" }).click();
+  await expect(
+    page.getByRole("button", { name: "Select Launch board" }),
+  ).toBeVisible();
+  await expect(page.getByText("R1 · voice")).toBeVisible();
+});
+
 test("commits exactly one canonical transform when a pointer drag ends", async ({
   page,
 }, testInfo) => {

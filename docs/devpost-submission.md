@@ -19,7 +19,7 @@ Meetings generate sketches, decisions, tasks, and commitments, but the useful ou
 
 ## What it does
 
-CommandCanvas is an infinite spatial collaboration canvas built from structured objects rather than untyped pixels or documents. A no-signup room opens with a project board, schedule, decision, live presence, and an activity trail. Participants can create, move, resize, pin, minimize, recover, and undo objects through accessible pointer controls.
+CommandCanvas is an infinite spatial collaboration canvas built from structured objects rather than untyped pixels or documents. A no-signup room opens with a project board, schedule, decision, live presence, and an activity trail. Participants can create, move, resize, pin, minimize, recover, and undo objects through pointer, touch, stylus, bounded typed commands, or reviewed browser speech transcripts.
 
 The defining workflow begins with a rough sketch. Mouse, touch, stylus, or local finger tracking produces a durable `SketchObject`. CommandCanvas rasterizes the selected strokes to a PNG in the browser and sends that image with the user’s instruction to a vision-capable model. A strict structured-output schema is validated before a new `DiagramObject` appears beside the preserved original.
 
@@ -42,7 +42,8 @@ Meeting packets preserve human control over consequential actions. The host revi
 All input paths converge on one architecture:
 
 ```text
-Pointer · Touch · Stylus · Local hand landmarks · Collaborator · WebMCP
+Pointer · Touch · Stylus · Typed command · Reviewed voice transcript
+Local hand landmarks · Collaborator · WebMCP
                                   │
                                   ▼
                          Semantic intent
@@ -105,6 +106,7 @@ An additional browser constraint was experimental WebMCP lifecycle behavior. Com
 - One mutation and receipt pipeline across human, collaborator, and agent inputs
 - A real rough-sketch-to-structured-diagram transition that preserves the source
 - No-signup, two-browser Supabase collaboration with actual Presence and Broadcast
+- No-reload recovery after a browser network outage, with Presence and durable collaboration restored
 - WebMCP tools that operate on the same live React page rather than a detached copy
 - Reversible, attributable canvas mutations
 - Exact packet and recipient approval snapshots with durable cancellation and honest delivery fallback

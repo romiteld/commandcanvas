@@ -1208,6 +1208,151 @@ button:focus-visible {
   color: #a6453b;
 }
 
+.gesture-self-check {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid rgb(28 151 139 / 24%);
+  border-radius: 7px;
+  background: rgb(28 151 139 / 7%);
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.gesture-self-check strong {
+  color: var(--ink);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.gesture-self-check em {
+  color: var(--teal);
+  font-style: normal;
+}
+
+.human-command-control {
+  display: grid;
+  gap: 9px;
+  margin: -8px 0 22px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+}
+
+.human-command-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.human-command-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.human-command-heading strong {
+  font-size: 11px;
+}
+
+.human-command-heading span,
+.human-command-control > p,
+.human-command-feedback,
+.human-command-confirmation p {
+  margin: 0;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.human-command-heading button,
+.human-command-form button,
+.human-command-confirmation button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: white;
+  color: var(--ink);
+  cursor: pointer;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.human-command-heading button:disabled,
+.human-command-form button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.human-command-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.human-command-form input {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--ink);
+  background: #fbfcfe;
+  font-size: 11px;
+}
+
+.human-command-form input:focus-visible {
+  border-color: var(--violet);
+  outline: 2px solid rgb(117 88 207 / 18%);
+  outline-offset: 1px;
+}
+
+.human-command-form button {
+  border-color: var(--ink);
+  color: white;
+  background: var(--ink);
+}
+
+.human-command-feedback {
+  min-height: 12px;
+}
+
+.human-command-feedback.feedback-ready {
+  color: var(--teal);
+}
+
+.human-command-feedback.feedback-error {
+  color: #a6453b;
+}
+
+.human-command-confirmation {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid rgb(242 106 91 / 32%);
+  border-radius: 7px;
+  background: var(--coral-wash);
+}
+
+.human-command-confirmation > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.human-command-confirmation button:last-child {
+  border-color: #a6453b;
+  color: white;
+  background: #a6453b;
+}
+
 .service-state div span {
   overflow: hidden;
   color: var(--muted);

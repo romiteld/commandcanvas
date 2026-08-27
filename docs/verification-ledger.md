@@ -1,6 +1,6 @@
 # CommandCanvas verification ledger
 
-This ledger records observed behavior only. An integration remains **UNVERIFIED** until it has been exercised against the named service or browser. “Working” means covered by automated checks or local runtime evidence; “Verified in browser” requires an observed browser interaction.
+This ledger records observed behavior only. An integration remains **UNVERIFIED** until it has been exercised against the named service or browser. “Working” means covered by automated checks or local runtime evidence; “Verified in browser” requires an observed browser interaction. Checkpoint sections are time-scoped; the newest checkpoint supersedes an earlier checkpoint's remaining-boundary list.
 
 ## Checkpoint 0: repository shell
 
@@ -87,6 +87,18 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 | 2026-08-27 | 10 | Vercel reported no production runtime errors or 5xx responses in the exercised window. The only 4xx entry was the deliberate GET probe of the POST-only `/api/rooms` boundary, which returned the expected HTTP 405 with the security headers | VERIFIED IN VERCEL PRODUCTION LOGS |
 | 2026-08-27 | 10 | The first clean GitHub Actions run failed because `app/layout.tsx` referenced a Next-generated global type before `.next/types` existed. The layout now uses an explicit `ReactNode` contract; a clean typecheck with the entire `.next` directory moved aside passed | FAIL-BEFORE/FIXED; CLEAN TYPECHECK PASSED |
 | 2026-08-27 | 10 | GitHub Actions reran the clean Node 22 checkout and passed the complete build/unit gate in 1m22s. GitHub's live release API identified `actions/checkout` v7.0.1 and `actions/setup-node` v7.0.0, so the workflow moved from v4 to the current v7 majors to remove the deprecated action-runtime annotation | GREEN CI; CURRENT ACTION MAJORS CONFIRMED |
+| 2026-08-27 | 11 | An isolated official Chrome for Testing 153.0.8010.5 binary, launched with `--enable-features=WebMCP`, exercised native `document.modelContext.executeTool(...)` against public `/demo`: state read, durable note and sketch creation, visible `webmcp` receipt, client-side in-flight cancellation before server admission with `AbortError`, unchanged revision, and exact room cleanup | VERIFIED IN PUBLIC CHROME 153 + DEPLOYED SUPABASE |
+| 2026-08-27 | 11 | The same Chrome 153 binary exercised a local production bundle built with `NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION=true` while only allowlisted room APIs were proxied to the canonical production origin: six initial tools, selection-driven `transform_sketch` registration/removal, native `toolchange`, registration-lifecycle separation from an in-flight invocation, client-side invocation cancellation, and exact cleanup | VERIFIED IN CHROME 153 LOCAL PRODUCTION BUNDLE + DEPLOYED API; PUBLIC DYNAMIC ORIGIN PENDING |
+| 2026-08-27 | 11 | Test-first direct human commands now create and manipulate semantic objects through the canonical `typed` or `voice` source. A production Chromium run injected a deterministic Web Speech provider, verified that the transcript remained reviewable and caused no mutation until **Run**, then observed `R1 · voice` | VERIFIED IN BROWSER WITH DETERMINISTIC SPEECH PROVIDER; REAL MICROPHONE/SPEECH SERVICE UNVERIFIED |
+| 2026-08-27 | 11 | Chromium CDP emitted trusted browser touch and pen sequences into the real sketch surface, producing canonical `R1 · touch` and `R2 · stylus` receipts. An iPhone-profile WebKit run kept the ordinary-browser canvas usable with no horizontal overflow or page errors | VERIFIED IN CHROMIUM + PLAYWRIGHT WEBKIT PROFILE; PHYSICAL HARDWARE UNVERIFIED |
+| 2026-08-27 | 11 | Two real no-signup browser sessions connected to deployed Supabase Realtime. The participant browser was forced offline and back online without reload; the current client replaced its private channel, returned to two-person Presence, resumed cursor Broadcast and durable mutation convergence, then deleted the exact room | VERIFIED IN LOCAL PRODUCTION CLIENT + DEPLOYED API + LIVE SUPABASE REALTIME |
+| 2026-08-27 | 11 | A post-cleanup Supabase SQL read-back returned zero rows in every room-scoped public/private table; the single intentional `demo_vision_usage` aggregate remains | VERIFIED IN DEPLOYED SUPABASE |
+| 2026-08-27 | 11 | Resend account metadata showed a verified sending domain, but neither the linked Vercel project nor this checkout contains the required Resend key/sender/recipient-allowlist configuration. The application therefore remains truthfully preview-only; no provider request was made | PROVIDER CONFIGURATION BLOCKED; NO DELIVERY CLAIM |
+| 2026-08-27 | 12 | Exact Node 22.17.0 release gate: ESLint, TypeScript, 523 Vitest tests across 60 files, hand-worker bundle, optimized Next.js production build, `git diff --check`, and production dependency audit completed with zero failures or vulnerabilities | WORKING |
+| 2026-08-27 | 12 | Fresh production build plus the ordinary Playwright matrix completed 15 exercised scenarios with 17 deliberate project/credential skips and zero failures: Chromium desktop/mobile, trusted touch and pen, deterministic reviewed speech, WebKit iPhone-profile fallback, Realtime recovery, and native-surface registration | VERIFIED IN BROWSER |
+| 2026-08-27 | 12 | Two live no-signup Chromium sessions crossed an actual offline/online transition without reload, re-established two-person Presence, exchanged a cursor, converged on a durable participant mutation, reconstructed revision 4 after participant reload, accepted that reloaded participant's next cursor immediately, and deleted the exact room | VERIFIED IN LOCAL PRODUCTION CLIENT + DEPLOYED API + LIVE SUPABASE REALTIME |
+| 2026-08-27 | 12 | Official Chrome for Testing 153.0.8010.5 exercised the exact source as both stable-static and feature-flagged-dynamic production bundles. Native execution, abort handling before server admission, selection-driven registration/removal, `toolchange`, lifecycle separation, and exact cleanup passed in both named modes | VERIFIED IN CHROME 153 LOCAL PRODUCTION BUNDLES + DEPLOYED API |
+| 2026-08-27 | 12 | Final Supabase read-back returned zero rows across every room-scoped public/private table after the browser probes; one intentional aggregate `demo_vision_usage` row remains | VERIFIED IN DEPLOYED SUPABASE |
 
 ## Checkpoint 1: local semantic canvas
 
@@ -343,3 +355,64 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 - Group/ungroup, redo, complex multi-select, frame hierarchy, rotation, two-hand resize, swipe/throw, gesture-only destructive actions, and physical pencil/marker tracking.
 - Video conferencing, conferencing-platform integrations, enterprise identity, broad document-suite integrations, billing, native apps, headsets, a plugin marketplace, and desktop automation.
+
+## Checkpoint 11: environment-specific hardening
+
+### WORKING
+
+- The command rail now includes a deliberately bounded **Human command** control. Typed text and reviewed browser speech transcripts map only to the approved create/select-state/sketch/undo intents; agent, packet, and email actions remain on the WebMCP and explicit site-authorization path.
+- Browser speech support is resolved after hydration so server rendering cannot permanently mark a capable browser as unsupported. Recognition produces one bounded final transcript, never auto-executes it, and retains typed input when permission, capture, provider access, or browser support fails.
+- Direct discard requires a second confirmation bound to the exact object ID, title, and version the human reviewed. A changed or deleted target is refused; an accepted discard remains recoverable through the canonical receipt/undo path.
+- The hand-input panel records point and pinch observations separately for the current camera session, including bounded confidence. It resets when the session stops or fails and reports only that the self-check completed after both gestures were detected.
+- Realtime listens for browser offline/online lifecycle events. Recovery removes and untracks the failed private channel, refreshes Realtime authorization, recreates the exact room channel, retracks Presence, coalesces duplicate work, ignores stale asynchronous callbacks, and applies bounded retries to initial, terminal, track, and replacement failures.
+- Cursor ordering starts from a per-controller time epoch so the first cursor after a participant reload is not rejected behind the prior session's sequence. Supabase `TOKEN_REFRESHED` rotates all room, vision, packet, and future Realtime-recovery credentials without reload.
+- Live probes capture the created room from the earliest successful API response, recover the room ID again during teardown, close browser contexts even if deletion fails, default WebMCP probing to loopback, and require an explicit opt-in for a public target. API proxying is restricted to the canonical production origin and the probe's named room endpoints.
+- Dedicated Playwright configurations cover ordinary Chromium, mobile Chromium, an iPhone-profile WebKit runtime, installed/native Chrome, and a strict official Chrome 153 release probe.
+
+### VERIFIED IN BROWSER
+
+- Official Chrome for Testing 153.0.8010.5: current `document.modelContext` present, deprecated navigator surface absent, native tool execution, cancellation, stable registration, dynamic registration, `toolchange`, and registration-lifecycle separation all passed in their explicitly named static or dynamic environment.
+- Chromium production browser: a deterministic speech provider placed a transcript into the input without mutating the canvas; the later human **Run** action created the board with a `voice` receipt.
+- Chromium production browser: browser-trusted touch and pen pointer sequences reached the sketch composer and produced distinct canonical source receipts.
+- Playwright WebKit 26.5 under the iPhone 15 profile: ordinary-browser fallback, canvas visibility, tap creation, receipt visibility, no page error, and no horizontal document overflow passed.
+- Live Supabase Realtime: two anonymous authenticated browsers established real Presence, one browser crossed an actual Playwright network outage without reload, then Presence, cursor Broadcast, durable Postgres mutation, and revision convergence resumed before exact cleanup.
+- Public Chrome's fake-camera pipeline evidence remains valid for permission, worker/WASM/model loading, ready state, and shutdown. The new point/pinch self-check is component-tested, not represented as physical-hand evidence.
+
+### UNVERIFIED
+
+- ChatGPT built-in-browser Site Tools discovery, selection, confirmation UI, or invocation. No accessible built-in-browser rollout surface was available from this environment.
+- Dynamic registration at a public HTTPS deployment origin. It passed in a local production bundle backed by deployed APIs; public production intentionally remains in stable static mode until a separate dynamic deployment is exercised.
+- A real microphone plus the browser's external speech-recognition service. The production-browser test used an explicitly deterministic provider; typed commands are the guaranteed fallback.
+- Physical human-hand pointing/pinch accuracy, camera-to-canvas latency, lighting/occlusion behavior, and actual camera hardware. This host exposes no `/dev/video*` capture device.
+- Physical iPhone/iPad/Android touch, pressure/tilt/palm rejection on a real stylus, and mobile-camera inference. Playwright input and device profiles do not establish hardware ergonomics.
+- Real Resend submission or delivery. Creating a least-privilege provider key and transferring it into Vercel without exposing the one-time token requires a secure dashboard action by the account owner.
+
+### CUT
+
+- The global scope lock is unchanged. No group/ungroup, redo, complex multi-select, hierarchy, rotation, two-hand resize, swipe/throw, gesture-only destructive action, physical marker tracking, conferencing, enterprise identity, broad integration, billing, native-app, headset, marketplace, or desktop-automation work was added.
+
+## Checkpoint 12: release-candidate verification
+
+### WORKING
+
+- The bounded human-command parser, reviewed speech lifecycle, exact-target discard confirmation, session-local camera self-check, token-refresh propagation, bounded Realtime recovery, reload-safe cursor ordering, and guarded live-probe infrastructure are integrated in one release candidate.
+- Duplicate browser `online` signals remain coalesced until a replacement channel reaches successful Presence tracking or a terminal outcome. The Chromium race was reproduced before the controller fix and is now covered by both unit and browser regressions without weakening the E2E assertion.
+- The root gate was rerun from the pinned Node 22.17.0 binary after all integration changes: 60 test files and 523 tests passed, along with ESLint, TypeScript, the worker bundle, optimized production build, diff validation, and a zero-vulnerability production dependency audit.
+- Repository scans found no tracked `AGENTS.md` or `CLAUDE.md`, no coauthor or AI-authorship attribution, no credential-shaped addition, and Daniel Romitelli remains the sole configured author.
+
+### VERIFIED IN BROWSER
+
+- The fresh static production bundle passed 15 ordinary-browser scenarios with no failures. The exercised boundaries include desktop/mobile Chromium, deterministic reviewed speech, named pointer controls, trusted touch and pen input, WebKit iPhone-profile fallback, offline/online controller recovery, and native-surface registration.
+- A fresh two-browser run against deployed Supabase verified real anonymous identities, private Presence, cursor Broadcast, transport recovery, durable collaboration, late reconstruction, post-reload cursor ordering, and exact room deletion.
+- Official Chrome for Testing 153.0.8010.5 passed the strict native WebMCP probe against both fresh static and dynamic production bundles. The public API proxy was restricted to the canonical production origin and only the probe's exact room endpoints.
+- Post-probe SQL read-back found no remaining room, membership, object, receipt, packet, share, send-request, capability, or sketch-attempt rows.
+
+### UNVERIFIED
+
+- The integrated release-candidate bytes have not yet been pushed and deployed. GitHub Actions, exact-commit Vercel deployment, the canonical public alias, and public-origin reruns remain release steps rather than completed evidence at this checkpoint.
+- ChatGPT built-in-browser discovery or invocation remains unavailable in this environment.
+- A real microphone/provider path, physical hand/camera behavior, physical touch/stylus hardware, and real Resend submission/delivery remain unverified at their named external boundaries.
+
+### CUT
+
+- The global scope lock remains unchanged; no cut feature was reintroduced during hardening.

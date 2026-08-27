@@ -36,12 +36,13 @@ Finger / mouse / touch / stylus strokes
 ## One-click judge path
 
 1. Open <https://commandcanvas.vercel.app/demo>.
-2. Click **Sketch**, draw boxes and arrows, and click **Done**.
-3. Select **Rough architecture** and click **Make usable**. The source remains visible while a structured diagram appears beside it.
-4. Move, resize, pin, minimize, trash, recover, or undo through named pointer controls.
-5. Click **Prepare meeting packet**, review the exact content and recipient, then approve it.
-6. Click **Request email send**. The agent/site stages the action; only the host can press **SEND**. Without an allowlisted Resend configuration the result is explicitly **Preview only: not sent**.
-7. Click **Copy invite** and open the link in a private window to exercise actual Supabase Presence, cursor Broadcast, and a participant mutation.
+2. In **Human command**, type **Bring in our project board**, review the bounded interpretation, and press **Run**. Supported browsers may transcribe one voice command into the same reviewable field; speech never executes automatically.
+3. Click **Sketch**, draw boxes and arrows, and click **Done**.
+4. Select **Rough architecture** and click **Make usable**. The source remains visible while a structured diagram appears beside it.
+5. Move, resize, pin, minimize, trash, recover, or undo through named pointer controls.
+6. Click **Prepare meeting packet**, review the exact content and recipient, then approve it.
+7. Click **Request email send**. The agent/site stages the action; only the host can press **SEND**. Without an allowlisted Resend configuration the result is explicitly **Preview only: not sent**.
+8. Click **Copy invite** and open the link in a private window to exercise actual Supabase Presence, cursor Broadcast, and a participant mutation.
 
 Use **Reset demo** to remove the current hosted demo room and return to a clean deterministic room.
 
@@ -69,7 +70,8 @@ The compact canvas projection has a hard 32,768-byte envelope. It prioritizes se
 ## One command architecture
 
 ```text
-Pointer · Touch · Stylus · Local hand landmarks · Collaborator · WebMCP
+Pointer · Touch · Stylus · Typed command · Reviewed voice transcript
+Local hand landmarks · Collaborator · WebMCP
                                   │
                                   ▼
                          Semantic intent
@@ -96,12 +98,18 @@ Pointer previews, hand landmarks, and remote cursors remain ephemeral. A stable 
 - **Presence:** actual connected participant identity, display name, color, and role.
 - **Broadcast:** bounded high-frequency cursors and compact revision notifications. Cursor movement is never persisted to Postgres.
 - **Late join/reload:** rebuild stable state from Postgres, then reconnect Presence and Broadcast.
+- **Network recovery:** preserve the mounted canvas while offline, then replace the failed private channel, refresh Realtime authorization, and retrack Presence when the browser returns online. Terminal channel failures use a bounded, disposal-aware retry policy, and reloaded participants resume cursor ordering immediately.
+- **Long-lived rooms:** Supabase token refresh rotates the room, vision, packet, and subsequent Realtime recovery credentials without a page reload.
 
 ## Camera and privacy
 
 Hand tracking uses the pinned MediaPipe Tasks Vision runtime, same-origin WASM inside a module worker, and a versioned Hand Landmarker model fetched from Google only when the user enables the camera. The MVP vocabulary is intentionally small: stable index pointing and pinch. Pointing can author a sketch; pinch can select and move an unpinned object.
 
+The camera panel includes a session-local self-check. It records point and pinch separately and reports success only after both observations actually occur in that camera session. This is a calibration aid, not a claim that every webcam, hand, or lighting condition has been validated.
+
 Camera frames remain local to the browser. They are never sent to ChatGPT, OpenAI, Supabase, or a WebMCP tool. Only semantic canvas commands cross the application boundary. Every camera action has pointer and button equivalents.
+
+Optional voice transcription is a separate browser capability: audio may be processed by the browser vendor's speech service under that browser's policy. CommandCanvas receives only the resulting text, places it in an editable field, and never executes it until the human presses **Run**. Typed commands remain the guaranteed fallback.
 
 The model provenance, runtime package, retrieval boundary, and license references are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
@@ -196,6 +204,24 @@ npm run test:e2e
 ```
 
 The test suite covers object schemas, command mutations, stale-revision refusal, undo, persistence projection, RLS/RPC contracts, WebMCP schemas and guards, bounded agent context, PNG validation, durable vision admission, packet approval/cancel/execute transitions, browser API validation, responsive rendering, Realtime adapters, and demo reset.
+
+Environment-specific browser probes are separate so their claims stay narrow:
+
+```bash
+# Ordinary Chromium plus the focused iPhone-profile WebKit checks
+npx playwright test e2e/realtime-input.spec.ts \
+  --project=chromium-desktop \
+  --project=webkit-mobile-safari
+
+# Official Chrome 153 binary with WebMCP enabled
+WEBMCP_CHROME_PATH=/path/to/chrome-153 \
+WEBMCP_BASE_URL=https://commandcanvas.vercel.app \
+WEBMCP_EXPECTED_MODE=static \
+WEBMCP_LIVE_PROBE=true \
+npx playwright test --config=playwright.webmcp153.config.ts
+```
+
+The Chrome 153 test refuses to run against another major version, defaults to loopback, and requires `WEBMCP_LIVE_PROBE=true` before it may target a public origin. Its optional local-to-production API proxy accepts only `https://commandcanvas.vercel.app` and only the exact room endpoints used by the probe. Dynamic mode uses the same probe with `WEBMCP_EXPECTED_MODE=dynamic` against a build created with `NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION=true`. Hardware, ChatGPT built-in-browser, live speech-provider, and real Resend claims remain unverified until those exact boundaries are exercised.
 
 The [verification ledger](docs/verification-ledger.md) distinguishes:
 

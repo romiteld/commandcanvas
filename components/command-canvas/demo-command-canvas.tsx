@@ -25,7 +25,6 @@ import type { DemoRoomRealtimeClient } from "@/lib/demo/room-session";
 import type { BrowserRoomClient } from "@/lib/supabase/browser-room";
 import { createBrowserSupabaseClient } from "@/lib/supabase/browser-client";
 import { createBrowserRoomApi } from "@/lib/supabase/room-api";
-import type { NoSignupAuthClient } from "@/lib/supabase/session";
 import { createBrowserPacketApi } from "@/lib/packets/browser-api";
 import type { BrowserPersistedPacketWorkflow } from "@/lib/packets/browser-api";
 import { createCanvasWebMcpAdapters } from "@/lib/webmcp/canvas-adapters";
@@ -1027,7 +1026,7 @@ async function bootstrapBrowserDemoRoom() {
     replacePath: (path) => window.history.replaceState(null, "", path),
     createSession: (hydrateCanvas) =>
       createDemoRoomSession({
-        authClient: client as unknown as NoSignupAuthClient,
+        authClient: client,
         roomDataClient: client as unknown as BrowserRoomClient,
         realtimeClient: client as unknown as DemoRoomRealtimeClient,
         createRoomApi: (accessToken) => createBrowserRoomApi({ accessToken }),

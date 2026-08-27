@@ -60,6 +60,18 @@ type RealtimeFactoryOptions = Parameters<typeof createRoomRealtime>[0];
 
 export type DemoRoomRealtimeClient = RealtimeFactoryOptions["client"];
 
+interface DemoRoomAuthSubscription {
+  unsubscribe: () => void;
+}
+
+interface DemoRoomAuthClient extends NoSignupAuthClient {
+  auth: NoSignupAuthClient["auth"] & {
+    onAuthStateChange: (
+      callback: (event: string, session: NoSignupSession | null) => void,
+    ) => { data: { subscription: DemoRoomAuthSubscription } };
+  };
+}
+
 export type DemoRoomStartIntent =
   | {
       kind: "host";
@@ -127,7 +139,7 @@ export interface DemoRoomSnapshot {
 }
 
 export interface DemoRoomSessionDependencies {
-  authClient: NoSignupAuthClient;
+  authClient: DemoRoomAuthClient;
   roomDataClient: BrowserRoomClient;
   realtimeClient: DemoRoomRealtimeClient;
   createRoomApi: (accessToken: string) => BrowserRoomApi;
@@ -279,6 +291,8 @@ export function createDemoRoomSession(
   let sketchTransformApi: BrowserSketchTransformApi | null = null;
   let packetApi: BrowserPacketApi | null = null;
   let realtime: RoomRealtimeController | null = null;
+  let realtimeOptions: RealtimeFactoryOptions | null = null;
+  let authSubscription: DemoRoomAuthSubscription | null = null;
   let disposed = false;
   let startCalled = false;
   let pendingRevision = 0;
@@ -321,6 +335,30 @@ export function createDemoRoomSession(
     return { ok: false, ...error };
   }
 
+  function installAuthenticatedSession(session: NoSignupSession) {
+    if (
+      disposed ||
+      (noSignupSession && noSignupSession.user.id !== session.user.id) ||
+      noSignupSession?.access_token === session.access_token
+    )
+      return;
+    noSignupSession = session;
+    roomApi = dependencies.createRoomApi(session.access_token);
+    sketchTransformApi =
+      dependencies.createSketchTransformApi?.(session.access_token) ?? null;
+    packetApi = dependencies.createPacketApi?.(session.access_token) ?? null;
+    if (realtimeOptions) realtimeOptions.accessToken = session.access_token;
+  }
+
+  function subscribeToTokenRefresh() {
+    authSubscription = dependencies.authClient.auth.onAuthStateChange(
+      (event, session) => {
+        if (event === "TOKEN_REFRESHED" && session)
+          installAuthenticatedSession(session);
+      },
+    ).data.subscription;
+  }
+
   async function start(intent: DemoRoomStartIntent): Promise<DemoRoomStartResult> {
     if (disposed) return disposedResult();
     if (startCalled)
@@ -347,14 +385,14 @@ export function createDemoRoomSession(
           ensured.code,
           "A no-signup browser session could not be established.",
         );
-      noSignupSession = ensured.session;
-      roomApi = dependencies.createRoomApi(ensured.session.access_token);
-      sketchTransformApi = dependencies.createSketchTransformApi?.(
-        ensured.session.access_token,
-      ) ?? null;
-      packetApi = dependencies.createPacketApi?.(
-        ensured.session.access_token,
-      ) ?? null;
+      installAuthenticatedSession(ensured.session);
+      subscribeToTokenRefresh();
+      const bootstrapRoomApi = roomApi;
+      if (!bootstrapRoomApi)
+        return fail(
+          "session_unavailable",
+          "Demo room is temporarily unavailable.",
+        );
       update({
         identity: {
           userId: ensured.session.user.id,
@@ -368,7 +406,7 @@ export function createDemoRoomSession(
 
       if (intent.kind === "host") {
         update({ status: "creating" });
-        const created = await roomApi.createRoom({
+        const created = await bootstrapRoomApi.createRoom({
           mode: "demo",
           name: intent.roomName,
           displayName: intent.displayName,
@@ -385,7 +423,7 @@ export function createDemoRoomSession(
         };
       } else if (intent.kind === "join") {
         update({ status: "joining" });
-        const joined = await roomApi.joinRoom({
+        const joined = await bootstrapRoomApi.joinRoom({
           slug: intent.slug,
           joinToken: intent.joinToken,
           displayName: intent.displayName,
@@ -452,10 +490,10 @@ export function createDemoRoomSession(
       });
       pendingRevision = verifiedCanvas.state.revision;
       try {
-        realtime = dependencies.createRealtime({
+        realtimeOptions = {
           client: dependencies.realtimeClient,
           roomId,
-          accessToken: ensured.session.access_token,
+          accessToken: noSignupSession!.access_token,
           participant: {
             participantId: ensured.session.user.id,
             displayName: verifiedMembership.membership.displayName,
@@ -468,7 +506,8 @@ export function createDemoRoomSession(
           onCursor: handleCursor,
           onRevision: requestRevisionReload,
           onStatus: handleRealtimeStatus,
-        });
+        };
+        realtime = dependencies.createRealtime(realtimeOptions);
         await realtime.connect();
       } catch {
         degrade(
@@ -858,7 +897,10 @@ export function createDemoRoomSession(
     if (disposed) return;
     disposed = true;
     const activeRealtime = realtime;
+    const activeAuthSubscription = authSubscription;
     realtime = null;
+    realtimeOptions = null;
+    authSubscription = null;
     noSignupSession = null;
     roomApi = null;
     sketchTransformApi = null;
@@ -870,6 +912,7 @@ export function createDemoRoomSession(
       cursors: {},
       commandPending: false,
     });
+    activeAuthSubscription?.unsubscribe();
     if (activeRealtime) await activeRealtime.dispose();
   }
 

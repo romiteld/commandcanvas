@@ -5,6 +5,7 @@ const externalBaseUrl = process.env.PLAYWRIGHT_BASE_URL;
 
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: /webmcp-chrome153\.spec\.ts/,
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
@@ -26,6 +27,11 @@ export default defineConfig({
     {
       name: "chromium-mobile",
       use: { ...devices["Pixel 7"] },
+    },
+    {
+      name: "webkit-mobile-safari",
+      testMatch: /realtime-input\.spec\.ts/,
+      use: { ...devices["iPhone 15"] },
     },
     {
       name: "chrome-webmcp",

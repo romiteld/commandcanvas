@@ -27,6 +27,10 @@ export function SpatialCameraControl({
   const [detectedMode, setDetectedMode] = useState<"point" | "pinch" | null>(
     null,
   );
+  const [selfCheck, setSelfCheck] = useState<{
+    pointConfidence?: number;
+    pinchConfidence?: number;
+  }>({});
   const videoRef = useRef<HTMLVideoElement>(null);
   const observationHandlerRef = useRef(onObservation);
   const statusHandlerRef = useRef(onStatusChange);
@@ -40,11 +44,21 @@ export function SpatialCameraControl({
     const unsubscribeStatus = controller.subscribeStatus((next) => {
       setStatus(next);
       statusHandlerRef.current?.(next);
-      if (next.state !== "ready") setDetectedMode(null);
+      if (next.state !== "ready") {
+        setDetectedMode(null);
+        setSelfCheck({});
+      }
     });
     const unsubscribeObservations = controller.subscribeObservations(
       (observation) => {
         setDetectedMode(observation.mode === "idle" ? null : observation.mode);
+        if (observation.mode !== "idle")
+          setSelfCheck((current) => ({
+            ...current,
+            ...(observation.mode === "point"
+              ? { pointConfidence: observation.confidence }
+              : { pinchConfidence: observation.confidence }),
+          }));
         observationHandlerRef.current?.(observation);
       },
     );
@@ -103,11 +117,42 @@ export function SpatialCameraControl({
         detector model downloads from Google. Only semantic canvas commands are
         shared.
       </p>
+      {status.state === "ready" ? (
+        <div className="gesture-self-check" aria-label="Gesture self-check">
+          <strong>
+            Gesture self-check · {Number(selfCheck.pointConfidence !== undefined) +
+              Number(selfCheck.pinchConfidence !== undefined)}
+            /2
+          </strong>
+          <span>
+            {selfCheck.pointConfidence === undefined
+              ? "Point not seen"
+              : `Point seen · ${confidencePercent(selfCheck.pointConfidence)}% confidence`}
+          </span>
+          <span>
+            {selfCheck.pinchConfidence === undefined
+              ? "Pinch not seen"
+              : `Pinch seen · ${confidencePercent(selfCheck.pinchConfidence)}% confidence`}
+          </span>
+          {selfCheck.pointConfidence !== undefined &&
+          selfCheck.pinchConfidence !== undefined ? (
+            <em role="status">
+              Point and pinch detected in this camera session. Self-check complete.
+            </em>
+          ) : (
+            <em>Show a clear point, then touch thumb and index finger.</em>
+          )}
+        </div>
+      ) : null}
       {status.state === "refused" || status.state === "unavailable" ? (
         <p className="camera-error-detail">{status.message}</p>
       ) : null}
     </section>
   );
+}
+
+function confidencePercent(confidence: number) {
+  return Math.round(Math.max(0, Math.min(1, confidence)) * 100);
 }
 
 function statusLabel(status: HandTrackingStatus) {

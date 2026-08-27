@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -51,7 +51,7 @@ describe("SpatialCameraControl", () => {
         onObservation={first}
       />,
     );
-    fake.setStatus({ state: "ready" });
+    act(() => fake.setStatus({ state: "ready" }));
 
     rerender(
       <SpatialCameraControl
@@ -123,6 +123,47 @@ describe("SpatialCameraControl", () => {
 
     await user.click(screen.getByRole("button", { name: "Disable hand input" }));
     expect(fake.controller.stop).toHaveBeenCalledOnce();
+  });
+
+  it("reports point and pinch as separate real-session self-checks", async () => {
+    const fake = fakeController();
+    render(<SpatialCameraControl createController={() => fake.controller} />);
+
+    fake.setStatus({ state: "ready" });
+    expect(await screen.findByText("Gesture self-check · 0/2")).toBeVisible();
+    expect(screen.getByText("Point not seen")).toBeVisible();
+    expect(screen.getByText("Pinch not seen")).toBeVisible();
+
+    act(() =>
+      fake.emit({
+        mode: "point",
+        pointer: { x: 0.3, y: 0.4 },
+        confidence: 0.91,
+        timestamp: 1_000,
+      }),
+    );
+    expect(await screen.findByText("Gesture self-check · 1/2")).toBeVisible();
+    expect(screen.getByText("Point seen · 91% confidence")).toBeVisible();
+
+    act(() => {
+      fake.emit({ mode: "idle", timestamp: 1_010 });
+      fake.emit({
+        mode: "pinch",
+        pointer: { x: 0.4, y: 0.45 },
+        confidence: 0.96,
+        timestamp: 1_020,
+      });
+    });
+    expect(await screen.findByText("Gesture self-check · 2/2")).toBeVisible();
+    expect(screen.getByText("Pinch seen · 96% confidence")).toBeVisible();
+    expect(
+      screen.getByText(
+        "Point and pinch detected in this camera session. Self-check complete.",
+      ),
+    ).toBeVisible();
+
+    act(() => fake.setStatus({ state: "off" }));
+    expect(screen.queryByText(/Gesture self-check/)).toBeNull();
   });
 
   it.each([
