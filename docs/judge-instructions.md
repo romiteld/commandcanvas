@@ -1,8 +1,6 @@
 # One-click judge instructions
 
-> Replace `PUBLIC_DEMO_URL` after deployment.
-
-Open **`PUBLIC_DEMO_URL/demo`**. No signup, login form, password, third-party account, API key, or configuration is required. The page creates an anonymous authenticated browser identity behind the scenes and opens a ready room with three semantic objects.
+Open **<https://commandcanvas.vercel.app/demo>**. No signup, login form, password, third-party account, API key, or configuration is required. The page creates an anonymous authenticated browser identity behind the scenes and opens a ready room with three semantic objects.
 
 Try the core path:
 

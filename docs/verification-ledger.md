@@ -77,6 +77,15 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 | 2026-08-27 | 9 | Production Chrome authored a real four-stroke pointer sketch, received a deliberately forced schema-valid HTTP 503 from only the transform route, preserved the revision-4 source with no diagram, then created a separate revision-5 **Prepared demo fallback** only after the user clicked its honestly labeled fallback control | VERIFIED IN BROWSER + DEPLOYED SUPABASE; NO VISION SUCCESS CLAIMED |
 | 2026-08-27 | 9 | Production Chrome with a fake camera granted permission, fetched the exact versioned Google detector model with HTTP 200, loaded the same-origin worker and module WASM with HTTP 200, reached **Hand input ready · local only**, then disabled input, detached the video stream, ended its media track, and returned to pointer mode | CURRENT BROWSER PIPELINE VERIFIED; REAL HAND UNVERIFIED |
 | 2026-08-27 | 9 | A fail-before-fix browser run found Next.js development tooling intercepting the fixed mobile toolbar. The Playwright-owned server was changed to the production build; the rerun completed 10 browser tests with 11 intentional project/credential skips and zero failures, including mobile controls and native Chrome WebMCP | VERIFIED IN PRODUCTION BROWSER HARNESS |
+| 2026-08-27 | 10 | Vercel deployed exact Git commit `0ea75f6` on Node 22 as production deployment `dpl_x3LQvo8wWbWJhpto3LYU3sJm5viS`; `https://commandcanvas.vercel.app/demo` returned HTTP 200 with HSTS, MIME-sniffing, referrer, frame, and camera permissions headers | VERIFIED IN VERCEL PRODUCTION |
+| 2026-08-27 | 10 | Two independent public HTTPS browser contexts created and joined one no-signup room, observed two actual Presence members, exchanged a cursor Broadcast, converged on a participant mutation and revision, resumed after reload, and deleted the exact room | VERIFIED IN PUBLIC BROWSER + SUPABASE REALTIME |
+| 2026-08-27 | 10 | Installed Chrome 152 loaded the public production page with its WebMCP feature and native `document.modelContext.getTools()` returned the exact eight-tool catalog | VERIFIED IN PUBLIC CHROME 152 TEST MODE |
+| 2026-08-27 | 10 | Public production Chrome drew a real four-stroke sketch, received HTTP 200 from the Vercel vision function and GPT-5.6 Terra, preserved the source, rendered a conservative two-node structured diagram, showed revision-5 provenance, emitted zero page/application console errors, and deleted the exact room | VERIFIED IN PUBLIC BROWSER + VERCEL + OPENAI + SUPABASE |
+| 2026-08-27 | 10 | Public production Chrome prepared and approved the exact packet snapshot, staged and durably cancelled it, reloaded, re-staged it, explicitly authorized **SEND**, persisted **Preview only: not sent**, reloaded again, reset to a new revision-3 room, proved the original room absent, and cleaned the new room | VERIFIED IN PUBLIC BROWSER + VERCEL + SUPABASE; RESEND NOT CALLED |
+| 2026-08-27 | 10 | Public production Chrome with a fake camera fetched the exact Google detector model plus same-origin worker and module WASM with HTTP 200, reached ready, then disabled input, detached the stream, ended the exact track, and emitted no failed requests, page errors, or unexpected application console errors | VERIFIED IN PUBLIC BROWSER; REAL HAND UNVERIFIED |
+| 2026-08-27 | 10 | Final Supabase read-back returned zero room-scoped application rows after exact cleanup. One intentional `demo_vision_usage` aggregate remains because the successful public transform must count against the anti-abuse budget | VERIFIED IN DEPLOYED SUPABASE |
+| 2026-08-27 | 10 | Vercel reported no production runtime errors or 5xx responses in the exercised window. The only 4xx entry was the deliberate GET probe of the POST-only `/api/rooms` boundary, which returned the expected HTTP 405 with the security headers | VERIFIED IN VERCEL PRODUCTION LOGS |
+| 2026-08-27 | 10 | The first clean GitHub Actions run failed because `app/layout.tsx` referenced a Next-generated global type before `.next/types` existed. The layout now uses an explicit `ReactNode` contract; a clean typecheck with the entire `.next` directory moved aside passed | FAIL-BEFORE/FIXED; CLEAN TYPECHECK PASSED |
 
 ## Checkpoint 1: local semantic canvas
 
@@ -157,6 +166,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 - An injected standards-shaped `document.modelContext` registered all eight descriptors, then invoked `create_object`; the exact live page rendered the object and an agent-attributed `R1 · webmcp` receipt.
 - Installed Google Chrome 152.0.7977.64 launched with its WebMCP testing feature, exposed the native `document.modelContext` surface, displayed `8 Site Tools registered`, and returned the exact catalog from native `getTools()` with no page errors.
+- The same native Chrome path returned the exact eight-tool catalog from the public Vercel production page.
 - Ordinary Playwright Chromium without WebMCP displayed the honest fallback and retained the full canvas interaction suite.
 
 ### UNVERIFIED
@@ -198,12 +208,12 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 - Sarah created a note through the UI. Both browsers rendered the resulting participant-attributed receipt and authoritative revision 4. No application page errors were observed.
 - Sarah then reloaded the scrubbed `/demo` URL. Her per-tab descriptor resumed the same anonymous membership, reconstructed revision 4, reconnected Presence, and restored the two-participant state in both browsers.
 - The 1440×900 two-participant checkpoint screenshot was visually inspected for fixture layout, Presence, remote cursor, service honesty, participant receipt attribution, and revision agreement.
+- The complete two-browser room, Presence, cursor, participant mutation, revision, reload, and exact-cleanup sequence also passed against the public Vercel HTTPS route.
 
 ### UNVERIFIED
 
 - A forced offline/online transport interruption without reloading. Reload-based session resume, durable reconstruction, and Realtime reconnection are verified.
 - Outsider private-channel denial through the application UI. The equivalent deployed Supabase client path is verified; the React integration is not yet exercised.
-- A production Vercel server credential and deployed `/demo` data path.
 
 ### CUT
 
@@ -230,13 +240,13 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 - Both real vision runs emitted no page errors or application console errors. Each exact test room was identified, deleted through the privileged cleanup path, and verified absent.
 - The resulting 1440×900 screenshots were visually inspected for source preservation, diagram structure, activity chronology, selection treatment, and rail overlap. A later narrow-viewport run verified automatic framing for both source and result.
 - A forced HTTP 503 browser run stayed at revision 4 with the original sketch and no diagram, displayed **Sketch interpretation failed**, and offered **Load prepared demo interpretation**. Clicking it created a distinct revision-5 diagram and typed receipt while preserving the pointer-authored source; the final screenshot was visually inspected.
+- The public Vercel route completed the real transform with HTTP 200, created a conservative schema-valid two-node diagram beside the four-stroke source, kept both objects visible at revision 5, and emitted no page or application console errors. The screenshot was visually inspected.
 
 ### UNVERIFIED
 
 - A ChatGPT built-in-browser invocation of `transform_sketch` against the deployed public URL.
 - Real WebMCP cancellation while an OpenAI request is in flight. Signal identity and cancellation refusal remain unit-verified only.
 - Vision interpretation of handwriting or a camera-authored multi-stroke sketch; the live source used unlabeled geometric strokes.
-- A public Vercel invocation with production environment variables.
 
 ### CUT
 
@@ -287,15 +297,48 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 - The cancel path persisted `cancelled`, rendered `Send request cancelled: no email was sent`, and refused a deliberately attempted post-cancel execute with HTTP 409.
 - The explicit-send path persisted `preview_only`, rendered `Preview only: not sent`, and created packet activity in this order: prepared, draft updated, approved, send staged, send previewed.
 - The full cancel, re-stage, explicit preview execution, reload, and reset sequence completed in one production-browser run. The cancelled request and preview-only request both survived reload, and reset deleted the exact former hosted room before creating a new revision-3 fixture room.
+- The same full packet path passed against public Vercel HTTPS. The public environment retained the explicit host confirmation and persisted the honest preview-only outcome; no Resend request was made.
 - The narrow 420×900 vision run kept both rough and structured artifacts visibly inside the canvas viewport. The live provider output was admitted once and stored as a schema-valid three-node/two-edge architecture diagram.
-- Local browser access used `host.docker.internal`, an insecure test-harness origin where Chromium withholds `crypto.randomUUID`; a test-only page initialization shim was required. Product code was not changed for this condition. Public Vercel HTTPS remains to be verified without the shim.
+- One earlier local `host.docker.internal` test used an initialization shim because that insecure harness origin withholds `crypto.randomUUID`; product code was not changed. The public Vercel HTTPS runs required no shim and passed through the browser-native secure-context path.
 
 ### UNVERIFIED
 
 - Real Resend provider submission or delivery. No Resend credentials are configured in the current environment, so only the truthful preview-only contract is verified.
 - Concurrent Vercel instances contending for the same vision lease; the database serialization contract is SQL- and unit-verified.
-- Public HTTPS behavior and environment configuration on Vercel.
 
 ### CUT
 
 - The checkpoint introduced none of the globally locked CUT features.
+
+## Checkpoint 8: public judge release
+
+### WORKING
+
+- The public GitHub repository is <https://github.com/romiteld/commandcanvas>. Release commits are authored only by Daniel Romitelli and contain no coauthor or AI-attribution trailers.
+- The canonical no-signup judge route is <https://commandcanvas.vercel.app/demo>. Vercel builds it with Node 22 from the linked public `main` branch.
+- Production and preview contain the required Supabase, OpenAI, model, and WebMCP configuration. Private values remain server-side and were supplied without entering the repository or command output.
+- Resend is intentionally absent from the public environment. The packet path therefore records **Preview only: not sent** after explicit host authorization and never claims delivery.
+- GitHub Actions runs the locked Node 22 build and unit gate on `main` pushes and pull requests.
+
+### VERIFIED IN BROWSER
+
+- Ordinary public Chrome: no-signup anonymous room initialization, deterministic three-object fixture, accessible pointer controls, honest **Site Tools unavailable** state, packet workflow, preview-only send, reload, and reset.
+- Two independent public browser contexts: actual Supabase Presence, cursor Broadcast, participant mutation, durable revision convergence, participant reload, and exact cleanup.
+- Public Chrome with the WebMCP testing feature: native `document.modelContext` discovery and the exact eight-tool catalog.
+- Public Chrome vision path: pointer sketch, browser PNG, Vercel function, real GPT-5.6 Terra structured output, validated diagram beside preserved source, visible revision receipts, and exact cleanup.
+- Production Chrome failure path before deployment: explicit transform failure, preserved source, opt-in prepared interpretation labeled as not model-generated, separate mutation, and receipt.
+- Public Chrome fake-camera path: permission, Google model fetch, same-origin worker/WASM, ready state, exact media-track shutdown, and pointer fallback.
+- Public `/demo` and API refusal responses include the intended security headers. Vercel reported no runtime errors or 5xx responses during the exercised release window.
+
+### UNVERIFIED
+
+- ChatGPT built-in-browser discovery or tool invocation. Rollout access was not available in this environment.
+- Chrome 153 lifecycle behavior. The installed target is Chrome 152 with its WebMCP testing feature.
+- Real human-hand pointing/pinch accuracy and physical-camera latency across lighting, webcams, and devices.
+- Real Resend submission or delivery. The public environment is intentionally preview-only.
+- Physical touch/stylus hardware, Safari, mobile Chrome camera inference, and a forced network transport outage without reload.
+
+### CUT
+
+- Group/ungroup, redo, complex multi-select, frame hierarchy, rotation, two-hand resize, swipe/throw, gesture-only destructive actions, and physical pencil/marker tracking.
+- Video conferencing, conferencing-platform integrations, enterprise identity, broad document-suite integrations, billing, native apps, headsets, a plugin marketplace, and desktop automation.

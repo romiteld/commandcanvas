@@ -2,7 +2,7 @@
 
 CommandCanvas is a shared spatial workspace where people, collaborators, and ChatGPT manipulate the same live collection of semantic objects. Rough sketches become separate structured diagrams without destroying the source, and every supported canvas mutation remains attributable and reversible whether it was initiated by a human, participant, or agent.
 
-**Live no-signup demo:** `PUBLIC_DEMO_URL/demo`
+**Live no-signup demo:** <https://commandcanvas.vercel.app/demo>
 
 No signup, login form, password, third-party account, API key, or configuration is required to use the deployed judge route. Supabase Anonymous Auth creates a scoped authenticated browser identity behind the scenes.
 
@@ -35,7 +35,7 @@ Finger / mouse / touch / stylus strokes
 
 ## One-click judge path
 
-1. Open `PUBLIC_DEMO_URL/demo`.
+1. Open <https://commandcanvas.vercel.app/demo>.
 2. Click **Sketch**, draw boxes and arrows, and click **Done**.
 3. Select **Rough architecture** and click **Make usable**. The source remains visible while a structured diagram appears beside it.
 4. Move, resize, pin, minimize, trash, recover, or undo through named pointer controls.

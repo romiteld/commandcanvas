@@ -1,7 +1,5 @@
 # Devpost submission draft
 
-> Replace `PUBLIC_DEMO_URL` after the production deployment is verified.
-
 ## Project name
 
 CommandCanvas
@@ -12,7 +10,7 @@ A shared spatial workspace where people and ChatGPT turn rough thinking into str
 
 ## Public links
 
-- Live demo: `PUBLIC_DEMO_URL/demo`
+- Live demo: <https://commandcanvas.vercel.app/demo>
 - Source: <https://github.com/romiteld/commandcanvas>
 
 ## Inspiration

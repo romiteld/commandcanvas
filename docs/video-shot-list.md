@@ -1,6 +1,6 @@
 # CommandCanvas 90-second video shot list
 
-> Replace `PUBLIC_DEMO_URL` after deployment. Rehearse with a real second browser and keep the critical transformation deterministic by drawing three clearly separated boxes with two arrows.
+Rehearse with a real second browser and keep the critical transformation deterministic by drawing three clearly separated boxes with two arrows.
 
 ## 0:00–0:07: camera and opening
 
@@ -10,7 +10,7 @@
 
 ## 0:07–0:15: one-click room
 
-**Picture:** Cut to `PUBLIC_DEMO_URL/demo`. The loaded board, schedule, decision, WebMCP status, activity rail, and two real Presence participants are already visible.
+**Picture:** Cut to <https://commandcanvas.vercel.app/demo>. The loaded board, schedule, decision, WebMCP status, activity rail, and two real Presence participants are already visible.
 
 **Line:** “This is a no-signup Supabase room. Daniel and Sarah are connected in two ordinary browsers.”
 
