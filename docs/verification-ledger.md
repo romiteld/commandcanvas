@@ -99,6 +99,12 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 | 2026-08-27 | 12 | Two live no-signup Chromium sessions crossed an actual offline/online transition without reload, re-established two-person Presence, exchanged a cursor, converged on a durable participant mutation, reconstructed revision 4 after participant reload, accepted that reloaded participant's next cursor immediately, and deleted the exact room | VERIFIED IN LOCAL PRODUCTION CLIENT + DEPLOYED API + LIVE SUPABASE REALTIME |
 | 2026-08-27 | 12 | Official Chrome for Testing 153.0.8010.5 exercised the exact source as both stable-static and feature-flagged-dynamic production bundles. Native execution, abort handling before server admission, selection-driven registration/removal, `toolchange`, lifecycle separation, and exact cleanup passed in both named modes | VERIFIED IN CHROME 153 LOCAL PRODUCTION BUNDLES + DEPLOYED API |
 | 2026-08-27 | 12 | Final Supabase read-back returned zero rows across every room-scoped public/private table after the browser probes; one intentional aggregate `demo_vision_usage` row remains | VERIFIED IN DEPLOYED SUPABASE |
+| 2026-08-27 | 13 | Public GitHub commit `88aad9b19add21c3ff6d3836655006ed637ebfbf` is authored only by Daniel Romitelli with no trailers. GitHub Actions run `33113760297` completed the clean Node 22 CI gate successfully | VERIFIED IN PUBLIC GITHUB + GREEN CI |
+| 2026-08-27 | 13 | Vercel production deployment `dpl_6gDpLPYRF1sRLsneEWUrZn55BhG5` reports the exact `88aad9b` implementation commit, Node.js lambdas, READY state, and the canonical `commandcanvas.vercel.app` alias. Public `/demo` returned HTTP 200 with HSTS, frame, MIME-sniffing, referrer, and camera/microphone policy headers | VERIFIED IN VERCEL PRODUCTION |
+| 2026-08-27 | 13 | The exact public origin passed 10 focused desktop/mobile Chromium UI scenarios, one live two-browser Supabase offline/reload/cursor/durable-collaboration scenario, and one strict official Chrome 153 native WebMCP lifecycle scenario; all probe rooms were deleted | VERIFIED IN PUBLIC BROWSER + CHROME 153 + SUPABASE REALTIME |
+| 2026-08-27 | 13 | Vercel reported no build errors, runtime error clusters, 4xx, or 5xx entries for the exact deployment during the exercised release window. Observed function requests were successful 200/201 responses | VERIFIED IN VERCEL PRODUCTION LOGS |
+| 2026-08-27 | 13 | Supabase advisors returned no error-level finding. Security WARN/INFO entries reflect the intentional anonymous-auth demo policies, fail-closed private tables, and disabled leaked-password screening for an app with no password signup. Performance INFO entries identify two low-volume private foreign keys without covering indexes, one unused early index, and a fixed Auth connection allocation | REVIEWED; NON-BLOCKING HARDENING ITEMS RECORDED |
+| 2026-08-27 | 13 | Post-release SQL read-back returned zero rows in all room-scoped public/private application tables; the single intentional `demo_vision_usage` aggregate remains | VERIFIED IN DEPLOYED SUPABASE |
 
 ## Checkpoint 1: local semantic canvas
 
@@ -416,3 +422,29 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 ### CUT
 
 - The global scope lock remains unchanged; no cut feature was reintroduced during hardening.
+
+## Checkpoint 13: public release verification
+
+### WORKING
+
+- The public repository is <https://github.com/romiteld/commandcanvas>, `main` contains implementation commit `88aad9b19add21c3ff6d3836655006ed637ebfbf`, and its clean GitHub Actions run is green.
+- Vercel's production deployment metadata and canonical alias both resolve to that implementation commit. The deployment is READY and its exercised runtime window contains no build error, runtime error cluster, 4xx, or 5xx entry.
+- The public route returns the expected no-signup title and security headers. Resend configuration remains absent, so explicit **SEND** continues to produce only the honest preview-only outcome and no provider call.
+- Supabase's current advisor output contains WARN/INFO items but no error-level finding. Anonymous-auth access is intentional and remains constrained by the already-exercised membership/host RLS policies; private tables expose no client policies.
+
+### VERIFIED IN BROWSER
+
+- Public `https://commandcanvas.vercel.app` passed 10 focused Chromium UI scenarios on desktop/mobile, including bounded typed and reviewed voice commands, semantic creation, spatial interaction, exact-target recoverable discard, undo, and visible receipts.
+- Two independent public `/demo` contexts established actual Supabase Presence, crossed an offline/online transition without reload, resumed cursor Broadcast, converged on a participant mutation, reconstructed durable state after reload, accepted the reloaded participant's next cursor immediately, and removed the exact room.
+- Official Chrome for Testing 153.0.8010.5 loaded the public HTTPS origin with WebMCP enabled and passed native tool discovery/execution, client cancellation before server admission, lifecycle handling, visible receipt behavior, and exact cleanup in stable static-registration mode.
+
+### UNVERIFIED
+
+- ChatGPT built-in-browser Site Tools discovery or invocation remains unavailable in this environment.
+- Dynamic registration has been verified in the fresh production bundle and Chrome 153 but not at a public HTTPS deployment origin. Public production remains intentionally static.
+- A real microphone/provider path, physical hand/camera behavior, physical touch/stylus hardware, and real Resend submission/delivery remain unverified at their named boundaries.
+- Supabase leaked-password screening is disabled and two private foreign keys lack covering indexes. Neither affects the anonymous-only judge path at current scale, but both should be revisited before adding password accounts or production-scale retention.
+
+### CUT
+
+- The final release retains the approved scope lock. No cut feature was added.
