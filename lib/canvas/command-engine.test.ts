@@ -258,4 +258,39 @@ describe("applyCanvasCommand", () => {
     });
     expect(result.state).toBe(created.state);
   });
+
+  it("rejects malformed external command input before any mutation occurs", () => {
+    const initial = createEmptyCanvasState("room-demo");
+    const malformed = command(0, {
+      type: "object.create",
+      object: {
+        id: "note-malformed",
+        type: "note",
+        title: "Malformed",
+        x: 0,
+        y: 0,
+        width: -1,
+        height: 180,
+        zIndex: 1,
+        payload: {
+          text: "Do not create this.",
+          tone: "coral",
+          unknownAgentField: true,
+        },
+      },
+    } as unknown as CanvasCommandEnvelope["command"]);
+
+    const result = applyCanvasCommand(initial, malformed, runtime);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_COMMAND",
+        message: "Command input did not match the canvas schema.",
+      },
+    });
+    expect(result.state).toBe(initial);
+    expect(result.state.objects).toEqual({});
+    expect(result.state.receipts).toEqual([]);
+  });
 });

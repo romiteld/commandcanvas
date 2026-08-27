@@ -41,12 +41,14 @@ describe("canvas store", () => {
     const store = createCanvasStore("room-demo", dependencies());
 
     const result = store.getState().dispatch(newNote, "typed");
+    const created = store.getState().canvas.objects["note-1"];
 
     expect(result.ok).toBe(true);
     expect(store.getState().canvas.revision).toBe(1);
-    expect(store.getState().canvas.objects["note-1"]?.payload.text).toBe(
-      "Ship the smallest complete story.",
-    );
+    expect(created?.type).toBe("note");
+    if (!created || created.type !== "note")
+      throw new Error("expected a note object");
+    expect(created.payload.text).toBe("Ship the smallest complete story.");
     expect(store.getState().canvas.receipts[0]?.source).toBe("typed");
   });
 

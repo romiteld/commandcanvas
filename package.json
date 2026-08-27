@@ -1,6 +1,7 @@
 {
   "name": "commandcanvas",
   "version": "0.1.0",
+  "author": "Daniel Romitelli",
   "private": true,
   "engines": {
     "node": ">=22.14.0 <23"

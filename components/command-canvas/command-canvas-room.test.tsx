@@ -44,6 +44,44 @@ describe("CommandCanvasRoom", () => {
     expect(store.getState().canvas.revision).toBe(1);
   });
 
+  it("creates a task board from the object toolbar and renders its columns and tasks", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    render(<CommandCanvasRoom store={store} />);
+
+    await user.click(screen.getByRole("button", { name: "Create task board" }));
+
+    expect(
+      screen.getByRole("button", { name: "Select Launch board" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
+    expect(screen.getByText("Confirm launch date")).toBeInTheDocument();
+    expect(screen.getByText("In progress")).toBeInTheDocument();
+    expect(screen.getByText("Polish the demo path")).toBeInTheDocument();
+    expect(Object.values(store.getState().canvas.objects)[0]?.type).toBe(
+      "task_board",
+    );
+  });
+
+  it("creates a schedule from the object toolbar and renders dated commitments", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    render(<CommandCanvasRoom store={store} />);
+
+    await user.click(screen.getByRole("button", { name: "Create schedule" }));
+
+    expect(
+      screen.getByRole("button", { name: "Select Next week" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Mon, Aug 31")).toBeInTheDocument();
+    expect(screen.getByText("09:30")).toBeInTheDocument();
+    expect(screen.getByText("Review WebMCP flow")).toBeInTheDocument();
+    expect(screen.getByText("America/New_York")).toBeInTheDocument();
+    expect(Object.values(store.getState().canvas.objects)[0]?.type).toBe(
+      "schedule",
+    );
+  });
+
   it("pins the selected object and uses the same universal undo control", async () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());

@@ -1,3 +1,17 @@
+import {
+  canvasCommandSchema,
+  type CanvasCommand,
+  type CanvasObject,
+} from "@/lib/canvas/object-model";
+
+export type {
+  CanvasCommand,
+  CanvasObject,
+  NewCanvasObject,
+  NewNoteObject,
+  NotePayload,
+} from "@/lib/canvas/object-model";
+
 export interface CanvasActor {
   id: string;
   displayName: string;
@@ -14,61 +28,6 @@ export type CanvasCommandSource =
   | "collaborator"
   | "webmcp"
   | "system";
-
-export interface NotePayload {
-  text: string;
-  tone: "coral" | "sky" | "sand" | "violet";
-}
-
-export interface NoteObject {
-  id: string;
-  roomId: string;
-  type: "note";
-  title: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  zIndex: number;
-  minimized: boolean;
-  pinned: boolean;
-  createdBy: string;
-  createdAt: string;
-  updatedAt: string;
-  deletedAt: string | null;
-  version: number;
-  metadata: Record<string, unknown>;
-  payload: NotePayload;
-}
-
-export type CanvasObject = NoteObject;
-
-export interface NewNoteObject {
-  id: string;
-  type: "note";
-  title: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  zIndex: number;
-  payload: NotePayload;
-}
-
-export type CanvasCommand =
-  | { type: "object.create"; object: NewNoteObject }
-  | {
-      type: "object.transform";
-      objectId: string;
-      transform: Partial<Pick<CanvasObject, "x" | "y" | "width" | "height">>;
-    }
-  | {
-      type: "object.set_flags";
-      objectId: string;
-      flags: Partial<Pick<CanvasObject, "minimized" | "pinned">>;
-    }
-  | { type: "object.discard"; objectId: string }
-  | { type: "history.undo" };
 
 export interface CanvasCommandEnvelope {
   id: string;
@@ -123,6 +82,7 @@ export interface CommandRuntime {
 }
 
 export type CommandErrorCode =
+  | "INVALID_COMMAND"
   | "ROOM_MISMATCH"
   | "STALE_REVISION"
   | "OBJECT_EXISTS"
@@ -172,7 +132,15 @@ export function applyCanvasCommand(
       "Canvas changed. Refresh the command and try again.",
     );
 
-  const command = envelope.command;
+  const parsedCommand = canvasCommandSchema.safeParse(envelope.command);
+  if (!parsedCommand.success)
+    return reject(
+      state,
+      "INVALID_COMMAND",
+      "Command input did not match the canvas schema.",
+    );
+
+  const command = parsedCommand.data;
   switch (command.type) {
     case "object.create":
       return createObject(state, envelope, command, runtime);

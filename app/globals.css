@@ -383,6 +383,19 @@ button:focus-visible {
   background: #d79b43;
 }
 
+.task-board-object::before,
+.diagram-object::before {
+  background: var(--cobalt);
+}
+
+.schedule-object::before {
+  background: var(--teal);
+}
+
+.sketch-object::before {
+  background: var(--violet);
+}
+
 .object-select-hitbox {
   width: 100%;
   height: 100%;
@@ -436,6 +449,190 @@ button:focus-visible {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
+}
+
+.task-board-object .object-kicker,
+.diagram-object .object-kicker {
+  color: var(--cobalt);
+}
+
+.schedule-object .object-kicker {
+  color: var(--teal);
+}
+
+.sketch-object .object-kicker {
+  color: var(--violet);
+}
+
+.task-board-preview {
+  width: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.task-column-preview {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f6f8fc;
+}
+
+.task-column-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 9px;
+  font-weight: 720;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.task-column-title small {
+  min-width: 18px;
+  min-height: 18px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 7px;
+}
+
+.task-card-preview {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--coral);
+  border-radius: 5px;
+  background: white;
+  box-shadow: 0 5px 14px rgb(40 62 92 / 7%);
+}
+
+.task-card-preview b,
+.schedule-entry-preview b {
+  overflow: hidden;
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+}
+
+.task-card-preview small,
+.schedule-entry-preview small,
+.task-column-empty {
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 7px;
+}
+
+.task-column-empty {
+  padding: 9px 2px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.schedule-preview {
+  width: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.schedule-timezone {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+}
+
+.schedule-day-preview {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  padding: 9px;
+  border-top: 2px solid var(--teal);
+  border-radius: 3px 3px 8px 8px;
+  background: #f2f8f6;
+}
+
+.schedule-day-label {
+  color: var(--teal);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+  font-weight: 720;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.schedule-entry-preview {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 3px 7px;
+  padding: 8px;
+  border: 1px solid rgb(22 133 111 / 16%);
+  border-radius: 5px;
+  background: white;
+}
+
+.schedule-entry-preview time {
+  grid-row: 1 / span 2;
+  color: var(--teal);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+  font-weight: 720;
+}
+
+.sketch-preview {
+  width: 100%;
+  flex: 1;
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  border: 1px dashed rgb(117 88 207 / 38%);
+  border-radius: 8px;
+  background: rgb(117 88 207 / 4%);
+  color: var(--violet);
+  text-align: center;
+}
+
+.sketch-preview span {
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 19px;
+  font-weight: 720;
+}
+
+.sketch-preview small {
+  font-size: 9px;
+}
+
+.diagram-preview {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.diagram-preview span {
+  padding: 8px 10px;
+  border: 1px solid rgb(39 94 215 / 24%);
+  border-radius: 6px;
+  background: var(--cobalt-wash);
+  color: #244eaa;
+  font-size: 9px;
+  font-weight: 650;
 }
 
 .pin-state {

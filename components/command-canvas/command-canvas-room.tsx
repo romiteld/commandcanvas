@@ -56,6 +56,106 @@ export function CommandCanvasRoom({ store }: CommandCanvasRoomProps) {
     );
   }
 
+  function createTaskBoard() {
+    dispatch(
+      {
+        type: "object.create",
+        object: {
+          id: createClientId("board"),
+          type: "task_board",
+          title: "Launch board",
+          x: 140 - viewport.x / viewport.scale,
+          y: 110 - viewport.y / viewport.scale,
+          width: 560,
+          height: 320,
+          zIndex: canvas.revision + 1,
+          payload: {
+            columns: [
+              {
+                id: createClientId("column"),
+                title: "Next",
+                tasks: [
+                  {
+                    id: createClientId("task"),
+                    title: "Confirm launch date",
+                    owner: "Danny",
+                    priority: "high",
+                  },
+                ],
+              },
+              {
+                id: createClientId("column"),
+                title: "In progress",
+                tasks: [
+                  {
+                    id: createClientId("task"),
+                    title: "Polish the demo path",
+                    owner: "Sarah",
+                    priority: "medium",
+                  },
+                ],
+              },
+              {
+                id: createClientId("column"),
+                title: "Done",
+                tasks: [],
+              },
+            ],
+          },
+        },
+      },
+      "pointer",
+    );
+  }
+
+  function createSchedule() {
+    dispatch(
+      {
+        type: "object.create",
+        object: {
+          id: createClientId("schedule"),
+          type: "schedule",
+          title: "Next week",
+          x: 180 - viewport.x / viewport.scale,
+          y: 140 - viewport.y / viewport.scale,
+          width: 460,
+          height: 310,
+          zIndex: canvas.revision + 1,
+          payload: {
+            timezone: "America/New_York",
+            days: [
+              {
+                date: "2026-08-31",
+                label: "Mon, Aug 31",
+                entries: [
+                  {
+                    id: createClientId("schedule-entry"),
+                    time: "09:30",
+                    title: "Review WebMCP flow",
+                    owner: "Danny",
+                  },
+                ],
+              },
+              {
+                date: "2026-09-01",
+                label: "Tue, Sep 1",
+                entries: [
+                  {
+                    id: createClientId("schedule-entry"),
+                    time: "14:00",
+                    title: "Record final demo",
+                    owner: "Team",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      "pointer",
+    );
+  }
+
   function startObjectDrag(
     event: ReactPointerEvent<HTMLButtonElement>,
     object: CanvasObject,
@@ -265,6 +365,22 @@ export function CommandCanvasRoom({ store }: CommandCanvasRoomProps) {
           </button>
           <button
             type="button"
+            onClick={createTaskBoard}
+            aria-label="Create task board"
+          >
+            <span aria-hidden="true">▦</span>
+            <small>Board</small>
+          </button>
+          <button
+            type="button"
+            onClick={createSchedule}
+            aria-label="Create schedule"
+          >
+            <span aria-hidden="true">31</span>
+            <small>Schedule</small>
+          </button>
+          <button
+            type="button"
             aria-label="Undo last change"
             disabled={canvas.receipts.length === 0}
             onClick={() => dispatch({ type: "history.undo" }, "typed")}
@@ -331,7 +447,7 @@ export function CommandCanvasRoom({ store }: CommandCanvasRoomProps) {
               <div className="canvas-empty-state">
                 <span className="empty-crosshair" aria-hidden="true" />
                 <p>No objects yet</p>
-                <span>Create a note to start the shared command history.</span>
+                <span>Create an object to start the shared command history.</span>
               </div>
             ) : null}
           </div>
@@ -481,9 +597,11 @@ function CanvasObjectCard({
   onResizePointerUp,
   onResizePointerCancel,
 }: CanvasObjectCardProps) {
+  const typeClass = objectTypeClass(object);
+
   return (
     <article
-      className={`canvas-object note-object tone-${object.payload.tone}${isSelected ? " is-selected" : ""}${object.minimized ? " is-minimized" : ""}`}
+      className={`canvas-object ${typeClass}${isSelected ? " is-selected" : ""}${object.minimized ? " is-minimized" : ""}`}
       style={{
         left: preview?.x ?? object.x,
         top: preview?.y ?? object.y,
@@ -503,11 +621,11 @@ function CanvasObjectCard({
         onPointerCancel={onPointerCancel}
       >
         <span className="object-kicker">
-          NOTE · V{object.version}
+          {objectTypeLabel(object)} · V{object.version}
           {object.pinned ? " · PINNED" : ""}
         </span>
         <strong>{object.title}</strong>
-        {!object.minimized ? <p>{object.payload.text}</p> : null}
+        {!object.minimized ? <CanvasObjectContent object={object} /> : null}
       </button>
       {isSelected && !object.minimized && !object.pinned ? (
         <button
@@ -523,6 +641,101 @@ function CanvasObjectCard({
       {object.pinned ? <span className="pin-state">Pinned to canvas</span> : null}
     </article>
   );
+}
+
+function CanvasObjectContent({ object }: { object: CanvasObject }) {
+  switch (object.type) {
+    case "note":
+      return <p>{object.payload.text}</p>;
+    case "task_board":
+      return (
+        <div className="task-board-preview">
+          {object.payload.columns.map((column) => (
+            <span key={column.id} className="task-column-preview">
+              <span className="task-column-title">
+                {column.title}
+                <small>{column.tasks.length}</small>
+              </span>
+              {column.tasks.length === 0 ? (
+                <span className="task-column-empty">Clear</span>
+              ) : (
+                column.tasks.map((task) => (
+                  <span key={task.id} className="task-card-preview">
+                    <b>{task.title}</b>
+                    {task.owner ? <small>{task.owner}</small> : null}
+                  </span>
+                ))
+              )}
+            </span>
+          ))}
+        </div>
+      );
+    case "schedule":
+      return (
+        <div className="schedule-preview">
+          <span className="schedule-timezone">{object.payload.timezone}</span>
+          {object.payload.days.map((day) => (
+            <span key={day.date} className="schedule-day-preview">
+              <span className="schedule-day-label">{day.label}</span>
+              {day.entries.map((entry) => (
+                <span key={entry.id} className="schedule-entry-preview">
+                  <time dateTime={`${day.date}T${entry.time}`}>{entry.time}</time>
+                  <b>{entry.title}</b>
+                  {entry.owner ? <small>{entry.owner}</small> : null}
+                </span>
+              ))}
+            </span>
+          ))}
+        </div>
+      );
+    case "sketch":
+      return (
+        <div className="sketch-preview">
+          <span>{object.payload.strokes.length}</span>
+          <small>source strokes preserved</small>
+        </div>
+      );
+    case "diagram":
+      return (
+        <div className="diagram-preview">
+          {object.payload.nodes.slice(0, 6).map((node) => (
+            <span key={node.id}>{node.label}</span>
+          ))}
+        </div>
+      );
+  }
+}
+
+function objectTypeClass(object: CanvasObject) {
+  switch (object.type) {
+    case "note":
+      return `note-object tone-${object.payload.tone}`;
+    case "task_board":
+      return "task-board-object";
+    case "schedule":
+      return "schedule-object";
+    case "sketch":
+      return "sketch-object";
+    case "diagram":
+      return "diagram-object";
+  }
+}
+
+function objectTypeLabel(object: CanvasObject) {
+  switch (object.type) {
+    case "note":
+      return "NOTE";
+    case "task_board":
+      return "PROJECT BOARD";
+    case "schedule":
+      return "SCHEDULE";
+    case "sketch":
+      return "ROUGH SKETCH";
+    case "diagram":
+      return object.payload.kind === "architecture"
+        ? "ARCHITECTURE DIAGRAM"
+        : "FLOWCHART";
+  }
 }
 
 interface ObjectTransformPreview {

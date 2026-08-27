@@ -52,6 +52,33 @@ test("keeps the canvas and primary action usable at a mobile viewport", async ({
   await expect(page.getByText("Danny created “New thought”.")).toBeVisible();
 });
 
+test("creates semantic project-board and schedule objects from the toolbar", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-desktop");
+  const browserErrors: string[] = [];
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Create task board" }).click();
+  await expect(
+    page.getByRole("button", { name: "Select Launch board" }),
+  ).toBeVisible();
+  await expect(page.getByText("Confirm launch date")).toBeVisible();
+  await expect(page.getByText("Polish the demo path")).toBeVisible();
+
+  await page.getByRole("button", { name: "Create schedule" }).click();
+  await expect(
+    page.getByRole("button", { name: "Select Next week" }),
+  ).toBeVisible();
+  await expect(page.getByText("Review WebMCP flow")).toBeVisible();
+  await expect(page.getByText("America/New_York")).toBeVisible();
+  await expect(page.getByText("Revision 2")).toBeVisible();
+  await expect(page.getByRole("listitem")).toHaveCount(2);
+
+  expect(browserErrors).toEqual([]);
+});
+
 test("commits exactly one canonical transform when a pointer drag ends", async ({
   page,
 }, testInfo) => {

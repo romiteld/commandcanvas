@@ -2,11 +2,12 @@
 
 CommandCanvas is a shared spatial command surface where people, collaborators, and an agent manipulate the same live collection of semantic objects. Every supported input resolves through one validated mutation pipeline, producing visible, attributable, reversible receipts.
 
-This repository is under active implementation for the 2026 Devpost WebMCP Challenge. The current checkpoint is a verified local canvas slice; WebMCP, Supabase Realtime, camera tracking, vision transformation, Resend, and the public no-signup `/demo` remain explicitly unverified until their integration checkpoints are exercised.
+This repository is under active implementation for the 2026 Devpost WebMCP Challenge. The current checkpoint is a verified local semantic-canvas slice; WebMCP, Supabase Realtime, camera tracking, vision transformation, Resend, and the public no-signup `/demo` remain explicitly unverified until their integration checkpoints are exercised.
 
 ## Current working slice
 
-- Typed note objects on a custom DOM-transform canvas
+- Strict, discriminated note, project-board, schedule, sketch, and diagram object types
+- Visible creation and type-specific rendering for notes, project boards, and schedules
 - Pointer creation, selection, move, and resize
 - Canvas pan and pointer-anchored wheel zoom
 - Pin/unpin, minimize/restore, and recoverable discard
@@ -15,6 +16,7 @@ This repository is under active implementation for the 2026 Devpost WebMCP Chall
 - Universal undo for supported mutations
 - Responsive desktop/mobile shell with non-gesture controls
 - Honest service-status states for integrations not yet exercised
+- Runtime rejection of malformed external commands before state or receipts change
 
 The running evidence ledger is in [`docs/verification-ledger.md`](docs/verification-ledger.md).
 
