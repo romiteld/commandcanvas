@@ -86,6 +86,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 | 2026-08-27 | 10 | Final Supabase read-back returned zero room-scoped application rows after exact cleanup. One intentional `demo_vision_usage` aggregate remains because the successful public transform must count against the anti-abuse budget | VERIFIED IN DEPLOYED SUPABASE |
 | 2026-08-27 | 10 | Vercel reported no production runtime errors or 5xx responses in the exercised window. The only 4xx entry was the deliberate GET probe of the POST-only `/api/rooms` boundary, which returned the expected HTTP 405 with the security headers | VERIFIED IN VERCEL PRODUCTION LOGS |
 | 2026-08-27 | 10 | The first clean GitHub Actions run failed because `app/layout.tsx` referenced a Next-generated global type before `.next/types` existed. The layout now uses an explicit `ReactNode` contract; a clean typecheck with the entire `.next` directory moved aside passed | FAIL-BEFORE/FIXED; CLEAN TYPECHECK PASSED |
+| 2026-08-27 | 10 | GitHub Actions reran the clean Node 22 checkout and passed the complete build/unit gate in 1m22s. GitHub's live release API identified `actions/checkout` v7.0.1 and `actions/setup-node` v7.0.0, so the workflow moved from v4 to the current v7 majors to remove the deprecated action-runtime annotation | GREEN CI; CURRENT ACTION MAJORS CONFIRMED |
 
 ## Checkpoint 1: local semantic canvas
 
