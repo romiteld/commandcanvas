@@ -1,0 +1,115 @@
+import "server-only";
+
+import { z } from "zod";
+
+import type {
+  PacketContentSnapshot,
+  PacketRecipient,
+} from "@/lib/packets/contracts";
+
+export type ResendPacketErrorCode =
+  | "resend_rejected"
+  | "resend_unavailable"
+  | "resend_invalid_response";
+
+export interface ResendPacketEmailInput {
+  apiKey: string;
+  from: string;
+  recipients: PacketRecipient[];
+  subject: string;
+  contentSnapshot: PacketContentSnapshot;
+  idempotencyKey: string;
+  signal?: AbortSignal;
+}
+
+export type ResendPacketEmailResult =
+  | { ok: true; providerMessageId: string }
+  | { ok: false; errorCode: ResendPacketErrorCode };
+
+export type ResendFetch = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
+const resendAcceptedSchema = z
+  .object({ id: z.string().trim().min(1).max(240) })
+  .passthrough();
+
+export async function submitResendPacketEmail(
+  input: ResendPacketEmailInput,
+  fetcher: ResendFetch = fetch,
+): Promise<ResendPacketEmailResult> {
+  const rendered = renderApprovedPacket(input.contentSnapshot);
+
+  let response: Response;
+  try {
+    response = await fetcher("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${input.apiKey}`,
+        "content-type": "application/json",
+        "idempotency-key": input.idempotencyKey,
+      },
+      body: JSON.stringify({
+        from: input.from,
+        to: input.recipients.map(formatRecipient),
+        subject: input.subject,
+        html: rendered.html,
+        text: rendered.text,
+      }),
+      signal: input.signal,
+    });
+  } catch {
+    return { ok: false, errorCode: "resend_unavailable" };
+  }
+
+  if (!response.ok)
+    return {
+      ok: false,
+      errorCode:
+        response.status === 429 || response.status >= 500
+          ? "resend_unavailable"
+          : "resend_rejected",
+    };
+
+  try {
+    const parsed = resendAcceptedSchema.safeParse(await response.json());
+    if (!parsed.success)
+      return { ok: false, errorCode: "resend_invalid_response" };
+    return { ok: true, providerMessageId: parsed.data.id };
+  } catch {
+    return { ok: false, errorCode: "resend_invalid_response" };
+  }
+}
+
+function formatRecipient(recipient: PacketRecipient) {
+  return `${recipient.name} <${recipient.email}>`;
+}
+
+function renderApprovedPacket(snapshot: PacketContentSnapshot) {
+  const content = JSON.stringify(snapshot.content, null, 2);
+  return {
+    text: `${snapshot.title}\n\n${content}`,
+    html: [
+      '<main style="font-family:ui-sans-serif,system-ui,sans-serif;line-height:1.5;color:#102235">',
+      `<h1>${escapeHtml(snapshot.title)}</h1>`,
+      '<p>This meeting packet was reviewed and approved in CommandCanvas.</p>',
+      `<pre style="white-space:pre-wrap;background:#f4f7fa;padding:16px;border-radius:12px">${escapeHtml(content)}</pre>`,
+      "</main>",
+    ].join(""),
+  };
+}
+
+function escapeHtml(value: string) {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[character] ?? character,
+  );
+}

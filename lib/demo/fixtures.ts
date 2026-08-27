@@ -1,11 +1,11 @@
 import type { CanvasCommand } from "@/lib/canvas/object-model";
 
-export function createDemoSeedCommands(): CanvasCommand[] {
+export function createDemoSeedCommands(roomId: string): CanvasCommand[] {
   return [
     {
       type: "object.create",
       object: {
-        id: "board-launch-readiness",
+        id: `board-launch-readiness-${roomId}`,
         type: "task_board",
         title: "Launch readiness",
         x: 92,
@@ -64,7 +64,7 @@ export function createDemoSeedCommands(): CanvasCommand[] {
     {
       type: "object.create",
       object: {
-        id: "schedule-submission-week",
+        id: `schedule-submission-week-${roomId}`,
         type: "schedule",
         title: "Submission week",
         x: 654,
@@ -106,7 +106,7 @@ export function createDemoSeedCommands(): CanvasCommand[] {
     {
       type: "object.create",
       object: {
-        id: "note-decision-preserve-source",
+        id: `note-decision-preserve-source-${roomId}`,
         type: "note",
         title: "Decision",
         x: 292,

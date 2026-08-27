@@ -1,10 +1,20 @@
 "use client";
 
-import { useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useRef,
+  useState,
+  type ReactNode,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import type { StoreApi } from "zustand";
 import { useStore } from "zustand";
 
+import { DiagramPreview } from "@/components/command-canvas/diagram-preview";
+import { SketchComposer } from "@/components/command-canvas/sketch-composer";
+import { SketchPreview } from "@/components/command-canvas/sketch-preview";
+import { SpatialCameraControl } from "@/components/command-canvas/spatial-camera-control";
 import type { CanvasStoreState } from "@/lib/canvas/canvas-store";
+import type { SketchPayload } from "@/lib/canvas/object-model";
 import type {
   CanvasCommand,
   CanvasCommandSource,
@@ -12,11 +22,24 @@ import type {
   CommandResult,
 } from "@/lib/canvas/command-engine";
 import {
+  fitViewportToWorldBounds,
   screenToWorld,
   worldToScreen,
   zoomViewportAt,
   type CanvasPoint,
 } from "@/lib/canvas/coordinates";
+import type {
+  HandTrackingController,
+  HandTrackingObservation,
+  HandTrackingStatus,
+} from "@/lib/gesture/hand-tracking-controller";
+import {
+  createGestureSketchCommand,
+  createInitialSpatialGestureState,
+  reduceSpatialGesture,
+  type SpatialGestureEffect,
+} from "@/lib/gesture/spatial-gesture";
+import type { CanvasSketchTransformer } from "@/lib/vision/canvas-transform";
 
 export interface CommandCanvasRoomProps {
   store: StoreApi<CanvasStoreState>;
@@ -26,7 +49,10 @@ export interface CommandCanvasRoomProps {
   participants?: readonly CommandCanvasParticipant[];
   remoteCursors?: readonly CommandCanvasRemoteCursor[];
   onCommand?: CommandCanvasCommandHandler;
+  onTransformSketch?: CommandCanvasSketchTransformHandler;
   onCanvasPointerWorldMove?: (point: CanvasPoint) => void;
+  createHandTrackingController?: () => HandTrackingController;
+  meetingPacketPanel?: ReactNode;
 }
 
 export type CommandCanvasRoomStatus =
@@ -53,6 +79,13 @@ export type CommandCanvasCommandHandler = (
   source: CanvasCommandSource,
 ) => void | CommandResult | Promise<void | CommandResult>;
 
+export type CommandCanvasSketchTransformHandler =
+  CanvasSketchTransformer["transform"];
+
+const UI_SKETCH_TRANSFORM_SOURCE: CanvasCommandSource = "typed";
+const UI_SKETCH_TRANSFORM_INSTRUCTION =
+  "Make this sketch usable as a clean architecture diagram.";
+
 type ServiceTone = "idle" | "working" | "ready";
 
 export interface CommandCanvasServiceStatus {
@@ -69,7 +102,10 @@ export function CommandCanvasRoom({
   participants = [],
   remoteCursors = [],
   onCommand,
+  onTransformSketch,
   onCanvasPointerWorldMove,
+  createHandTrackingController,
+  meetingPacketPanel,
 }: CommandCanvasRoomProps) {
   const [objectPreviews, setObjectPreviews] = useState<
     Record<string, ObjectTransformPreview>
@@ -77,8 +113,19 @@ export function CommandCanvasRoom({
   const [drag, setDrag] = useState<ObjectDragState | null>(null);
   const [resize, setResize] = useState<ObjectResizeState | null>(null);
   const [pan, setPan] = useState<CanvasPanState | null>(null);
+  const [sketchComposerOpen, setSketchComposerOpen] = useState(false);
+  const [gestureStrokePreview, setGestureStrokePreview] = useState<
+    readonly CanvasPoint[]
+  >([]);
+  const [handTrackingStatus, setHandTrackingStatus] =
+    useState<HandTrackingStatus>({ state: "off" });
   const [commandExecution, setCommandExecution] =
     useState<CommandExecutionState>({ status: "idle" });
+  const [sketchTransformExecution, setSketchTransformExecution] =
+    useState<SketchTransformExecutionState>({ status: "idle" });
+  const canvasViewportRef = useRef<HTMLDivElement>(null);
+  const spatialGestureState = useRef(createInitialSpatialGestureState());
+  const gesturePreviewObjectId = useRef<string | null>(null);
   const canvas = useStore(store, (state) => state.canvas);
   const selectedObjectId = useStore(store, (state) => state.selectedObjectId);
   const viewport = useStore(store, (state) => state.viewport);
@@ -93,13 +140,24 @@ export function CommandCanvasRoom({
     ? canvas.objects[selectedObjectId]
     : undefined;
   const commandPending = commandExecution.status === "pending";
+  const sketchTransformPending = sketchTransformExecution.status === "pending";
+  const interactionPending = commandPending || sketchTransformPending;
+  const spatialServiceState = serviceStateForHandTracking(
+    handTrackingStatus,
+    serviceStatus?.spatialInput,
+  );
 
-  function runCommand(command: CanvasCommand, source: CanvasCommandSource) {
+  function runCommand(
+    command: CanvasCommand,
+    source: CanvasCommandSource,
+    onApplied?: () => void,
+  ) {
     if (!onCommand) {
-      dispatch(command, source);
+      const result = dispatch(command, source);
+      if (result.ok) onApplied?.();
       return;
     }
-    if (commandPending) return;
+    if (interactionPending) return;
 
     setCommandExecution({ status: "pending" });
     let execution: void | CommandResult | Promise<void | CommandResult>;
@@ -111,16 +169,206 @@ export function CommandCanvasRoom({
     }
 
     if (!isPromiseLike(execution)) {
-      finishRemoteCommand(execution);
+      finishRemoteCommand(execution, onApplied);
       return;
     }
 
-    void Promise.resolve(execution).then(finishRemoteCommand, (error) => {
-      setCommandExecution(commandRefusal(error));
-    });
+    void Promise.resolve(execution).then(
+      (result) => finishRemoteCommand(result, onApplied),
+      (error) => {
+        setCommandExecution(commandRefusal(error));
+      },
+    );
   }
 
-  function finishRemoteCommand(result: void | CommandResult) {
+  async function transformSelectedSketch() {
+    if (
+      !onTransformSketch ||
+      interactionPending ||
+      !selectedObject ||
+      selectedObject.deletedAt ||
+      selectedObject.type !== "sketch"
+    )
+      return;
+
+    setSketchTransformExecution({ status: "pending" });
+    try {
+      const result = await onTransformSketch({
+        sketchObjectId: selectedObject.id,
+        instruction: UI_SKETCH_TRANSFORM_INSTRUCTION,
+        outputKind: "architecture",
+        source: UI_SKETCH_TRANSFORM_SOURCE,
+      });
+      if (!result.ok) {
+        setSketchTransformExecution({
+          status: "refused",
+          message: result.message,
+          sourceSketchId: selectedObject.id,
+        });
+        return;
+      }
+      setSketchTransformExecution({ status: "idle" });
+      if (result.diagramObjectId) {
+        selectObject(result.diagramObjectId);
+        revealSketchTransformation(
+          selectedObject.id,
+          result.diagramObjectId,
+        );
+      }
+    } catch (error) {
+      setSketchTransformExecution({
+        status: "refused",
+        sourceSketchId: selectedObject.id,
+        message:
+          error instanceof Error && error.message.trim()
+            ? error.message
+            : "Sketch interpretation is temporarily unavailable.",
+      });
+    }
+  }
+
+  function loadPreparedDemoInterpretation() {
+    if (
+      interactionPending ||
+      sketchTransformExecution.status !== "refused" ||
+      !selectedObject ||
+      selectedObject.deletedAt ||
+      selectedObject.type !== "sketch" ||
+      selectedObject.id !== sketchTransformExecution.sourceSketchId
+    )
+      return;
+
+    const sourceSketchId = selectedObject.id;
+    const diagramId = createClientId("diagram");
+    const highestZ = objects.reduce(
+      (maximum, object) => Math.max(maximum, object.zIndex),
+      0,
+    );
+    const clientNodeId = `${diagramId}-client`;
+    const serviceNodeId = `${diagramId}-service`;
+    const databaseNodeId = `${diagramId}-database`;
+
+    runCommand(
+      {
+        type: "object.create",
+        object: {
+          id: diagramId,
+          type: "diagram",
+          title: "Prepared demo fallback",
+          x: selectedObject.x + selectedObject.width + 64,
+          y: selectedObject.y,
+          width: 620,
+          height: 360,
+          zIndex: highestZ + 1,
+          payload: {
+            kind: "architecture",
+            sourceSketchId,
+            interpretationSummary:
+              "Prepared demo fallback: not generated by the vision model.",
+            nodes: [
+              {
+                id: clientNodeId,
+                label: "Browser",
+                kind: "client",
+                x: 32,
+                y: 126,
+                width: 140,
+                height: 72,
+              },
+              {
+                id: serviceNodeId,
+                label: "CommandCanvas",
+                kind: "service",
+                x: 240,
+                y: 126,
+                width: 156,
+                height: 72,
+              },
+              {
+                id: databaseNodeId,
+                label: "Shared room",
+                kind: "database",
+                x: 464,
+                y: 126,
+                width: 140,
+                height: 72,
+              },
+            ],
+            edges: [
+              {
+                id: `${diagramId}-client-service`,
+                from: clientNodeId,
+                to: serviceNodeId,
+                label: "semantic command",
+              },
+              {
+                id: `${diagramId}-service-database`,
+                from: serviceNodeId,
+                to: databaseNodeId,
+                label: "validated mutation",
+              },
+            ],
+          },
+        },
+      },
+      UI_SKETCH_TRANSFORM_SOURCE,
+      () => {
+        setSketchTransformExecution({ status: "idle" });
+        selectObject(diagramId);
+        revealSketchTransformation(sourceSketchId, diagramId);
+      },
+    );
+  }
+
+  function revealSketchTransformation(
+    sourceSketchId: string,
+    diagramObjectId: string,
+  ) {
+    const state = store.getState();
+    const source = state.canvas.objects[sourceSketchId];
+    const diagram = state.canvas.objects[diagramObjectId];
+    const canvasViewport = canvasViewportRef.current;
+    if (
+      !canvasViewport ||
+      !source ||
+      source.deletedAt ||
+      source.type !== "sketch" ||
+      !diagram ||
+      diagram.deletedAt ||
+      diagram.type !== "diagram" ||
+      diagram.payload.sourceSketchId !== source.id
+    )
+      return;
+
+    const measured = canvasViewport.getBoundingClientRect();
+    const revealPadding = Math.min(48, measured.width * 0.08);
+    const fitted = fitViewportToWorldBounds(
+      state.viewport,
+      [
+        {
+          x: source.x,
+          y: source.y,
+          width: source.width,
+          height: source.height,
+        },
+        {
+          x: diagram.x,
+          y: diagram.y,
+          width: diagram.width,
+          height: diagram.height,
+        },
+      ],
+      { x: 0, y: 0, width: measured.width, height: measured.height },
+      revealPadding,
+      0.24,
+    );
+    if (fitted) setViewport(fitted);
+  }
+
+  function finishRemoteCommand(
+    result: void | CommandResult,
+    onApplied?: () => void,
+  ) {
     if (result && !result.ok) {
       setCommandExecution({
         status: "refused",
@@ -130,6 +378,7 @@ export function CommandCanvasRoom({
     }
     if (result?.ok) store.getState().hydrateCanvas(result.state);
     setCommandExecution({ status: "idle" });
+    onApplied?.();
   }
 
   function createNote() {
@@ -140,8 +389,8 @@ export function CommandCanvasRoom({
           id: createClientId("note"),
           type: "note",
           title: "New thought",
-          x: 160 - viewport.x / viewport.scale,
-          y: 130 - viewport.y / viewport.scale,
+          x: (160 - viewport.x) / viewport.scale,
+          y: (130 - viewport.y) / viewport.scale,
           width: 280,
           height: 190,
           zIndex: canvas.revision + 1,
@@ -163,8 +412,8 @@ export function CommandCanvasRoom({
           id: createClientId("board"),
           type: "task_board",
           title: "Launch board",
-          x: 140 - viewport.x / viewport.scale,
-          y: 110 - viewport.y / viewport.scale,
+          x: (140 - viewport.x) / viewport.scale,
+          y: (110 - viewport.y) / viewport.scale,
           width: 560,
           height: 320,
           zIndex: canvas.revision + 1,
@@ -215,8 +464,8 @@ export function CommandCanvasRoom({
           id: createClientId("schedule"),
           type: "schedule",
           title: "Next week",
-          x: 180 - viewport.x / viewport.scale,
-          y: 140 - viewport.y / viewport.scale,
+          x: (180 - viewport.x) / viewport.scale,
+          y: (140 - viewport.y) / viewport.scale,
           width: 460,
           height: 310,
           zIndex: canvas.revision + 1,
@@ -255,13 +504,41 @@ export function CommandCanvasRoom({
     );
   }
 
+  function createSketch(
+    payload: SketchPayload,
+    source: "pointer" | "touch" | "stylus",
+  ) {
+    const highestZ = objects.reduce(
+      (maximum, object) => Math.max(maximum, object.zIndex),
+      0,
+    );
+    runCommand(
+      {
+        type: "object.create",
+        object: {
+          id: createClientId("sketch"),
+          type: "sketch",
+          title: "Rough architecture",
+          x: (180 - viewport.x) / viewport.scale,
+          y: (130 - viewport.y) / viewport.scale,
+          width: 440,
+          height: 280,
+          zIndex: highestZ + 1,
+          payload,
+        },
+      },
+      source,
+      () => setSketchComposerOpen(false),
+    );
+  }
+
   function startObjectDrag(
     event: ReactPointerEvent<HTMLButtonElement>,
     object: CanvasObject,
   ) {
     event.stopPropagation();
     selectObject(object.id);
-    if (object.pinned || commandPending) return;
+    if (object.pinned || interactionPending) return;
 
     event.preventDefault();
     if (typeof event.currentTarget.setPointerCapture === "function")
@@ -332,7 +609,7 @@ export function CommandCanvasRoom({
   ) {
     event.preventDefault();
     event.stopPropagation();
-    if (commandPending) return;
+    if (interactionPending) return;
     if (typeof event.currentTarget.setPointerCapture === "function")
       event.currentTarget.setPointerCapture(event.pointerId);
     setResize({
@@ -404,7 +681,98 @@ export function CommandCanvasRoom({
     });
   }
 
+  function handleHandObservation(observation: HandTrackingObservation) {
+    const canvasViewport = canvasViewportRef.current;
+    if (!canvasViewport || interactionPending) return;
+    const bounds = canvasViewport.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return;
+    const current = store.getState();
+    const sceneObjects = Object.values(current.canvas.objects).flatMap(
+      (object) =>
+        object.deletedAt
+          ? []
+          : [
+              {
+                id: object.id,
+                x: object.x,
+                y: object.y,
+                width: object.width,
+                height: object.height,
+                zIndex: object.zIndex,
+                pinned: object.pinned,
+                minimized: object.minimized,
+              },
+            ],
+    );
+    const transition = reduceSpatialGesture(
+      spatialGestureState.current,
+      observation.mode === "idle"
+        ? { mode: "idle" }
+        : { mode: observation.mode, pointer: observation.pointer },
+      {
+        bounds,
+        viewport: current.viewport,
+        objects: sceneObjects,
+      },
+    );
+    spatialGestureState.current = transition.state;
+    for (const effect of transition.effects) applySpatialGestureEffect(effect);
+  }
+
+  function applySpatialGestureEffect(effect: SpatialGestureEffect) {
+    switch (effect.type) {
+      case "stroke.preview":
+        setGestureStrokePreview(effect.points);
+        return;
+      case "stroke.commit": {
+        const activeObjects = Object.values(store.getState().canvas.objects).filter(
+          (object) => !object.deletedAt,
+        );
+        const highestZ = activeObjects.reduce(
+          (maximum, object) => Math.max(maximum, object.zIndex),
+          0,
+        );
+        runCommand(
+          createGestureSketchCommand(effect.points, {
+            objectId: createClientId("sketch"),
+            strokeId: createClientId("stroke"),
+            zIndex: highestZ + 1,
+          }),
+          "gesture",
+        );
+        return;
+      }
+      case "object.select":
+        selectObject(effect.objectId);
+        return;
+      case "object.preview_move":
+        gesturePreviewObjectId.current = effect.objectId;
+        setObjectPreviews((current) => ({
+          ...current,
+          [effect.objectId]: { x: effect.x, y: effect.y },
+        }));
+        return;
+      case "object.commit_move":
+        runCommand(
+          {
+            type: "object.transform",
+            objectId: effect.objectId,
+            transform: { x: effect.x, y: effect.y },
+          },
+          "gesture",
+        );
+        return;
+      case "preview.clear": {
+        setGestureStrokePreview([]);
+        const objectId = gesturePreviewObjectId.current;
+        gesturePreviewObjectId.current = null;
+        if (objectId) clearObjectPreview(objectId);
+      }
+    }
+  }
+
   function startCanvasPan(event: ReactPointerEvent<HTMLDivElement>) {
+    if (interactionPending) return;
     if ((event.target as HTMLElement).closest(".canvas-object")) return;
     event.preventDefault();
     selectObject(null);
@@ -449,7 +817,7 @@ export function CommandCanvasRoom({
   }
 
   return (
-    <main className="command-canvas-shell" aria-busy={commandPending}>
+    <main className="command-canvas-shell" aria-busy={interactionPending}>
       <header className="room-header">
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true">
@@ -498,7 +866,7 @@ export function CommandCanvasRoom({
             type="button"
             onClick={createNote}
             aria-label="Create note"
-            disabled={commandPending}
+            disabled={interactionPending}
           >
             <span aria-hidden="true">＋</span>
             <small>Note</small>
@@ -507,7 +875,7 @@ export function CommandCanvasRoom({
             type="button"
             onClick={createTaskBoard}
             aria-label="Create task board"
-            disabled={commandPending}
+            disabled={interactionPending}
           >
             <span aria-hidden="true">▦</span>
             <small>Board</small>
@@ -516,15 +884,24 @@ export function CommandCanvasRoom({
             type="button"
             onClick={createSchedule}
             aria-label="Create schedule"
-            disabled={commandPending}
+            disabled={interactionPending}
           >
             <span aria-hidden="true">31</span>
             <small>Schedule</small>
           </button>
           <button
             type="button"
+            onClick={() => setSketchComposerOpen(true)}
+            aria-label="Create sketch"
+            disabled={interactionPending}
+          >
+            <span aria-hidden="true">⌁</span>
+            <small>Sketch</small>
+          </button>
+          <button
+            type="button"
             aria-label="Undo last change"
-            disabled={commandPending || canvas.receipts.length === 0}
+            disabled={interactionPending || canvas.receipts.length === 0}
             onClick={() => runCommand({ type: "history.undo" }, "typed")}
           >
             <span aria-hidden="true">↶</span>
@@ -539,6 +916,7 @@ export function CommandCanvasRoom({
             <span>Revision {canvas.revision}</span>
           </div>
           <div
+            ref={canvasViewportRef}
             className={`canvas-viewport${pan ? " is-panning" : ""}`}
             style={{
               backgroundPosition: `${viewport.x}px ${viewport.y}px, ${viewport.x}px ${viewport.y}px, ${viewport.x}px ${viewport.y}px`,
@@ -565,6 +943,19 @@ export function CommandCanvasRoom({
                 transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
               }}
             >
+              {gestureStrokePreview.length > 0 ? (
+                <svg
+                  className="gesture-stroke-preview"
+                  aria-hidden="true"
+                  viewBox="0 0 1 1"
+                >
+                  <polyline
+                    points={gestureStrokePreview
+                      .map((point) => `${point.x},${point.y}`)
+                      .join(" ")}
+                  />
+                </svg>
+              ) : null}
               {objects.map((object) => (
                 <CanvasObjectCard
                   key={object.id}
@@ -582,7 +973,7 @@ export function CommandCanvasRoom({
                   onResizePointerMove={updateObjectResize}
                   onResizePointerUp={finishObjectResize}
                   onResizePointerCancel={cancelObjectResize}
-                  commandsDisabled={commandPending}
+                  commandsDisabled={interactionPending}
                 />
               ))}
             </div>
@@ -643,10 +1034,39 @@ export function CommandCanvasRoom({
           {selectedObject && !selectedObject.deletedAt ? (
             <div className="selection-toolbar" aria-label="Selected object actions">
               <span className="selection-name">{selectedObject.title}</span>
+              {selectedObject.type === "sketch" && onTransformSketch ? (
+                <>
+                  <button
+                    type="button"
+                    aria-label={
+                      sketchTransformPending
+                        ? "Interpreting sketch…"
+                        : "Make usable"
+                    }
+                    disabled={interactionPending}
+                    onClick={transformSelectedSketch}
+                  >
+                    {sketchTransformPending
+                      ? "Interpreting sketch…"
+                      : "Make usable"}
+                  </button>
+                  {sketchTransformExecution.status === "refused" &&
+                  sketchTransformExecution.sourceSketchId === selectedObject.id ? (
+                    <button
+                      type="button"
+                      aria-label="Load prepared demo interpretation"
+                      disabled={interactionPending}
+                      onClick={loadPreparedDemoInterpretation}
+                    >
+                      Load prepared demo interpretation
+                    </button>
+                  ) : null}
+                </>
+              ) : null}
               <button
                 type="button"
                 aria-label={selectedObject.pinned ? "Unpin object" : "Pin object"}
-                disabled={commandPending}
+                disabled={interactionPending}
                 onClick={() =>
                   runCommand(
                     {
@@ -665,7 +1085,7 @@ export function CommandCanvasRoom({
                 aria-label={
                   selectedObject.minimized ? "Restore object" : "Minimize object"
                 }
-                disabled={commandPending}
+                disabled={interactionPending}
                 onClick={() =>
                   runCommand(
                     {
@@ -683,7 +1103,7 @@ export function CommandCanvasRoom({
                 type="button"
                 className="danger-action"
                 aria-label="Move object to trash"
-                disabled={commandPending}
+                disabled={interactionPending}
                 onClick={() =>
                   runCommand(
                     { type: "object.discard", objectId: selectedObject.id },
@@ -721,10 +1141,18 @@ export function CommandCanvasRoom({
             />
             <ServiceState
               label="Spatial input"
-              value={serviceStatus?.spatialInput?.value ?? "Camera off"}
-              tone={serviceStatus?.spatialInput?.tone ?? "idle"}
+              value={spatialServiceState.value}
+              tone={spatialServiceState.tone}
             />
           </section>
+
+          <SpatialCameraControl
+            createController={createHandTrackingController}
+            onObservation={handleHandObservation}
+            onStatusChange={setHandTrackingStatus}
+          />
+
+          {meetingPacketPanel}
 
           {commandExecution.status === "pending" ? (
             <div className="command-error" role="status" aria-live="polite">
@@ -737,6 +1165,13 @@ export function CommandCanvasRoom({
             <div className="command-error" role="status" aria-live="polite">
               <strong>Command refused</strong>
               <span>{commandExecution.message}</span>
+            </div>
+          ) : null}
+
+          {sketchTransformExecution.status === "refused" ? (
+            <div className="command-error" role="status" aria-live="polite">
+              <strong>Sketch interpretation failed</strong>
+              <span>{sketchTransformExecution.message}</span>
             </div>
           ) : null}
 
@@ -779,6 +1214,33 @@ export function CommandCanvasRoom({
           </section>
         </aside>
       </section>
+
+      {sketchComposerOpen ? (
+        <div className="sketch-dialog-backdrop">
+          <section
+            className="sketch-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sketch-dialog-title"
+          >
+            <div className="sketch-dialog-heading">
+              <div>
+                <p className="eyebrow">Original artifact preserved</p>
+                <h2 id="sketch-dialog-title">Draw a rough sketch</h2>
+              </div>
+              <span>Mouse · touch · stylus · finger</span>
+            </div>
+            <SketchComposer
+              width={440}
+              height={280}
+              onDone={createSketch}
+              onCancel={() => {
+                if (!interactionPending) setSketchComposerOpen(false);
+              }}
+            />
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -831,6 +1293,7 @@ function CanvasObjectCard({
         type="button"
         className="object-select-hitbox"
         aria-label={`Select ${object.title}`}
+        disabled={commandsDisabled}
         onClick={onSelect}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -909,16 +1372,19 @@ function CanvasObjectContent({ object }: { object: CanvasObject }) {
     case "sketch":
       return (
         <div className="sketch-preview">
-          <span>{object.payload.strokes.length}</span>
-          <small>source strokes preserved</small>
+          <SketchPreview
+            title={object.title}
+            width={object.width}
+            height={object.height}
+            payload={object.payload}
+          />
+          <small>Original source · {object.payload.strokes.length} strokes</small>
         </div>
       );
     case "diagram":
       return (
         <div className="diagram-preview">
-          {object.payload.nodes.slice(0, 6).map((node) => (
-            <span key={node.id}>{node.label}</span>
-          ))}
+          <DiagramPreview payload={object.payload} />
         </div>
       );
   }
@@ -967,6 +1433,11 @@ type CommandExecutionState =
   | { status: "idle" }
   | { status: "pending" }
   | { status: "refused"; message: string };
+
+type SketchTransformExecutionState =
+  | { status: "idle" }
+  | { status: "pending" }
+  | { status: "refused"; message: string; sourceSketchId: string };
 
 function isPromiseLike(
   value: void | CommandResult | Promise<void | CommandResult>,
@@ -1066,6 +1537,24 @@ function ServiceState({ label, value, tone }: ServiceStateProps) {
 function createClientId(prefix: string) {
   const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`;
   return `${prefix}-${suffix}`;
+}
+
+function serviceStateForHandTracking(
+  status: HandTrackingStatus,
+  fallback: CommandCanvasServiceStatus["spatialInput"],
+): { value: string; tone: ServiceTone } {
+  switch (status.state) {
+    case "off":
+      return fallback ?? { value: "Camera off", tone: "idle" };
+    case "starting":
+      return { value: "Starting camera locally…", tone: "working" };
+    case "ready":
+      return { value: "Hand input ready · local only", tone: "ready" };
+    case "refused":
+      return { value: "Camera permission refused · pointer active", tone: "idle" };
+    case "unavailable":
+      return { value: "Hand input unavailable · pointer active", tone: "idle" };
+  }
 }
 
 function initials(name: string) {

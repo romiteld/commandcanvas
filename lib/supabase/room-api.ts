@@ -15,6 +15,7 @@ import {
 import type {
   CommitCommandValue,
   CreateRoomValue,
+  DeleteDemoRoomValue,
   JoinRoomValue,
 } from "@/lib/supabase/room-service";
 import { parseBearerJwtHeader } from "@/lib/supabase/server-auth";
@@ -49,6 +50,10 @@ export interface BrowserRoomApi {
     input: CreateRoomRequest,
     options?: RoomApiRequestOptions,
   ) => Promise<RoomApiResult<CreateRoomValue>>;
+  deleteDemoRoom: (
+    roomId: string,
+    options?: RoomApiRequestOptions,
+  ) => Promise<RoomApiResult<DeleteDemoRoomValue>>;
   joinRoom: (
     input: JoinRoomRequest,
     options?: RoomApiRequestOptions,
@@ -98,6 +103,17 @@ const joinRoomResponseSchema = z
         roomId: z.uuid(),
         role: z.enum(["host", "participant"]),
         joined: z.boolean(),
+      })
+      .strict(),
+  })
+  .strict();
+const deleteDemoRoomResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    room: z
+      .object({
+        roomId: z.uuid(),
+        deleted: z.literal(true),
       })
       .strict(),
   })
@@ -326,8 +342,12 @@ const errorResponseSchema = z
           "request_too_large",
           "invalid_request",
           "create_unavailable",
+          "demo_room_limit_reached",
+          "demo_room_storage_limit_reached",
+          "delete_unavailable",
           "join_unavailable",
           "room_mismatch",
+          "invalid_room_id",
           "member_required",
           "host_required",
           "permission_denied",
@@ -391,6 +411,49 @@ export function createBrowserRoomApi({
         const parsed = createRoomResponseSchema.safeParse(raw);
         if (!parsed.success)
           return failure("invalid_response", "Room could not be created.", response.status);
+        return { ok: true, value: parsed.data.room };
+      } catch (error) {
+        return requestFailure(error, options?.signal);
+      }
+    },
+    async deleteDemoRoom(roomId, options) {
+      if (bearerToken === null) return invalidAuthorization();
+      if (!z.uuid().safeParse(roomId).success)
+        return failure("invalid_request", "Room ID is invalid.");
+      if (options?.signal?.aborted) return cancelled();
+
+      try {
+        const response = await fetcher(
+          `/api/rooms/${encodeURIComponent(roomId)}`,
+          {
+            method: "DELETE",
+            headers: { authorization: `Bearer ${bearerToken}` },
+            cache: "no-store",
+            signal: options?.signal,
+          },
+        );
+        const rawResponse = await readJsonResponse(response);
+        if (!rawResponse.ok)
+          return failure(
+            "invalid_response",
+            "Demo room could not be deleted.",
+            response.status,
+          );
+        const raw = rawResponse.value;
+        if (response.status !== 200)
+          return parseErrorResponse(
+            raw,
+            response.status,
+            "Demo room could not be deleted.",
+            [accessToken],
+          );
+        const parsed = deleteDemoRoomResponseSchema.safeParse(raw);
+        if (!parsed.success || parsed.data.room.roomId !== roomId)
+          return failure(
+            "invalid_response",
+            "Demo room could not be deleted.",
+            response.status,
+          );
         return { ok: true, value: parsed.data.room };
       } catch (error) {
         return requestFailure(error, options?.signal);

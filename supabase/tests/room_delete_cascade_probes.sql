@@ -67,6 +67,7 @@ select public.commit_canvas_mutation(
   p_room_id => :'cc_target_room_id'::uuid,
   p_actor_user_id => :'host_user_id'::uuid,
   p_actor_type => 'human',
+  p_source => 'system',
   p_action => 'create',
   p_description => 'Cascade host created the target note.',
   p_changes => jsonb_build_array(
@@ -99,6 +100,7 @@ select public.commit_canvas_mutation(
   p_room_id => :'cc_unrelated_room_id'::uuid,
   p_actor_user_id => :'unrelated_host_user_id'::uuid,
   p_actor_type => 'human',
+  p_source => 'system',
   p_action => 'create',
   p_description => 'Unrelated host created the control note.',
   p_changes => jsonb_build_array(
@@ -131,6 +133,7 @@ select public.commit_canvas_mutation(
   p_room_id => :'cc_target_room_id'::uuid,
   p_actor_user_id => :'host_user_id'::uuid,
   p_actor_type => 'human',
+  p_source => 'system',
   p_action => 'undo',
   p_description => 'Cascade host undid the target note creation.',
   p_changes => '[]'::jsonb,

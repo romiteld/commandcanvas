@@ -68,7 +68,7 @@ function fakeSessionFactory(options?: {
       lastError: null,
     };
     const listeners = new Set<() => void>();
-    session = {
+    const createdSession: DemoRoomSession = {
       getSnapshot: () => snapshot,
       subscribe: (listener) => {
         listeners.add(listener);
@@ -113,13 +113,54 @@ function fakeSessionFactory(options?: {
         listeners.forEach((listener) => listener());
         return { ok: true, state };
       },
+      transformSketch: async () => ({
+        ok: false,
+        error: {
+          code: "sketch_transform_unconfigured",
+          message: "Sketch interpretation is not configured.",
+        },
+      }),
+      loadLatestPacketWorkflow: async () => ({
+        ok: true,
+        value: { packet: null, latestSend: null, activity: [] },
+      }),
+      preparePacket: async () => ({
+        ok: false,
+        error: { code: "packet_api_unconfigured", message: "Not configured." },
+      }),
+      updatePacket: async () => ({
+        ok: false,
+        error: { code: "packet_api_unconfigured", message: "Not configured." },
+      }),
+      approvePacket: async () => ({
+        ok: false,
+        error: { code: "packet_api_unconfigured", message: "Not configured." },
+      }),
+      stagePacketSend: async () => ({
+        ok: false,
+        error: { code: "packet_api_unconfigured", message: "Not configured." },
+      }),
+      cancelPacketSend: async () => ({
+        ok: false,
+        error: { code: "packet_api_unconfigured", message: "Not configured." },
+      }),
+      executePacketSend: async () => ({
+        ok: false,
+        error: { code: "packet_api_unconfigured", message: "Not configured." },
+      }),
       publishCursor: async () => true,
+      deleteHostedDemoRoom: async () => ({
+        ok: true,
+        roomId: ROOM_ID,
+        deleted: true,
+      }),
       whenIdle: async () => undefined,
       dispose: async () => {
         disposed += 1;
       },
     };
-    return session;
+    session = createdSession;
+    return createdSession;
   };
 
   return {

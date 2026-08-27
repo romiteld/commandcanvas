@@ -8,7 +8,10 @@
   },
   "packageManager": "npm@11.5.2",
   "scripts": {
+    "build:hand-worker": "node scripts/build-hand-worker.mjs",
+    "predev": "npm run build:hand-worker",
     "dev": "next dev",
+    "prebuild": "npm run build:hand-worker",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
@@ -19,28 +22,31 @@
     "check": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.112.4",
+    "@mediapipe/tasks-vision": "1.0.1",
+    "@supabase/supabase-js": "2.112.4",
     "next": "16.3.3",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "zod": "^4.4.3",
-    "zustand": "^5.0.15"
+    "server-only": "0.0.1",
+    "zod": "4.4.3",
+    "zustand": "5.0.15"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
-    "@tailwindcss/postcss": "^4",
-    "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.6",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "@vitejs/plugin-react": "^6.1.0",
-    "eslint": "^9",
+    "@playwright/test": "1.62.1",
+    "@tailwindcss/postcss": "4.3.3",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.6",
+    "@types/node": "20.19.43",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@vitejs/plugin-react": "6.1.0",
+    "esbuild": "0.28.2",
+    "eslint": "9.39.5",
     "eslint-config-next": "16.3.3",
-    "jsdom": "^29.1.1",
-    "tailwindcss": "^4",
-    "typescript": "^5",
-    "vitest": "^4.1.11"
+    "jsdom": "29.1.1",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
   }
 }

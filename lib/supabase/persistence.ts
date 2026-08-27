@@ -129,6 +129,7 @@ export const receiptDataRowSchema = z
     occurred_at: timestampSchema,
     actor_user_id: z.uuid(),
     actor_type: z.enum(["human", "participant", "agent"]),
+    source: sourceSchema,
     actor_display_name: z.string().trim().min(1).max(80),
     action: receiptActionSchema,
     affected_object_ids: z.array(objectIdSchema).min(1).max(50),
@@ -140,14 +141,6 @@ export const receiptDataRowSchema = z
     description: z.string().trim().min(1).max(280),
   })
   .strict();
-
-const receiptContextValueSchema = z
-  .object({
-    commandId: z.string().min(1).max(128).optional(),
-    source: sourceSchema.optional(),
-  })
-  .strict();
-const receiptContextSchema = z.record(z.string(), receiptContextValueSchema);
 
 export type RoomDataRow = z.infer<typeof roomDataRowSchema>;
 export type CanvasObjectDataRow = z.infer<typeof canvasObjectDataRowSchema>;
@@ -176,7 +169,6 @@ export interface PersistenceRowsInput {
   room: unknown;
   objects: unknown;
   receipts: unknown;
-  receiptContext?: unknown;
 }
 
 interface SnapshotWithRevision {
@@ -215,15 +207,6 @@ export function parseCanvasPersistenceRows(
         entity: "input",
         message: "Persisted objects and receipts must be arrays.",
       });
-
-    const contextResult = receiptContextSchema.safeParse(input.receiptContext ?? {});
-    if (!contextResult.success)
-      fail({
-        code: "INVALID_INPUT",
-        entity: "input",
-        message: "Receipt context is invalid.",
-      });
-    const receiptContext = contextResult.data;
 
     const objectRows: CanvasObjectDataRow[] = [];
     const objects: Record<string, CanvasObject> = {};
@@ -306,9 +289,7 @@ export function parseCanvasPersistenceRows(
         });
       priorRevision = row.revision;
 
-      mappedReceipts.push(
-        mapReceiptRow(row, room.id, index, receiptContext[row.id]),
-      );
+      mappedReceipts.push(mapReceiptRow(row, room.id, index));
     });
 
     validateLatestObjectStates(objectRows, objects, mappedReceipts);
@@ -427,7 +408,6 @@ function mapReceiptRow(
   row: ReceiptDataRow,
   roomId: string,
   index: number,
-  context?: z.infer<typeof receiptContextValueSchema>,
 ): MappedReceipt {
   validateReceiptShape(row, index);
   const before = mapReceiptState(
@@ -449,7 +429,7 @@ function mapReceiptRow(
   const receipt: ActivityReceipt = {
     id: row.id,
     roomId,
-    commandId: context?.commandId ?? row.id,
+    commandId: row.id,
     revision: row.revision,
     occurredAt: row.occurred_at,
     actor: {
@@ -457,7 +437,7 @@ function mapReceiptRow(
       displayName: row.actor_display_name,
       type: row.actor_type,
     },
-    source: resolveReceiptSource(row.actor_type, context?.source, index),
+    source: resolveReceiptSource(row.actor_type, row.source, index),
     action: row.action,
     affectedObjectIds: [...row.affected_object_ids],
     before: toReceiptObjectState(before),
@@ -555,11 +535,9 @@ function toReceiptObjectState(
 
 function resolveReceiptSource(
   actorType: ReceiptDataRow["actor_type"],
-  explicit: CanvasCommandSource | undefined,
+  explicit: CanvasCommandSource,
   index: number,
 ): CanvasCommandSource {
-  if (!explicit) return actorType === "participant" ? "collaborator" : "system";
-
   const allowed =
     actorType === "participant"
       ? new Set<CanvasCommandSource>(["collaborator", "system"])

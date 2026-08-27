@@ -94,6 +94,7 @@ const createReceiptRow = {
   occurred_at: CREATED_AT,
   actor_user_id: HOST_ID,
   actor_type: "human",
+  source: "typed",
   actor_display_name: "Danny",
   action: "create",
   affected_object_ids: ["note-launch"],
@@ -112,6 +113,7 @@ const moveReceiptRow = {
   occurred_at: MOVED_AT,
   actor_user_id: PARTICIPANT_ID,
   actor_type: "participant",
+  source: "collaborator",
   actor_display_name: "Sarah",
   action: "transform",
   affected_object_ids: ["note-launch"],
@@ -132,12 +134,6 @@ function persistenceInput(overrides?: {
     room: overrides?.room ?? roomRow,
     objects: overrides?.objects ?? [objectRow],
     receipts: overrides?.receipts ?? [createReceiptRow, moveReceiptRow],
-    receiptContext: {
-      [RECEIPT_CREATE_ID]: {
-        commandId: "command-create-note",
-        source: "typed" as const,
-      },
-    },
   };
 }
 
@@ -197,7 +193,7 @@ describe("parseCanvasPersistenceRows", () => {
           {
             id: RECEIPT_CREATE_ID,
             roomId: ROOM_ID,
-            commandId: "command-create-note",
+            commandId: RECEIPT_CREATE_ID,
             revision: 1,
             occurredAt: CREATED_AT,
             actor: { id: HOST_ID, displayName: "Danny", type: "human" },
@@ -259,6 +255,64 @@ describe("parseCanvasPersistenceRows", () => {
           },
         ],
         undoneReceiptIds: [],
+      },
+    });
+  });
+
+  it("reloads an agent WebMCP receipt source from the durable row without context", () => {
+    const result = parseCanvasPersistenceRows(
+      persistenceInput({
+        room: { ...roomRow, revision: 1, updated_at: CREATED_AT },
+        objects: [
+          {
+            ...objectRow,
+            x: createSnapshot.x,
+            updated_at: CREATED_AT,
+            version: 1,
+            revision: 1,
+          },
+        ],
+        receipts: [
+          {
+            ...createReceiptRow,
+            actor_type: "agent",
+            source: "webmcp",
+            actor_display_name: "CommandCanvas agent",
+          },
+        ],
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error.message);
+    expect(result.state.receipts[0]).toMatchObject({
+      commandId: RECEIPT_CREATE_ID,
+      source: "webmcp",
+      actor: {
+        id: HOST_ID,
+        displayName: "CommandCanvas agent",
+        type: "agent",
+      },
+    });
+  });
+
+  it("refuses a durable receipt source that is inconsistent with its actor", () => {
+    const result = parseCanvasPersistenceRows(
+      persistenceInput({
+        receipts: [
+          { ...createReceiptRow, source: "collaborator" },
+          moveReceiptRow,
+        ],
+      }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "INVALID_RECEIPT_STATE",
+        entity: "receipt",
+        index: 0,
+        message: "Receipt source is inconsistent with its actor type.",
       },
     });
   });
@@ -382,6 +436,7 @@ describe("parseCanvasPersistenceRows", () => {
       occurred_at: deletedAt,
       actor_user_id: HOST_ID,
       actor_type: "human",
+      source: "pointer",
       actor_display_name: "Danny",
       action: "discard",
       previous_state: [{ objectId: "note-launch", state: moveSnapshot }],

@@ -31,6 +31,30 @@ import {
   type NoSignupAuthClient,
   type NoSignupSession,
 } from "@/lib/supabase/session";
+import type {
+  BrowserSketchTransformApi,
+  BrowserSketchTransformResult,
+} from "@/lib/vision/browser-api";
+import type { SketchTransformRequest } from "@/lib/vision/diagram-transform";
+import type {
+  ApprovePacketRequest,
+  CancelPacketSendRequest,
+  ExecutePacketSendRequest,
+  PreparePacketRequest,
+  StagePacketSendRequest,
+  UpdatePacketRequest,
+} from "@/lib/packets/contracts";
+import type {
+  BrowserApprovedPacket,
+  BrowserCancelledPacketSend,
+  BrowserExecutedPacketSend,
+  BrowserPacketApi,
+  BrowserPacketApiResult,
+  BrowserPersistedPacketWorkflow,
+  BrowserPreparedPacket,
+  BrowserStagedPacketSend,
+  BrowserUpdatedPacket,
+} from "@/lib/packets/browser-api";
 
 type RealtimeFactoryOptions = Parameters<typeof createRoomRealtime>[0];
 
@@ -107,6 +131,10 @@ export interface DemoRoomSessionDependencies {
   roomDataClient: BrowserRoomClient;
   realtimeClient: DemoRoomRealtimeClient;
   createRoomApi: (accessToken: string) => BrowserRoomApi;
+  createSketchTransformApi?: (
+    accessToken: string,
+  ) => BrowserSketchTransformApi;
+  createPacketApi?: (accessToken: string) => BrowserPacketApi;
   ensureSession: typeof ensureNoSignupSession;
   loadMembership: typeof loadOwnRoomMembership;
   loadCanvas: typeof loadBrowserCanvas;
@@ -125,7 +153,41 @@ export interface DemoRoomSession {
     source: CanvasCommandSource,
     signal?: AbortSignal,
   ) => Promise<DemoRoomCommandResult>;
+  transformSketch: (
+    input: Omit<SketchTransformRequest, "roomId">,
+    signal?: AbortSignal,
+  ) => Promise<BrowserSketchTransformResult>;
+  loadLatestPacketWorkflow: (
+    signal?: AbortSignal,
+  ) => Promise<BrowserPacketApiResult<BrowserPersistedPacketWorkflow>>;
+  preparePacket: (
+    input: Omit<PreparePacketRequest, "roomId">,
+    signal?: AbortSignal,
+  ) => Promise<BrowserPacketApiResult<BrowserPreparedPacket>>;
+  updatePacket: (
+    input: Omit<UpdatePacketRequest, "roomId">,
+    signal?: AbortSignal,
+  ) => Promise<BrowserPacketApiResult<BrowserUpdatedPacket>>;
+  approvePacket: (
+    input: Omit<ApprovePacketRequest, "roomId">,
+    signal?: AbortSignal,
+  ) => Promise<BrowserPacketApiResult<BrowserApprovedPacket>>;
+  stagePacketSend: (
+    input: Omit<StagePacketSendRequest, "roomId">,
+    signal?: AbortSignal,
+  ) => Promise<BrowserPacketApiResult<BrowserStagedPacketSend>>;
+  cancelPacketSend: (
+    input: Omit<CancelPacketSendRequest, "roomId">,
+    signal?: AbortSignal,
+  ) => Promise<BrowserPacketApiResult<BrowserCancelledPacketSend>>;
+  executePacketSend: (
+    input: Omit<ExecutePacketSendRequest, "roomId">,
+    signal?: AbortSignal,
+  ) => Promise<BrowserPacketApiResult<BrowserExecutedPacketSend>>;
   publishCursor: (point: { x: number; y: number }) => Promise<boolean>;
+  deleteHostedDemoRoom: (
+    signal?: AbortSignal,
+  ) => Promise<DemoRoomDeleteResult>;
   whenIdle: () => Promise<void>;
   dispose: () => Promise<void>;
 }
@@ -136,6 +198,10 @@ export type DemoRoomStartResult =
 
 export type DemoRoomCommandResult =
   | { ok: true; state: CanvasState }
+  | ({ ok: false } & DemoRoomSessionError);
+
+export type DemoRoomDeleteResult =
+  | { ok: true; roomId: string; deleted: true }
   | ({ ok: false } & DemoRoomSessionError);
 
 const defaultOperations = {
@@ -210,12 +276,15 @@ export function createDemoRoomSession(
   };
   let noSignupSession: NoSignupSession | null = null;
   let roomApi: BrowserRoomApi | null = null;
+  let sketchTransformApi: BrowserSketchTransformApi | null = null;
+  let packetApi: BrowserPacketApi | null = null;
   let realtime: RoomRealtimeController | null = null;
   let disposed = false;
   let startCalled = false;
   let pendingRevision = 0;
   let revisionWork: Promise<void> | null = null;
   let commandWork: Promise<DemoRoomCommandResult> | null = null;
+  let roomDeleteWork: Promise<DemoRoomDeleteResult> | null = null;
 
   function getSnapshot() {
     return snapshot;
@@ -280,6 +349,12 @@ export function createDemoRoomSession(
         );
       noSignupSession = ensured.session;
       roomApi = dependencies.createRoomApi(ensured.session.access_token);
+      sketchTransformApi = dependencies.createSketchTransformApi?.(
+        ensured.session.access_token,
+      ) ?? null;
+      packetApi = dependencies.createPacketApi?.(
+        ensured.session.access_token,
+      ) ?? null;
       update({
         identity: {
           userId: ensured.session.user.id,
@@ -623,6 +698,155 @@ export function createDemoRoomSession(
     }
   }
 
+  async function deleteHostedDemoRoom(
+    signal?: AbortSignal,
+  ): Promise<DemoRoomDeleteResult> {
+    if (disposed) return disposedResult();
+    if (roomDeleteWork) return roomDeleteWork;
+    if (
+      !roomApi ||
+      !snapshot.roomId ||
+      !snapshot.membership ||
+      snapshot.membership.role !== "host"
+    )
+      return {
+        ok: false,
+        code: "host_required",
+        message: "Only the demo room host can delete this room.",
+      };
+
+    const roomId = snapshot.roomId;
+    const work = (async (): Promise<DemoRoomDeleteResult> => {
+      const result = await roomApi!.deleteDemoRoom(roomId, { signal });
+      if (!result.ok) {
+        const error = {
+          code: result.error.code,
+          message: "Demo room was not reset. Try again.",
+        };
+        if (!disposed) update({ lastError: error });
+        return { ok: false, ...error };
+      }
+      await dispose();
+      return { ok: true, roomId: result.value.roomId, deleted: true };
+    })();
+    roomDeleteWork = work;
+    try {
+      return await work;
+    } catch {
+      const error = {
+        code: signal?.aborted ? "request_cancelled" : "delete_unavailable",
+        message: "Demo room was not reset. Try again.",
+      };
+      if (!disposed) update({ lastError: error });
+      return { ok: false, ...error };
+    } finally {
+      if (!disposed) roomDeleteWork = null;
+    }
+  }
+
+  async function transformSketch(
+    input: Omit<SketchTransformRequest, "roomId">,
+    signal?: AbortSignal,
+  ): Promise<BrowserSketchTransformResult> {
+    if (disposed)
+      return sketchTransformFailure(
+        "session_disposed",
+        "This demo room session has been closed.",
+      );
+    if (!noSignupSession || !snapshot.roomId)
+      return sketchTransformFailure(
+        "room_not_ready",
+        "Create or join a room before interpreting a sketch.",
+      );
+    if (!sketchTransformApi)
+      return sketchTransformFailure(
+        "sketch_transform_unconfigured",
+        "Sketch interpretation is not configured.",
+      );
+    return sketchTransformApi.transform({ ...input, roomId: snapshot.roomId }, signal);
+  }
+
+  async function preparePacket(
+    input: Omit<PreparePacketRequest, "roomId">,
+    signal?: AbortSignal,
+  ) {
+    const unavailable = packetWorkflowUnavailable<BrowserPreparedPacket>();
+    if (unavailable) return unavailable;
+    return packetApi!.prepare({ ...input, roomId: snapshot.roomId! }, signal);
+  }
+
+  async function loadLatestPacketWorkflow(signal?: AbortSignal) {
+    const unavailable =
+      packetWorkflowUnavailable<BrowserPersistedPacketWorkflow>();
+    if (unavailable) return unavailable;
+    return packetApi!.loadLatest(snapshot.roomId!, signal);
+  }
+
+  async function updatePacket(
+    input: Omit<UpdatePacketRequest, "roomId">,
+    signal?: AbortSignal,
+  ) {
+    const unavailable = packetWorkflowUnavailable<BrowserUpdatedPacket>();
+    if (unavailable) return unavailable;
+    return packetApi!.update({ ...input, roomId: snapshot.roomId! }, signal);
+  }
+
+  async function approvePacket(
+    input: Omit<ApprovePacketRequest, "roomId">,
+    signal?: AbortSignal,
+  ) {
+    const unavailable = packetWorkflowUnavailable<BrowserApprovedPacket>();
+    if (unavailable) return unavailable;
+    return packetApi!.approve({ ...input, roomId: snapshot.roomId! }, signal);
+  }
+
+  async function stagePacketSend(
+    input: Omit<StagePacketSendRequest, "roomId">,
+    signal?: AbortSignal,
+  ) {
+    const unavailable = packetWorkflowUnavailable<BrowserStagedPacketSend>();
+    if (unavailable) return unavailable;
+    return packetApi!.stageSend({ ...input, roomId: snapshot.roomId! }, signal);
+  }
+
+  async function executePacketSend(
+    input: Omit<ExecutePacketSendRequest, "roomId">,
+    signal?: AbortSignal,
+  ) {
+    const unavailable = packetWorkflowUnavailable<BrowserExecutedPacketSend>();
+    if (unavailable) return unavailable;
+    return packetApi!.executeSend({ ...input, roomId: snapshot.roomId! }, signal);
+  }
+
+  async function cancelPacketSend(
+    input: Omit<CancelPacketSendRequest, "roomId">,
+    signal?: AbortSignal,
+  ) {
+    const unavailable = packetWorkflowUnavailable<BrowserCancelledPacketSend>();
+    if (unavailable) return unavailable;
+    return packetApi!.cancelSend({ ...input, roomId: snapshot.roomId! }, signal);
+  }
+
+  function packetWorkflowUnavailable<T>(): BrowserPacketApiResult<T> | null {
+    if (!noSignupSession || !snapshot.roomId)
+      return {
+        ok: false,
+        error: {
+          code: "room_not_ready",
+          message: "Create or join a room before using meeting packets.",
+        },
+      };
+    if (!packetApi)
+      return {
+        ok: false,
+        error: {
+          code: "packet_api_unconfigured",
+          message: "Meeting packet actions are not configured.",
+        },
+      };
+    return null;
+  }
+
   async function whenIdle() {
     while (revisionWork || commandWork) {
       if (revisionWork) await revisionWork;
@@ -637,6 +861,8 @@ export function createDemoRoomSession(
     realtime = null;
     noSignupSession = null;
     roomApi = null;
+    sketchTransformApi = null;
+    packetApi = null;
     update({
       status: "disposed",
       realtimeStatus: "closed",
@@ -652,7 +878,16 @@ export function createDemoRoomSession(
     subscribe,
     start,
     submitCommand,
+    transformSketch,
+    loadLatestPacketWorkflow,
+    preparePacket,
+    updatePacket,
+    approvePacket,
+    stagePacketSend,
+    cancelPacketSend,
+    executePacketSend,
     publishCursor,
+    deleteHostedDemoRoom,
     whenIdle,
     dispose,
   };
@@ -664,4 +899,11 @@ function disposedResult() {
     code: "session_disposed",
     message: "This demo room session has been closed.",
   };
+}
+
+function sketchTransformFailure(
+  code: string,
+  message: string,
+): BrowserSketchTransformResult {
+  return { ok: false, error: { code, message } };
 }

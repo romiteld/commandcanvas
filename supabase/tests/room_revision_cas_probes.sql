@@ -82,6 +82,7 @@ select public.commit_canvas_mutation(
   p_room_id => :'cc_unrelated_room_id'::uuid,
   p_actor_user_id => :'host_user_id'::uuid,
   p_actor_type => 'human',
+  p_source => 'system',
   p_action => 'create',
   p_description => 'CAS host created the unrelated control note.',
   p_changes => jsonb_build_array(
@@ -116,6 +117,7 @@ select public.commit_canvas_mutation_at_revision(
   p_expected_room_revision => 0,
   p_actor_user_id => :'host_user_id'::uuid,
   p_actor_type => 'human',
+  p_source => 'system',
   p_action => 'create',
   p_description => 'CAS host created the target note.',
   p_changes => jsonb_build_array(
@@ -161,6 +163,12 @@ begin
        from public.receipts
        where room_id = current_setting('commandcanvas.cas_target_room_id')::uuid
      ) <> 1
+     or (
+       select source
+       from public.receipts
+       where room_id = current_setting('commandcanvas.cas_target_room_id')::uuid
+         and revision = 1
+     ) <> 'system'
   then
     raise exception 'room_revision_cas_exact_revision_failed';
   end if;
@@ -215,6 +223,7 @@ begin
       p_expected_room_revision => 0,
       p_actor_user_id => current_setting('commandcanvas.cas_host_user_id')::uuid,
       p_actor_type => 'human',
+      p_source => 'system',
       p_action => 'transform',
       p_description => 'This stale room revision must not mutate state.',
       p_changes => jsonb_build_array(
@@ -333,6 +342,7 @@ begin
       p_expected_room_revision => 0,
       p_actor_user_id => current_setting('commandcanvas.cas_host_user_id')::uuid,
       p_actor_type => 'human',
+      p_source => 'system',
       p_action => 'create',
       p_description => 'Missing room probe.',
       p_changes => '[]'::jsonb,
@@ -358,7 +368,7 @@ declare
   v_function_oid oid;
 begin
   v_function_oid := to_regprocedure(
-    'public.commit_canvas_mutation_at_revision(uuid,bigint,uuid,text,text,text,jsonb,jsonb,boolean,uuid,uuid)'
+    'public.commit_canvas_mutation_at_revision(uuid,bigint,uuid,text,text,text,text,jsonb,jsonb,boolean,uuid,uuid)'
   );
 
   if v_function_oid is null then
@@ -414,6 +424,7 @@ begin
       p_expected_room_revision => 0,
       p_actor_user_id => gen_random_uuid(),
       p_actor_type => 'human',
+      p_source => 'system',
       p_action => 'create',
       p_description => 'Authenticated execution probe.',
       p_changes => '[]'::jsonb,
@@ -441,6 +452,7 @@ begin
       p_expected_room_revision => 0,
       p_actor_user_id => gen_random_uuid(),
       p_actor_type => 'human',
+      p_source => 'system',
       p_action => 'create',
       p_description => 'Anonymous execution probe.',
       p_changes => '[]'::jsonb,

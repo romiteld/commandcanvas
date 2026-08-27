@@ -288,6 +288,85 @@ button:focus-visible {
   cursor: pointer;
 }
 
+.sketch-dialog-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(18 35 61 / 34%);
+  backdrop-filter: blur(9px);
+}
+
+.sketch-dialog {
+  width: min(560px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid rgb(18 35 61 / 18%);
+  border-radius: 16px;
+  background: white;
+  box-shadow: 0 28px 90px rgb(11 29 53 / 28%);
+}
+
+.sketch-dialog-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.sketch-dialog-heading h2 {
+  margin: 3px 0 0;
+  font-size: 22px;
+  letter-spacing: -0.035em;
+}
+
+.sketch-dialog-heading > span {
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+}
+
+.sketch-composer-toolbar button {
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+}
+
+.sketch-composer-toolbar button[aria-pressed="true"] {
+  border-color: var(--cobalt);
+  background: var(--cobalt-wash);
+  color: var(--cobalt);
+}
+
+.sketch-composer-toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.sketch-composer-surface {
+  border-color: rgb(117 88 207 / 28%) !important;
+  border-radius: 11px !important;
+  background:
+    linear-gradient(rgb(117 88 207 / 6%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(117 88 207 / 6%) 1px, transparent 1px),
+    #fcfbff !important;
+  background-size: 24px 24px !important;
+}
+
+.sketch-composer > p {
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+}
+
 .workspace-grid {
   min-height: 0;
   display: grid;
@@ -418,6 +497,26 @@ button:focus-visible {
   inset: 0;
   transform-origin: 0 0;
   will-change: transform;
+}
+
+.gesture-stroke-preview {
+  position: absolute;
+  z-index: 100001;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.gesture-stroke-preview polyline {
+  fill: none;
+  stroke: #f6b44c;
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 2px 4px rgb(51 37 13 / 24%));
 }
 
 .canvas-empty-state {
@@ -741,10 +840,12 @@ button:focus-visible {
 
 .sketch-preview {
   width: 100%;
+  min-height: 0;
   flex: 1;
   display: grid;
-  place-content: center;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 4px;
+  padding: 8px 8px 6px;
   border: 1px dashed rgb(117 88 207 / 38%);
   border-radius: 8px;
   background: rgb(117 88 207 / 4%);
@@ -752,31 +853,97 @@ button:focus-visible {
   text-align: center;
 }
 
-.sketch-preview span {
-  font-family: var(--font-geist-mono), monospace;
-  font-size: 19px;
-  font-weight: 720;
+.sketch-preview small {
+  justify-self: center;
+  font-size: 9px;
 }
 
-.sketch-preview small {
-  font-size: 9px;
+.preserved-sketch {
+  width: 100%;
+  height: 100%;
+  min-height: 72px;
+  overflow: visible;
+  pointer-events: none;
 }
 
 .diagram-preview {
   width: 100%;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  min-height: 0;
+  flex: 1;
 }
 
-.diagram-preview span {
-  padding: 8px 10px;
-  border: 1px solid rgb(39 94 215 / 24%);
-  border-radius: 6px;
-  background: var(--cobalt-wash);
-  color: #244eaa;
+.structured-diagram {
+  width: 100%;
+  height: 100%;
+  min-height: 96px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.diagram-edge {
+  fill: none;
+  stroke: #6982af;
+  stroke-width: 2;
+}
+
+.diagram-arrowhead {
+  fill: #6982af;
+}
+
+.diagram-edge-label {
+  paint-order: stroke;
+  stroke: white;
+  stroke-width: 5px;
+  stroke-linejoin: round;
+  fill: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
   font-size: 9px;
+}
+
+.diagram-node rect {
+  fill: white;
+  stroke: #9cb0d1;
+  stroke-width: 2;
+  filter: drop-shadow(0 5px 7px rgb(29 53 87 / 10%));
+}
+
+.diagram-node-client rect {
+  fill: #f0f4ff;
+  stroke: var(--cobalt);
+}
+
+.diagram-node-service rect {
+  fill: #fff5f2;
+  stroke: var(--coral);
+}
+
+.diagram-node-database rect {
+  fill: #eff9f6;
+  stroke: var(--teal);
+}
+
+.diagram-node-queue rect {
+  fill: #f5f1ff;
+  stroke: var(--violet);
+}
+
+.diagram-node-external rect {
+  fill: #f6f8fc;
+  stroke-dasharray: 5 4;
+}
+
+.diagram-node text {
+  fill: var(--ink);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.diagram-node .diagram-node-kind {
+  fill: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 7px;
   font-weight: 650;
+  letter-spacing: 0.08em;
 }
 
 .pin-state {
@@ -872,6 +1039,57 @@ button:focus-visible {
   margin: 16px 0 24px;
 }
 
+.packet-workflow-shell {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0 24px;
+}
+
+.packet-workflow-empty {
+  display: grid;
+  gap: 9px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+}
+
+.packet-workflow-empty > p:not(.eyebrow) {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.packet-workflow-empty button,
+.packet-fallback-action {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--ink);
+  border-radius: 7px;
+  color: white;
+  background: var(--ink);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.packet-workflow-empty button:disabled,
+.packet-fallback-action:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.packet-workflow-error {
+  padding: 10px;
+  border: 1px solid rgb(242 106 91 / 32%);
+  border-radius: 7px;
+  color: #8c322b;
+  background: var(--coral-wash);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .service-state {
   gap: 10px;
   min-height: 51px;
@@ -889,6 +1107,105 @@ button:focus-visible {
 
 .service-state strong {
   font-size: 10px;
+}
+
+.spatial-camera-control {
+  display: grid;
+  gap: 9px;
+  margin: -8px 0 22px;
+  padding: 12px;
+  border: 1px solid rgb(117 88 207 / 24%);
+  border-radius: 10px;
+  background: linear-gradient(145deg, #fff 0%, #f6f3ff 100%);
+}
+
+.spatial-camera-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.spatial-camera-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.spatial-camera-heading strong {
+  font-size: 10px;
+}
+
+.spatial-camera-heading span,
+.spatial-camera-control > p,
+.camera-preview-label {
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.spatial-camera-heading button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgb(117 88 207 / 35%);
+  border-radius: 6px;
+  background: white;
+  color: var(--violet);
+  cursor: pointer;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.camera-preview {
+  position: relative;
+  min-height: 82px;
+  overflow: hidden;
+  border: 1px solid rgb(18 35 61 / 15%);
+  border-radius: 7px;
+  background:
+    radial-gradient(circle at center, rgb(117 88 207 / 16%), transparent 58%),
+    #101725;
+}
+
+.camera-preview video {
+  width: 100%;
+  height: 108px;
+  display: block;
+  object-fit: cover;
+  opacity: 0;
+  transform: scaleX(-1);
+  transition: opacity 160ms ease;
+}
+
+.camera-preview.camera-starting video,
+.camera-preview.camera-ready video {
+  opacity: 0.76;
+}
+
+.camera-preview-label {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  left: 7px;
+  padding: 4px 6px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 4px;
+  background: rgb(9 15 26 / 74%);
+  color: rgb(255 255 255 / 82%);
+  text-align: center;
+  backdrop-filter: blur(8px);
+}
+
+.spatial-camera-control > p {
+  margin: 0;
+}
+
+.spatial-camera-control .camera-error-detail {
+  color: #a6453b;
 }
 
 .service-state div span {

@@ -1,4 +1,6 @@
-import type { z } from "zod";
+import "server-only";
+
+import { z } from "zod";
 
 import {
   commandRequestSchema,
@@ -80,6 +82,8 @@ export async function handleCreateRoomRequest(
       actor.actorUserId,
       input.value,
     );
+    if (!result.ok && result.error.code === "demo_room_limit_reached")
+      return errorResponse(409, result.error);
     if (!result.ok)
       return errorResponse(503, {
         code: "create_unavailable",
@@ -87,6 +91,37 @@ export async function handleCreateRoomRequest(
       });
 
     return jsonResponse(201, { ok: true, room: result.value });
+  } catch {
+    return serviceUnavailable();
+  }
+}
+
+export async function handleDeleteDemoRoomRequest(
+  request: Request,
+  pathRoomId: string,
+  dependencies: RoomRouteDependencies,
+): Promise<Response> {
+  const actor = await authenticate(request, dependencies);
+  if (!actor.ok) return actor.response;
+  if (!z.uuid().safeParse(pathRoomId).success)
+    return errorResponse(400, {
+      code: "invalid_room_id",
+      message: "Room ID is invalid.",
+    });
+
+  try {
+    const result = await dependencies.service.deleteDemoRoom(
+      actor.actorUserId,
+      pathRoomId,
+    );
+    if (!result.ok && result.error.code === "host_required")
+      return errorResponse(403, result.error);
+    if (!result.ok)
+      return errorResponse(503, {
+        code: "delete_unavailable",
+        message: "Demo room could not be deleted.",
+      });
+    return jsonResponse(200, { ok: true, room: result.value });
   } catch {
     return serviceUnavailable();
   }
@@ -289,6 +324,12 @@ function commandServiceError(code: RoomServiceErrorCode): Response {
         code,
         message: "Canvas changed before the command could be committed.",
       });
+    case "demo_room_storage_limit_reached":
+      return errorResponse(409, {
+        code,
+        message:
+          "This demo room reached its storage limit. Reset the demo to continue.",
+      });
     case "nothing_to_undo":
       return errorResponse(409, {
         code,
@@ -300,6 +341,8 @@ function commandServiceError(code: RoomServiceErrorCode): Response {
         message: "Canvas command is invalid.",
       });
     case "create_unavailable":
+    case "demo_room_limit_reached":
+    case "delete_unavailable":
     case "join_unavailable":
     case "invalid_persisted_state":
     case "mutation_unavailable":

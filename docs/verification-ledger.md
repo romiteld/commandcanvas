@@ -2,7 +2,7 @@
 
 This ledger records observed behavior only. An integration remains **UNVERIFIED** until it has been exercised against the named service or browser. “Working” means covered by automated checks or local runtime evidence; “Verified in browser” requires an observed browser interaction.
 
-## Checkpoint 0 — repository shell
+## Checkpoint 0: repository shell
 
 ### WORKING
 
@@ -58,8 +58,27 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 | 2026-08-27 | 4 | Deployed room-revision compare-and-swap wrapper read-back confirmed volatile/security-definer/empty-search-path behavior, service-only execution, and no `anon` or `authenticated` execution | VERIFIED IN DEPLOYED SUPABASE |
 | 2026-08-27 | 4 | A Node 22 production server and real Supabase anonymous host/participant/outsider sessions exercised create, join, two durable commands, authoritative revisions 1 and 2, stale-revision HTTP 409, member reads, outsider isolation, and exact room cleanup | VERIFIED THROUGH LOCAL PRODUCTION HTTP + DEPLOYED SUPABASE |
 | 2026-08-27 | 4 | Two isolated production-browser contexts opened `/demo`, created and joined the same real room without signup, observed two actual Presence members, exchanged a cursor Broadcast, persisted a participant-created note, reconciled revision 4 in both React canvases, scrubbed the participant capability URL, resumed the participant after reload, and completed exact server-side room cleanup | VERIFIED IN BROWSER + DEPLOYED SUPABASE REALTIME |
+| 2026-08-27 | 5 | Node 22: ESLint, TypeScript, 318 Vitest tests across 43 files, hand-worker bundle, optimized Next.js build, and diff check completed with zero failures | WORKING |
+| 2026-08-27 | 5 | Production Chrome drew five strokes, rendered the real selected sketch to PNG, received HTTP 200 from the authenticated live GPT vision route, preserved the source, created one structured diagram through the canonical Supabase mutation path, and verified exact room cleanup | VERIFIED IN BROWSER + OPENAI + DEPLOYED SUPABASE |
+| 2026-08-27 | 5 | Deployed migration catalog and function read-back confirmed durable non-null actor-consistent receipt sources and service-only source-aware mutation RPCs; a full browser reload preserved `R5 · typed` and `R4 · pointer` | VERIFIED IN DEPLOYED SUPABASE + BROWSER RELOAD |
+| 2026-08-27 | 6 | Before release hardening, Production Chrome fake-media exercised the same-origin hand worker, SIMD JavaScript/WASM, and then-bundled hand-landmarker model with HTTP 200, reached the truthful ready/no-hand state, and returned to pointer fallback on disable | HISTORICAL BROWSER PIPELINE EVIDENCE; CURRENT MODEL FETCH REVERIFIED BELOW |
+| 2026-08-27 | 7 | Eleven forward migrations are present in the deployed Supabase migration ledger; deployed catalog assertions and the durable vision-admission SQL probe passed after the packet-storage, vision-admission, and packet-authorization migrations | VERIFIED IN DEPLOYED SUPABASE |
+| 2026-08-27 | 7 | Two independent browser contexts created separate `/demo` rooms with three fixtures and revision 3; room-scoped fixture IDs prevented the formerly reproduced global primary-key collision, and all five exact probe rooms were removed with zero rows remaining | VERIFIED IN BROWSER + DEPLOYED SUPABASE |
+| 2026-08-27 | 7 | A live host prepared and visibly reviewed the exact three-object packet snapshot, approved one immutable recipient, staged a send, durably cancelled it, and received HTTP 409 `send_request_unavailable` when the cancelled request was explicitly re-executed | VERIFIED IN BROWSER + DEPLOYED SUPABASE |
+| 2026-08-27 | 7 | A second live host approved and staged the same workflow, explicitly pressed SEND, and received the honest persisted `preview_only` result with provider `preview`, no provider message ID, and the message `Preview only: no email was sent.` | VERIFIED IN BROWSER + DEPLOYED SUPABASE; RESEND NOT CALLED |
+| 2026-08-27 | 8 | At 420×900, Playwright Chromium drew ten pointer strokes, persisted the rough sketch, rasterized it to PNG, passed the deployed admission guard, received a real GPT-5.6 Terra structured result, and rendered a three-node/two-edge diagram beside the preserved source at revision 5 | VERIFIED IN BROWSER + OPENAI + DEPLOYED SUPABASE |
+| 2026-08-27 | 8 | Deployed admission read-back showed one completed attempt, one recorded attempt, a provider response ID, and matching source sketch/kind. The original and diagram both intersected the 420×611 canvas viewport; the responsive screenshot was visually inspected | VERIFIED IN BROWSER + DEPLOYED SUPABASE |
+| 2026-08-27 | 8 | A fail-before-fix boundary test reproduced the deployment mismatch between the former 8 MB application request limit and Vercel Functions' documented 4.5 MB payload ceiling. The route now rejects above 4 MB and raw PNGs above 2 MB; 28 focused tests pass | WORKING; PUBLIC VERCEL ROUTE UNVERIFIED |
+| 2026-08-27 | 9 | Node 22.17.0: ESLint, TypeScript, 472 Vitest tests across 56 files, hand-worker bundle, and optimized Next.js production build completed with zero failures; the production dependency audit reported zero vulnerabilities | WORKING |
+| 2026-08-27 | 9 | A clean PostgreSQL 17 integration run applied all 15 migrations in filename order and passed all 13 catalog, RLS, mutation, realtime, packet, lifecycle, storage-cap, and vision-admission probes; the isolated container was removed | VERIFIED IN ISOLATED POSTGRES 17 |
+| 2026-08-27 | 9 | The dedicated Supabase project reports all 15 forward migrations. Remote catalog assertions and exact transactional rollback probes passed for packet restaging, demo storage caps, demo vision spend, and demo-room lifecycle | VERIFIED IN DEPLOYED SUPABASE |
+| 2026-08-27 | 9 | Local production Chrome prepared and approved a packet, staged and durably cancelled it, re-staged it, explicitly authorized the preview-only execution, preserved both terminal states across reloads, then reset the room and proved the exact former room was deleted | VERIFIED IN BROWSER + DEPLOYED SUPABASE; RESEND NOT CALLED |
+| 2026-08-27 | 9 | A strict live residue audit identified two deterministic seed-only browser rooms, deleted only those exact UUIDs through `delete_demo_room_as_host`, and independently read zero rows across all 12 public/private application tables at 2026-08-27T18:12:57Z | VERIFIED IN DEPLOYED SUPABASE |
+| 2026-08-27 | 9 | Production Chrome authored a real four-stroke pointer sketch, received a deliberately forced schema-valid HTTP 503 from only the transform route, preserved the revision-4 source with no diagram, then created a separate revision-5 **Prepared demo fallback** only after the user clicked its honestly labeled fallback control | VERIFIED IN BROWSER + DEPLOYED SUPABASE; NO VISION SUCCESS CLAIMED |
+| 2026-08-27 | 9 | Production Chrome with a fake camera granted permission, fetched the exact versioned Google detector model with HTTP 200, loaded the same-origin worker and module WASM with HTTP 200, reached **Hand input ready · local only**, then disabled input, detached the video stream, ended its media track, and returned to pointer mode | CURRENT BROWSER PIPELINE VERIFIED; REAL HAND UNVERIFIED |
+| 2026-08-27 | 9 | A fail-before-fix browser run found Next.js development tooling intercepting the fixed mobile toolbar. The Playwright-owned server was changed to the production build; the rerun completed 10 browser tests with 11 intentional project/credential skips and zero failures, including mobile controls and native Chrome WebMCP | VERIFIED IN PRODUCTION BROWSER HARNESS |
 
-## Checkpoint 1 — local semantic canvas
+## Checkpoint 1: local semantic canvas
 
 ### WORKING
 
@@ -94,7 +113,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 - The checkpoint introduced none of the globally locked CUT features.
 
-## Checkpoint 2 — semantic object system
+## Checkpoint 2: semantic object system
 
 ### WORKING
 
@@ -120,7 +139,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 - The checkpoint introduced none of the globally locked CUT features.
 
-## Checkpoint 3 — WebMCP-native canvas operations
+## Checkpoint 3: WebMCP-native canvas operations
 
 ### WORKING
 
@@ -152,7 +171,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 - The checkpoint introduced none of the globally locked CUT features.
 
-## Checkpoint 4 — Supabase persistence and realtime collaboration (in progress)
+## Checkpoint 4: Supabase persistence and realtime collaboration
 
 ### WORKING
 
@@ -185,6 +204,97 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 - A forced offline/online transport interruption without reloading. Reload-based session resume, durable reconstruction, and Realtime reconnection are verified.
 - Outsider private-channel denial through the application UI. The equivalent deployed Supabase client path is verified; the React integration is not yet exercised.
 - A production Vercel server credential and deployed `/demo` data path.
+
+### CUT
+
+- The checkpoint introduced none of the globally locked CUT features.
+
+## Checkpoint 5: preserved sketch to structured diagram
+
+### WORKING
+
+- Mouse, touch, and stylus strokes resolve to one typed `SketchObject` through the canonical create-command boundary. The original stroke coordinates remain part of the durable object payload.
+- The browser renders a selected sketch to a bounded PNG locally. The server authenticates the anonymous room member, verifies current room membership and the exact active sketch version, and sends the PNG plus the bounded instruction to the configured vision model.
+- The OpenAI Responses request uses image input, strict structured output, `store: false`, a privacy-preserving actor hash, cancellation propagation, and an allowlisted GPT-5.6 Sol/Terra model. Provider output is projected and Zod-validated before it can become a canvas object.
+- A successful interpretation creates a separate typed diagram beside the source via the same authoritative room mutation service. It never overwrites or deletes the rough sketch.
+- If live interpretation fails, the browser preserves the source and shows the exact provider-safe error before offering an optional deterministic demo interpretation. The fallback is a separate canonical object labeled **not generated by the vision model** and is never presented as provider output.
+- The UI and WebMCP adapter share one transformation orchestrator. The UI is attributed as `typed`; a WebMCP invocation is attributed as `webmcp` and requires the exact selected active sketch.
+- Durable receipt provenance now includes a non-null, actor-consistent `source` column. The source-aware service-only mutation RPC migration is deployed, and receipt reload no longer depends on request-local context.
+- The complete Node 22 checkpoint gate passes: ESLint, TypeScript, 318 Vitest tests across 43 files, the separately bundled worker build, optimized Next.js production build, and `git diff --check`.
+
+### VERIFIED IN BROWSER
+
+- A production Chrome session created a real no-signup Supabase demo room, drew five pointer strokes, persisted one rough sketch, rasterized it to PNG, received HTTP 200 from the real authenticated transform route, and rendered one structured architecture diagram beside the still-present source.
+- The live model described the unlabeled three-box source conservatively, returned a schema-valid three-node architecture, and did not invent a success fallback.
+- Before and after a full page reload, the latest durable receipt remained `R5 · typed`; the source sketch receipt remained `R4 · pointer`. This closes the transient Realtime-versus-command-response provenance race discovered during the first live run.
+- Both real vision runs emitted no page errors or application console errors. Each exact test room was identified, deleted through the privileged cleanup path, and verified absent.
+- The resulting 1440×900 screenshots were visually inspected for source preservation, diagram structure, activity chronology, selection treatment, and rail overlap. A later narrow-viewport run verified automatic framing for both source and result.
+- A forced HTTP 503 browser run stayed at revision 4 with the original sketch and no diagram, displayed **Sketch interpretation failed**, and offered **Load prepared demo interpretation**. Clicking it created a distinct revision-5 diagram and typed receipt while preserving the pointer-authored source; the final screenshot was visually inspected.
+
+### UNVERIFIED
+
+- A ChatGPT built-in-browser invocation of `transform_sketch` against the deployed public URL.
+- Real WebMCP cancellation while an OpenAI request is in flight. Signal identity and cancellation refusal remain unit-verified only.
+- Vision interpretation of handwriting or a camera-authored multi-stroke sketch; the live source used unlabeled geometric strokes.
+- A public Vercel invocation with production environment variables.
+
+### CUT
+
+- The checkpoint introduced none of the globally locked CUT features.
+
+## Checkpoint 6: local hand input (browser pipeline verified; real hand pending)
+
+### WORKING
+
+- `@mediapipe/tasks-vision@1.0.1` is pinned. The worker and required WASM variants are served from same-origin public assets; the versioned Hand Landmarker model is fetched from the exact Google-hosted URL used by the official sample only after the user enables hand input.
+- Runtime inference remains inside the browser. Camera frames are not uploaded to Google, the application server, Supabase, OpenAI, ChatGPT, or WebMCP; the only third-party camera-path request is the disclosed detector-model download.
+- A separately bundled module worker initializes `FilesetResolver` and `HandLandmarker` in `VIDEO` mode for one hand. Only one transferred `ImageBitmap` may be in flight, and each worker frame is closed after inference.
+- Camera access begins only after the accessible **Enable hand input** action. Disable/unmount stops media tracks, clears the video source, disposes the detector, terminates the worker, and leaves pointer input active.
+- The landmark reducer recognizes only the locked MVP vocabulary: stable index pointing and pinch. Point observations become a canonical gesture-authored sketch command; pinch selects, previews, and commits one canonical object move on release. Pinned objects are selected but not moved.
+- The visible camera panel states that frames stay in the browser and distinguishes off, starting, ready, permission-refused, and unavailable states. A ready detector with no recognized hand says **Show one hand to begin** rather than claiming detection.
+
+### VERIFIED IN BROWSER
+
+- Production Chrome with a fake camera device exercised actual permission, one `getUserMedia` call, one live video track, the same-origin worker, local module JavaScript/WASM, and the versioned Google-hosted detector model. Every required network response returned HTTP 200, and the model response allowed cross-origin use.
+- The real worker reached **Hand input ready · local only**. Disable returned the UI to **Camera off · pointer active**, detached the video stream, and changed the exact media track from `live` to `ended`.
+- The browser run emitted no page errors, failed requests, or unexpected application console errors. MediaPipe's CPU delegate informational line was classified as provider diagnostics, not an application error.
+
+### UNVERIFIED
+
+- Recognition accuracy, stability, latency, point drawing, and pinch movement with an actual human hand and physical webcam. These are not claimed from the fake-media readiness test.
+- Camera behavior on Safari, mobile Chrome, a low-power device, or a browser without module-worker/WASM support.
+
+### CUT
+
+- Two-hand resize, swipe or throw, gesture erase, gesture-only discard, physical pencil or marker tracking, and continuous raw-camera upload remain cut.
+
+## Checkpoint 7: durable vision admission and human-authorized packet delivery
+
+### WORKING
+
+- Vision transforms use a deterministic request key derived from room, sketch identity/version, output kind, normalized instruction hash, and PNG-byte hash. A service-only admission boundary enforces one active lease per room, a two-per-minute actor limit, three lifetime demo transforms, twenty daily standard-room transforms, exact-result caching, and lease-token compare-and-set completion/release.
+- The vision route caps its complete JSON request at 4 MB and decoded PNG bytes at 2 MB, leaving explicit headroom below [Vercel Functions' documented 4.5 MB request limit](https://vercel.com/docs/functions/limitations#request-body-size).
+- Packet preparation persists an exact semantic-object content snapshot. Host approval locks that content hash and an editable recipient snapshot; staging copies the approved packet version, hashes, and recipients into a durable send request.
+- The WebMCP send operation stages an external action only. The site renders the authoritative snapshot and requires the host to press **SEND** before the server can authorize delivery.
+- Cancellation is a durable, idempotent state transition with one immutable `packet_send_cancelled` receipt. A cancelled request cannot later be authorized.
+- With Resend configuration absent, execution persists and displays an honest preview-only record. No UI or receipt claims that an email was delivered.
+- Cancelled, failed, expired, or preview-only send requests can be re-staged from the same still-approved immutable packet snapshot. A successfully submitted packet requires a changed draft and new approval before another send can be staged.
+- Deterministic demo fixture IDs include the room ID, so independent rooms cannot collide on the global canvas-object primary key.
+
+### VERIFIED IN BROWSER
+
+- Exact packet content and recipient snapshots were visible before approval and again at send confirmation.
+- The cancel path persisted `cancelled`, rendered `Send request cancelled: no email was sent`, and refused a deliberately attempted post-cancel execute with HTTP 409.
+- The explicit-send path persisted `preview_only`, rendered `Preview only: not sent`, and created packet activity in this order: prepared, draft updated, approved, send staged, send previewed.
+- The full cancel, re-stage, explicit preview execution, reload, and reset sequence completed in one production-browser run. The cancelled request and preview-only request both survived reload, and reset deleted the exact former hosted room before creating a new revision-3 fixture room.
+- The narrow 420×900 vision run kept both rough and structured artifacts visibly inside the canvas viewport. The live provider output was admitted once and stored as a schema-valid three-node/two-edge architecture diagram.
+- Local browser access used `host.docker.internal`, an insecure test-harness origin where Chromium withholds `crypto.randomUUID`; a test-only page initialization shim was required. Product code was not changed for this condition. Public Vercel HTTPS remains to be verified without the shim.
+
+### UNVERIFIED
+
+- Real Resend provider submission or delivery. No Resend credentials are configured in the current environment, so only the truthful preview-only contract is verified.
+- Concurrent Vercel instances contending for the same vision lease; the database serialization contract is SQL- and unit-verified.
+- Public HTTPS behavior and environment configuration on Vercel.
 
 ### CUT
 

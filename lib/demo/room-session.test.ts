@@ -10,6 +10,12 @@ import type { PresenceParticipant } from "@/lib/realtime/protocol";
 import type { OwnRoomMembership } from "@/lib/supabase/browser-room";
 import type { BrowserRoomApi } from "@/lib/supabase/room-api";
 import type { NoSignupSession } from "@/lib/supabase/session";
+import type {
+  BrowserSketchTransformApi,
+  BrowserSketchTransformResult,
+} from "@/lib/vision/browser-api";
+import type { SketchTransformRequest } from "@/lib/vision/diagram-transform";
+import type { BrowserPacketApi } from "@/lib/packets/browser-api";
 
 const USER_ID = "22222222-2222-4222-8222-222222222222";
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
@@ -22,6 +28,24 @@ const JOIN_TOKEN =
 const SESSION: NoSignupSession = {
   access_token: "header.payload.signature",
   user: { id: USER_ID, is_anonymous: true },
+};
+
+const SKETCH_INPUT: Omit<SketchTransformRequest, "roomId"> = {
+  sketchObjectId: "sketch-source",
+  sourceVersion: 1,
+  instruction: "Turn this into a deployment diagram.",
+  outputKind: "architecture",
+  imageDataUrl:
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+};
+
+type SketchTransformFactory = (accessToken: string) => BrowserSketchTransformApi;
+type PacketApiFactory = (accessToken: string) => BrowserPacketApi;
+type DemoRoomSketchBridge = {
+  transformSketch: (
+    input: Omit<SketchTransformRequest, "roomId">,
+    signal?: AbortSignal,
+  ) => Promise<BrowserSketchTransformResult>;
 };
 
 function canvas(revision: number): CanvasState {
@@ -56,6 +80,8 @@ function createHarness(options?: {
   loadCanvas?: DemoRoomSessionDependencies["loadCanvas"];
   loadMembership?: DemoRoomSessionDependencies["loadMembership"];
   hydrateCanvas?: DemoRoomSessionDependencies["hydrateCanvas"];
+  createSketchTransformApi?: SketchTransformFactory;
+  createPacketApi?: PacketApiFactory;
 }) {
   let realtimeOptions:
     | Parameters<DemoRoomSessionDependencies["createRealtime"]>[0]
@@ -87,6 +113,13 @@ function createHarness(options?: {
       joined: true,
     },
   }));
+  const deleteDemoRoom = vi.fn<BrowserRoomApi["deleteDemoRoom"]>(async () => ({
+    ok: true as const,
+    value: {
+      roomId: ROOM_ID,
+      deleted: true as const,
+    },
+  }));
   const commitCommand = vi.fn<BrowserRoomApi["commitCommand"]>(async () => ({
     ok: true as const,
     value: {
@@ -98,6 +131,7 @@ function createHarness(options?: {
   }));
   const roomApi: BrowserRoomApi = {
     createRoom,
+    deleteDemoRoom,
     joinRoom,
     commitCommand,
     ...options?.api,
@@ -135,13 +169,24 @@ function createHarness(options?: {
     now: () => new Date("2026-08-27T12:00:00.000Z"),
   } satisfies DemoRoomSessionDependencies;
 
+  const session = createDemoRoomSession({
+    ...dependencies,
+    ...(options?.createSketchTransformApi
+      ? { createSketchTransformApi: options.createSketchTransformApi }
+      : {}),
+    ...(options?.createPacketApi
+      ? { createPacketApi: options.createPacketApi }
+      : {}),
+  });
+
   return {
-    session: createDemoRoomSession(dependencies),
+    session,
     dependencies,
     ensureSession,
     loadMembership,
     loadCanvas,
     createRoom,
+    deleteDemoRoom,
     joinRoom,
     commitCommand,
     createRoomApi,
@@ -151,6 +196,152 @@ function createHarness(options?: {
     getRealtimeOptions: () => realtimeOptions,
   };
 }
+
+describe("authenticated packet workflow bridge", () => {
+  it("creates one authenticated packet API and injects the verified room ID", async () => {
+    const packetApi: BrowserPacketApi = {
+      loadLatest: vi.fn(async () => ({
+        ok: true as const,
+        value: { packet: null, latestSend: null, activity: [] },
+      })),
+      prepare: vi.fn(async () => ({
+        ok: true as const,
+        value: {
+          packetId: "packet-launch",
+          packetVersion: 1,
+          sourceRevision: 3,
+          status: "draft" as const,
+          title: "Launch packet",
+          objectCount: 2,
+          contentSnapshot: {
+            title: "Launch packet",
+            content: {
+              schemaVersion: 1 as const,
+              roomName: "Architecture review",
+              sourceRevision: 3,
+              objects: [
+                {
+                  objectId: "note-launch",
+                  objectType: "note" as const,
+                  title: "Launch decision",
+                  payload: { text: "Ship." },
+                },
+              ],
+            },
+          },
+        },
+      })),
+      update: vi.fn(),
+      approve: vi.fn(),
+      stageSend: vi.fn(),
+      cancelSend: vi.fn(async () => ({
+        ok: true as const,
+        value: {
+          sendRequestId: "55555555-5555-4555-8555-555555555555",
+          packetId: "packet-launch",
+          status: "cancelled" as const,
+          receiptId: "66666666-6666-4666-8666-666666666666",
+          changed: true,
+        },
+      })),
+      executeSend: vi.fn(),
+    };
+    const createPacketApi = vi.fn(() => packetApi);
+    const harness = createHarness({ createPacketApi });
+    await harness.session.start({
+      kind: "host",
+      roomName: "Architecture review",
+      displayName: "Danny",
+      color: "#0ea5e9",
+    });
+
+    const signal = new AbortController().signal;
+    await expect(
+      harness.session.loadLatestPacketWorkflow(signal),
+    ).resolves.toEqual({
+      ok: true,
+      value: { packet: null, latestSend: null, activity: [] },
+    });
+    expect(packetApi.loadLatest).toHaveBeenCalledExactlyOnceWith(
+      ROOM_ID,
+      signal,
+    );
+
+    await expect(
+      harness.session.preparePacket(
+        {
+          packetId: "packet-launch",
+          actorType: "agent",
+          title: "Launch packet",
+          selectedObjectIds: ["note-launch", "diagram-system"],
+        },
+        signal,
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    expect(createPacketApi).toHaveBeenCalledExactlyOnceWith(SESSION.access_token);
+    expect(packetApi.prepare).toHaveBeenCalledExactlyOnceWith(
+      {
+        roomId: ROOM_ID,
+        packetId: "packet-launch",
+        actorType: "agent",
+        title: "Launch packet",
+        selectedObjectIds: ["note-launch", "diagram-system"],
+      },
+      signal,
+    );
+
+    await expect(
+      harness.session.cancelPacketSend(
+        {
+          sendRequestId: "55555555-5555-4555-8555-555555555555",
+          explicitHostCancellation: true,
+        },
+        signal,
+      ),
+    ).resolves.toMatchObject({ ok: true, value: { status: "cancelled" } });
+    expect(packetApi.cancelSend).toHaveBeenCalledExactlyOnceWith(
+      {
+        roomId: ROOM_ID,
+        sendRequestId: "55555555-5555-4555-8555-555555555555",
+        explicitHostCancellation: true,
+      },
+      signal,
+    );
+  });
+
+  it("fails compactly before a packet API or verified room exists", async () => {
+    const harness = createHarness();
+
+    await expect(
+      harness.session.stagePacketSend({
+        packetId: "packet-launch",
+        requestedByActorType: "agent",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "room_not_ready",
+        message: "Create or join a room before using meeting packets.",
+      },
+    });
+
+    await harness.session.start({
+      kind: "host",
+      roomName: "Architecture review",
+      displayName: "Danny",
+      color: "#0ea5e9",
+    });
+    await expect(
+      harness.session.approvePacket({ packetId: "packet-launch" }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "packet_api_unconfigured",
+        message: "Meeting packet actions are not configured.",
+      },
+    });
+  });
+});
 
 describe("demo room bootstrap", () => {
   it("creates a host room with the anonymous identity, then exposes only RLS-verified state", async () => {
@@ -606,5 +797,176 @@ describe("canonical command submission and lifecycle", () => {
     await expect(harness.session.publishCursor({ x: 1, y: 2 })).resolves.toBe(
       false,
     );
+  });
+
+  it("deletes the exact hosted demo room before disposing its live session", async () => {
+    const harness = createHarness();
+    await harness.session.start({
+      kind: "host",
+      roomName: "Architecture review",
+      displayName: "Danny",
+      color: "#0ea5e9",
+    });
+    const result = await harness.session.deleteHostedDemoRoom();
+
+    expect(result).toEqual({
+      ok: true,
+      roomId: ROOM_ID,
+      deleted: true,
+    });
+    expect(harness.deleteDemoRoom).toHaveBeenCalledExactlyOnceWith(ROOM_ID, {
+      signal: undefined,
+    });
+    expect(harness.realtimeDispose).toHaveBeenCalledOnce();
+    expect(harness.session.getSnapshot().status).toBe("disposed");
+  });
+
+  it("refuses participant deletion without calling the room API", async () => {
+    const harness = createHarness({ ownMembership: membership("participant") });
+    await harness.session.start({
+      kind: "join",
+      slug: SLUG,
+      joinToken: JOIN_TOKEN,
+      displayName: "Sarah",
+      color: "#a855f7",
+    });
+
+    const result = await harness.session.deleteHostedDemoRoom();
+
+    expect(result).toEqual({
+      ok: false,
+      code: "host_required",
+      message: "Only the demo room host can delete this room.",
+    });
+    expect(harness.deleteDemoRoom).not.toHaveBeenCalled();
+    expect(harness.realtimeDispose).not.toHaveBeenCalled();
+    expect(harness.session.getSnapshot().status).not.toBe("disposed");
+  });
+
+  it("keeps the verified room active when durable deletion fails", async () => {
+    const harness = createHarness();
+    harness.deleteDemoRoom.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: "network_unavailable",
+        message: "CommandCanvas could not be reached.",
+      },
+    });
+    await harness.session.start({
+      kind: "host",
+      roomName: "Architecture review",
+      displayName: "Danny",
+      color: "#0ea5e9",
+    });
+    const statusBeforeDelete = harness.session.getSnapshot().status;
+
+    const result = await harness.session.deleteHostedDemoRoom();
+
+    expect(result).toEqual({
+      ok: false,
+      code: "network_unavailable",
+      message: "Demo room was not reset. Try again.",
+    });
+    expect(harness.realtimeDispose).not.toHaveBeenCalled();
+    expect(harness.session.getSnapshot()).toMatchObject({
+      status: statusBeforeDelete,
+      roomId: ROOM_ID,
+      membership: membership("host"),
+      lastError: {
+        code: "network_unavailable",
+        message: "Demo room was not reset. Try again.",
+      },
+    });
+  });
+});
+
+describe("authenticated sketch transformation", () => {
+  it("scopes interpretation to the verified room and forwards the caller signal", async () => {
+    const transformed: BrowserSketchTransformResult = {
+      ok: false,
+      error: {
+        code: "model_unavailable",
+        message: "Interpretation is temporarily unavailable.",
+      },
+    };
+    const transform = vi.fn(async () => transformed);
+    const createSketchTransformApi = vi.fn<SketchTransformFactory>(() => ({
+      transform,
+    }));
+    const harness = createHarness({ createSketchTransformApi });
+    const bridge = harness.session as unknown as DemoRoomSketchBridge;
+    const controller = new AbortController();
+
+    expect(await bridge.transformSketch(SKETCH_INPUT)).toEqual({
+      ok: false,
+      error: {
+        code: "room_not_ready",
+        message: "Create or join a room before interpreting a sketch.",
+      },
+    });
+    expect(createSketchTransformApi).not.toHaveBeenCalled();
+
+    await harness.session.start({
+      kind: "host",
+      roomName: "Architecture review",
+      displayName: "Danny",
+      color: "#0ea5e9",
+    });
+    const stateBeforeTransform = harness.session.getSnapshot().state;
+
+    await expect(
+      bridge.transformSketch(SKETCH_INPUT, controller.signal),
+    ).resolves.toEqual(transformed);
+    expect(createSketchTransformApi).toHaveBeenCalledExactlyOnceWith(
+      SESSION.access_token,
+    );
+    expect(transform).toHaveBeenCalledExactlyOnceWith(
+      { ...SKETCH_INPUT, roomId: ROOM_ID },
+      controller.signal,
+    );
+    expect(harness.session.getSnapshot().state).toBe(stateBeforeTransform);
+  });
+
+  it("returns compact errors without mutating canvas when unavailable or disposed", async () => {
+    const harness = createHarness();
+    const bridge = harness.session as unknown as DemoRoomSketchBridge;
+    const initialSnapshot = harness.session.getSnapshot();
+
+    await expect(bridge.transformSketch(SKETCH_INPUT)).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "room_not_ready",
+        message: "Create or join a room before interpreting a sketch.",
+      },
+    });
+    expect(harness.session.getSnapshot()).toEqual(initialSnapshot);
+
+    await harness.session.start({
+      kind: "host",
+      roomName: "Architecture review",
+      displayName: "Danny",
+      color: "#0ea5e9",
+    });
+    const verifiedState = harness.session.getSnapshot().state;
+
+    await expect(bridge.transformSketch(SKETCH_INPUT)).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "sketch_transform_unconfigured",
+        message: "Sketch interpretation is not configured.",
+      },
+    });
+    expect(harness.session.getSnapshot().state).toBe(verifiedState);
+
+    await harness.session.dispose();
+
+    await expect(bridge.transformSketch(SKETCH_INPUT)).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "session_disposed",
+        message: "This demo room session has been closed.",
+      },
+    });
+    expect(harness.session.getSnapshot().state).toBe(verifiedState);
   });
 });

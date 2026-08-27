@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "CommandCanvas — Spatial collaboration workspace",
+  title: "CommandCanvas: Spatial collaboration workspace",
   description:
     "A shared spatial command surface where people and agents manipulate the same semantic objects with visible, reversible receipts.",
 };

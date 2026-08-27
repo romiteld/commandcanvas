@@ -140,6 +140,89 @@ describe("browser room API", () => {
     });
   });
 
+  it("preserves the explicit demo-room cap response", async () => {
+    const fetcher = vi.fn<RoomApiFetch>(async () =>
+      Response.json(
+        {
+          ok: false,
+          error: {
+            code: "demo_room_limit_reached",
+            message: "Reset one of your demo rooms before creating another.",
+          },
+        },
+        { status: 409 },
+      ),
+    );
+    const api = createBrowserRoomApi({ accessToken: JWT, fetcher });
+
+    const result = await api.createRoom({
+      mode: "demo",
+      name: "Fourth demo room",
+      displayName: "Danny",
+      color: "#0ea5e9",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "demo_room_limit_reached",
+        message: "Reset one of your demo rooms before creating another.",
+        status: 409,
+      },
+    });
+  });
+
+  it("deletes the exact hosted demo room without a request body", async () => {
+    const fetcher = vi.fn<RoomApiFetch>(async () =>
+      Response.json(
+        { ok: true, room: { roomId: ROOM_ID, deleted: true } },
+        { status: 200 },
+      ),
+    );
+    const api = createBrowserRoomApi({ accessToken: JWT, fetcher });
+
+    const result = await api.deleteDemoRoom(ROOM_ID);
+
+    expect(result).toEqual({
+      ok: true,
+      value: { roomId: ROOM_ID, deleted: true },
+    });
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith(`/api/rooms/${ROOM_ID}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${JWT}` },
+      cache: "no-store",
+      signal: undefined,
+    });
+  });
+
+  it("returns the host-only delete refusal without reflecting credentials", async () => {
+    const fetcher = vi.fn<RoomApiFetch>(async () =>
+      Response.json(
+        {
+          ok: false,
+          error: {
+            code: "host_required",
+            message: "Only the demo room host can delete this room.",
+          },
+        },
+        { status: 403 },
+      ),
+    );
+    const api = createBrowserRoomApi({ accessToken: JWT, fetcher });
+
+    const result = await api.deleteDemoRoom(ROOM_ID);
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "host_required",
+        message: "Only the demo room host can delete this room.",
+        status: 403,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(JWT);
+  });
+
   it("joins a room without reflecting the capability token in its result", async () => {
     const fetcher = vi.fn<RoomApiFetch>(async () =>
       Response.json(
@@ -232,6 +315,35 @@ describe("browser room API", () => {
     const requestBody = fetcher.mock.calls[0]?.[1]?.body;
     expect(typeof requestBody).toBe("string");
     expect(JSON.parse(requestBody as string)).toEqual(commandInput);
+  });
+
+  it("preserves the allowlisted demo storage-cap refusal from a command", async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json(
+        {
+          ok: false,
+          error: {
+            code: "demo_room_storage_limit_reached",
+            message:
+              "This demo room reached its storage limit. Reset the demo to continue.",
+          },
+        },
+        { status: 409 },
+      ),
+    );
+    const api = createBrowserRoomApi({ accessToken: JWT, fetcher });
+
+    const result = await api.commitCommand(commandInput);
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "demo_room_storage_limit_reached",
+        message:
+          "This demo room reached its storage limit. Reset the demo to continue.",
+        status: 409,
+      },
+    });
   });
 
   it("preserves a compact server error without leaking transport internals", async () => {

@@ -1,0 +1,2 @@
+public/mediapipe/wasm/*.js -diff linguist-vendored
+public/mediapipe/wasm/*.wasm -diff linguist-vendored

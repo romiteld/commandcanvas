@@ -204,6 +204,7 @@ function createdReceiptRow(input: {
   actorUserId: string;
   actorType: "human" | "participant" | "agent";
   actorDisplayName: string;
+  source?: "typed" | "collaborator" | "webmcp";
 }) {
   return {
     id: COMMAND_ID,
@@ -212,6 +213,13 @@ function createdReceiptRow(input: {
     occurred_at: CREATED_AT,
     actor_user_id: input.actorUserId,
     actor_type: input.actorType,
+    source:
+      input.source ??
+      (input.actorType === "participant"
+        ? "collaborator"
+        : input.actorType === "agent"
+          ? "webmcp"
+          : "typed"),
     actor_display_name: input.actorDisplayName,
     action: "create",
     affected_object_ids: ["note-launch"],
@@ -366,6 +374,90 @@ describe("CommandCanvas room service", () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain(JOIN_TOKEN);
+  });
+
+  it("surfaces the serialized demo-room cap without provider details", async () => {
+    const harness = createClient({
+      rpcResults: [
+        {
+          data: null,
+          error: {
+            code: "P0001",
+            message: "demo_room_limit_reached",
+            details: "provider-only detail",
+          },
+        },
+      ],
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).createRoom(HOST_ID, {
+      mode: "demo",
+      name: "Fourth demo room",
+      displayName: "Danny",
+      color: "#275ed7",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "demo_room_limit_reached",
+        message: "Reset one of your demo rooms before creating another.",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("provider-only");
+  });
+
+  it("deletes one exact demo room through the host-checked RPC", async () => {
+    const harness = createClient({
+      rpcResults: [
+        {
+          data: { roomId: ROOM_ID, deleted: true },
+          error: null,
+        },
+      ],
+    });
+    const service = createRoomService(harness.client, dependencies);
+
+    const result = await service.deleteDemoRoom(HOST_ID, ROOM_ID);
+
+    expect(result).toEqual({
+      ok: true,
+      value: { roomId: ROOM_ID, deleted: true },
+    });
+    expect(harness.rawClient.rpc).toHaveBeenCalledExactlyOnceWith(
+      "delete_demo_room_as_host",
+      {
+        p_room_id: ROOM_ID,
+        p_actor_user_id: HOST_ID,
+      },
+    );
+  });
+
+  it("does not let a participant or missing room escape the same compact delete refusal", async () => {
+    const harness = createClient({
+      rpcResults: [
+        {
+          data: null,
+          error: { code: "P0001", message: "demo_room_delete_forbidden" },
+        },
+      ],
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).deleteDemoRoom(PARTICIPANT_ID, ROOM_ID);
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "host_required",
+        message: "Only the demo room host can delete this room.",
+      },
+    });
   });
 
   it("collapses a missing slug and token mismatch into the same join error", async () => {
@@ -787,6 +879,7 @@ describe("CommandCanvas room service", () => {
         p_expected_room_revision: 0,
         p_actor_user_id: HOST_ID,
         p_actor_type: "human",
+        p_source: "typed",
         p_action: "create",
         p_description: "Danny created “Launch decision”.",
         p_changes: [
@@ -876,6 +969,7 @@ describe("CommandCanvas room service", () => {
         p_expected_room_revision: 0,
         p_actor_user_id: PARTICIPANT_ID,
         p_actor_type: "participant",
+        p_source: "collaborator",
         p_description: "Sarah created “Launch decision”.",
       }),
     );
@@ -885,6 +979,7 @@ describe("CommandCanvas room service", () => {
         p_expected_room_revision: 0,
         p_actor_user_id: HOST_ID,
         p_actor_type: "agent",
+        p_source: "webmcp",
         p_description: "CommandCanvas agent created “Launch decision”.",
       }),
     );
@@ -925,6 +1020,82 @@ describe("CommandCanvas room service", () => {
       error: {
         code: "command_conflict",
         message: "Canvas changed before the command could be committed.",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("private-row-detail");
+  });
+
+  it("maps the exact demo storage-cap refusal to one compact recoverable error", async () => {
+    const harness = createClient({
+      tableResults: {
+        room_members: [{ data: memberRow("host"), error: null }],
+        rooms: [
+          { data: emptyRoomRow, error: null },
+          { data: emptyRoomRow, error: null },
+        ],
+        canvas_objects: [{ data: [], error: null }],
+        receipts: [{ data: [], error: null }],
+      },
+      rpcResults: [
+        {
+          data: null,
+          error: {
+            code: "P0001",
+            message: "demo_room_storage_limit_reached",
+            details: "canvas_objects row private-object-17",
+          },
+        },
+      ],
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).commitCommand(HOST_ID, createNoteRequest());
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "demo_room_storage_limit_reached",
+        message: "This demo room reached its storage limit. Reset the demo to continue.",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("canvas_objects");
+    expect(JSON.stringify(result)).not.toContain("private-object-17");
+  });
+
+  it("does not treat a similar provider message as the allowlisted storage refusal", async () => {
+    const harness = createClient({
+      tableResults: {
+        room_members: [{ data: memberRow("host"), error: null }],
+        rooms: [
+          { data: emptyRoomRow, error: null },
+          { data: emptyRoomRow, error: null },
+        ],
+        canvas_objects: [{ data: [], error: null }],
+        receipts: [{ data: [], error: null }],
+      },
+      rpcResults: [
+        {
+          data: null,
+          error: {
+            code: "P0001",
+            message: "demo_room_storage_limit_reached:private-row-detail",
+          },
+        },
+      ],
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).commitCommand(HOST_ID, createNoteRequest());
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "mutation_unavailable",
+        message: "Canvas mutation is unavailable.",
       },
     });
     expect(JSON.stringify(result)).not.toContain("private-row-detail");

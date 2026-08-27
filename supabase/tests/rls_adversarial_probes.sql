@@ -126,6 +126,7 @@ insert into public.receipts (
   revision,
   actor_user_id,
   actor_type,
+  source,
   actor_display_name,
   action,
   affected_object_ids,
@@ -140,6 +141,7 @@ insert into public.receipts (
   1,
   :'host_user_id'::uuid,
   'human',
+  'system',
   'Host probe',
   'create',
   array[:'cc_object_id']::text[],
@@ -152,6 +154,21 @@ insert into public.receipts (
   'Host probe created a fixture note.'
 );
 
+with packet_fixture as (
+  select
+    'Private packet probe'::text as title,
+    '{"summary":"Recipient data must remain host-only."}'::jsonb as content,
+    '[{"name":"Controlled recipient","email":"controlled@example.com"}]'::jsonb
+      as recipients
+), approved_fixture as (
+  select
+    packet_fixture.*,
+    pg_catalog.jsonb_build_object(
+      'title', packet_fixture.title,
+      'content', packet_fixture.content
+    ) as approved_content
+  from packet_fixture
+)
 insert into public.meeting_packets (
   id,
   room_id,
@@ -163,26 +180,38 @@ insert into public.meeting_packets (
   recipient_draft,
   recipient_snapshot,
   recipient_snapshot_hash,
+  approved_content_snapshot,
   approved_content_hash,
   created_by,
   approved_by,
   approved_at
-) values (
+) select
   :'cc_packet_id',
   :'cc_room_id'::uuid,
   1,
   1,
   'approved',
-  'Private packet probe',
-  '{"summary":"Recipient data must remain host-only."}'::jsonb,
-  '[{"name":"Controlled recipient","email":"controlled@example.com"}]'::jsonb,
-  '[{"name":"Controlled recipient","email":"controlled@example.com"}]'::jsonb,
-  repeat('a', 64),
-  repeat('b', 64),
+  approved_fixture.title,
+  approved_fixture.content,
+  approved_fixture.recipients,
+  approved_fixture.recipients,
+  pg_catalog.encode(
+    pg_catalog.sha256(
+      pg_catalog.convert_to(approved_fixture.recipients::text, 'UTF8')
+    ),
+    'hex'
+  ),
+  approved_fixture.approved_content,
+  pg_catalog.encode(
+    pg_catalog.sha256(
+      pg_catalog.convert_to(approved_fixture.approved_content::text, 'UTF8')
+    ),
+    'hex'
+  ),
   :'host_user_id'::uuid,
   :'host_user_id'::uuid,
   clock_timestamp()
-);
+from approved_fixture;
 
 do $$
 begin
@@ -238,11 +267,23 @@ begin
 end;
 $$;
 
+with request_fixture as (
+  select
+    pg_catalog.jsonb_build_object(
+      'title', packet.title,
+      'content', packet.content
+    ) as content_snapshot,
+    packet.recipient_snapshot
+  from public.meeting_packets packet
+  where packet.room_id = :'cc_room_id'::uuid
+    and packet.id = :'cc_packet_id'
+)
 insert into public.packet_send_requests (
   id,
   room_id,
   packet_id,
   packet_version,
+  content_snapshot,
   packet_content_hash,
   recipient_snapshot,
   recipient_snapshot_hash,
@@ -251,20 +292,31 @@ insert into public.packet_send_requests (
   requested_by_actor_type,
   expires_at,
   idempotency_key
-) values (
+) select
   :'cc_send_request_id'::uuid,
   :'cc_room_id'::uuid,
   :'cc_packet_id',
   1,
-  repeat('b', 64),
-  '[{"name":"Controlled recipient","email":"controlled@example.com"}]'::jsonb,
-  repeat('a', 64),
+  request_fixture.content_snapshot,
+  pg_catalog.encode(
+    pg_catalog.sha256(
+      pg_catalog.convert_to(request_fixture.content_snapshot::text, 'UTF8')
+    ),
+    'hex'
+  ),
+  request_fixture.recipient_snapshot,
+  pg_catalog.encode(
+    pg_catalog.sha256(
+      pg_catalog.convert_to(request_fixture.recipient_snapshot::text, 'UTF8')
+    ),
+    'hex'
+  ),
   'awaiting_human_approval',
   :'host_user_id'::uuid,
   'agent',
   clock_timestamp() + interval '10 minutes',
   'probe-' || :'cc_send_request_id'
-);
+from request_fixture;
 
 insert into public.outbound_shares (
   id,
@@ -286,7 +338,12 @@ insert into public.outbound_shares (
   'preview_only',
   '[{"name":"Controlled recipient","email":"controlled@example.com"}]'::jsonb,
   'CommandCanvas packet preview',
-  repeat('b', 64),
+  (
+    select packet.approved_content_hash
+    from public.meeting_packets packet
+    where packet.room_id = :'cc_room_id'::uuid
+      and packet.id = :'cc_packet_id'
+  ),
   clock_timestamp()
 );
 
@@ -364,6 +421,7 @@ begin
       revision,
       actor_user_id,
       actor_type,
+      source,
       actor_display_name,
       action,
       description
@@ -372,6 +430,7 @@ begin
       2,
       current_setting('commandcanvas.test_host_user_id')::uuid,
       'human',
+      'system',
       'Host probe',
       'tamper',
       'This insert must be rejected.'

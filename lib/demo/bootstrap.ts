@@ -87,7 +87,7 @@ export async function bootstrapDemoRoom(
   }
 
   if (snapshot.membership.role === "host" && snapshot.state.revision === 0) {
-    for (const command of createDemoSeedCommands()) {
+    for (const command of createDemoSeedCommands(started.roomId)) {
       const result = await session.submitCommand(command, "system");
       if (!result.ok) {
         await session.dispose();

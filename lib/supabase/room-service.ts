@@ -53,6 +53,9 @@ export interface RoomServiceDependencies {
 
 export type RoomServiceErrorCode =
   | "create_unavailable"
+  | "demo_room_limit_reached"
+  | "demo_room_storage_limit_reached"
+  | "delete_unavailable"
   | "join_unavailable"
   | "room_unavailable"
   | "invalid_persisted_state"
@@ -89,6 +92,11 @@ export interface JoinRoomValue {
   joined: boolean;
 }
 
+export interface DeleteDemoRoomValue {
+  roomId: string;
+  deleted: true;
+}
+
 export interface CommitCommandValue {
   roomId: string;
   revision: number;
@@ -105,6 +113,10 @@ export interface CommandCanvasRoomService {
     actorUserId: string,
     input: JoinRoomRequest,
   ) => Promise<RoomServiceResult<JoinRoomValue>>;
+  deleteDemoRoom: (
+    actorUserId: string,
+    roomId: string,
+  ) => Promise<RoomServiceResult<DeleteDemoRoomValue>>;
   loadCanvas: (roomId: string) => Promise<RoomServiceResult<CanvasState>>;
   commitCommand: (
     actorUserId: string,
@@ -135,6 +147,12 @@ const joinRoomRpcSchema = z
     joined: z.boolean(),
   })
   .strict();
+const deleteDemoRoomRpcSchema = z
+  .object({
+    roomId: z.uuid(),
+    deleted: z.literal(true),
+  })
+  .strict();
 const mutationRpcSchema = z
   .object({
     receiptId: z.uuid(),
@@ -154,13 +172,6 @@ const mutationRpcSchema = z
     ),
   })
   .strict();
-
-interface ReceiptContext {
-  [receiptId: string]: {
-    commandId?: string;
-    source?: CanvasCommandSource;
-  };
-}
 
 const defaultDependencies: RoomServiceDependencies = {
   createUuid: randomUUID,
@@ -204,6 +215,11 @@ export function createRoomService(
         p_color: input.data.color,
         p_join_token: joinToken,
       });
+      if (providerErrorMessage(response.error) === "demo_room_limit_reached")
+        return failure(
+          "demo_room_limit_reached",
+          "Reset one of your demo rooms before creating another.",
+        );
       if (hasError(response))
         return failure("create_unavailable", "Room could not be created.");
 
@@ -227,6 +243,40 @@ export function createRoomService(
       };
     } catch {
       return failure("create_unavailable", "Room could not be created.");
+    }
+  }
+
+  async function deleteDemoRoom(
+    actorUserId: string,
+    roomId: string,
+  ): Promise<RoomServiceResult<DeleteDemoRoomValue>> {
+    if (
+      !uuidSchema.safeParse(actorUserId).success ||
+      !uuidSchema.safeParse(roomId).success
+    )
+      return failure("delete_unavailable", "Demo room could not be deleted.");
+
+    try {
+      const response = await client.rpc("delete_demo_room_as_host", {
+        p_room_id: roomId,
+        p_actor_user_id: actorUserId,
+      });
+      if (
+        providerErrorMessage(response.error) === "demo_room_delete_forbidden"
+      )
+        return failure(
+          "host_required",
+          "Only the demo room host can delete this room.",
+        );
+      if (hasError(response))
+        return failure("delete_unavailable", "Demo room could not be deleted.");
+
+      const parsed = deleteDemoRoomRpcSchema.safeParse(response.data);
+      if (!parsed.success || parsed.data.roomId !== roomId)
+        return failure("delete_unavailable", "Demo room could not be deleted.");
+      return { ok: true, value: parsed.data };
+    } catch {
+      return failure("delete_unavailable", "Demo room could not be deleted.");
     }
   }
 
@@ -269,7 +319,6 @@ export function createRoomService(
 
   async function loadCanvas(
     roomId: string,
-    receiptContext: ReceiptContext = {},
   ): Promise<RoomServiceResult<CanvasState>> {
     if (!uuidSchema.safeParse(roomId).success)
       return failure("room_unavailable", "Room is unavailable.");
@@ -322,7 +371,6 @@ export function createRoomService(
           room: roomAfter.data,
           objects: objectResponse.data,
           receipts: receiptResponse.data,
-          receiptContext,
         });
         if (!parsed.ok)
           return failure(
@@ -391,6 +439,7 @@ export function createRoomService(
         p_expected_room_revision: input.data.baseRevision,
         p_actor_user_id: actorUserId,
         p_actor_type: actorResult.value.actor.type,
+        p_source: actorResult.value.source,
         p_action: planned.plan.action,
         p_description: planned.plan.description,
         p_changes: planned.plan.changes,
@@ -413,12 +462,7 @@ export function createRoomService(
     )
       return failure("mutation_unavailable", "Canvas mutation is unavailable.");
 
-    const reloaded = await loadCanvas(input.data.roomId, {
-      [input.data.commandId]: {
-        commandId: input.data.commandId,
-        source: actorResult.value.source,
-      },
-    });
+    const reloaded = await loadCanvas(input.data.roomId);
     if (!reloaded.ok) return reloaded;
     const committedReceipt = reloaded.value.receipts.find(
       (receipt) => receipt.id === input.data.commandId,
@@ -448,6 +492,7 @@ export function createRoomService(
   return {
     createRoom,
     joinRoom,
+    deleteDemoRoom,
     loadCanvas,
     commitCommand,
   };
@@ -469,6 +514,12 @@ function exactRandomBytes(
 
 function hasError(result: RoomServiceQueryResult) {
   return result.error !== null && result.error !== undefined;
+}
+
+function providerErrorMessage(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("message" in error))
+    return null;
+  return typeof error.message === "string" ? error.message : null;
 }
 
 function failure<C extends RoomServiceErrorCode>(
@@ -606,6 +657,11 @@ function mapPlanError(
 
 function mapMutationError(error: unknown): RoomServiceResult<never> {
   const message = databaseErrorMessage(error);
+  if (message === "demo_room_storage_limit_reached")
+    return failure(
+      "demo_room_storage_limit_reached",
+      "This demo room reached its storage limit. Reset the demo to continue.",
+    );
   if (
     includesAny(message, [
       "canvas_object_version_conflict",

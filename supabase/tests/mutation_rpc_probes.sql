@@ -109,6 +109,7 @@ select public.commit_canvas_mutation(
   p_room_id => :'cc_room_id'::uuid,
   p_actor_user_id => :'host_user_id'::uuid,
   p_actor_type => 'human',
+  p_source => 'typed',
   p_action => 'create',
   p_description => 'Mutation host created a note.',
   p_changes => jsonb_build_array(
@@ -164,6 +165,7 @@ begin
     where receipt.room_id = current_setting('commandcanvas.test_room_id')::uuid
       and receipt.revision = 1
       and receipt.actor_display_name = 'Mutation host'
+      and receipt.source = 'typed'
       and receipt.previous_state -> 0 -> 'state' = 'null'::jsonb
       and receipt.resulting_state -> 0 -> 'state' ->> 'title' = 'Mutation probe note'
       and receipt.inverse_command ->> 'schemaVersion' = '1'
@@ -173,10 +175,59 @@ begin
 end;
 $$;
 
+do $$
+begin
+  begin
+    perform public.commit_canvas_mutation(
+      p_room_id => current_setting('commandcanvas.test_room_id')::uuid,
+      p_actor_user_id => current_setting('commandcanvas.test_host_user_id')::uuid,
+      p_actor_type => 'human',
+      p_source => 'collaborator',
+      p_action => 'transform',
+      p_description => 'Actor and source mismatch must fail.',
+      p_changes => '[]'::jsonb,
+      p_inverse_command => null,
+      p_reversible => true,
+      p_undoes_receipt_id => null,
+      p_receipt_id => gen_random_uuid()
+    );
+    raise exception 'mutation_actor_source_mismatch_was_accepted';
+  exception
+    when raise_exception then
+      if sqlerrm <> 'canvas_actor_source_mismatch' then
+        raise;
+      end if;
+  end;
+
+  begin
+    perform public.commit_canvas_mutation(
+      p_room_id => current_setting('commandcanvas.test_room_id')::uuid,
+      p_actor_user_id => current_setting('commandcanvas.test_host_user_id')::uuid,
+      p_actor_type => 'human',
+      p_source => 'camera_frame',
+      p_action => 'transform',
+      p_description => 'Unknown source must fail.',
+      p_changes => '[]'::jsonb,
+      p_inverse_command => null,
+      p_reversible => true,
+      p_undoes_receipt_id => null,
+      p_receipt_id => gen_random_uuid()
+    );
+    raise exception 'mutation_unknown_source_was_accepted';
+  exception
+    when raise_exception then
+      if sqlerrm <> 'canvas_invalid_source' then
+        raise;
+      end if;
+  end;
+end;
+$$;
+
 select public.commit_canvas_mutation(
   p_room_id => :'cc_room_id'::uuid,
   p_actor_user_id => :'host_user_id'::uuid,
   p_actor_type => 'human',
+  p_source => 'pointer',
   p_action => 'transform',
   p_description => 'Mutation host moved the note once.',
   p_changes => jsonb_build_array(
@@ -212,6 +263,7 @@ begin
       p_room_id => current_setting('commandcanvas.test_room_id')::uuid,
       p_actor_user_id => current_setting('commandcanvas.test_host_user_id')::uuid,
       p_actor_type => 'human',
+      p_source => 'pointer',
       p_action => 'transform',
       p_description => 'This stale transform must fail.',
       p_changes => jsonb_build_array(
@@ -274,6 +326,7 @@ select public.commit_canvas_mutation(
   p_room_id => :'cc_room_id'::uuid,
   p_actor_user_id => :'host_user_id'::uuid,
   p_actor_type => 'human',
+  p_source => 'pointer',
   p_action => 'transform',
   p_description => 'Mutation host moved the note twice.',
   p_changes => jsonb_build_array(
@@ -309,6 +362,7 @@ begin
       p_room_id => current_setting('commandcanvas.test_room_id')::uuid,
       p_actor_user_id => current_setting('commandcanvas.test_host_user_id')::uuid,
       p_actor_type => 'human',
+      p_source => 'system',
       p_action => 'undo',
       p_description => 'Out-of-order undo must fail.',
       p_changes => '[]'::jsonb,
@@ -333,6 +387,7 @@ select public.commit_canvas_mutation(
   p_room_id => :'cc_room_id'::uuid,
   p_actor_user_id => :'host_user_id'::uuid,
   p_actor_type => 'human',
+  p_source => 'system',
   p_action => 'undo',
   p_description => 'Mutation host undid the second move.',
   p_changes => '[]'::jsonb,
@@ -358,6 +413,7 @@ select public.commit_canvas_mutation(
   p_room_id => :'cc_room_id'::uuid,
   p_actor_user_id => :'host_user_id'::uuid,
   p_actor_type => 'human',
+  p_source => 'system',
   p_action => 'undo',
   p_description => 'Mutation host undid the first move.',
   p_changes => '[]'::jsonb,
@@ -382,6 +438,7 @@ begin
       p_room_id => current_setting('commandcanvas.test_room_id')::uuid,
       p_actor_user_id => current_setting('commandcanvas.test_host_user_id')::uuid,
       p_actor_type => 'human',
+      p_source => 'system',
       p_action => 'undo',
       p_description => 'Repeated undo must fail.',
       p_changes => '[]'::jsonb,
@@ -406,6 +463,7 @@ select public.commit_canvas_mutation(
   p_room_id => :'cc_room_id'::uuid,
   p_actor_user_id => :'host_user_id'::uuid,
   p_actor_type => 'human',
+  p_source => 'pointer',
   p_action => 'pin',
   p_description => 'Mutation host pinned the note.',
   p_changes => jsonb_build_array(
@@ -441,6 +499,7 @@ begin
       p_room_id => current_setting('commandcanvas.test_room_id')::uuid,
       p_actor_user_id => current_setting('commandcanvas.test_host_user_id')::uuid,
       p_actor_type => 'human',
+      p_source => 'pointer',
       p_action => 'transform',
       p_description => 'Pinned spatial transform must fail.',
       p_changes => jsonb_build_array(
@@ -485,6 +544,7 @@ begin
         'commandcanvas.test_participant_user_id'
       )::uuid,
       p_actor_type => 'agent',
+      p_source => 'webmcp',
       p_action => 'transform',
       p_description => 'Participant-authorized agent mutation must fail.',
       p_changes => jsonb_build_array(
@@ -527,6 +587,7 @@ begin
       p_room_id => current_setting('commandcanvas.test_room_id')::uuid,
       p_actor_user_id => current_setting('commandcanvas.test_host_user_id')::uuid,
       p_actor_type => 'human',
+      p_source => 'typed',
       p_action => 'transform',
       p_description => 'Client inverse state must be rejected.',
       p_changes => '[]'::jsonb,

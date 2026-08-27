@@ -98,7 +98,12 @@ export const WEBMCP_TOOL_INPUT_SCHEMAS = {
   prepare_meeting_packet: z
     .object({
       title: z.string().trim().min(1).max(120).optional(),
-      objectIds: z.array(objectIdSchema).min(1).max(100).optional(),
+      objectIds: z
+        .array(objectIdSchema)
+        .min(1)
+        .max(50)
+        .refine((ids) => new Set(ids).size === ids.length)
+        .optional(),
     })
     .strict(),
   request_packet_send: z.object({ packetId: objectIdSchema }).strict(),
@@ -126,7 +131,7 @@ export interface WebMcpToolCatalogEntry {
 export const WEBMCP_TOOL_CATALOG = {
   get_canvas_state: {
     description:
-      "Read the live semantic canvas state, selection, participants, and recent receipts without changing the room.",
+      "Read a compact semantic projection of the live canvas, selection, and recent activity receipts without changing the room.",
     inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.get_canvas_state,
     annotations: { readOnlyHint: true, untrustedContentHint: true },
     humanApproval: "not_required",
@@ -135,28 +140,28 @@ export const WEBMCP_TOOL_CATALOG = {
     description:
       "Create one validated semantic canvas object at explicit world coordinates and record an attributable receipt.",
     inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.create_object,
-    annotations: { readOnlyHint: false, untrustedContentHint: false },
+    annotations: { readOnlyHint: false, untrustedContentHint: true },
     humanApproval: "not_required",
   },
   transform_object: {
     description:
       "Move or resize one existing, unpinned canvas object through the canonical mutation pipeline.",
     inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.transform_object,
-    annotations: { readOnlyHint: false, untrustedContentHint: false },
+    annotations: { readOnlyHint: false, untrustedContentHint: true },
     humanApproval: "not_required",
   },
   set_object_state: {
     description:
       "Pin, unpin, minimize, or restore one existing canvas object and record the resulting receipt.",
     inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.set_object_state,
-    annotations: { readOnlyHint: false, untrustedContentHint: false },
+    annotations: { readOnlyHint: false, untrustedContentHint: true },
     humanApproval: "not_required",
   },
   discard_object: {
     description:
       "Move one canvas object to recoverable trash; this never performs permanent deletion.",
     inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.discard_object,
-    annotations: { readOnlyHint: false, untrustedContentHint: false },
+    annotations: { readOnlyHint: false, untrustedContentHint: true },
     humanApproval: "not_required",
   },
   transform_sketch: {

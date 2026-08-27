@@ -2,6 +2,8 @@ import type { StoreApi } from "zustand";
 
 import type { CanvasStoreState } from "@/lib/canvas/canvas-store";
 import type { CanvasCommand, CommandError } from "@/lib/canvas/command-engine";
+import type { CanvasSketchTransformer } from "@/lib/vision/canvas-transform";
+import { projectCanvasState } from "@/lib/webmcp/canvas-state-projection";
 import type {
   WebMcpAwaitingApprovalResult,
   WebMcpToolFailure,
@@ -25,9 +27,7 @@ export interface CanvasWebMcpAdapterOptions {
     command: CanvasCommand,
     signal: AbortSignal,
   ) => Promise<WebMcpToolResult>;
-  transformSketch?: (
-    request: Extract<WebMcpAdapterRequest, { toolName: "transform_sketch" }>,
-  ) => Promise<WebMcpToolResult>;
+  transformSketch?: CanvasSketchTransformer["transform"];
   prepareMeetingPacket?: (
     request: Extract<
       WebMcpAdapterRequest,
@@ -88,9 +88,7 @@ export function createCanvasWebMcpAdapters(
             request.signal,
           );
         case "transform_sketch":
-          return options.transformSketch
-            ? options.transformSketch(request)
-            : unavailable("sketch transformation service is not ready");
+          return transformSelectedSketch(options, request);
         case "prepare_meeting_packet":
           return options.prepareMeetingPacket
             ? options.prepareMeetingPacket(request)
@@ -104,6 +102,66 @@ export function createCanvasWebMcpAdapters(
         : unavailable("meeting packet delivery staging is not ready");
     },
   };
+}
+
+async function transformSelectedSketch(
+  options: CanvasWebMcpAdapterOptions,
+  request: Extract<WebMcpAdapterRequest, { toolName: "transform_sketch" }>,
+): Promise<WebMcpToolResult> {
+  const state = options.store.getState();
+  if (request.input.sketchId !== state.selectedObjectId)
+    return {
+      ok: false,
+      code: "invalid_input",
+      message: "Transform request must target the currently selected sketch.",
+    };
+
+  const selected = state.canvas.objects[state.selectedObjectId];
+  if (!selected || selected.deletedAt || selected.type !== "sketch")
+    return {
+      ok: false,
+      code: "invalid_input",
+      message: "Select an active sketch before requesting a transformation.",
+    };
+  if (!options.transformSketch)
+    return unavailable("sketch transformation service is not ready");
+
+  try {
+    const result = await options.transformSketch({
+      sketchObjectId: request.input.sketchId,
+      instruction: request.input.instruction,
+      outputKind: request.input.outputKind ?? "architecture",
+      source: "webmcp",
+      signal: request.signal,
+    });
+    if (!result.ok)
+      return {
+        ok: false,
+        code: "execution_failed",
+        message: result.message,
+      };
+
+    return {
+      ok: true,
+      status: "completed",
+      message: `Sketch interpreted as a structured ${request.input.outputKind ?? "architecture"} diagram.`,
+      receiptId: result.receiptId,
+      data: {
+        revision: result.revision,
+        diagramObjectId: result.diagramObjectId,
+        provider: result.provider,
+        model: result.model,
+      },
+    };
+  } catch {
+    return {
+      ok: false,
+      code: "execution_failed",
+      message: request.signal.aborted
+        ? "Sketch interpretation was cancelled."
+        : "Sketch interpretation is temporarily unavailable.",
+    };
+  }
 }
 
 function executeMutation(
@@ -121,25 +179,14 @@ function readCanvasState(
   input: { scope?: "all" | "selected"; includeReceipts?: boolean },
 ): WebMcpToolResult {
   const state = store.getState();
-  const allObjects = Object.values(state.canvas.objects).filter(
-    (object) => !object.deletedAt,
-  );
-  const objects =
-    input.scope === "selected"
-      ? allObjects.filter((object) => object.id === state.selectedObjectId)
-      : allObjects;
 
   return {
     ok: true,
     status: "completed",
     message: `Canvas state read at revision ${state.canvas.revision}.`,
-    data: toJsonValue({
-      roomId: state.canvas.roomId,
-      revision: state.canvas.revision,
-      selectedObjectId: state.selectedObjectId,
-      objects,
-      receipts: input.includeReceipts ? state.canvas.receipts.slice(-20) : [],
-    }),
+    data: toJsonValue(
+      projectCanvasState(state.canvas, state.selectedObjectId, input),
+    ),
   };
 }
 

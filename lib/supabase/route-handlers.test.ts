@@ -6,6 +6,7 @@ import type { CommandRequest } from "@/lib/supabase/room-contracts";
 import {
   handleCommandRequest,
   handleCreateRoomRequest,
+  handleDeleteDemoRoomRequest,
   handleJoinRoomRequest,
   type RoomRouteDependencies,
 } from "@/lib/supabase/route-handlers";
@@ -13,6 +14,7 @@ import type {
   CommandCanvasRoomService,
   CommitCommandValue,
   CreateRoomValue,
+  DeleteDemoRoomValue,
   JoinRoomValue,
   RoomServiceResult,
 } from "@/lib/supabase/room-service";
@@ -113,6 +115,7 @@ function createDependencies(input?: {
   createResult?: RoomServiceResult<CreateRoomValue>;
   joinResult?: RoomServiceResult<JoinRoomValue>;
   commandResult?: RoomServiceResult<CommitCommandValue>;
+  deleteResult?: RoomServiceResult<DeleteDemoRoomValue>;
   getUserError?: unknown;
   getUserId?: string | null;
   serviceThrows?: Error;
@@ -135,6 +138,9 @@ function createDependencies(input?: {
   const service: CommandCanvasRoomService = {
     createRoom: invoke(input?.createResult ?? ok(createdRoom)),
     joinRoom: invoke(input?.joinResult ?? ok(joinedRoom)),
+    deleteDemoRoom: invoke(
+      input?.deleteResult ?? ok({ roomId: ROOM_ID, deleted: true }),
+    ),
     loadCanvas: vi.fn(),
     commitCommand: invoke(input?.commandResult ?? ok(committedCommand)),
   };
@@ -305,6 +311,122 @@ describe("create room route", () => {
     expect(JSON.stringify(body)).not.toContain(JOIN_TOKEN);
     expect(JSON.stringify(body)).not.toContain("database");
   });
+
+  it("returns an explicit conflict when the authenticated actor reaches the demo-room cap", async () => {
+    const { dependencies } = createDependencies({
+      createResult: {
+        ok: false,
+        error: {
+          code: "demo_room_limit_reached",
+          message: "Reset one of your demo rooms before creating another.",
+        },
+      },
+    });
+
+    const response = await handleCreateRoomRequest(
+      jsonRequest("https://commandcanvas.test/api/rooms", createInput),
+      dependencies,
+    );
+
+    expect(response.status).toBe(409);
+    expect(await expectJson(response)).toEqual({
+      ok: false,
+      error: {
+        code: "demo_room_limit_reached",
+        message: "Reset one of your demo rooms before creating another.",
+      },
+    });
+  });
+});
+
+describe("delete demo room route", () => {
+  it("deletes only the exact path room for the authenticated actor", async () => {
+    const { dependencies, service } = createDependencies();
+    const request = new Request(
+      `https://commandcanvas.test/api/rooms/${ROOM_ID}`,
+      {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${JWT}` },
+      },
+    );
+
+    const response = await handleDeleteDemoRoomRequest(
+      request,
+      ROOM_ID,
+      dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await expectJson(response)).toEqual({
+      ok: true,
+      room: { roomId: ROOM_ID, deleted: true },
+    });
+    expect(service.deleteDemoRoom).toHaveBeenCalledExactlyOnceWith(
+      ACTOR_ID,
+      ROOM_ID,
+    );
+  });
+
+  it("returns one non-enumerating refusal when the actor is not the demo host", async () => {
+    const { dependencies } = createDependencies({
+      deleteResult: {
+        ok: false,
+        error: {
+          code: "host_required",
+          message: "Only the demo room host can delete this room.",
+        },
+      },
+    });
+    const request = new Request(
+      `https://commandcanvas.test/api/rooms/${ROOM_ID}`,
+      {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${JWT}` },
+      },
+    );
+
+    const response = await handleDeleteDemoRoomRequest(
+      request,
+      ROOM_ID,
+      dependencies,
+    );
+
+    expect(response.status).toBe(403);
+    expect(await expectJson(response)).toEqual({
+      ok: false,
+      error: {
+        code: "host_required",
+        message: "Only the demo room host can delete this room.",
+      },
+    });
+  });
+
+  it("rejects a malformed path identifier before calling the service", async () => {
+    const { dependencies, service } = createDependencies();
+    const request = new Request(
+      "https://commandcanvas.test/api/rooms/not-a-room",
+      {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${JWT}` },
+      },
+    );
+
+    const response = await handleDeleteDemoRoomRequest(
+      request,
+      "not-a-room",
+      dependencies,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await expectJson(response)).toEqual({
+      ok: false,
+      error: {
+        code: "invalid_room_id",
+        message: "Room ID is invalid.",
+      },
+    });
+    expect(service.deleteDemoRoom).not.toHaveBeenCalled();
+  });
 });
 
 describe("join room route", () => {
@@ -429,6 +551,7 @@ describe("canvas command route", () => {
     ["stale_revision", 409],
     ["object_pinned", 409],
     ["command_conflict", 409],
+    ["demo_room_storage_limit_reached", 409],
     ["nothing_to_undo", 409],
     ["invalid_command", 400],
     ["invalid_persisted_state", 503],
@@ -454,6 +577,36 @@ describe("canvas command route", () => {
     expect(response.status).toBe(expectedStatus);
     expect(body).toMatchObject({ ok: false, error: { code } });
     expect(JSON.stringify(body)).not.toContain("provider-specific");
+  });
+
+  it("returns an honest reset path for a demo storage-cap refusal", async () => {
+    const { dependencies } = createDependencies({
+      commandResult: {
+        ok: false,
+        error: {
+          code: "demo_room_storage_limit_reached",
+          message: "provider-specific internal storage detail",
+        },
+      },
+    });
+
+    const response = await handleCommandRequest(
+      jsonRequest(
+        `https://commandcanvas.test/api/rooms/${ROOM_ID}/commands`,
+        commandInput,
+      ),
+      ROOM_ID,
+      dependencies,
+    );
+
+    expect(response.status).toBe(409);
+    expect(await expectJson(response)).toEqual({
+      ok: false,
+      error: {
+        code: "demo_room_storage_limit_reached",
+        message: "This demo room reached its storage limit. Reset the demo to continue.",
+      },
+    });
   });
 
   it("suppresses a thrown service error and returns one honest 503", async () => {
