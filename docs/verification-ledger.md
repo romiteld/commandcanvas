@@ -687,3 +687,25 @@ This checkpoint is a draft for the current source candidate. It does not replace
 
 - No approved hand-control capability was cut in this release. The former oversized camera-as-workspace panel and visible dashed camera boundary were removed because they misrepresented the control plane; calibration is temporary and the canvas is the interaction surface.
 - Physical pencil, marker, or arbitrary-object tracking; permanent unrecoverable gesture deletion; TURN or SFU infrastructure; recording; screen sharing; production conferencing scale; conferencing-platform integrations; enterprise identity; broad office-suite integrations; billing; native apps; headset support; marketplaces; and desktop automation remain outside this release.
+
+## Checkpoint 21: unmirrored index-pointer landing correction
+
+### WORKING
+
+- The landing workflow now uses one clearly extended index finger with the thumb and remaining fingers folded. The fingertip meets the dashed receipt stroke rather than pointing away from it.
+- The SVG exposes a descriptive image label plus explicit index, orientation, pointer, receipt-path, and fingertip markers. A landing unit assertion prevents a mirrored or generic-finger substitution.
+- The exact product commit passed ESLint, TypeScript, 95 Vitest files with 934 of 934 tests, both generated hand-worker bundles, the optimized 13-route Next.js build, and five applicable focused landing Playwright scenarios with three intentional project skips.
+
+### VERIFIED IN BROWSER
+
+- Local Chromium at 390 by 844 rendered the index-pointer card with no horizontal overflow. The pointer transform determinant was positive at 13.6900003528595, its transformed fingertip landed exactly on the receipt-path endpoint with distance 0 SVG units, and the fingertip remained upper-left of the palm.
+- Vercel production deployment `dpl_CHgc6XvYMXeVkTNH6sp4dTs65HHc` is READY from GitHub commit `bf8d153458526eb07a294c2454fd9b99099e0505` with no alias error at <https://commandcanvas.vercel.app>.
+- The canonical production page repeated the same 390 by 844 geometry checks, kept the illustration inside the viewport with zero horizontal overflow, and produced no browser console errors.
+
+### UNVERIFIED
+
+- This checkpoint corrects the landing illustration only. It does not add evidence for physical-hand detection, pointing accuracy, pinch ergonomics, camera behavior, or any other device boundary listed in Checkpoint 20.
+
+### CUT
+
+- No product capability was cut or changed by this landing-only correction.
