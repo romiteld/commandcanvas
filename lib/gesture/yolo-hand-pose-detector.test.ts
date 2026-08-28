@@ -47,6 +47,7 @@ describe("YOLO 21-keypoint browser detector", () => {
     await expect(
       configureYoloWebGpuAdapter(null, setAdapter),
     ).resolves.toEqual({
+      highPerformanceGpuRequested: false,
       unavailableReason: "WebGPU is unavailable in this browser",
     });
     expect(setAdapter).not.toHaveBeenCalled();
@@ -69,6 +70,7 @@ describe("YOLO 21-keypoint browser detector", () => {
     await expect(
       configureYoloWebGpuAdapter({ requestAdapter }, setAdapter),
     ).resolves.toEqual({
+      highPerformanceGpuRequested: true,
       adapterInfo: {
         vendor: "nvidia",
         architecture: "ampere",
@@ -98,6 +100,7 @@ describe("YOLO 21-keypoint browser detector", () => {
         setAdapter,
       ),
     ).resolves.toEqual({
+      highPerformanceGpuRequested: true,
       unavailableReason:
         "The selected WebGPU adapter lacks shader-f16 for this FP16 model",
     });
@@ -114,6 +117,7 @@ describe("YOLO 21-keypoint browser detector", () => {
         setAdapter,
       ),
     ).resolves.toEqual({
+      highPerformanceGpuRequested: true,
       unavailableReason: "WebGPU did not return a GPU adapter",
     });
     await expect(
@@ -125,7 +129,10 @@ describe("YOLO 21-keypoint browser detector", () => {
         },
         setAdapter,
       ),
-    ).resolves.toEqual({ unavailableReason: "GPU process unavailable" });
+    ).resolves.toEqual({
+      highPerformanceGpuRequested: true,
+      unavailableReason: "GPU process unavailable",
+    });
     expect(setAdapter).not.toHaveBeenCalled();
   });
 
@@ -297,7 +304,7 @@ describe("YOLO 21-keypoint browser detector", () => {
     );
     expect(detector.getDiagnostics?.()).toMatchObject({
       executionProvider: "webgpu",
-      highPerformanceGpuRequested: true,
+      highPerformanceGpuRequested: false,
     });
     expect(runtime.createTensor).toHaveBeenCalledWith(
       expect.any(Float32Array),
@@ -320,6 +327,7 @@ describe("YOLO 21-keypoint browser detector", () => {
     };
     const runtime = {
       configure: vi.fn(),
+      didRequestHighPerformanceWebGpuAdapter: () => true,
       createSession: vi
         .fn()
         .mockRejectedValueOnce(new Error("WebGPU unavailable"))

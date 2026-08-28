@@ -155,6 +155,7 @@ describe("hand tracking controller lifecycle", () => {
     expect(controller.getStatus()).toEqual({ state: "ready" });
     expect(controller.getEngineStatus?.()).toMatchObject({
       executionProvider: "webgpu",
+      highPerformanceGpuRequested: true,
       adapter: { architecture: "ampere", description: "NVIDIA GPU" },
     });
 
@@ -312,6 +313,150 @@ describe("hand tracking controller lifecycle", () => {
     );
     expect(track.stop).not.toHaveBeenCalled();
     controller.stop();
+  });
+
+  it("attempts the private CUDA relay first only with current upload consent, then falls back to local YOLO", async () => {
+    let consent = false;
+    const relayWorker = Object.assign(new FakeWorker(), {
+      frameQueueMode: "newest-only" as const,
+    });
+    const yoloWorker = new FakeWorker();
+    const mediaPipeWorker = new FakeWorker();
+    const createPrivateRelayWorker = vi.fn(() => relayWorker);
+    const createWorkerForEngine = vi.fn((engine: { id: string }) =>
+      engine.id.startsWith("yolo26") ? yoloWorker : mediaPipeWorker,
+    );
+    const video = {
+      srcObject: null,
+      readyState: 4,
+      play: vi.fn(async () => undefined),
+    } as unknown as HTMLVideoElement;
+    const controller = createHandTrackingController({
+      getUserMedia: vi.fn(async () => ({
+        getTracks: () => [{ stop: vi.fn() }],
+      }) as unknown as MediaStream),
+      privateHandRelay: {
+        roomId: "11111111-1111-4111-8111-111111111111",
+        getAccessToken: async () => "access-token",
+        cameraUploadConsent: () => consent,
+        createWorker: createPrivateRelayWorker,
+      },
+      createWorkerForEngine,
+      createImageBitmap: vi.fn(
+        async () => ({ close: vi.fn() }) as unknown as ImageBitmap,
+      ),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      now: () => 1_000,
+    });
+
+    const localStart = controller.start(video);
+    await vi.waitFor(() => expect(yoloWorker.postMessage).toHaveBeenCalled());
+    expect(createPrivateRelayWorker).not.toHaveBeenCalled();
+    yoloWorker.emit({ type: "ready" });
+    await localStart;
+    controller.stop();
+
+    consent = true;
+    const relayStart = controller.start(video);
+    await vi.waitFor(() => expect(createPrivateRelayWorker).toHaveBeenCalledOnce());
+    expect(relayWorker.postMessage).toHaveBeenCalledWith({
+      type: "initialize",
+      wasmBaseUrl: "private-relay",
+      modelAssetUrl: "private-relay",
+    });
+    relayWorker.emit({
+      type: "error",
+      message: "Private GPU relay timed out; switching to local hand tracking.",
+    });
+    await vi.waitFor(() => expect(yoloWorker.postMessage).toHaveBeenCalledTimes(3));
+    yoloWorker.emit({ type: "ready" });
+    await relayStart;
+
+    expect(controller.getEngineStatus?.()).toMatchObject({
+      id: "yolo26-hand-pose-2abb91",
+      fallback: true,
+      fallbackKind: "private-relay",
+      fallbackReason: "Private GPU relay timed out; switching to local hand tracking.",
+    });
+  });
+
+  it("allows the relay endpoint to retain one in-flight plus newest-only frames and reports relay processing latency", async () => {
+    const relayWorker = Object.assign(new FakeWorker(), {
+      frameQueueMode: "newest-only" as const,
+    });
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 0;
+    let now = 1_000;
+    const createImageBitmap = vi.fn(
+      async () => ({ close: vi.fn() }) as unknown as ImageBitmap,
+    );
+    const video = {
+      srcObject: null,
+      readyState: 4,
+      play: vi.fn(async () => undefined),
+    } as unknown as HTMLVideoElement;
+    const controller = createHandTrackingController({
+      getUserMedia: vi.fn(async () => ({
+        getTracks: () => [{ stop: vi.fn() }],
+      }) as unknown as MediaStream),
+      privateHandRelay: {
+        roomId: "11111111-1111-4111-8111-111111111111",
+        getAccessToken: async () => "access-token",
+        cameraUploadConsent: () => true,
+        createWorker: () => relayWorker,
+      },
+      createImageBitmap,
+      requestAnimationFrame: vi.fn((callback) => {
+        frames.set(++nextFrame, callback);
+        return nextFrame;
+      }),
+      cancelAnimationFrame: vi.fn((id) => frames.delete(id)),
+      now: () => now,
+    });
+
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(relayWorker.postMessage).toHaveBeenCalled());
+    relayWorker.emit({
+      type: "ready",
+      diagnostics: {
+        executionProvider: "cuda",
+        processingLocation: "private-relay",
+        highPerformanceGpuRequested: false,
+        adapter: { description: "NVIDIA GeForce RTX 3090 Ti" },
+      },
+    });
+    await starting;
+
+    [...frames.values()].at(-1)?.(1_000);
+    await vi.waitFor(() => expect(createImageBitmap).toHaveBeenCalledTimes(1));
+    [...frames.values()].at(-1)?.(1_016);
+    await vi.waitFor(() => expect(createImageBitmap).toHaveBeenCalledTimes(2));
+
+    now = 1_090;
+    relayWorker.emit({
+      type: "result",
+      timestamp: 1_000,
+      hands: [],
+      processingLatencyMs: 24,
+      relayMetrics: {
+        encodeLatencyMs: 8,
+        relayRoundTripMs: 51,
+        droppedBeforeEncode: 2,
+        droppedBeforeSend: 0,
+      },
+    });
+    expect(controller.getEngineStatus?.()).toMatchObject({
+      executionProvider: "cuda",
+      processingLocation: "private-relay",
+      adapter: { description: "NVIDIA GeForce RTX 3090 Ti" },
+      processingLatencyMs: 24,
+      detectorRoundTripMs: 90,
+      encodeLatencyMs: 8,
+      relayRoundTripMs: 51,
+      droppedBeforeEncode: 2,
+      droppedBeforeSend: 0,
+    });
   });
 
   it("reports a post-ready YOLO inference failure before starting the labeled fallback", async () => {

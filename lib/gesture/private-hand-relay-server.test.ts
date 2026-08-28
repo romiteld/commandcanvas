@@ -63,7 +63,13 @@ function capability(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function client(member: unknown = { role: "participant" }) {
+function client(
+  member: unknown = { role: "participant" },
+  admission: { data: unknown; error: unknown } = {
+    data: { outcome: "admitted" },
+    error: null,
+  },
+) {
   const query = {
     select: vi.fn(),
     eq: vi.fn(),
@@ -79,6 +85,7 @@ function client(member: unknown = { role: "participant" }) {
       })),
     },
     from: vi.fn(() => query),
+    rpc: vi.fn(async () => admission),
     query,
   };
 }
@@ -172,6 +179,13 @@ describe("private hand relay server dependencies", () => {
       "https://hand.example.test/v1/capabilities",
       expect.objectContaining({ method: "GET", cache: "no-store" }),
     );
+    expect(fakeClient.rpc).toHaveBeenCalledWith(
+      "admit_private_hand_relay_session",
+      {
+        p_room_id: ROOM_ID,
+        p_actor_user_id: ACTOR_ID,
+      },
+    );
     expect(started).toMatchObject({
       ok: true,
       relay: {
@@ -230,5 +244,51 @@ describe("private hand relay server dependencies", () => {
       }),
     ).resolves.toEqual({ ok: false, code: "relay_unavailable" });
     expect(createUuid).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before token minting when durable relay admission is denied or unavailable", async () => {
+    for (const admission of [
+      {
+        data: {
+          outcome: "denied",
+          code: "hand_relay_actor_rate_limit",
+          retryAfterSeconds: 83,
+        },
+        error: null,
+      },
+      { data: null, error: { message: "database unavailable" } },
+    ]) {
+      const fakeClient = client({ role: "participant" }, admission);
+      const createUuid = vi.fn(() => SESSION_ID);
+      const fetcher = vi.fn(async () =>
+        new Response(JSON.stringify(capability()), { status: 200 }),
+      );
+      const built = createServerPrivateHandRelayDependencies({
+        environment: environment(),
+        createClient: () => fakeClient,
+        fetch: fetcher,
+        createUuid,
+      });
+      expect(built.ok).toBe(true);
+      if (!built.ok) continue;
+
+      const result = await built.dependencies.startSession({
+        roomId: ROOM_ID,
+        actorUserId: ACTOR_ID,
+        signal: new AbortController().signal,
+      });
+
+      if (admission.error) {
+        expect(result).toEqual({ ok: false, code: "relay_unavailable" });
+      } else {
+        expect(result).toEqual({
+          ok: false,
+          code: "rate_limited",
+          retryAfterSeconds: 83,
+        });
+      }
+      expect(createUuid).not.toHaveBeenCalled();
+      expect(fetcher).not.toHaveBeenCalled();
+    }
   });
 });

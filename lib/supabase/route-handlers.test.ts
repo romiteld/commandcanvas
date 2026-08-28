@@ -267,6 +267,41 @@ describe("room route authentication and request boundaries", () => {
 });
 
 describe("create room route", () => {
+  it("refuses standard-room input at the legacy demo creation route", async () => {
+    const { dependencies, service } = createDependencies();
+    dependencies.verifier.auth.getUser = vi.fn(async () => ({
+      data: {
+        user: {
+          id: ACTOR_ID,
+          is_anonymous: true,
+          user_metadata: {
+            email: "spoofed@example.com",
+            email_confirmed_at: "2026-08-28T12:00:00.000Z",
+          },
+        },
+      },
+      error: null,
+    }));
+
+    const response = await handleCreateRoomRequest(
+      jsonRequest("https://commandcanvas.test/api/rooms", {
+        ...createInput,
+        mode: "standard",
+      }),
+      dependencies,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await expectJson(response)).toEqual({
+      ok: false,
+      error: {
+        code: "invalid_request",
+        message: "Request body is invalid.",
+      },
+    });
+    expect(service.createRoom).not.toHaveBeenCalled();
+  });
+
   it("uses only the authenticated actor and returns a one-time join token on success", async () => {
     const { dependencies, service } = createDependencies();
 

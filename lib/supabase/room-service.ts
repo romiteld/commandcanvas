@@ -129,7 +129,9 @@ export interface CommandCanvasRoomService {
 }
 
 const uuidSchema = z.uuid();
-const roomLookupSchema = z.object({ id: z.uuid() }).strict();
+const roomLookupSchema = z
+  .object({ id: z.uuid(), mode: z.literal("demo") })
+  .strict();
 const memberSchema = z
   .object({
     role: z.enum(["host", "participant"]),
@@ -299,7 +301,7 @@ export function createRoomService(
     try {
       const lookup = await client
         .from("rooms")
-        .select("id")
+        .select("id, mode")
         .eq("slug", input.data.slug)
         .maybeSingle();
       if (hasError(lookup)) return joinUnavailable();

@@ -50,6 +50,7 @@ function landmarks() {
     x: index / 20,
     y: 1 - index / 20,
     z: 0,
+    visibility: 0.95,
   }));
 }
 
@@ -155,6 +156,34 @@ describe("private hand relay contract", () => {
       privateHandRelayResultSchema.safeParse({
         ...result,
         hands: [{ ...result.hands[0], landmarks: landmarks().slice(1) }],
+      }).success,
+    ).toBe(false);
+    expect(
+      privateHandRelayResultSchema.safeParse({
+        ...result,
+        hands: [
+          {
+            ...result.hands[0],
+            landmarks: result.hands[0].landmarks.map(({ x, y, z }) => ({
+              x,
+              y,
+              z,
+            })),
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      privateHandRelayResultSchema.safeParse({
+        ...result,
+        hands: [
+          {
+            ...result.hands[0],
+            landmarks: result.hands[0].landmarks.map((landmark, index) =>
+              index === 8 ? { ...landmark, visibility: 1.1 } : landmark,
+            ),
+          },
+        ],
       }).success,
     ).toBe(false);
   });

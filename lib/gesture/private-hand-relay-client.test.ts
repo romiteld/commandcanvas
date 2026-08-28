@@ -251,6 +251,89 @@ describe("private hand relay browser client", () => {
     expect(onFallback).not.toHaveBeenCalled();
   });
 
+  it("reports relay round-trip time and encoded frames dropped before send", () => {
+    const socket = new FakeSocket();
+    let now = 1_000;
+    const onResult = vi.fn();
+    const transport = createPrivateHandRelayTransport({
+      session: relaySession().relay,
+      cameraUploadConsent: true,
+      createWebSocket: () => socket,
+      onResult,
+      onFallback: vi.fn(),
+      now: () => now,
+    });
+    socket.open();
+    socket.message(
+      JSON.stringify({ type: "ready", protocol: PRIVATE_HAND_RELAY_PROTOCOL }),
+    );
+
+    transport.enqueueFrame(new Blob(["one"], { type: "image/webp" }), 100);
+    transport.enqueueFrame(new Blob(["two"], { type: "image/webp" }), 110);
+    transport.enqueueFrame(new Blob(["three"], { type: "image/webp" }), 120);
+    now = 1_045;
+    socket.message(
+      JSON.stringify({
+        type: "result",
+        protocol: PRIVATE_HAND_RELAY_PROTOCOL,
+        frameId: 1,
+        capturedAtMs: 100,
+        processedAtMs: 125,
+        hands: [],
+      }),
+    );
+
+    expect(onResult).toHaveBeenCalledWith(
+      expect.objectContaining({ frameId: 1, capturedAtMs: 100 }),
+      { relayRoundTripMs: 45, droppedBeforeSend: 1 },
+    );
+  });
+
+  it.each([
+    {
+      label: "a mismatched capture timestamp",
+      capturedAtMs: 101,
+      processedAtMs: 125,
+    },
+    {
+      label: "an impossible processing interval",
+      capturedAtMs: 100,
+      processedAtMs: 2_101,
+    },
+  ])("fails closed on $label", ({ capturedAtMs, processedAtMs }) => {
+    const socket = new FakeSocket();
+    const onResult = vi.fn();
+    const onFallback = vi.fn();
+    const transport = createPrivateHandRelayTransport({
+      session: relaySession().relay,
+      cameraUploadConsent: true,
+      createWebSocket: () => socket,
+      onResult,
+      onFallback,
+      frameTimeoutMs: 2_000,
+      now: () => 1_000,
+    });
+    socket.open();
+    socket.message(
+      JSON.stringify({ type: "ready", protocol: PRIVATE_HAND_RELAY_PROTOCOL }),
+    );
+    transport.enqueueFrame(new Blob(["frame"], { type: "image/webp" }), 100);
+
+    socket.message(
+      JSON.stringify({
+        type: "result",
+        protocol: PRIVATE_HAND_RELAY_PROTOCOL,
+        frameId: 1,
+        capturedAtMs,
+        processedAtMs,
+        hands: [],
+      }),
+    );
+
+    expect(onResult).not.toHaveBeenCalled();
+    expect(onFallback).toHaveBeenCalledWith("invalid_relay_message");
+  });
+
   it("fails closed to local tracking on malformed server output", () => {
     const socket = new FakeSocket();
     const onFallback = vi.fn();

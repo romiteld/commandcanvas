@@ -22,6 +22,25 @@ Click **Copy invite**, open the capability link in a second private or incognito
 
 Meeting media is optional. In both windows, press **Start camera + mic**. The filmstrip is limited to four present participants. Audio and video travel peer-to-peer; Supabase carries only bounded signaling on the dedicated private media topic. The controlled two-browser path is verified, but physical iPhone devices, arbitrary cross-network traversal, and TURN behavior are not. There is no TURN relay, so a restrictive network may prevent the media connection without affecting the canvas.
 
+## Standard passwordless meeting path
+
+`/demo` is deliberately no-signup. Standard hosted meetings begin at
+**<https://commandcanvas.vercel.app/meet>** and use a six-digit Supabase Email
+OTP with no password or third-party account. A host can create a room, enter an
+exact participant email, and choose **Send invitation** or **Copy invitation**.
+The invitation uses `/meet#invite=...`; CommandCanvas scrubs that fragment
+before constructing its Supabase client or making application requests. The
+invited person enters the same email and OTP, then CommandCanvas atomically
+checks the verified email, creates participant membership, and consumes the
+24-hour invitation.
+
+Three mail boundaries are intentionally separate. Supabase Auth sends OTP mail
+through its own configured mailer or custom SMTP. CommandCanvas sends meeting
+invitations through a server-side Resend API path with an invitation-only
+allowlist. Approved meeting packets use another server-side Resend API path,
+another recipient allowlist, and the explicit host **SEND** gate. A copy-link,
+preview-only, or failed result is not described as delivered mail.
+
 ## Continuous voice versus ChatGPT Site Tools
 
 **Live voice** is a regular paid `gpt-realtime-2.1` session inside CommandCanvas. It has a narrower tool catalog for safe canvas creation, selected-object operations, local focus, grouping, rotation, undo, redo, recoverable trash, bounded thought capture, and sketch transformation. An explicit spoken discard moves the selected object to recoverable trash and remains undoable; it never permanently deletes data. Live voice cannot manage rooms, approve packets, or send email. Microphone audio travels to OpenAI only while Live voice is on.
@@ -32,6 +51,8 @@ Native Chrome 153 discovery is tested separately from ChatGPT built-in-browser i
 
 ## Hand input
 
-Hand input is optional. If a physical-camera rehearsal succeeds, enable it and complete the large visible calibration surface. CommandCanvas starts the pinned YOLO26 21-keypoint detector; the system drawer names YOLO as the active engine and labels MediaPipe only if YOLO failed and recovery was required. Choose **Draw** and point your index finger to draw repeated strokes directly on the main canvas. Choose **Move**, then pinch one hand to grab and move, pinch both hands over an object and spread to resize, or hold an open palm over an object to focus or restore it. Over blank canvas, drag an open palm to pan the local viewport or use two hands to zoom it around their midpoint. The overlay exposes open-hand, pinch, held-object, resizing, panning, and canvas-zoom states so accepted gestures are visible. Throw a held object through either red side edge to move it to recoverable trash, or downward into the blue dock to minimize it. These actions open no confirmation drawer; Undo restores the object. Camera frames stay in the browser and only semantic canvas commands leave the tracking layer. The local gesture state machine is covered independently from physical-hand accuracy. Do not treat fake media, browser events, or the presence of a state label as proof of real-device ergonomics. Physical iPhone camera behavior and general real-hand accuracy remain unverified until exercised on those devices. If the rehearsal does not succeed, use pointer or touch.
+Hand input is optional. Enable it from the system drawer, then close the drawer and work on the full canvas. The small preview is only a sensor and skeleton check; it is not the movement boundary. A comfortable central camera region maps across the complete canvas. CommandCanvas starts the pinned YOLO26 21-keypoint detector and labels MediaPipe only if local YOLO failed and recovery was required. Choose **Draw** and point your index finger to draw repeated strokes directly on the main canvas. Choose **Move**, then pinch one hand to grab and move, pinch both hands over an object and spread to resize, or hold an open palm over an object to focus or restore it. Over blank canvas, drag an open palm to pan the local viewport or use two hands to zoom it around their midpoint. The overlay exposes target, open-hand, pinch, held-object, resizing, panning, and canvas-zoom states so accepted gestures are visible. Throw a held object through either red side edge to move it to recoverable trash, or downward into the blue dock to minimize it. These actions open no confirmation drawer; Undo restores the object.
+
+Local processing is the default and keeps camera frames in the browser. The optional **Use private GPU hand tracking** control is a separate consent: while it and Hand input are active, one bounded JPEG or WebP frame at a time may go only to `hands.autolensai.com`; the service returns semantic landmarks and does not retain raw frames. It never sends camera frames to ChatGPT, OpenAI, Supabase, or WebMCP. Disable the option to close the relay and return to local YOLO. Do not treat the static CUDA benchmark, fake media, browser events, or a visible state label as proof of post-fix physical ergonomics. A real recording recognized open palm and pinch ratios from 0.22 to 0.28, but the exact full-canvas candidate still needs a physical-camera rehearsal. If that rehearsal does not succeed, use pointer or touch.
 
 The detailed evidence and known unverified boundaries are maintained in `docs/verification-ledger.md`.

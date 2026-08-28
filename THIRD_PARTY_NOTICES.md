@@ -1,7 +1,8 @@
 # Third-Party Notices
 
-CommandCanvas includes the following third-party runtime for local,
-browser-based hand landmark detection.
+CommandCanvas includes third-party runtimes for local browser hand-landmark
+detection and for the optional native CUDA relay. The same pinned YOLO model is
+used in both paths.
 
 ## MediaPipe Tasks Vision
 
@@ -27,8 +28,11 @@ enables hand input.
 - Official Google MediaPipe web sample using this exact URL: <https://github.com/google-ai-edge/mediapipe-samples-web/blob/main/src/tasks/hand-landmarker.ts>
 
 CommandCanvas does not bundle or redistribute the detector model and makes no
-separate licensing claim for it. Camera frames remain in the browser; the model
-request goes from the user's browser to Google only when hand input is enabled.
+separate licensing claim for it. MediaPipe is attempted only as a visibly
+labeled recovery engine after local YOLO fails. Its model download request does
+not contain a camera frame. Camera frames stay in the browser while a local
+engine is selected. The separate private-GPU path is described below and is
+used only after explicit camera-upload consent.
 
 ## ONNX Runtime Web
 
@@ -44,12 +48,39 @@ The generated YOLO worker uses ONNX Runtime Web locally. Its WebAssembly
 runtime files are copied unchanged from the pinned npm dependency during the
 application build.
 
+## Native CUDA relay runtime
+
+The optional private hand relay uses these directly relevant native packages.
+The complete exact dependency set is pinned in
+`services/hand-relay/requirements.lock`.
+
+| Package | Version | License | Upstream source |
+| --- | --- | --- | --- |
+| `onnxruntime-gpu` | `1.23.2` | MIT | <https://github.com/microsoft/onnxruntime> |
+| `FastAPI` | `0.115.6` | MIT | <https://github.com/fastapi/fastapi> |
+| `Starlette` | `0.41.3` | BSD-3-Clause | <https://github.com/encode/starlette> |
+| `Uvicorn` | `0.34.0` | BSD-3-Clause | <https://github.com/encode/uvicorn> |
+| `websockets` | `13.1` | BSD-3-Clause | <https://github.com/python-websockets/websockets> |
+| `NumPy` | `2.2.6` | BSD-3-Clause | <https://github.com/numpy/numpy> |
+| `Pillow` | `11.3.0` | HPND | <https://github.com/python-pillow/Pillow> |
+| `Pydantic` | `2.10.6` | MIT | <https://github.com/pydantic/pydantic> |
+| `nvidia-ml-py` | `13.580.82` | BSD-3-Clause | <https://github.com/gpuopenanalytics/pynvml> |
+
+The relay requires ONNX Runtime's `CUDAExecutionProvider` and refuses CPU
+execution-provider fallback. It receives at most one bounded JPEG or WebP frame
+at a time after explicit browser consent, performs in-memory decode and native
+inference, does not retain raw frames, and returns semantic landmarks. The
+no-retention claim applies to the CommandCanvas relay process. The reverse
+proxy, firewall, container runtime, and hosting edge remain separate trust
+boundaries and are configured not to log WebSocket bodies or capability tokens.
+
 ## YOLO26 Hand Pose runtime model
 
 CommandCanvas includes a 320 by 320 FP16 ONNX export derived from one pinned
-Hugging Face checkpoint. Serving the artifact from the application origin
-removes a runtime model-host dependency and enables cross-origin-isolated,
-multithreaded ONNX Runtime Web inference.
+Hugging Face checkpoint. The browser serves it from the application origin for
+local ONNX Runtime Web inference. The native CUDA relay mounts the identical
+tracked artifact read-only and verifies its digest and tensor shapes before
+warmup. Both uses remain within the same AGPL-3.0-only CommandCanvas release.
 
 - Repository: <https://huggingface.co/poptoz/yolo26-hand-pose-face-detection>
 - Revision: `2abb91a7030e1aa5231ec900ccb2c07ab3f03460`

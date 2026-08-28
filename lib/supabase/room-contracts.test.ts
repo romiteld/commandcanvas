@@ -32,6 +32,17 @@ describe("room API contracts", () => {
     ).toBe(false);
   });
 
+  it("reserves the legacy room creation contract for no-signup demo rooms", () => {
+    expect(
+      createRoomRequestSchema.safeParse({
+        mode: "standard",
+        name: "Standard meeting",
+        displayName: "Danny",
+        color: "#275ed7",
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires a bounded high-entropy join capability", () => {
     const input = {
       slug: "launch-room-4k29x",

@@ -7,7 +7,7 @@ test("registers the stable catalog on Chrome's native WebMCP surface", async ({
   const browserErrors: string[] = [];
   page.on("pageerror", (error) => browserErrors.push(error.message));
 
-  await page.goto("/");
+  await page.goto("/local");
   await page.getByRole("button", { name: "Open system status" }).click();
   await expect(page.getByText("10 Site Tools registered")).toBeVisible();
 

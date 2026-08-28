@@ -7,6 +7,11 @@ import {
   type PrivateHandRelaySession,
 } from "@/lib/gesture/private-hand-relay-contract";
 
+export interface PrivateHandRelayTransportMetrics {
+  readonly relayRoundTripMs: number;
+  readonly droppedBeforeSend: number;
+}
+
 export type PrivateHandRelaySessionRequestResult =
   | ReturnType<typeof privateHandRelaySessionResponseSchema.parse>
   | {
@@ -86,13 +91,18 @@ interface QueuedFrame {
   frameId: number;
   capturedAtMs: number;
   frame: Blob;
+  sentAtMs?: number;
 }
 
 export function createPrivateHandRelayTransport(input: {
   session: PrivateHandRelaySession;
   cameraUploadConsent: boolean;
   createWebSocket?: (url: string) => PrivateHandRelayWebSocketLike;
-  onResult: (result: PrivateHandRelayResult) => void;
+  onReady?: () => void;
+  onResult: (
+    result: PrivateHandRelayResult,
+    metrics: PrivateHandRelayTransportMetrics,
+  ) => void;
   onFallback: (
     reason:
       | "consent_required"
@@ -116,6 +126,7 @@ export function createPrivateHandRelayTransport(input: {
   let frameTimer: ReturnType<typeof setTimeout> | null = null;
   let handshakeTimer: ReturnType<typeof setTimeout> | null = null;
   let lastFrameSentAtMs: number | null = null;
+  let droppedBeforeSend = 0;
   const setTimer = input.setTimeout ?? setTimeout;
   const clearTimer = input.clearTimeout ?? clearTimeout;
   const now = input.now ?? Date.now;
@@ -224,7 +235,8 @@ export function createPrivateHandRelayTransport(input: {
       fallBack("connection_failed");
       return;
     }
-    lastFrameSentAtMs = now();
+    frame.sentAtMs = now();
+    lastFrameSentAtMs = frame.sentAtMs;
     frameTimer = setTimer(() => fallBack("relay_timeout"), frameTimeoutMs);
   }
 
@@ -272,18 +284,40 @@ export function createPrivateHandRelayTransport(input: {
       if (handshakeTimer !== null) clearTimer(handshakeTimer);
       handshakeTimer = null;
       serverReady = true;
+      input.onReady?.();
       flush();
       return;
     }
     const result = privateHandRelayResultSchema.safeParse(value);
-    if (!result.success || result.data.frameId !== inFlight?.frameId) {
+    const activeFrame = inFlight;
+    const processingLatencyMs = result.success
+      ? result.data.processedAtMs - result.data.capturedAtMs
+      : Number.NaN;
+    const completedAtMs = now();
+    const relayRoundTripMs =
+      activeFrame?.sentAtMs === undefined
+        ? Number.NaN
+        : completedAtMs - activeFrame.sentAtMs;
+    if (
+      !result.success ||
+      result.data.frameId !== activeFrame?.frameId ||
+      result.data.capturedAtMs !== activeFrame.capturedAtMs ||
+      !Number.isFinite(processingLatencyMs) ||
+      processingLatencyMs < 0 ||
+      processingLatencyMs > frameTimeoutMs ||
+      !Number.isFinite(relayRoundTripMs) ||
+      relayRoundTripMs < 0
+    ) {
       fallBack("invalid_relay_message");
       return;
     }
     if (frameTimer !== null) clearTimer(frameTimer);
     frameTimer = null;
     inFlight = null;
-    input.onResult(result.data);
+    input.onResult(result.data, {
+      relayRoundTripMs,
+      droppedBeforeSend,
+    });
     flush();
   };
   socket.onerror = () => fallBack("connection_failed");
@@ -303,6 +337,7 @@ export function createPrivateHandRelayTransport(input: {
       )
         return false;
       nextFrameId += 1;
+      if (pending !== null) droppedBeforeSend += 1;
       pending = { frameId: nextFrameId, capturedAtMs, frame };
       flush();
       return true;

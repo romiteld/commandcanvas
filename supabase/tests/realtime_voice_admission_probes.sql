@@ -1,7 +1,7 @@
 \set ON_ERROR_STOP on
 
--- Required input: host_user_id, an existing Supabase Auth user UUID. All room
--- fixtures and admission attempts are rolled back.
+-- Required input: host_user_id, an existing confirmed permanent Supabase Auth
+-- user UUID. All room fixtures and admission attempts are rolled back.
 
 begin;
 
@@ -24,6 +24,21 @@ begin
   end if;
 end;
 $$;
+
+select pg_temp.assert_json_text(
+  pg_catalog.jsonb_build_object(
+    'eligible', exists (
+      select 1
+      from auth.users user_row
+      where user_row.id = :'host_user_id'
+        and user_row.is_anonymous is false
+        and user_row.email_confirmed_at is not null
+    )::text
+  ),
+  array['eligible'],
+  'true',
+  'realtime_voice_probe_permanent_user_required'
+);
 
 select
   gen_random_uuid() as room_id,
@@ -93,8 +108,7 @@ select pg_temp.assert_json_text(
   'realtime_voice_rate_limit_not_enforced'
 );
 
--- Live voice is an explicitly bounded no-signup demo capability. A member of
--- a standard room must still be refused before an admission row is written.
+-- The same bounded admission path now accepts a verified standard-room member.
 reset role;
 
 select
@@ -134,13 +148,13 @@ select public.admit_realtime_voice_session(
   :'cc_voice_standard_room_id',
   :'host_user_id'
 ) as admission
-\gset cc_voice_standard_refused_
+\gset cc_voice_standard_admitted_
 
 select pg_temp.assert_json_text(
-  :'cc_voice_standard_refused_admission'::jsonb,
-  array['code'],
-  'voice_demo_room_required',
-  'realtime_voice_standard_room_admitted'
+  :'cc_voice_standard_admitted_admission'::jsonb,
+  array['outcome'],
+  'admitted',
+  'realtime_voice_standard_room_not_admitted'
 );
 
 reset role;
@@ -154,8 +168,8 @@ select pg_temp.assert_json_text(
     )
   ),
   array['count'],
-  '0',
-  'realtime_voice_standard_room_ledger_mutated'
+  '1',
+  'realtime_voice_standard_room_ledger_missing'
 );
 
 -- Each durable daily branch is exercised independently so a passing burst

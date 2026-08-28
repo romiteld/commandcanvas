@@ -13,6 +13,7 @@ export interface SpatialGestureScene {
   viewport: CanvasViewport;
   handActiveZone?: HandActiveZone;
   selectedObjectId?: string | null;
+  targetedObjectId?: string | null;
   objects: readonly {
     id: string;
     x: number;
@@ -162,6 +163,7 @@ const MINIMIZE_DOCK_THRESHOLD = 0.92;
 const EDGE_DROP_MIN_DISTANCE = 0.08;
 const MIN_BIMANUAL_SPAN = 0.08;
 const OBJECT_TARGET_SLOP_SCREEN_PX = 42;
+const PINCH_TARGET_REACQUIRE_SLOP_SCREEN_PX = 84;
 
 const IDENTITY_HAND_ACTIVE_ZONE = Object.freeze(
   validateHandActiveZone({ left: 0, right: 1, top: 0, bottom: 1 }),
@@ -311,11 +313,24 @@ export function reduceSpatialGesture(
     };
   }
 
-  const hit = hitTest(
+  const directHit = hitTest(
     point,
     scene.objects,
     OBJECT_TARGET_SLOP_SCREEN_PX / scene.viewport.scale,
   );
+  const targetedObject = scene.targetedObjectId
+    ? scene.objects.find((object) => object.id === scene.targetedObjectId)
+    : undefined;
+  const hit =
+    directHit ??
+    (targetedObject &&
+    pointInsideObject(
+      point,
+      targetedObject,
+      PINCH_TARGET_REACQUIRE_SLOP_SCREEN_PX / scene.viewport.scale,
+    )
+      ? targetedObject
+      : undefined);
   if (!hit) return { state: createInitialSpatialGestureState(), effects: [] };
   if (hit.pinned)
     return {

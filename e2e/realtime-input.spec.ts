@@ -250,7 +250,7 @@ test("routes trusted touch and pen pointer sequences into canonical sketch recei
   const browserErrors: string[] = [];
   page.on("pageerror", (error) => browserErrors.push(error.message));
 
-  await page.goto("/");
+  await page.goto("/local");
   await page.evaluate(() => {
     const pointerEvidence: Array<{
       isTrusted: boolean;
@@ -333,7 +333,7 @@ test("routes trusted touch and pen pointer sequences into canonical sketch recei
 
   await expect(page.getByText("R2 · stylus")).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Select Rough architecture" }),
+    page.getByRole("button", { name: "Select Rough sketch" }),
   ).toHaveCount(2);
   const pointerEvidence = await page.evaluate(
     () =>
@@ -360,7 +360,7 @@ test("keeps the ordinary-browser canvas usable under an iPhone WebKit profile", 
   const browserErrors: string[] = [];
   page.on("pageerror", (error) => browserErrors.push(error.message));
 
-  await page.goto("/");
+  await page.goto("/local");
   await page.getByRole("button", { name: "Open system status" }).tap();
   await expect(page.getByText("Site Tools unavailable")).toBeVisible();
   await page

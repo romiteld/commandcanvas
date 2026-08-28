@@ -6,6 +6,10 @@ CommandCanvas is a shared spatial workspace where people, remote collaborators, 
 
 No signup, login form, password, third-party account, API key, or configuration is required to use the deployed judge route. Supabase Anonymous Auth creates a scoped authenticated browser identity behind the scenes.
 
+**Standard meeting entry:** <https://commandcanvas.vercel.app/meet>
+
+Standard rooms use a six-digit Supabase Email OTP. A host can send an exact-email, 24-hour participant invitation or copy its fragment-token link. The standard path and the no-signup judge path are intentionally separate.
+
 ## The product thesis
 
 The canvas is not a document and the agent is not a detached chat panel. Notes, boards, schedules, sketches, diagrams, and charts are typed application objects with stable identities, spatial geometry, versions, and payload schemas. WebMCP gives ChatGPT bounded tools over those same live objects and the same selected state that human participants see.
@@ -40,7 +44,7 @@ The current validated output kinds are a generic diagram, architecture diagram, 
 1. Open <https://commandcanvas.vercel.app/demo>.
 2. Open the command drawer, press **Start** under **Live voice**, and say **Bring in our project board**. The `gpt-realtime-2.1` session listens for later commands until the user stops it or the bounded session ends. There is no Run button in this path. If live voice is disabled, typed **Human command** plus **Run** remains the fallback.
    To capture a note without reaching for a mouse, say **Start a new thought**. CommandCanvas creates and selects one **New thought** card only after the canonical create command succeeds. Continue speaking normally: each completed user turn is appended as speech-to-text inside that same card. The start and finish phrases and the assistant's speech are excluded. Say **Finish thought** to close the capture.
-3. Click **Sketch** and draw a rough relationship map, flow, or labeled data chart, or enable Hand input, choose **Draw**, and trace it directly on the main canvas with your index finger. While drawing, explain its labels or values in Live voice. Multiple lines remain one active sketch instead of spawning objects or drawers. Finish the sketch, select it, and say **Make this sketch professional**.
+3. Click **Sketch** and draw a rough relationship map, flow, or labeled data chart, or enable Hand input, choose **Draw**, and trace it directly on the main canvas with your index finger. The camera preview is only a sensor check; the complete canvas is the spatial control plane. While drawing, explain its labels or values in Live voice. Multiple lines remain one active sketch instead of spawning objects or drawers. Finish the sketch, select it, and say **Make this sketch professional**.
 4. Keep the rough sketch visible beside the auto-selected, schema-validated visual. Move, resize, rotate, pin, minimize, restore, trash, recover, undo, and redo through named controls.
 5. Turn on **Select many**, choose two objects, group them into a semantic frame, move the frame, then ungroup it.
 6. Click **Prepare meeting packet**, review the exact content and recipient, then approve it.
@@ -85,7 +89,8 @@ Live voice is an optional paid provider path with a separate server-only key, du
 
 ```text
 Pointer · Touch · Stylus · Typed command · Continuous GPT Realtime voice
-Local hand landmarks · Collaborator · ChatGPT Site Tools through WebMCP
+Local or consented private-GPU hand landmarks · Collaborator
+ChatGPT Site Tools through WebMCP
                                   │
                                   ▼
                          Semantic intent
@@ -121,11 +126,13 @@ Hand tracking starts with a pinned YOLO26 Hand Pose checkpoint exported to a sam
 
 The gesture vocabulary maps the YOLO index fingertip to direct drawing on the main canvas, one-hand pinch to magnetic grab and move, two-hand pinch span over an object to resize, and open-palm dwell to focus or restore. Over blank canvas, an open-palm drag pans the local viewport and a two-hand spread or pinch zooms it around the tracked midpoint. These viewport changes are local view state, so they do not create shared mutation receipts. Drawing mode accumulates repeated lines into one `SketchObject`; it never opens a drawer per stroke. Deliberately releasing a held object through either side edge moves it into recoverable trash after a short exit animation, with a receipt and universal Undo. Releasing it into the blue bottom dock minimizes it. No gesture permanently deletes data and neither edge path opens a confirmation panel.
 
-The on-canvas feedback names what the tracker currently understands, including open-hand, pinch, held-object, resizing, panning, and canvas-zoom states. This feedback and the local gesture state machine are implemented independently of the camera preview size. They make an accepted gesture visible; they are not a claim that every physical hand, camera, lighting condition, or device has passed calibration.
+The camera's comfortable central tracking region maps across the full canvas, so a person does not need to reach to the physical edges of a small preview to reach the workspace edges. The preview is an optional sensor and skeleton check, not an interaction boundary. The system drawer closes when spatial input begins and the on-canvas feedback names what the tracker currently understands, including target, open-hand, pinch, held-object, resizing, panning, and canvas-zoom states. They make an accepted gesture visible; they are not a claim that every physical hand, camera, lighting condition, or device has passed calibration.
 
 The camera panel includes a session-local self-check. It records point and pinch separately and reports success only after both observations actually occur in that camera session. This is a calibration aid, not a claim that every webcam, hand, or lighting condition has been validated.
 
-Camera frames remain local to the browser. They are never sent to ChatGPT, OpenAI, Supabase, or a WebMCP tool. Only semantic canvas commands cross the application boundary. Every camera action has pointer and button equivalents.
+Hand tracking is local by default. The browser runs the pinned YOLO model with WebGPU or threaded WASM and may visibly fall back to MediaPipe. In that mode, camera frames remain in the browser.
+
+The installed private CUDA relay is a separate, explicit opt-in. Only while **Use private GPU hand tracking** is on and Hand input is active, the browser may encode one bounded JPEG or WebP frame at a time and send it to `hands.autolensai.com`. The relay runs the same pinned YOLO hand-pose model, does not retain raw frames, and returns only bounded semantic landmarks. Turning consent off, disabling Hand input, hiding or leaving the page, or a relay failure closes the remote path and restores local processing. Camera frames are never sent to ChatGPT, OpenAI, Supabase, or WebMCP in either mode. Every camera action has pointer and button equivalents.
 
 Continuous voice has a separate and explicit privacy boundary. Microphone audio travels to OpenAI only while the user-visible **Live voice** session is on, and assistant audio returns over that WebRTC connection. The server creates the provider call with a server-only key; no provider credential reaches the browser. Typed commands remain available when continuous voice is disabled or unavailable. The older reviewed browser-transcription control may use the browser vendor's speech service under that browser's policy, but it never executes a transcript until the user presses **Run**.
 
@@ -154,6 +161,16 @@ Prepare → edit recipients → inspect exact content → approve
 
 Cancellation is durable and idempotent. A cancelled request cannot later execute. Resend delivery is enabled only when the API key, verified sender, and recipient allowlist are all configured; otherwise no provider call occurs.
 
+## Passwordless rooms, invitations, and email boundaries
+
+CommandCanvas has three distinct email paths:
+
+1. **Supabase Auth OTP:** `/meet` calls `signInWithOtp` and verifies the user-entered six-digit token with `verifyOtp({ type: "email" })`. Supabase Auth sends this mail through its configured mailer. If Resend is selected as custom SMTP, its SMTP credential lives in Supabase Auth configuration and never enters the browser.
+2. **Meeting invitation:** an authenticated host creates an exact-email, participant-only invitation. The database stores only the SHA-256 token digest and normalized email, applies durable issuance limits, and accepts it once in a transaction. The Next.js server may submit that invitation through the Resend HTTPS API only when the invitation recipient is separately allowlisted. Otherwise the UI provides an honest copy-link fallback.
+3. **Meeting packet:** after the host reviews and approves an immutable content and recipient snapshot, WebMCP or the site may stage a send request. Only an explicit host **SEND** authorizes the Resend HTTPS API call. Packet recipients use a separate allowlist from meeting invitations.
+
+Invitation links use `/meet#invite=...`. The fragment is never sent in an HTTP request. The client reads it once, scrubs it before constructing a Supabase client or making application calls, and presents the normal email OTP flow. Acceptance compares the verified top-level Supabase Auth email with the invitation email and atomically creates participant membership while consuming the invitation.
+
 ## Technology
 
 - Next.js 16.3.3, React 19.2.8, TypeScript, Zustand, Zod, Tailwind CSS
@@ -164,6 +181,7 @@ Cancellation is durable and idempotent. A cancelled request cannot later execute
 - OpenAI `gpt-realtime-2.1` over WebRTC for optional continuous in-page voice
 - OpenAI Responses image input and strict structured output
 - YOLO26 Hand Pose, ONNX Runtime Web, and a same-origin FP16 ONNX model
+- Optional native ONNX Runtime CUDA relay at `hands.autolensai.com`, behind explicit per-session camera-upload consent
 - MediaPipe Hand Landmarker only as a visibly labeled recovery detector
 - Vercel Functions and deployment
 - Optional Resend delivery
@@ -174,7 +192,8 @@ Requirements:
 
 - Node.js 22.14–22.x (`.nvmrc` pins 22.17.0)
 - npm 11.5.2
-- A Supabase project with Anonymous Auth enabled
+- A Supabase project with Anonymous Auth enabled for `/demo` and Email Auth
+  enabled for normal `/meet` rooms
 - An OpenAI API key for live sketch interpretation
 - A separately budgeted OpenAI API key only if continuous voice is enabled
 
@@ -197,11 +216,20 @@ OPENAI_VISION_MODEL=gpt-5.6-terra
 REALTIME_VOICE_ENABLED=false
 OPENAI_REALTIME_API_KEY=
 NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION=false
+COMMANDCANVAS_PUBLIC_URL=https://your-commandcanvas.example
+RESEND_API_KEY=
+RESEND_FROM=
+COMMANDCANVAS_EMAIL_ALLOWLIST=
+COMMANDCANVAS_INVITE_EMAIL_ALLOWLIST=
+PRIVATE_HAND_RELAY_ENABLED=false
+PRIVATE_HAND_RELAY_ORIGIN=https://hands.example.com
+PRIVATE_HAND_RELAY_SIGNING_KEY=
+PRIVATE_HAND_RELAY_TOKEN_TTL_SECONDS=60
 ```
 
 The Supabase server credential and all provider keys are server-only. Do not prefix them with `NEXT_PUBLIC_`.
 
-`REALTIME_VOICE_ENABLED=false` keeps the paid voice path off. Enabling it without a separate valid key still fails closed. Voice admission is limited to no-signup demo rooms and is durably rate-limited before the provider call.
+`REALTIME_VOICE_ENABLED=false` keeps the paid voice path off. Enabling it without a separate valid key still fails closed. Eligible no-signup demo rooms and verified standard-room members pass through durable actor, room, and global admission limits before a provider call.
 
 Start the app:
 
@@ -209,7 +237,44 @@ Start the app:
 npm run dev
 ```
 
-Open <http://localhost:3000/demo>.
+Open <http://localhost:3000/meet> for the passwordless meeting lobby or
+<http://localhost:3000/demo> for the no-signup judge room.
+Open <http://localhost:3000/local> for the local-only canvas fallback when
+hosted collaboration is unavailable.
+
+### Supabase passwordless Auth configuration
+
+Normal rooms use Supabase Email OTP only. There are no password fields or
+password credentials in this flow. In the Supabase dashboard:
+
+1. Keep **Anonymous Sign-Ins** enabled for the isolated `/demo` path.
+2. Enable the **Email** provider for `/meet`.
+3. Put the same six-digit-code experience in both the **Confirm signup** and
+   **Magic Link or OTP** templates. Include `{{ .Token }}` in each template and
+   omit `{{ .ConfirmationURL }}`. A first-time address receives Confirm signup;
+   an existing address receives Magic Link or OTP. Both are verified with
+   `verifyOtp({ type: "email" })`.
+4. Set the Site URL to the canonical deployment origin and allow both the
+   production origin and `http://localhost:3000` in redirect URLs. The current
+   six-digit-code flow does not consume a redirect token, but these settings
+   keep other Supabase Auth callbacks on approved origins.
+5. Configure custom SMTP before testing arbitrary external addresses. When
+   using Resend SMTP, set host `smtp.resend.com`, port `465`, username `resend`,
+   the Resend key as the Supabase-held SMTP password, and a verified sender.
+   This is Supabase Auth mail, not either CommandCanvas Resend API workflow. If
+   the mail provider refuses or rate-limits a code, CommandCanvas reports that
+   failure and does not pretend the participant signed in.
+
+Invitation capabilities use `/meet#invite=...`, not a query string. The client
+reads the fragment once and immediately scrubs it before constructing a
+Supabase client or making application requests. Acceptance then verifies the
+authenticated user's canonical top-level `auth.users.email`, inserts the
+participant membership, and consumes the invitation in one database
+transaction. `/demo` remains no-signup and does not require Email Auth.
+
+Configuration references: [Supabase passwordless email](https://supabase.com/docs/guides/auth/auth-email-passwordless),
+[email templates](https://supabase.com/docs/guides/auth/auth-email-templates),
+and [custom SMTP](https://supabase.com/docs/guides/auth/auth-smtp).
 
 ### Optional Resend delivery
 
@@ -217,9 +282,24 @@ Open <http://localhost:3000/demo>.
 RESEND_API_KEY=replace_me
 RESEND_FROM=CommandCanvas <verified-sender@example.com>
 COMMANDCANVAS_EMAIL_ALLOWLIST=allowed-one@example.com,allowed-two@example.com
+COMMANDCANVAS_INVITE_EMAIL_ALLOWLIST=allowed-one@example.com,allowed-two@example.com
+COMMANDCANVAS_PUBLIC_URL=https://your-commandcanvas.example
 ```
 
-All approved recipients must be present in the allowlist. Missing or mismatched configuration produces an explicit preview-only result.
+Meeting-packet recipients and room-invitation recipients use separate exact
+allowlists. An invitation is durably admitted before Resend is called. Missing,
+mismatched, rejected, or failed delivery configuration produces an explicit
+preview-only or failed result plus a copyable secure link; it never claims the
+email was sent.
+
+### Optional private CUDA relay
+
+The four `PRIVATE_HAND_RELAY_*` values in the application environment authorize
+short-lived sessions from CommandCanvas to the installed relay. They never
+belong in `NEXT_PUBLIC_*` values. The native service has a separate safe example
+at [`services/hand-relay/.env.example`](services/hand-relay/.env.example) and an
+installed-topology runbook at [docs/private-hand-relay.md](docs/private-hand-relay.md).
+The application and service share only the independently generated signing key.
 
 ## Verification
 
@@ -239,7 +319,20 @@ npm run build
 npm run test:e2e
 ```
 
-The current integrated source gate completed 843 of 843 unit tests, ESLint, TypeScript, both generated hand-worker bundles, and diff validation. The suite covers object schemas, command mutations, stale-revision refusal, undo and redo, multi-selection, grouping, ungrouping, rotation, thought-card speech-to-text lifecycle and conflict recovery, persistence projection, RLS/RPC contracts, WebMCP schemas and guards, bounded agent context, GPT Realtime admission and tool truthfulness, PNG validation, durable vision admission, YOLO output and preprocessing contracts, packet approval/cancel/execute transitions, shared-camera shutdown, responsive rendering, Realtime adapters, and demo reset. Exact deployment-build evidence is recorded separately in the verification ledger because this sandbox prevents Turbopack's internal CSS worker from binding its helper port.
+Native-relay contracts and reversible edge operations are separate from the
+browser build:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+  python3 -m pytest services/hand-relay/tests -q
+bash ops/hand-relay/tests/manage-caddy-route.test.sh
+```
+
+Those tests inject the CUDA session boundary and do not claim a GPU was used.
+The native benchmark command and its evidence boundary are documented in
+[`services/hand-relay/README.md`](services/hand-relay/README.md).
+
+The integrated source gate runs ESLint, TypeScript, the complete current Vitest suite, both generated hand-worker bundles, and the optimized application build. Separate deterministic gates exercise the non-GPU native-relay contracts and the reversible Caddy-route helper. Coverage includes object schemas, command mutations, stale-revision refusal, undo and redo, multi-selection, grouping, ungrouping, rotation, thought-card speech-to-text lifecycle and conflict recovery, persistence projection, RLS/RPC contracts, WebMCP schemas and guards, bounded agent context, GPT Realtime admission and tool truthfulness, PNG validation, durable vision admission, YOLO output and preprocessing contracts, packet approval/cancel/execute transitions, private-relay security and fallback, shared-camera shutdown, responsive rendering, Realtime adapters, OTP invitations, and demo reset. Time-scoped command output and counts belong in the verification ledger instead of this README.
 
 Environment-specific browser probes are separate so their claims stay narrow:
 
@@ -259,7 +352,7 @@ npx playwright test --config=playwright.webmcp153.config.ts
 
 The Chrome 153 test refuses to run against another major version, defaults to loopback, and requires `WEBMCP_LIVE_PROBE=true` before it may target a public origin. Its optional local-to-production API proxy accepts only `https://commandcanvas.vercel.app` and only the exact room endpoints used by the probe. Dynamic mode uses the same probe with `WEBMCP_EXPECTED_MODE=dynamic` against a build created with `NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION=true`.
 
-Current browser evidence is narrower than the complete source surface. Two authenticated browser contexts passed Supabase collaboration and peer-to-peer media with live local and remote tracks. A paid `gpt-realtime-2.1` session heard a controlled audio fixture, invoked the narrow `create_board` tool, and produced the canonical voice receipt. Real OpenAI image interpretation passed through an injected standards-shaped `document.modelContext`, preserving the sketch beside a validated structured visual. Chromium loaded the pinned same-origin YOLO model in its real worker and inferred one 21-keypoint hand from a CC0 image; the warm threaded-WASM samples were 109.505 ms and 96.815 ms. Chromium also exercised fake-camera permission, YOLO model loading, and exact track shutdown, while WebKit exercised the worker fallback boundary. A controlled allowlisted packet completed the full approval and explicit-SEND path, received a Resend provider ID, and was reported delivered by Resend. The public no-signup environment remains preview-only to prevent anonymous email abuse. ChatGPT built-in-browser Site Tools, physical iPhone hardware, physical hand accuracy, cross-network WebRTC, and TURN behavior remain unverified.
+Current browser evidence is narrower than the complete source surface. Two authenticated browser contexts passed Supabase collaboration and peer-to-peer media with live local and remote tracks. A paid `gpt-realtime-2.1` session heard a controlled audio fixture, invoked the narrow `create_board` tool, and produced the canonical voice receipt. Real OpenAI image interpretation passed through an injected standards-shaped `document.modelContext`, preserving the sketch beside a validated structured visual. Chromium loaded the pinned same-origin YOLO model in its real worker and inferred one 21-keypoint hand from a CC0 image; Chromium also exercised fake-camera permission, model loading, and exact track shutdown, while WebKit exercised the worker fallback boundary. The installed native relay reported a warmed CUDA provider on an NVIDIA GeForce RTX 3090 and passed a CC0 static-image protocol plus a repeated native benchmark. Those are relay and static-image facts, not post-fix physical-hand ergonomics. A real screen recording showed the rendered UI recognizing open-palm state and pinch ratios between 0.22 and 0.28, while also exposing the old preview-boundary usability failure that the full-canvas control plane addresses. A controlled allowlisted packet completed the full approval and explicit-SEND path, received a Resend provider ID, and was reported delivered by Resend. The public no-signup environment remains preview-only to prevent anonymous email abuse. ChatGPT built-in-browser Site Tools, post-fix physical iPhone and real-hand interaction quality, cross-network WebRTC, and TURN behavior remain unverified.
 
 The [verification ledger](docs/verification-ledger.md) distinguishes:
 
@@ -279,7 +372,8 @@ The [verification ledger](docs/verification-ledger.md) distinguishes:
 - External delivery requires explicit host authorization and a server-side recipient allowlist.
 - Paid vision work uses actor/room limits, one active room lease, exact-request caching, and compare-and-set completion.
 - The complete vision JSON body is capped at 4 MB and decoded PNG data at 2 MB, below Vercel Functions' 4.5 MB payload ceiling.
-- Raw camera frames and private credentials never enter WebMCP context.
+- Private-relay sessions require current room membership, explicit camera-upload consent, durable admission, a short-lived HMAC capability, an exact Origin, and one-use replay protection.
+- Raw camera frames and private credentials never enter WebMCP, OpenAI, ChatGPT, or Supabase context. The opt-in relay receives bounded camera frames only while active, does not retain them, and returns semantic landmarks.
 
 ## Deliberate scope cuts
 

@@ -2,7 +2,10 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { SpatialCameraControl } from "@/components/command-canvas/spatial-camera-control";
+import {
+  SpatialCameraControl,
+  type SpatialCameraControllerPreferences,
+} from "@/components/command-canvas/spatial-camera-control";
 import type {
   HandTrackingController,
   HandTrackingEngineStatus,
@@ -64,6 +67,152 @@ function fakeController() {
 }
 
 describe("SpatialCameraControl", () => {
+  it("requires a visible opt-in before the private GPU controller can observe upload consent", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    const createController = vi.fn(
+      (preferences: SpatialCameraControllerPreferences) => {
+        void preferences;
+        return fake.controller;
+      },
+    );
+    render(
+      <SpatialCameraControl
+        createController={createController}
+        privateGpuRelayAvailable
+      />,
+    );
+
+    const consent = screen.getByRole("checkbox", {
+      name: "Use private GPU hand tracking",
+    });
+    expect(consent).not.toBeChecked();
+    expect(createController.mock.calls[0]?.[0]?.cameraUploadConsent()).toBe(false);
+    expect(fake.controller.start).not.toHaveBeenCalled();
+
+    await user.click(consent);
+    expect(consent).toBeChecked();
+    expect(createController.mock.calls[0]?.[0]?.cameraUploadConsent()).toBe(true);
+    expect(
+      screen.getByText(/bounded camera frames are uploaded only while hand input is active/i),
+    ).toBeVisible();
+  });
+
+  it("restarts active tracking relay-first on opt-in and locally on opt-out", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    let preferences: SpatialCameraControllerPreferences | undefined;
+    render(
+      <SpatialCameraControl
+        createController={(next) => {
+          preferences = next;
+          return fake.controller;
+        }}
+        privateGpuRelayAvailable
+      />,
+    );
+    const consent = screen.getByRole("checkbox", {
+      name: "Use private GPU hand tracking",
+    });
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => fake.setStatus({ state: "ready" }));
+
+    await user.click(consent);
+    expect(preferences?.cameraUploadConsent()).toBe(true);
+    expect(fake.controller.stop).toHaveBeenCalledOnce();
+    expect(fake.controller.start).toHaveBeenCalledTimes(2);
+    act(() => fake.setStatus({ state: "starting" }));
+    expect(await screen.findByText("Connecting to private GPU…")).toBeVisible();
+
+    act(() => {
+      fake.setEngine({
+        id: "private-yolo-hand-relay-v1",
+        displayName: "Private GPU Hand Relay",
+        runtime: "private-hand-relay",
+        fallback: false,
+        processingLocation: "private-relay",
+      });
+      fake.setStatus({ state: "ready" });
+    });
+    await user.click(consent);
+    expect(consent).not.toBeChecked();
+    expect(preferences?.cameraUploadConsent()).toBe(false);
+    expect(fake.controller.stop).toHaveBeenCalledTimes(2);
+    expect(fake.controller.start).toHaveBeenCalledTimes(3);
+    act(() => fake.setStatus({ state: "starting" }));
+    expect(await screen.findByText("Starting local hand tracking…")).toBeVisible();
+  });
+
+  it("stops an active camera exactly once when pagehide and visibility cleanup overlap", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    const { unmount } = render(
+      <SpatialCameraControl createController={() => fake.controller} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => fake.setStatus({ state: "ready" }));
+    window.dispatchEvent(new Event("pagehide"));
+    window.dispatchEvent(new Event("pagehide"));
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(fake.controller.stop).toHaveBeenCalledOnce();
+    unmount();
+    expect(fake.controller.stop).toHaveBeenCalledOnce();
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+  });
+
+  it("labels the actual private relay provider, device, processing latency, and transit latency", async () => {
+    const fake = fakeController();
+    render(
+      <SpatialCameraControl
+        createController={() => fake.controller}
+        privateGpuRelayAvailable
+      />,
+    );
+
+    act(() => {
+      fake.setEngine({
+        id: "private-yolo-hand-relay-v1",
+        displayName: "Private GPU Hand Relay",
+        runtime: "private-hand-relay",
+        fallback: false,
+        executionProvider: "cuda",
+        processingLocation: "private-relay",
+        highPerformanceGpuRequested: false,
+        adapter: { description: "NVIDIA GeForce RTX 3090 Ti" },
+        processingLatencyMs: 24,
+        detectorRoundTripMs: 61,
+        encodeLatencyMs: 8,
+        relayRoundTripMs: 42,
+        droppedBeforeEncode: 2,
+        droppedBeforeSend: 0,
+        runtimeSamples: 4,
+      });
+      fake.setStatus({ state: "ready" });
+    });
+
+    expect(
+      await screen.findByText("Hand input ready · private GPU relay"),
+    ).toBeVisible();
+    expect(screen.getByText("Provider CUDA · NVIDIA GeForce RTX 3090 Ti")).toBeVisible();
+    expect(
+      screen.getByText("24 ms GPU processing · 61 ms capture/result round trip"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "8 ms encode · 42 ms relay round trip · dropped 2 raw / 0 encoded",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/high-performance webgpu adapter requested/i)).toBeNull();
+  });
+
   it("enters spatial control automatically after the one required permission action", async () => {
     const user = userEvent.setup();
     const fake = fakeController();
@@ -200,6 +349,7 @@ describe("SpatialCameraControl", () => {
         runtime: "onnx-runtime-web",
         fallback: false,
         executionProvider: "webgpu",
+        highPerformanceGpuRequested: true,
         adapter: { architecture: "ampere", description: "NVIDIA GPU" },
         detectorRoundTripMs: 69.01,
         resultRateFps: 14.49,
@@ -209,6 +359,9 @@ describe("SpatialCameraControl", () => {
     });
     expect(await screen.findByText("Engine YOLO26 Hand Pose")).toBeVisible();
     expect(screen.getByText("Provider WebGPU · NVIDIA GPU")).toBeVisible();
+    expect(
+      screen.getByText("High-performance WebGPU adapter requested"),
+    ).toBeVisible();
     expect(
       screen.getByText("69 ms detector/worker round trip · 14.5 results/s"),
     ).toBeVisible();
@@ -224,6 +377,35 @@ describe("SpatialCameraControl", () => {
     expect(
       await screen.findByText("Fallback MediaPipe Hand Landmarker"),
     ).toBeVisible();
+  });
+
+  it("distinguishes a high-performance WebGPU request from the actual WASM fallback", async () => {
+    const fake = fakeController();
+    render(<SpatialCameraControl createController={() => fake.controller} />);
+
+    act(() => {
+      fake.setEngine({
+        id: "yolo26-hand-pose-2abb91",
+        displayName: "YOLO26 Hand Pose",
+        runtime: "onnx-runtime-web",
+        fallback: false,
+        executionProvider: "wasm",
+        highPerformanceGpuRequested: true,
+        fallbackReason: "WebGPU did not return a GPU adapter",
+      });
+      fake.setStatus({ state: "ready" });
+    });
+
+    expect(await screen.findByText("Provider WASM")).toBeVisible();
+    expect(
+      screen.getByText("High-performance WebGPU adapter requested"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "WebGPU fallback · WebGPU did not return a GPU adapter",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/3090/i)).toBeNull();
   });
 
   it("hands control back to the canvas as soon as the engine is ready", async () => {
@@ -329,6 +511,19 @@ describe("SpatialCameraControl", () => {
     expect(screen.getByText("Confidence 91%")).toBeVisible();
     expect(screen.getByText("left hand")).toBeVisible();
     expect(screen.getByText("State point")).toBeVisible();
+  });
+
+  it("presents the camera as a sensor preview rather than a movement boundary", () => {
+    const fake = fakeController();
+    const { container } = render(
+      <SpatialCameraControl createController={() => fake.controller} />,
+    );
+
+    expect(container.querySelector(".camera-interaction-boundary")).toBeNull();
+    expect(screen.getByText("Sensor preview only")).toBeVisible();
+    expect(
+      screen.getByText("Your whole canvas is the hand control surface."),
+    ).toBeVisible();
   });
 
   it("shows open-palm and bimanual resize feedback without miscounting the pinch self-check", async () => {

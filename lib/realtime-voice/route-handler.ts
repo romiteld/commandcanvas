@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  authenticatePermanentEmailUser,
   authenticateRequestActor,
   type SupabaseUserVerifier,
 } from "@/lib/supabase/server-auth";
@@ -86,12 +87,18 @@ export async function handleRealtimeSessionRequest(
       "member_required",
       "Join this room before starting live voice.",
     );
-  if (membership.roomMode !== "demo")
-    return jsonError(
-      403,
-      "demo_room_required",
-      "Live voice is available in the no-signup demo room.",
+  if (membership.roomMode === "standard") {
+    const permanentActor = await authenticatePermanentEmailUser(
+      request.headers.get("authorization"),
+      dependencies.verifier,
     );
+    if (!permanentActor.ok || permanentActor.actorUserId !== actor.actorUserId)
+      return jsonError(
+        403,
+        "permanent_email_auth_required",
+        "Verify your email before using live voice in a meeting room.",
+      );
+  }
 
   let sdp: string;
   try {

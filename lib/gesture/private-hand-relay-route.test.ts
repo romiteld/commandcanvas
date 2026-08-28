@@ -213,4 +213,32 @@ describe("private hand relay session route", () => {
       },
     });
   });
+
+  it("returns a compact local fallback and retry boundary when durable relay admission is denied", async () => {
+    const deps = dependencies({
+      startSession: vi.fn(async () => ({
+        ok: false as const,
+        code: "rate_limited" as const,
+        retryAfterSeconds: 47,
+      })) as unknown as PrivateHandRelaySessionRouteDependencies["startSession"],
+    });
+
+    const response = await handlePrivateHandRelaySessionRequest(
+      request(),
+      ROOM_ID,
+      deps,
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("47");
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      fallback: "local",
+      error: {
+        code: "relay_rate_limited",
+        message:
+          "Private GPU hand tracking has reached its session-start limit. Local tracking remains active.",
+      },
+    });
+  });
 });

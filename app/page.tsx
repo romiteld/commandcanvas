@@ -1,5 +1,5 @@
-import { LocalCommandCanvas } from "@/components/command-canvas/local-command-canvas";
+import { redirect } from "next/navigation";
 
 export default function Home() {
-  return <LocalCommandCanvas />;
+  redirect("/meet");
 }

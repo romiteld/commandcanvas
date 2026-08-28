@@ -21,7 +21,7 @@ test("initializes the local hand detector in an iPhone module worker without DOM
       ].join("\n"),
     });
   });
-  await page.goto("/");
+  await page.goto("/local");
 
   const result = await page.evaluate(
     () =>
@@ -86,7 +86,7 @@ test("fails with an explicit fallback signal rather than touching the DOM when a
       ].join("\n"),
     });
   });
-  await page.goto("/");
+  await page.goto("/local");
 
   const result = await initializeWorker(
     page,

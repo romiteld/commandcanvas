@@ -24,9 +24,13 @@ below.
 - detector load options and normalized detector loader;
 - license-review and target-device-evidence status.
 
-Engines without a compatible worker must use the controller's local in-page
-detector endpoint. Camera frames still stay in the browser. Gesture
-interpretation and canvas mutation code must not depend on the engine ID.
+Engines without a compatible worker use the controller's local in-page
+detector endpoint. Camera frames stay in the browser for every local engine.
+The installed native CUDA relay is a separate engine selected only after
+explicit camera-upload consent; it accepts bounded newest-only JPEG/WebP frames
+while Hand input is active and returns semantic landmarks without raw
+retention. Gesture interpretation and canvas mutation code do not depend on the
+engine ID or processing location.
 
 ## Candidate review
 
@@ -120,3 +124,17 @@ behavior.
 - No candidate-versus-MediaPipe iPhone benchmark artifact has been recorded in
   this repository yet. Until that happens, physical accuracy, latency,
   occlusion behavior, and ergonomics remain unverified.
+- The installed native relay reported a warmed
+  `CUDAExecutionProvider` on `NVIDIA GeForce RTX 3090 (CUDA device 0)` using
+  the exact same pinned model. A CC0 static hand image produced one hand at
+  confidence `0.934082` with 21 finite landmarks. Across 200 warmed native
+  repeats, p50 was `7.652 ms`, p95 was `11.016 ms`, and throughput was
+  `122.013` results per second. These values exclude live capture, encode,
+  network, decode scheduling, and physical interaction.
+- A real rendered-UI recording recognized open-palm state and displayed pinch
+  ratios between 0.22 and 0.28. The recording also demonstrated that the old
+  preview-shaped movement boundary was a usability failure. The current source
+  instead maps a comfortable central camera region across the full canvas and
+  treats the preview as a collapsible sensor check. Reducer and component tests
+  cover that mapping; physical post-fix reach and pinch ergonomics remain
+  unverified.

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   MAX_BEARER_JWT_LENGTH,
+  authenticatePermanentEmailUser,
   authenticateRequestActor,
   parseBearerJwtHeader,
 } from "@/lib/supabase/server-auth";
@@ -112,6 +113,67 @@ describe("authenticateRequestActor", () => {
       error: { code: "authorization_malformed" },
     });
     expect(getUser).not.toHaveBeenCalled();
+  });
+});
+
+describe("authenticatePermanentEmailUser", () => {
+  it("returns verified top-level auth fields and ignores spoofed metadata", async () => {
+    const getUser = vi.fn().mockResolvedValue({
+      data: {
+        user: {
+          id: "22222222-2222-4222-8222-222222222222",
+          email: "Danny@Example.com",
+          email_confirmed_at: "2026-08-28T12:00:00.000Z",
+          is_anonymous: false,
+          user_metadata: {
+            email: "attacker@example.com",
+            actorUserId: "99999999-9999-4999-8999-999999999999",
+          },
+        },
+      },
+      error: null,
+    });
+
+    const result = await authenticatePermanentEmailUser(`Bearer ${jwt}`, {
+      auth: { getUser },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      actorUserId: "22222222-2222-4222-8222-222222222222",
+      email: "danny@example.com",
+    });
+  });
+
+  it("refuses anonymous, unconfirmed, and missing-email users", async () => {
+    for (const user of [
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        email: "danny@example.com",
+        email_confirmed_at: "2026-08-28T12:00:00.000Z",
+        is_anonymous: true,
+      },
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        email: "danny@example.com",
+        is_anonymous: false,
+      },
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        email_confirmed_at: "2026-08-28T12:00:00.000Z",
+        is_anonymous: false,
+      },
+    ]) {
+      const result = await authenticatePermanentEmailUser(`Bearer ${jwt}`, {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({ data: { user }, error: null }),
+        },
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "permanent_email_auth_required" },
+      });
+    }
   });
 });
 

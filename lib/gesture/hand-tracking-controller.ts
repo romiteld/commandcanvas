@@ -10,6 +10,7 @@ import type {
   HandDetectorDiagnostics,
   HandTrackingWorkerInboundMessage,
   HandTrackingWorkerOutboundMessage,
+  HandTrackingRelayMetrics,
   TrackedHandLandmarks,
   TrackedHandedness,
 } from "@/lib/gesture/hand-tracking-worker-core";
@@ -20,6 +21,13 @@ import {
   type SpatialVisionEngineDescriptor,
   type SpatialVisionEnginePlan,
 } from "@/lib/gesture/spatial-vision-engine";
+import {
+  createPrivateHandRelaySpatialVisionEngine,
+  createPrivateHandRelayWorker,
+  PRIVATE_HAND_RELAY_ENGINE_ID,
+  type PrivateHandRelayWorkerLike,
+  type PrivateHandRelayWorkerOptions,
+} from "@/lib/gesture/private-hand-relay-worker";
 
 export type HandTrackingStatus =
   | { state: "off" | "starting" | "ready" }
@@ -56,6 +64,7 @@ export interface HandTrackingPointer {
 }
 
 export interface HandTrackingWorkerLike {
+  readonly frameQueueMode?: "newest-only";
   onmessage: ((event: MessageEvent<HandTrackingWorkerOutboundMessage>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
   postMessage(message: HandTrackingWorkerInboundMessage, transfer?: Transferable[]): void;
@@ -82,13 +91,27 @@ export interface HandTrackingEngineStatus {
   runtime: string;
   fallback: boolean;
   executionProvider?: HandDetectorDiagnostics["executionProvider"];
+  highPerformanceGpuRequested?: boolean;
+  processingLocation?: HandDetectorDiagnostics["processingLocation"];
   adapter?: HandDetectorDiagnostics["adapter"];
   fallbackReason?: string;
+  fallbackKind?: "private-relay" | "engine" | "webgpu";
   /** Median detector-worker round trip after a captured bitmap is posted. */
   detectorRoundTripMs?: number;
   /** Fresh landmark results per second over the latest local samples. */
   resultRateFps?: number;
   runtimeSamples?: number;
+  /** Server-reported model processing time, excluding browser/network transit. */
+  processingLatencyMs?: number;
+  encodeLatencyMs?: number;
+  relayRoundTripMs?: number;
+  droppedBeforeEncode?: number;
+  droppedBeforeSend?: number;
+}
+
+export interface PrivateHandRelayControllerOptions
+  extends PrivateHandRelayWorkerOptions {
+  createWorker?: () => PrivateHandRelayWorkerLike;
 }
 
 export interface HandTrackingControllerDependencies {
@@ -113,6 +136,7 @@ export interface HandTrackingControllerDependencies {
   clearTimeout?: (handle: number) => void;
   workerReadyTimeoutMs?: number;
   now?: () => number;
+  privateHandRelay?: PrivateHandRelayControllerOptions;
 }
 
 const UNAVAILABLE_MESSAGE =
@@ -149,19 +173,31 @@ export function createHandTrackingController(
     observationListeners.forEach((listener) => listener(observation));
   }
 
-  function setEngineStatus(engine: SpatialVisionEngine | null, fallback = false) {
+  function setEngineStatus(
+    engine: SpatialVisionEngine | null,
+    fallback = false,
+    fallbackReason?: string,
+    fallbackKind?: HandTrackingEngineStatus["fallbackKind"],
+  ) {
     engineStatus = engine
       ? {
           id: engine.descriptor.id,
           displayName: engine.descriptor.displayName,
           runtime: engine.descriptor.runtime,
           fallback,
+          ...(fallbackReason ? { fallbackReason } : {}),
+          ...(fallbackKind ? { fallbackKind } : {}),
         }
       : null;
     engineListeners.forEach((listener) => listener(engineStatus));
   }
 
-  function recordRuntimeResult(run: HandTrackingRun, frameTimestamp: number) {
+  function recordRuntimeResult(
+    run: HandTrackingRun,
+    frameTimestamp: number,
+    processingLatencyMs?: number,
+    relayMetrics?: HandTrackingRelayMetrics,
+  ) {
     if (!engineStatus || !Number.isFinite(frameTimestamp)) return;
     const completedAt = dependencies.now();
     if (!Number.isFinite(completedAt) || completedAt < frameTimestamp) return;
@@ -188,6 +224,17 @@ export function createHandTrackingController(
         ? {}
         : { resultRateFps: rounded(resultRateFps) }),
       runtimeSamples: run.roundTripSamples.length,
+      ...(processingLatencyMs === undefined
+        ? {}
+        : { processingLatencyMs: rounded(processingLatencyMs) }),
+      ...(relayMetrics
+        ? {
+            encodeLatencyMs: rounded(relayMetrics.encodeLatencyMs),
+            relayRoundTripMs: rounded(relayMetrics.relayRoundTripMs),
+            droppedBeforeEncode: relayMetrics.droppedBeforeEncode,
+            droppedBeforeSend: relayMetrics.droppedBeforeSend,
+          }
+        : {}),
     };
     engineListeners.forEach((listener) => listener(engineStatus));
   }
@@ -244,13 +291,20 @@ export function createHandTrackingController(
   }
 
   function startEngineWorker(run: HandTrackingRun, engineIndex: number) {
-    const engine = dependencies.visionEngines[engineIndex];
+    const engine = run.visionEngines[engineIndex];
     const createWorkerForEngine = dependencies.createWorkerForEngine;
     if (!engine || !createWorkerForEngine) throw new Error(UNAVAILABLE_MESSAGE);
     const worker = createWorkerForEngine(engine);
     run.engineIndex = engineIndex;
     run.worker = worker;
-    setEngineStatus(engine, engineIndex > 0);
+    setEngineStatus(
+      engine,
+      engineIndex > 0,
+      run.pendingFallbackReason,
+      run.pendingFallbackKind,
+    );
+    run.pendingFallbackReason = undefined;
+    run.pendingFallbackKind = undefined;
     worker.onmessage = (event) =>
       handleWorkerMessage(run, worker, event.data);
     worker.onerror = (event) => {
@@ -292,7 +346,7 @@ export function createHandTrackingController(
       run.readyTimeout = null;
     }
     const nextEngineIndex = run.engineIndex + 1;
-    if (nextEngineIndex >= dependencies.visionEngines.length) {
+    if (nextEngineIndex >= run.visionEngines.length) {
       failUnavailable(run, message);
       return;
     }
@@ -311,6 +365,12 @@ export function createHandTrackingController(
     run.resultCompletionTimes = [];
     run.intentStates.clear();
     run.lastSingleObservation = null;
+    const failedEngine = run.visionEngines[run.engineIndex];
+    run.pendingFallbackReason = message;
+    run.pendingFallbackKind =
+      failedEngine?.descriptor.id === PRIVATE_HAND_RELAY_ENGINE_ID
+        ? "private-relay"
+        : "engine";
     emit({ mode: "idle", timestamp: dependencies.now(), trackingState: "lost" });
     setStatus({ state: "starting" });
     try {
@@ -359,6 +419,7 @@ export function createHandTrackingController(
         { type: "frame", frame: bitmap, timestamp },
         [bitmap],
       );
+      if (run.worker.frameQueueMode === "newest-only") run.frameInFlight = false;
       bitmap = null;
     } catch (error) {
       bitmap?.close();
@@ -406,7 +467,12 @@ export function createHandTrackingController(
     }
 
     run.frameInFlight = false;
-    recordRuntimeResult(run, message.timestamp);
+    recordRuntimeResult(
+      run,
+      message.timestamp,
+      message.processingLatencyMs,
+      message.relayMetrics,
+    );
     if (message.hands.length === 0) {
       emitLossOrGrace(run, message.timestamp);
       return;
@@ -504,6 +570,11 @@ export function createHandTrackingController(
     engineStatus = {
       ...engineStatus,
       executionProvider: diagnostics.executionProvider,
+      highPerformanceGpuRequested:
+        diagnostics.highPerformanceGpuRequested,
+      ...(diagnostics.processingLocation
+        ? { processingLocation: diagnostics.processingLocation }
+        : {}),
       ...(diagnostics.adapter ? { adapter: diagnostics.adapter } : {}),
       ...(diagnostics.fallbackReason
         ? { fallbackReason: diagnostics.fallbackReason }
@@ -594,7 +665,11 @@ export function createHandTrackingController(
         throw error;
       }
 
-      const run = createRun(++nextRunId, targetVideo);
+      const run = createRun(
+        ++nextRunId,
+        targetVideo,
+        dependencies.visionEnginesForStart(),
+      );
       activeRun = run;
       setStatus({ state: "starting" });
       try {
@@ -672,7 +747,10 @@ interface HandTrackingRun {
   stream: MediaStream | null;
   ownsStream: boolean;
   worker: HandTrackingWorkerLike | null;
+  readonly visionEngines: readonly SpatialVisionEngine[];
   engineIndex: number;
+  pendingFallbackReason?: string;
+  pendingFallbackKind?: HandTrackingEngineStatus["fallbackKind"];
   animationFrame: number | null;
   frameInFlight: boolean;
   intentStates: Map<string, HandIntentState>;
@@ -694,7 +772,11 @@ interface HandTrackingRun {
   resultCompletionTimes: number[];
 }
 
-function createRun(id: number, video: HTMLVideoElement): HandTrackingRun {
+function createRun(
+  id: number,
+  video: HTMLVideoElement,
+  visionEngines: readonly SpatialVisionEngine[],
+): HandTrackingRun {
   let resolveStop!: () => void;
   const stopped = new Promise<void>((resolve) => {
     resolveStop = resolve;
@@ -705,6 +787,7 @@ function createRun(id: number, video: HTMLVideoElement): HandTrackingRun {
     stream: null,
     ownsStream: false,
     worker: null,
+    visionEngines,
     engineIndex: 0,
     animationFrame: null,
     frameInFlight: false,
@@ -925,9 +1008,12 @@ function resolveDependencies(
       provided.createWorkerForEngine ||
       (!provided.createWorker && !provided.loadDetector),
   );
-  const visionEngines = useFallback
+  const localVisionEngines = useFallback
     ? [plan.primary, plan.fallback]
     : [plan.primary];
+  const relayEngine = provided.privateHandRelay
+    ? createPrivateHandRelaySpatialVisionEngine()
+    : null;
   const supportsWorkerCanvas =
     provided.supportsWorkerCanvas ??
     (provided.createWorker || provided.createWorkerForEngine
@@ -935,7 +1021,7 @@ function resolveDependencies(
       : typeof globalThis.OffscreenCanvas === "function");
   const canCreateBrowserWorker = typeof Worker !== "undefined";
   const canCreateInPageEndpoint = typeof document !== "undefined";
-  const createWorkerForEngine = provided.createWorkerForEngine
+  const createLocalWorkerForEngine = provided.createWorkerForEngine
     ? (engine: SpatialVisionEngine) =>
         provided.createWorkerForEngine!(engine.descriptor)
     : provided.createWorker && supportsWorkerCanvas
@@ -954,8 +1040,39 @@ function resolveDependencies(
             throw new Error(UNAVAILABLE_MESSAGE);
           }
         : undefined;
+  const createWorkerForEngine = (
+    createLocalWorkerForEngine || provided.privateHandRelay
+  )
+    ? (engine: SpatialVisionEngine) => {
+        if (
+          engine.descriptor.id === PRIVATE_HAND_RELAY_ENGINE_ID &&
+          provided.privateHandRelay
+        ) {
+          if (provided.privateHandRelay.createWorker)
+            return provided.privateHandRelay.createWorker();
+          return createPrivateHandRelayWorker({
+            roomId: provided.privateHandRelay.roomId,
+            getAccessToken: provided.privateHandRelay.getAccessToken,
+            cameraUploadConsent:
+              provided.privateHandRelay.cameraUploadConsent,
+            requestSession: provided.privateHandRelay.requestSession,
+            createTransport: provided.privateHandRelay.createTransport,
+            encodeFrame: provided.privateHandRelay.encodeFrame,
+            now: provided.privateHandRelay.now,
+            setTimeout: provided.privateHandRelay.setTimeout,
+            clearTimeout: provided.privateHandRelay.clearTimeout,
+          });
+        }
+        if (createLocalWorkerForEngine)
+          return createLocalWorkerForEngine(engine);
+        throw new Error(UNAVAILABLE_MESSAGE);
+      }
+    : undefined;
   return {
-    visionEngines,
+    visionEnginesForStart: () =>
+      relayEngine && provided.privateHandRelay?.cameraUploadConsent()
+        ? [relayEngine, ...localVisionEngines]
+        : localVisionEngines,
     getSharedMediaStream: provided.getSharedMediaStream,
     getUserMedia:
       provided.getUserMedia ??
@@ -1035,7 +1152,7 @@ function createInPageHandTrackingWorker(
 }
 
 interface ResolvedHandTrackingControllerDependencies {
-  visionEngines: readonly SpatialVisionEngine[];
+  visionEnginesForStart: () => readonly SpatialVisionEngine[];
   getSharedMediaStream?: HandTrackingControllerDependencies["getSharedMediaStream"];
   getUserMedia?: HandTrackingControllerDependencies["getUserMedia"];
   createWorkerForEngine?: (engine: SpatialVisionEngine) => HandTrackingWorkerLike;

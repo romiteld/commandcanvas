@@ -14,6 +14,7 @@ const relayLandmarkSchema = z
     x: z.number().finite().min(0).max(1),
     y: z.number().finite().min(0).max(1),
     z: z.number().finite().min(-2).max(2),
+    visibility: z.number().finite().min(0).max(1),
   })
   .strict();
 

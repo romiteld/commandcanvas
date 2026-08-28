@@ -81,7 +81,11 @@ begin
      or pg_catalog.pg_get_functiondef(v_admit_oid) !~ 'voice_actor_daily_limit'
      or pg_catalog.pg_get_functiondef(v_admit_oid) !~ 'voice_room_daily_limit'
      or pg_catalog.pg_get_functiondef(v_admit_oid) !~ 'voice_global_daily_limit'
-     or pg_catalog.pg_get_functiondef(v_admit_oid) !~ 'voice_demo_room_required'
+     or pg_catalog.pg_get_functiondef(v_admit_oid) !~ 'auth.users'
+     or pg_catalog.pg_get_functiondef(v_admit_oid) !~ 'is_anonymous'
+     or pg_catalog.pg_get_functiondef(v_admit_oid) !~ 'email_confirmed_at'
+     or pg_catalog.pg_get_functiondef(v_admit_oid) !~ 'realtime_voice_permanent_member_required'
+     or pg_catalog.pg_get_functiondef(v_admit_oid) ~ 'voice_demo_room_required'
   then
     raise exception 'realtime_voice_admission_guard_branch_missing';
   end if;

@@ -26,7 +26,10 @@ import {
 } from "@/components/command-canvas/realtime-voice-control";
 import { SketchComposer } from "@/components/command-canvas/sketch-composer";
 import { SketchPreview } from "@/components/command-canvas/sketch-preview";
-import { SpatialCameraControl } from "@/components/command-canvas/spatial-camera-control";
+import {
+  SpatialCameraControl,
+  type SpatialCameraControllerPreferences,
+} from "@/components/command-canvas/spatial-camera-control";
 import type { CanvasStoreState } from "@/lib/canvas/canvas-store";
 import {
   NOTE_APPEND_TEXT_MAX_LENGTH,
@@ -80,7 +83,10 @@ export interface CommandCanvasRoomProps {
   onCommand?: CommandCanvasCommandHandler;
   onTransformSketch?: CommandCanvasSketchTransformHandler;
   onCanvasPointerWorldMove?: (point: CanvasPoint) => void;
-  createHandTrackingController?: () => HandTrackingController;
+  createHandTrackingController?: (
+    preferences: SpatialCameraControllerPreferences,
+  ) => HandTrackingController;
+  privateGpuRelayAvailable?: boolean;
   realtimeVoice?: Omit<RealtimeVoiceControlProps, "onIntent">;
   meetingMediaPanel?: ReactNode;
   commandDrawerRequestKey?: string;
@@ -142,6 +148,7 @@ export function CommandCanvasRoom({
   onTransformSketch,
   onCanvasPointerWorldMove,
   createHandTrackingController,
+  privateGpuRelayAvailable = false,
   realtimeVoice,
   meetingMediaPanel,
   commandDrawerRequestKey,
@@ -190,6 +197,7 @@ export function CommandCanvasRoom({
   const canvasViewportRef = useRef<HTMLDivElement>(null);
   const spatialGestureState = useRef(createInitialSpatialGestureState());
   const gesturePreviewObjectId = useRef<string | null>(null);
+  const handTargetObjectIdRef = useRef<string | null>(null);
   const handEraseLatchedRef = useRef(false);
   const initialCompactCompositionFitRef = useRef(false);
   const seededCompositionAtMountRef = useRef(
@@ -1399,6 +1407,8 @@ export function CommandCanvasRoom({
     if (!canvasViewport || interactionPending) return;
     const bounds = canvasViewport.getBoundingClientRect();
     if (bounds.width <= 0 || bounds.height <= 0) return;
+    if (observation.mode !== "idle")
+      setOpenDrawer((current) => (current === "system" ? null : current));
     const displayPointer =
       observation.mode === "idle"
         ? null
@@ -1485,6 +1495,7 @@ export function CommandCanvasRoom({
         viewport: current.viewport,
         handActiveZone: DEFAULT_HAND_ACTIVE_ZONE,
         selectedObjectId: current.selectedObjectId,
+        targetedObjectId: handTargetObjectIdRef.current,
         objects: sceneObjects,
       },
       {
@@ -1493,7 +1504,10 @@ export function CommandCanvasRoom({
       },
     );
     spatialGestureState.current = transition.state;
-    if (observation.mode === "idle") setHandTargetObjectId(null);
+    if (observation.mode === "idle") {
+      handTargetObjectIdRef.current = null;
+      setHandTargetObjectId(null);
+    }
     if (
       observation.mode === "idle" &&
       !transition.effects.some((effect) => effect.type === "object.stage_action")
@@ -1556,10 +1570,12 @@ export function CommandCanvasRoom({
         return;
       }
       case "object.select":
+        handTargetObjectIdRef.current = null;
         setHandTargetObjectId(null);
         selectObject(effect.objectId);
         return;
       case "object.target":
+        handTargetObjectIdRef.current = effect.objectId;
         setHandTargetObjectId(effect.objectId);
         return;
       case "object.preview_move":
@@ -2001,6 +2017,9 @@ export function CommandCanvasRoom({
           <div
             ref={canvasViewportRef}
             className={`canvas-viewport${pan ? " is-panning" : ""}`}
+            data-spatial-control-plane={
+              handTrackingStatus.state === "ready" ? "active" : undefined
+            }
             style={{
               backgroundPosition: `${viewport.x}px ${viewport.y}px, ${viewport.x}px ${viewport.y}px, ${viewport.x}px ${viewport.y}px`,
               backgroundSize: `${96 * viewport.scale}px ${96 * viewport.scale}px, ${96 * viewport.scale}px ${96 * viewport.scale}px, ${16 * viewport.scale}px ${16 * viewport.scale}px`,
@@ -2020,6 +2039,18 @@ export function CommandCanvasRoom({
               setViewport(zoomViewportAt(viewport, point, scale));
             }}
           >
+            {handTrackingStatus.state === "ready" ? (
+              <div className="hand-control-plane-indicator" aria-hidden="true">
+                <span className="hand-control-plane-label">
+                  <strong>HAND CONTROL</strong>
+                  <span>FULL CANVAS</span>
+                </span>
+                <i data-plane-corner="north-west" />
+                <i data-plane-corner="north-east" />
+                <i data-plane-corner="south-west" />
+                <i data-plane-corner="south-east" />
+              </div>
+            ) : null}
             <div
               className="canvas-world"
               style={
@@ -2496,6 +2527,7 @@ export function CommandCanvasRoom({
             </section>
             <SpatialCameraControl
               createController={createHandTrackingController}
+              privateGpuRelayAvailable={privateGpuRelayAvailable}
               onObservation={handleHandObservation}
               onSpatialModeStarted={() => setOpenDrawer(null)}
               onStatusChange={(status) => {

@@ -6,7 +6,7 @@ test("creates, pins, and undoes one semantic object with visible receipts", asyn
   const browserErrors: string[] = [];
   page.on("pageerror", (error) => browserErrors.push(error.message));
 
-  await page.goto("/");
+  await page.goto("/local");
 
   await expect(page).toHaveTitle(/CommandCanvas/);
   await expect(
@@ -70,7 +70,7 @@ test("bridges a document.modelContext invocation into the live canvas", async ({
     });
   });
 
-  await page.goto("/");
+  await page.goto("/local");
   await page.getByRole("button", { name: "Open system status" }).click();
   await expect(page.getByText("10 Site Tools registered")).toBeVisible();
   await page
@@ -130,7 +130,7 @@ test("keeps the canvas and primary action usable at a mobile viewport", async ({
   test.skip(testInfo.project.name !== "chromium-mobile");
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/");
+  await page.goto("/local");
   await expect(page.getByRole("region", { name: "Infinite canvas" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Create note" })).toBeVisible();
   await expect
@@ -174,7 +174,7 @@ test("opens command and system controls over the workspace without resizing the 
     !["chromium-desktop", "chromium-mobile"].includes(testInfo.project.name),
   );
 
-  await page.goto("/");
+  await page.goto("/local");
   const canvas = page.getByRole("region", { name: "Infinite canvas" });
   await expect
     .poll(() =>
@@ -239,7 +239,7 @@ test("creates semantic project-board and schedule objects from the toolbar", asy
   const browserErrors: string[] = [];
   page.on("pageerror", (error) => browserErrors.push(error.message));
 
-  await page.goto("/");
+  await page.goto("/local");
   await page.getByRole("button", { name: "Create task board" }).click();
   await expect(
     page.getByRole("button", { name: "Select Launch board" }),
@@ -318,7 +318,7 @@ test("reviews a deterministic browser speech transcript before a canonical voice
       });
   });
 
-  await page.goto("/");
+  await page.goto("/local");
   await page.getByRole("button", { name: "Open command drawer" }).click();
   expect(
     await page.evaluate(
@@ -360,7 +360,7 @@ test("commits exactly one canonical transform when a pointer drag ends", async (
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-desktop");
 
-  await page.goto("/");
+  await page.goto("/local");
   await page.getByRole("button", { name: "Create note" }).click();
   const object = page.getByRole("button", { name: "Select New thought" });
   const before = await object.boundingBox();
@@ -398,7 +398,7 @@ test("resizes a selected object with a canonical pointer-up mutation", async ({
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-desktop");
 
-  await page.goto("/");
+  await page.goto("/local");
   await page.getByRole("button", { name: "Create note" }).click();
   const object = page.getByRole("button", { name: "Select New thought" });
   await object.click();
@@ -427,7 +427,7 @@ test("pans and zooms the viewport without creating object receipts", async ({
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-desktop");
 
-  await page.goto("/");
+  await page.goto("/local");
   await page.getByRole("button", { name: "Create note" }).click();
   const object = page.getByRole("button", { name: "Select New thought" });
   const before = await object.boundingBox();
@@ -465,7 +465,7 @@ test("minimizes, restores, safely discards, and recovers the selected object", a
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-desktop");
 
-  await page.goto("/");
+  await page.goto("/local");
   await page.getByRole("button", { name: "Create note" }).click();
   const object = page.getByRole("button", { name: "Select New thought" });
   await object.click();

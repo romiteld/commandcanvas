@@ -599,6 +599,91 @@ describe("CommandCanvasRoom", () => {
     expect(container.querySelector("[data-hand-cursor]")).not.toBeNull();
   });
 
+  it("uses the whole viewport as the visible hand control plane and closes diagnostics on activity", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+
+    const viewport = container.querySelector(".canvas-viewport");
+    expect(viewport).not.toHaveAttribute("data-spatial-control-plane");
+
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+
+    expect(viewport).toHaveAttribute("data-spatial-control-plane", "active");
+    expect(container.querySelector(".hand-control-plane-indicator")).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    expect(
+      screen.getByRole("complementary", { name: "System status drawer" }),
+    ).toBeVisible();
+
+    act(() =>
+      hand.emit({
+        mode: "point",
+        pointer: { x: 0.5, y: 0.5 },
+        confidence: 0.98,
+        timestamp: 1_040,
+      }),
+    );
+
+    expect(
+      screen.queryByRole("complementary", { name: "System status drawer" }),
+    ).toBeNull();
+    expect(hand.controller.stop).not.toHaveBeenCalled();
+  });
+
+  it("keeps a magnetic hand target through the point-to-pinch shape change", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-spatial", title: "Spatial note", x: 200 });
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+
+    act(() =>
+      hand.emit({
+        mode: "point",
+        pointer: { x: 0.19, y: 0.35 },
+        confidence: 0.97,
+        timestamp: 1_000,
+      }),
+    );
+    expect(await screen.findByText("TARGET")).toBeVisible();
+
+    act(() =>
+      hand.emit({
+        mode: "pinch",
+        pointer: { x: 0.12, y: 0.35 },
+        confidence: 0.97,
+        timestamp: 1_016,
+      }),
+    );
+
+    expect(await screen.findByText("HELD")).toBeVisible();
+    expect(
+      screen
+        .getByRole("button", { name: "Select Spatial note" })
+        .closest("article"),
+    ).toHaveClass("is-held");
+  });
+
   it("keeps pointing non-mutating until the user explicitly arms hand drawing", async () => {
     const user = userEvent.setup();
     const hand = fakeHandController();

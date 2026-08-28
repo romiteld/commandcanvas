@@ -73,6 +73,7 @@ export interface YoloHandPoseRuntime {
   ): Promise<YoloHandPoseSession>;
   getWebGpuAdapterInfo?(): HandDetectorDiagnostics["adapter"];
   getWebGpuUnavailableReason?(): string | undefined;
+  didRequestHighPerformanceWebGpuAdapter?(): boolean;
   createTensor(data: Float32Array, dims: readonly number[]): unknown;
   createCanvas(width: number, height: number): CanvasLike;
 }
@@ -127,7 +128,8 @@ export async function loadYoloHandPoseDetector(
     getDiagnostics() {
       return {
         executionProvider,
-        highPerformanceGpuRequested: true,
+        highPerformanceGpuRequested:
+          runtime.didRequestHighPerformanceWebGpuAdapter?.() ?? false,
         ...(executionProvider === "webgpu" && runtime.getWebGpuAdapterInfo
           ? { adapter: runtime.getWebGpuAdapterInfo() }
           : {}),
@@ -283,6 +285,7 @@ async function createDefaultYoloRuntime(): Promise<YoloHandPoseRuntime> {
   const ort = await import("onnxruntime-web/all");
   let adapterInfo: HandDetectorDiagnostics["adapter"];
   let webGpuUnavailableReason: string | undefined;
+  let highPerformanceGpuRequested = false;
   return {
     async configure(wasmBaseUrl) {
       ort.env.wasm.wasmPaths = ensureTrailingSlash(wasmBaseUrl);
@@ -305,6 +308,7 @@ async function createDefaultYoloRuntime(): Promise<YoloHandPoseRuntime> {
       );
       adapterInfo = configured.adapterInfo;
       webGpuUnavailableReason = configured.unavailableReason;
+      highPerformanceGpuRequested = configured.highPerformanceGpuRequested;
     },
     async createSession(modelAssetUrl, options) {
       return (await ort.InferenceSession.create(modelAssetUrl, {
@@ -314,6 +318,8 @@ async function createDefaultYoloRuntime(): Promise<YoloHandPoseRuntime> {
     },
     getWebGpuAdapterInfo: () => adapterInfo,
     getWebGpuUnavailableReason: () => webGpuUnavailableReason,
+    didRequestHighPerformanceWebGpuAdapter: () =>
+      highPerformanceGpuRequested,
     createTensor(data, dims) {
       return new ort.Tensor("float32", data, [...dims]);
     },
@@ -349,28 +355,42 @@ export async function configureYoloWebGpuAdapter(
   gpu: BrowserGpuNavigator | null,
   setAdapter: (adapter: BrowserGpuAdapter) => void,
 ): Promise<{
+  highPerformanceGpuRequested: boolean;
   adapterInfo?: HandDetectorDiagnostics["adapter"];
   unavailableReason?: string;
 }> {
   if (!gpu)
-    return { unavailableReason: "WebGPU is unavailable in this browser" };
+    return {
+      highPerformanceGpuRequested: false,
+      unavailableReason: "WebGPU is unavailable in this browser",
+    };
   try {
     const adapter = await gpu.requestAdapter({
       powerPreference: "high-performance",
       forceFallbackAdapter: false,
     });
     if (!adapter)
-      return { unavailableReason: "WebGPU did not return a GPU adapter" };
+      return {
+        highPerformanceGpuRequested: true,
+        unavailableReason: "WebGPU did not return a GPU adapter",
+      };
     if (!adapter.features.has("shader-f16")) {
       return {
+        highPerformanceGpuRequested: true,
         unavailableReason:
           "The selected WebGPU adapter lacks shader-f16 for this FP16 model",
       };
     }
     setAdapter(adapter);
-    return { adapterInfo: sanitizeAdapterInfo(adapter.info) };
+    return {
+      highPerformanceGpuRequested: true,
+      adapterInfo: sanitizeAdapterInfo(adapter.info),
+    };
   } catch (error) {
-    return { unavailableReason: compactError(error) };
+    return {
+      highPerformanceGpuRequested: true,
+      unavailableReason: compactError(error),
+    };
   }
 }
 

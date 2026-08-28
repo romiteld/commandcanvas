@@ -27,7 +27,7 @@ test("loads the pinned YOLO 21-keypoint model and completes one browser inferenc
       responses.push({ url: response.url(), status: response.status() });
   });
 
-  await page.goto("/");
+  await page.goto("/local");
   const observation = await page.evaluate(async ({ modelUrl }) => {
     const worker = new Worker("/workers/yolo-hand-pose.js", {
       type: "module",

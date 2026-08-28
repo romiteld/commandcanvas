@@ -11,19 +11,36 @@ import type {
 import { createHandTrackingController } from "@/lib/gesture/hand-tracking-controller";
 
 export interface SpatialCameraControlProps {
-  createController?: () => HandTrackingController;
+  createController?: (
+    preferences: SpatialCameraControllerPreferences,
+  ) => HandTrackingController;
+  privateGpuRelayAvailable?: boolean;
   onObservation?: (observation: HandTrackingObservation) => void;
   onStatusChange?: (status: HandTrackingStatus) => void;
   onSpatialModeStarted?: () => void;
 }
 
+export interface SpatialCameraControllerPreferences {
+  cameraUploadConsent: () => boolean;
+}
+
 export function SpatialCameraControl({
-  createController = createHandTrackingController,
+  createController = () => createHandTrackingController(),
+  privateGpuRelayAvailable = false,
   onObservation,
   onStatusChange,
   onSpatialModeStarted,
 }: SpatialCameraControlProps) {
-  const [controller] = useState(createController);
+  const [uploadConsent] = useState(() => createMutableConsentState());
+  const [privateGpuConsent, setPrivateGpuConsent] = useState(false);
+  const [startingTarget, setStartingTarget] = useState<
+    "private-relay" | "local" | null
+  >(null);
+  const [controller] = useState(() =>
+    createController({
+      cameraUploadConsent: uploadConsent.get,
+    }),
+  );
   const [status, setStatus] = useState<HandTrackingStatus>(() =>
     controller.getStatus(),
   );
@@ -44,6 +61,7 @@ export function SpatialCameraControl({
   const videoRef = useRef<HTMLVideoElement>(null);
   const spatialModeStartedRef = useRef(false);
   const spatialModeRequestedRef = useRef(false);
+  const lifecycleStopIssuedRef = useRef(false);
   const observationHandlerRef = useRef(onObservation);
   const statusHandlerRef = useRef(onStatusChange);
   const spatialModeStartedHandlerRef = useRef(onSpatialModeStarted);
@@ -58,6 +76,7 @@ export function SpatialCameraControl({
     const unsubscribeStatus = controller.subscribeStatus((next) => {
       setStatus(next);
       statusHandlerRef.current?.(next);
+      if (next.state === "ready") setStartingTarget(null);
       if (
         next.state === "ready" &&
         spatialModeRequestedRef.current &&
@@ -97,9 +116,77 @@ export function SpatialCameraControl({
       unsubscribeStatus();
       unsubscribeObservations();
       unsubscribeEngine?.();
-      controller.stop();
+      if (!lifecycleStopIssuedRef.current) {
+        lifecycleStopIssuedRef.current = true;
+        controller.stop();
+      }
     };
   }, [controller]);
+
+  useEffect(() => {
+    const stopForPageLifecycle = () => {
+      if (lifecycleStopIssuedRef.current) return;
+      const current = controller.getStatus();
+      if (current.state !== "starting" && current.state !== "ready") return;
+      lifecycleStopIssuedRef.current = true;
+      controller.stop();
+      setStartingTarget(null);
+      spatialModeStartedRef.current = false;
+      spatialModeRequestedRef.current = false;
+      setPreviewExpanded(false);
+    };
+    const stopWhenHidden = () => {
+      if (document.visibilityState === "hidden") stopForPageLifecycle();
+    };
+    document.addEventListener("visibilitychange", stopWhenHidden);
+    window.addEventListener("pagehide", stopForPageLifecycle);
+    return () => {
+      document.removeEventListener("visibilitychange", stopWhenHidden);
+      window.removeEventListener("pagehide", stopForPageLifecycle);
+    };
+  }, [controller]);
+
+  function startTracking({
+    preserveSpatialMode = false,
+    target = uploadConsent.get() ? "private-relay" : "local",
+  }: {
+    preserveSpatialMode?: boolean;
+    target?: "private-relay" | "local";
+  } = {}) {
+    const video = videoRef.current;
+    if (!video) return;
+    lifecycleStopIssuedRef.current = false;
+    setStartingTarget(target);
+    if (!preserveSpatialMode) {
+      spatialModeStartedRef.current = false;
+      spatialModeRequestedRef.current = true;
+    }
+    setPreviewExpanded(false);
+    void controller.start(video).catch(() => undefined);
+  }
+
+  function stopTracking() {
+    lifecycleStopIssuedRef.current = true;
+    controller.stop();
+    setStartingTarget(null);
+    spatialModeStartedRef.current = false;
+    spatialModeRequestedRef.current = false;
+    setPreviewExpanded(false);
+  }
+
+  function restartTrackingForEnginePreference(
+    target: "private-relay" | "local",
+  ) {
+    const current = controller.getStatus();
+    if (current.state !== "starting" && current.state !== "ready") return;
+    const preserveSpatialMode = spatialModeStartedRef.current;
+    const resumeSpatialMode =
+      preserveSpatialMode || spatialModeRequestedRef.current;
+    controller.stop();
+    spatialModeStartedRef.current = preserveSpatialMode;
+    spatialModeRequestedRef.current = !preserveSpatialMode && resumeSpatialMode;
+    startTracking({ preserveSpatialMode: true, target });
+  }
 
   const active = status.state === "starting" || status.state === "ready";
   const trackedHands =
@@ -118,7 +205,7 @@ export function SpatialCameraControl({
         <div>
           <strong>Hand input</strong>
           <span role="status" aria-live="polite">
-            {statusLabel(status)}
+            {statusLabel(status, engineStatus, startingTarget)}
           </span>
         </div>
         <div className="spatial-camera-actions">
@@ -139,25 +226,35 @@ export function SpatialCameraControl({
             aria-label={active ? "Disable hand input" : "Enable hand input"}
             onClick={() => {
               if (active) {
-                controller.stop();
-                spatialModeStartedRef.current = false;
-                spatialModeRequestedRef.current = false;
-                setPreviewExpanded(false);
+                stopTracking();
                 return;
               }
-              const video = videoRef.current;
-              if (video) {
-                spatialModeStartedRef.current = false;
-                spatialModeRequestedRef.current = true;
-                setPreviewExpanded(false);
-                void controller.start(video).catch(() => undefined);
-              }
+              startTracking();
             }}
           >
             {active ? "Disable" : "Enable"}
           </button>
         </div>
       </div>
+      {privateGpuRelayAvailable ? (
+        <label className="private-gpu-consent">
+          <input
+            type="checkbox"
+            aria-label="Use private GPU hand tracking"
+            checked={privateGpuConsent}
+            onChange={(event) => {
+              const next = event.currentTarget.checked;
+              uploadConsent.set(next);
+              setPrivateGpuConsent(next);
+              restartTrackingForEnginePreference(next ? "private-relay" : "local");
+            }}
+          />
+          <span>
+            <strong>Use private GPU hand tracking</strong>
+            <small>Explicit camera-upload consent. Local tracking remains the fallback.</small>
+          </span>
+        </label>
+      ) : null}
       <div className={`camera-preview camera-${status.state}`}>
         <div
           className="camera-media-frame"
@@ -174,7 +271,10 @@ export function SpatialCameraControl({
                 setVideoAspectRatio(videoWidth / videoHeight);
             }}
           />
-          <div className="camera-interaction-boundary" aria-hidden="true" />
+          <div className="camera-sensor-context">
+            <strong>Sensor preview only</strong>
+            <span>Your whole canvas is the hand control surface.</span>
+          </div>
           <div className="camera-keypoint-overlay" aria-hidden="true">
             {trackedHands.flatMap((hand, handIndex) =>
               (hand.landmarks ?? []).map((landmark, index) => (
@@ -258,12 +358,38 @@ export function SpatialCameraControl({
                 : ""}
             </span>
           ) : null}
+          {engineStatus?.highPerformanceGpuRequested ? (
+            <span data-high-performance-gpu-request>
+              High-performance WebGPU adapter requested
+            </span>
+          ) : null}
+          {engineStatus?.fallbackReason ? (
+            <span data-execution-provider-fallback>
+              {fallbackLabel(engineStatus.fallbackKind)} · {engineStatus.fallbackReason}
+            </span>
+          ) : null}
           {engineStatus?.detectorRoundTripMs !== undefined ? (
             <span data-hand-runtime-metrics>
-              {Math.round(engineStatus.detectorRoundTripMs)} ms detector/worker round trip
-              {engineStatus.resultRateFps !== undefined
-                ? ` · ${engineStatus.resultRateFps.toFixed(1)} results/s`
-                : ""}
+              {engineStatus.processingLocation === "private-relay" &&
+              engineStatus.processingLatencyMs !== undefined
+                ? `${Math.round(engineStatus.processingLatencyMs)} ms GPU processing · ${Math.round(engineStatus.detectorRoundTripMs)} ms capture/result round trip`
+                : `${Math.round(engineStatus.detectorRoundTripMs)} ms detector/worker round trip${
+                    engineStatus.resultRateFps !== undefined
+                      ? ` · ${engineStatus.resultRateFps.toFixed(1)} results/s`
+                      : ""
+                  }`}
+            </span>
+          ) : null}
+          {engineStatus?.processingLocation === "private-relay" &&
+          engineStatus.encodeLatencyMs !== undefined &&
+          engineStatus.relayRoundTripMs !== undefined &&
+          engineStatus.droppedBeforeEncode !== undefined &&
+          engineStatus.droppedBeforeSend !== undefined ? (
+            <span data-hand-relay-pipeline-metrics>
+              {Math.round(engineStatus.encodeLatencyMs)} ms encode ·{" "}
+              {Math.round(engineStatus.relayRoundTripMs)} ms relay round trip · dropped{" "}
+              {engineStatus.droppedBeforeEncode} raw / {engineStatus.droppedBeforeSend}{" "}
+              encoded
             </span>
           ) : null}
           <span>{trackedHands.length > 0 ? `${trackedHands.length} hand${trackedHands.length === 1 ? "" : "s"}` : "No hand"}</span>
@@ -294,10 +420,7 @@ export function SpatialCameraControl({
             type="button"
             aria-label="Cancel spatial calibration"
             onClick={() => {
-              controller.stop();
-              spatialModeStartedRef.current = false;
-              spatialModeRequestedRef.current = false;
-              setPreviewExpanded(false);
+              stopTracking();
             }}
           >
             Cancel
@@ -317,10 +440,18 @@ export function SpatialCameraControl({
           </button>
         </div>
       ) : null}
-      <p>
-        Camera frames stay in this browser. The active local hand-pose engine
-        downloads its model in your browser. Only semantic canvas commands are shared.
-      </p>
+      {engineStatus?.processingLocation === "private-relay" || privateGpuConsent ? (
+        <p>
+          Bounded camera frames are uploaded only while hand input is active and
+          private GPU consent remains on. The relay reports semantic landmarks and
+          does not retain raw frames. Disable consent to close it immediately.
+        </p>
+      ) : (
+        <p>
+          Camera frames stay in this browser. The active local hand-pose engine
+          downloads its model in your browser. Only semantic canvas commands are shared.
+        </p>
+      )}
       {status.state === "ready" ? (
         <div className="gesture-self-check" aria-label="Gesture self-check">
           <strong>
@@ -367,6 +498,16 @@ function confidencePercent(confidence: number) {
   return Math.round(Math.max(0, Math.min(1, confidence)) * 100);
 }
 
+function createMutableConsentState() {
+  let current = false;
+  return {
+    get: () => current,
+    set(next: boolean) {
+      current = next;
+    },
+  };
+}
+
 function executionProviderLabel(
   provider: NonNullable<HandTrackingEngineStatus["executionProvider"]>,
 ) {
@@ -377,6 +518,10 @@ function executionProviderLabel(
       return "WASM";
     case "mediapipe":
       return "MediaPipe";
+    case "cuda":
+      return "CUDA";
+    case "tensorrt":
+      return "TensorRT";
     default:
       return "Unknown";
   }
@@ -392,14 +537,30 @@ function adapterLabel(adapter: HandTrackingEngineStatus["adapter"]) {
   );
 }
 
-function statusLabel(status: HandTrackingStatus) {
+function fallbackLabel(kind: HandTrackingEngineStatus["fallbackKind"]) {
+  if (kind === "private-relay") return "Private GPU fallback";
+  if (kind === "engine") return "Engine fallback";
+  return "WebGPU fallback";
+}
+
+function statusLabel(
+  status: HandTrackingStatus,
+  engineStatus: HandTrackingEngineStatus | null,
+  startingTarget: "private-relay" | "local" | null,
+) {
   switch (status.state) {
     case "off":
       return "Camera off · pointer active";
     case "starting":
-      return "Starting camera locally…";
+      return startingTarget === "private-relay"
+        ? "Connecting to private GPU…"
+        : "Starting local hand tracking…";
     case "ready":
-      return "Hand input ready · local only";
+      if (engineStatus?.processingLocation === "private-relay")
+        return "Hand input ready · private GPU relay";
+      return engineStatus?.fallbackKind === "private-relay"
+        ? "Hand input ready · local fallback"
+        : "Hand input ready · local only";
     case "refused":
       return "Camera permission refused · pointer active";
     case "unavailable":

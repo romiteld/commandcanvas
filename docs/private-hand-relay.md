@@ -1,179 +1,193 @@
 # Optional private GPU hand relay
 
-Status: application-side contract and browser transport scaffold implemented;
-GPU relay service, network exposure, UI opt-in, and physical-camera accuracy are
-not deployed or claimed.
+Status as of 2026-08-28: installed and externally reachable at
+`https://hands.autolensai.com`. The service is an opt-in acceleration path, not
+the privacy default and not a judge dependency. Local YOLO remains the default
+and the automatic fallback.
 
-CommandCanvas remains local-first. Its in-browser YOLO hand-pose engine requests
-WebGPU and falls back to WASM. The private relay is an explicit, separately
-enabled acceleration option for a user who chooses to upload short-lived camera
-frames to a GPU they control. It must never be an automatic failover because
-that would silently change the camera privacy boundary.
-
-## Why the matte service is a pattern, not the hand service
-
-The existing `/home/romiteld/matte-service` proves a useful operational shape:
-a warmed CUDA model behind a loopback FastAPI process, Caddy TLS, a stable DNS
-name, an open liveness endpoint, and authenticated inference. Its measured
-approximately 0.6–0.8 seconds per image is appropriate for still-photo
-segmentation and categorically too slow for a cursor. It also uses a static
-bearer contract intended for server-to-server still images.
-
-Do not add hand frames to that process or route. Live hand tracking needs a
-separate warmed ONNX Runtime CUDA/TensorRT process, a WebSocket, bounded image
-dimensions, one in-flight frame, and expiring per-session authorization.
-
-## Implemented application boundary
-
-The following files are deliberately independent of the current local engine:
-
-- `lib/gesture/private-hand-relay-contract.ts` validates capability, session,
-  readiness, and semantic landmark messages.
-- `lib/gesture/private-hand-relay-token.ts` creates and verifies HMAC-SHA256
-  capabilities with room, actor, session, nonce, issue time, and expiry claims.
-- `lib/gesture/private-hand-relay-route.ts` requires a Supabase-authenticated
-  room member and explicit `cameraUploadConsent: true` before any relay work.
-- `lib/gesture/private-hand-relay-server.ts` is disabled by default, probes the
-  configured HTTPS readiness endpoint, then issues a 15–120 second token.
-- `lib/gesture/private-hand-relay-client.ts` sends the ephemeral token as the
-  first WebSocket message, never in the URL. It holds one in-flight frame and
-  replaces a waiting frame with the newest one. Invalid output, timeout, or
-  disconnection invokes the local fallback callback.
-- `app/api/rooms/[roomId]/hand-relay/session/route.ts` is the no-store session
-  endpoint. With the feature disabled or unhealthy it returns HTTP 503 and
-  `fallback: "local"`.
-
-No reusable relay secret is sent to the browser. The browser sees only a
-short-lived signed capability. The relay must consume its `jti` once and keep a
-TTL-bounded replay cache, so the same capability cannot open a second socket.
-
-## Relay protocol v1
-
-Capability probe:
+## Processing choices
 
 ```text
-GET https://<relay-origin>/v1/capabilities
+Camera
+  |
+  +-- no private-GPU consent --> local YOLO WebGPU
+  |                                  |
+  |                                  +--> threaded WASM
+  |                                  |
+  |                                  +--> labeled MediaPipe recovery
+  |
+  +-- explicit consent ------> bounded JPEG/WebP, newest frame only
+                                      |
+                                      v
+                        hands.autolensai.com over TLS/WSS
+                                      |
+                                      v
+                           native YOLO CUDA inference
+                                      |
+                                      v
+                         semantic 21-point landmarks
+                                      |
+                                      v
+                          canonical canvas intentions
 ```
 
-It must return the exact schema in
-`privateHandRelayCapabilitySchema`. In particular:
+In local mode, camera frames stay in the browser. In private-GPU mode, one
+bounded frame at a time may leave the browser only while Hand input is active
+and **Use private GPU hand tracking** remains selected. The relay accepts JPEG
+or WebP, limits encoded bytes and decompressed dimensions, does not retain raw
+frames, and returns at most two semantic hands with exactly 21 normalized
+landmarks each. Camera frames are never sent to ChatGPT, OpenAI, Supabase, or a
+WebMCP tool.
 
-- `ready: true` implies `warm: true`;
-- the actual pinned model revision, license, CUDA device, and precision are
-  reported;
-- `maxInFlight` is exactly `1` and `newestFrameOnly` is `true`;
-- `rawFramesPersisted` is `false`, `semanticResultsOnly` is `true`, and
-  `maxRetentionSeconds` is `0`.
+Disabling consent, disabling Hand input, hiding or leaving the page, an expired
+session, a network failure, or an invalid relay result closes the remote path
+and selects the local engine. Private relay failure is not a reason to stop the
+canvas.
 
-A cold or overloaded process reports `ready: false` with an
-`unavailableReason`; it does not return a pretend-ready response.
-
-WebSocket:
+## Installed topology
 
 ```text
-wss://<relay-origin>/v1/hand-pose
+CommandCanvas browser
+  -> authenticated Vercel session route
+  -> short-lived one-use HMAC capability
+  -> wss://hands.autolensai.com/v1/hand-pose
+  -> existing WAN TCP 443 path
+  -> Caddy virtual host selected by SNI
+  -> 127.0.0.1:8100
+  -> commandcanvas-hand-relay Docker service
+  -> ONNX Runtime CUDAExecutionProvider, CUDA device 0
 ```
 
-Message order:
+The public capability route is
+`https://hands.autolensai.com/v1/capabilities`. Caddy exposes only
+`/v1/capabilities` and `/v1/hand-pose`; unrelated paths return 404. The native
+service remains loopback-bound at `127.0.0.1:8100`, uses
+`restart: unless-stopped`, has no CPU inference mode, and mounts the tracked
+model artifact read-only. The existing AutoLensAI matte process, port, model,
+credentials, and lifecycle remain separate.
 
-1. Browser opens the socket without query credentials.
-2. Browser sends `{type:"hello", protocol, token}`.
-3. Relay verifies signature, audience, issuer, room/user/session claims,
-   expiration, an allowlisted CommandCanvas `Origin`, and unused `jti` before
-   accepting any binary message.
-4. Relay sends `{type:"ready", protocol}`.
-5. Browser sends one JSON frame header followed by one WebP or JPEG binary
-   message.
-6. Relay returns the validated semantic result: at most two hands, confidence,
-   handedness, and exactly 21 normalized landmarks per hand.
-7. Only after that result does the browser send its newest waiting frame.
+The DNS A record points `hands.autolensai.com` to the existing public edge.
+No pfSense mutation was needed because WAN TCP 443 already reached the Caddy
+host and SNI selects the hand-relay virtual host. No firewall or management
+credential is stored in this repository.
 
-The relay should close with a policy error for authentication failure, token
-replay, metadata/binary ordering violations, oversized input, wrong MIME,
-decompression-bomb dimensions, or more than one in-flight frame. It must not
-log tokens or frame bytes.
+## Browser and server authorization
 
-## Server configuration
+The browser never receives a reusable relay secret. It requests a session from
+the no-store CommandCanvas route, which requires:
 
-All four values stay in the Vercel server environment. None is prefixed
-`NEXT_PUBLIC_`.
+- a valid Supabase bearer token;
+- current room membership;
+- explicit `cameraUploadConsent: true`;
+- enabled server configuration;
+- a healthy exact HTTPS relay origin;
+- successful durable actor, room, and global admission.
 
-```text
+The server returns a short-lived capability containing room, actor, session,
+nonce, issue time, expiry, issuer, audience, and JTI claims. The browser sends
+that capability as the first WebSocket message, never in a URL. The relay
+checks the HMAC, exact CommandCanvas Origin, claims, expiry, and unused JTI
+before accepting a frame. A process-local TTL cache consumes each JTI once.
+
+## Protocol limits
+
+The installed v1 protocol enforces:
+
+- `maxInFlight: 1` and newest-frame-only browser queuing;
+- target encoding around 320 pixels and 65,536 bytes where possible;
+- an absolute 262,144-byte encoded-frame ceiling;
+- a 1280 by 720 decompressed-dimension ceiling;
+- JPEG/WebP signature and declared-MIME agreement;
+- bounded handshake, frame-idle, inference, and authenticated-session deadlines;
+- one native inference worker and server-side frame pacing;
+- at most two results with exactly 21 normalized landmarks;
+- no token, frame, or request-body logging in the application service;
+- no raw-frame persistence and zero advertised raw retention;
+- policy close for invalid Origin, authentication, message order, or image;
+- local browser fallback after timeout, overload, malformed output, or close.
+
+The native model exposes x/y and per-keypoint visibility. The relay reports
+`z: 0` and `handedness: "unknown"` rather than inventing depth or handedness.
+
+## Installed configuration
+
+The Vercel application has these server-only names:
+
+```dotenv
 PRIVATE_HAND_RELAY_ENABLED=true
-PRIVATE_HAND_RELAY_ORIGIN=https://hands.example.com
-PRIVATE_HAND_RELAY_SIGNING_KEY=<32 random bytes encoded as unpadded base64url>
+PRIVATE_HAND_RELAY_ORIGIN=https://hands.autolensai.com
+PRIVATE_HAND_RELAY_SIGNING_KEY=<independent 32-byte base64url secret>
 PRIVATE_HAND_RELAY_TOKEN_TTL_SECONDS=60
 ```
 
-The GPU service receives the same signing key through its own local secret
-manager or protected environment file. Generate a new independent key; do not
-reuse a Supabase, Resend, pfSense, matte, or application secret.
+The native service uses its own protected environment file. A public,
+non-secret template is at
+[`services/hand-relay/.env.example`](../services/hand-relay/.env.example). The
+matching signing key is independent of Supabase, Vercel, Resend, pfSense,
+AutoLensAI, and every other application secret.
 
-## Exact deployment sequence still required
+## Installed evidence
 
-1. **Rotate the pfSense password exposed in chat.** Do not use it in a shell,
-   commit, deployment log, browser URL, or automation. Full authorization does
-   not make an exposed management password safe to reuse.
-2. **Benchmark a separate warmed relay locally on the RTX 3090.** Pin the
-   `poptoz/yolo26-hand-pose-face-detection` ONNX revision and its AGPL-3.0
-   notices. Use ONNX Runtime CUDA first; compare TensorRT only after correctness
-   matches. Warm with a real hand fixture, then require measured end-to-end p50,
-   p95, output cadence, and dropped-frame counts. Do not infer readiness from
-   `nvidia-smi` alone.
-3. **Implement relay-side verification and the bounded socket.** Validate the
-   v1 contract, enforce an exact production/staging Origin allowlist, consume
-   each `jti` once until expiry, permit one in-flight frame, drop stale queued
-   work, reject images above the advertised bytes/dimensions, and keep no raw
-   frame or debug capture. Unit-test tampering, expiry, replay, cross-origin
-   attempts, malformed images, queue pressure, disconnect, and semantic output
-   shape.
-4. **Bind inference to loopback**, for example `127.0.0.1:8100`. Run it under a
-   dedicated unprivileged service account. Do not modify or share the matte
-   process, virtual environment, bearer token, port, or model lifecycle.
-5. **Add a separate Caddy virtual host** such as `hands.example.com` that
-   reverse-proxies only `/v1/capabilities` and `/v1/hand-pose` to the new
-   loopback port. Cap the request body, disable response caching, keep the token
-   out of the URL, and ensure access logs never contain message bodies.
-6. **Point DNS to the controlled public address.** Verify the certificate,
-   WebSocket upgrade, and the capability JSON from outside the LAN before
-   changing CommandCanvas.
-7. **Use pfSense only for the minimum network path.** On pfSense Plus 25.07 or
-   later, Netgate Nexus is enabled under **System > Advanced > Netgate Nexus**.
-   If WAN TCP 443 already forwards to the Caddy host and Caddy selects virtual
-   hosts by SNI, no new hand-relay NAT rule is required. Otherwise add only the
-   specific TCP 443 path to that Caddy host. Prefer the GUI for this one-time
-   rule. If automating, create a scoped Nexus API key after password rotation;
-   never use an administrator username/password as an API credential.
-8. **Set the four server variables in a non-production CommandCanvas
-   deployment first.** The route must return a WSS session with a 60-second
-   capability, and the browser must fall back locally when the service is
-   stopped, cold, overloaded, malformed, or slow.
-9. **Add a visible opt-in control.** Its copy must say that camera frames leave
-   the browser for the named private GPU. Stopping spatial mode, closing the
-   room, revoking consent, visibility suspension, or local fallback must close
-   the socket and clear queued blobs.
-10. **Exercise a physical-camera matrix** before production: far-left/right,
-    high/low reach, point, pinch engage/release, finger drawing continuity,
-    one-hand object move, two-hand resize, occlusion, bright/dim light, and
-    network loss. Record local WebGPU, local WASM, and private-GPU p50/p95 rather
-    than assuming the remote path is smoother.
+The following evidence was recorded on 2026-08-28:
 
-Netgate’s supported interface is [Netgate Nexus for pfSense
-Plus](https://docs.netgate.com/pfsense/en/latest/nexus/index.html), with its
-enablement options documented in [Netgate Nexus
-settings](https://docs.netgate.com/pfsense/en/latest/nexus/options.html).
+- the public capability route returned HTTP 200, ready and warm;
+- the runtime identified `NVIDIA GeForce RTX 3090 (CUDA device 0)` and
+  `CUDAExecutionProvider`, FP16, 30 FPS advertised maximum, and one in-flight
+  frame;
+- the returned privacy contract reported semantic results only, no raw-frame
+  persistence, and zero raw retention;
+- an unrelated public route returned HTTP 404;
+- the exact tracked ONNX model was 21,447,188 bytes with SHA-256
+  `07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc`;
+- a CC0 static bare-hand image produced one hand at confidence `0.934082` with
+  21 finite landmarks;
+- 200 warmed native repeats of that static image measured p50 `7.652 ms`, p95
+  `11.016 ms`, and `122.013` results per second;
+- the live GPU also had a light separate AutoLensAI workload. CommandCanvas
+  does not claim exclusive GPU ownership.
 
-## Release gate
+These results prove the installed native CUDA inference path and its static
+image protocol. They do not prove live camera cadence, end-to-end network
+latency, or physical-hand ergonomics.
 
-Do not set `PRIVATE_HAND_RELAY_ENABLED=true` publicly until all of these are
-true:
+## Reversible edge installation
 
-- HTTPS capability and WSS endpoints are externally exercised;
-- a real CUDA inference result matches the 21-point schema;
-- token expiry and one-use replay refusal are observed at the relay;
-- no raw frame, token, or management credential appears in logs;
-- local WebGPU/WASM still runs when consent is absent or the relay fails;
-- physical hand testing demonstrates a material latency or reach improvement.
+The route helper in [`ops/hand-relay`](../ops/hand-relay/README.md) created a
+complete pre-install Caddy snapshot before replacing or reloading the live
+file. The recorded snapshot is:
 
-Until then, the accurate product status is: **secure opt-in contract scaffold;
-private GPU inference not deployed**.
+```text
+/home/romiteld/matte-service/ops/caddy/commandcanvas-backups/
+  20260828T093447Z-1738645-pre-install.Caddyfile
+```
+
+The pre-install file SHA-256 was
+`58ec84209dce36faf498b7c14804ddb8fee8c38ad085aef070e34391c2ab5683`.
+The installed file SHA-256 was
+`5265d7eab968760b8c4959c6bb030897e68e4d1c3d9ac7d319377b449d264787`.
+Rollback checks that the current file still matches the installed checksum,
+restores the exact snapshot, validates it, and reloads Caddy. DNS removal is a
+separate deliberate operation and must target the exact resolved record ID.
+
+## Remaining physical verification
+
+Danny's real screen recording showed the rendered UI receiving a physical
+camera, recognizing open-palm state, and reporting pinch ratios between 0.22
+and 0.28. It also showed why the old camera-preview boundary was unacceptable:
+reaching the canvas edges required large physical motion while an enlarged
+preview obscured the workspace.
+
+The current source removes that preview boundary from the interaction model.
+The complete canvas is the hand control plane, a comfortable central camera
+region maps across its full width and height, the drawer closes when spatial
+control begins, and the preview is only a collapsible sensor check. Pinch target
+acquisition also retains a larger reacquisition area after a target is found.
+
+That post-fix design is covered by reducers and component tests, but a person
+has not yet completed the physical matrix against the exact release candidate.
+Before claiming physical readiness, exercise far-left/right and high/low reach,
+point, pinch engage and release, finger drawing continuity, one-hand movement,
+two-hand resize and canvas zoom, open-palm pan, edge throw, bottom minimize,
+occlusion, bright and dim light, visibility suspension, and network loss. Record
+end-to-end p50, p95, result cadence, dropped frames, false grabs, false releases,
+and whether local fallback remains usable.

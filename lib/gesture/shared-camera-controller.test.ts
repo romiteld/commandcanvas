@@ -25,4 +25,30 @@ describe("createSharedCameraHandController", () => {
     expect(await dependencies?.getSharedMediaStream?.()).toBe(stream);
     expect(getMeetingStream).toHaveBeenCalledOnce();
   });
+
+  it("passes the exact room access-token provider and live upload-consent getter to the relay engine", () => {
+    const controller = {} as HandTrackingController;
+    const createController = vi.fn<
+      (dependencies: HandTrackingControllerDependencies) => HandTrackingController
+    >(() => controller);
+    let consent = false;
+    const getAccessToken = vi.fn(async () => "room-access-token");
+
+    createSharedCameraHandController({
+      getMeetingStream: () => null,
+      privateHandRelay: {
+        roomId: "11111111-1111-4111-8111-111111111111",
+        getAccessToken,
+        cameraUploadConsent: () => consent,
+      },
+      createController,
+    });
+
+    const relay = createController.mock.calls[0]?.[0].privateHandRelay;
+    expect(relay?.roomId).toBe("11111111-1111-4111-8111-111111111111");
+    expect(relay?.getAccessToken).toBe(getAccessToken);
+    expect(relay?.cameraUploadConsent()).toBe(false);
+    consent = true;
+    expect(relay?.cameraUploadConsent()).toBe(true);
+  });
 });

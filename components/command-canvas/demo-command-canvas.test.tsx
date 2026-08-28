@@ -987,6 +987,26 @@ describe("DemoCommandCanvas", () => {
     expect(screen.queryByRole("textbox", { name: /email|password/i })).toBeNull();
   });
 
+  it("does not offer private GPU camera upload when the server feature is disabled", async () => {
+    const user = userEvent.setup();
+    const harness = readyEnvironment();
+
+    render(
+      <DemoCommandCanvas
+        environment={harness.environment}
+        privateGpuRelayEnabled={false}
+      />,
+    );
+
+    expect(await screen.findByText("Live demo room")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    expect(
+      screen.queryByRole("checkbox", {
+        name: "Use private GPU hand tracking",
+      }),
+    ).toBeNull();
+  });
+
   it("renders only actual Presence participants and one remote cursor", async () => {
     const user = userEvent.setup();
     const { environment } = readyEnvironment();

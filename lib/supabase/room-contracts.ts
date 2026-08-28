@@ -18,7 +18,7 @@ const joinTokenSchema = z
 
 export const createRoomRequestSchema = z
   .object({
-    mode: z.enum(["standard", "demo"]),
+    mode: z.literal("demo"),
     name: z.string().trim().min(1).max(120),
     displayName: displayNameSchema,
     color: participantColorSchema,

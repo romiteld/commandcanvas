@@ -6,7 +6,8 @@ export type RequestAuthenticationErrorCode =
   | "authorization_missing"
   | "authorization_malformed"
   | "authorization_too_large"
-  | "authentication_failed";
+  | "authentication_failed"
+  | "permanent_email_auth_required";
 
 export interface RequestAuthenticationError {
   code: RequestAuthenticationErrorCode;
@@ -19,6 +20,10 @@ export type BearerJwtResult =
 
 export type RequestActorResult =
   | { ok: true; actorUserId: string }
+  | { ok: false; error: RequestAuthenticationError };
+
+export type PermanentEmailUserResult =
+  | { ok: true; actorUserId: string; email: string }
   | { ok: false; error: RequestAuthenticationError };
 
 export interface SupabaseUserVerifier {
@@ -86,6 +91,38 @@ export async function authenticateRequestActor(
   }
 }
 
+export async function authenticatePermanentEmailUser(
+  authorizationHeader: string | null,
+  verifier: SupabaseUserVerifier,
+): Promise<PermanentEmailUserResult> {
+  const bearer = parseBearerJwtHeader(authorizationHeader);
+  if (!bearer.ok) return bearer;
+
+  try {
+    const { data, error } = await verifier.auth.getUser(bearer.token);
+    const user = data.user;
+    const email =
+      typeof user?.email === "string" ? user.email.trim().toLowerCase() : "";
+    const confirmedAt = user?.email_confirmed_at;
+    if (
+      error ||
+      !user ||
+      user.id.trim() === "" ||
+      user.is_anonymous === true ||
+      email.length < 3 ||
+      email.length > 254 ||
+      !email.includes("@") ||
+      typeof confirmedAt !== "string" ||
+      confirmedAt.trim() === ""
+    )
+      return permanentEmailRequired();
+
+    return { ok: true, actorUserId: user.id, email };
+  } catch {
+    return permanentEmailRequired();
+  }
+}
+
 function malformedAuthorization(): BearerJwtResult {
   return {
     ok: false,
@@ -102,6 +139,16 @@ function authenticationFailed(): RequestActorResult {
     error: {
       code: "authentication_failed",
       message: "Authentication failed.",
+    },
+  };
+}
+
+function permanentEmailRequired(): PermanentEmailUserResult {
+  return {
+    ok: false,
+    error: {
+      code: "permanent_email_auth_required",
+      message: "Verify your email before using a meeting room.",
     },
   };
 }

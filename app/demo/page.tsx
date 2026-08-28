@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { DemoCommandCanvas } from "@/components/command-canvas/demo-command-canvas";
+import { isPrivateHandRelayConfigured } from "@/lib/gesture/private-hand-relay-server";
 
 export const metadata: Metadata = {
   title: "CommandCanvas: No-signup live demo",
@@ -11,5 +12,9 @@ export const metadata: Metadata = {
 };
 
 export default function DemoPage() {
-  return <DemoCommandCanvas />;
+  return (
+    <DemoCommandCanvas
+      privateGpuRelayEnabled={isPrivateHandRelayConfigured()}
+    />
+  );
 }

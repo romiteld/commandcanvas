@@ -24,8 +24,15 @@ export interface HandDetector {
 }
 
 export interface HandDetectorDiagnostics {
-  readonly executionProvider: "webgpu" | "wasm" | "mediapipe" | "unknown";
+  readonly executionProvider:
+    | "webgpu"
+    | "wasm"
+    | "mediapipe"
+    | "cuda"
+    | "tensorrt"
+    | "unknown";
   readonly highPerformanceGpuRequested: boolean;
+  readonly processingLocation?: "browser" | "private-relay";
   readonly adapter?: {
     readonly vendor?: string;
     readonly architecture?: string;
@@ -40,6 +47,17 @@ export interface HandDetectorLoadOptions {
   modelAssetUrl: string;
   runningMode: "VIDEO";
   numHands: 2;
+}
+
+export interface HandTrackingRelayMetrics {
+  /** Browser time spent encoding the frame that produced this result. */
+  readonly encodeLatencyMs: number;
+  /** Send-to-validated-result time, including network and relay work. */
+  readonly relayRoundTripMs: number;
+  /** Cumulative raw camera bitmaps replaced before encoding in this run. */
+  readonly droppedBeforeEncode: number;
+  /** Cumulative encoded frames replaced before WebSocket send in this run. */
+  readonly droppedBeforeSend: number;
 }
 
 export type TrackedHandedness = "left" | "right" | "unknown";
@@ -66,6 +84,8 @@ export type HandTrackingWorkerOutboundMessage =
       type: "result";
       timestamp: number;
       hands: readonly TrackedHandLandmarks[];
+      processingLatencyMs?: number;
+      relayMetrics?: HandTrackingRelayMetrics;
     }
   | { type: "error"; message: string };
 

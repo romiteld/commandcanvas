@@ -89,7 +89,37 @@ describe("Realtime session route", () => {
     expect(notMember.createCall).not.toHaveBeenCalled();
   });
 
-  it("refuses a standard room before admission or paid provider work", async () => {
+  it("admits a verified permanent member of a standard room through the same provider path", async () => {
+    const deps = dependencies({
+      verifier: {
+        auth: {
+          getUser: vi.fn(async () => ({
+            data: {
+              user: {
+                id: ACTOR_ID,
+                email: "danny@example.com",
+                email_confirmed_at: "2026-08-28T12:00:00.000Z",
+                is_anonymous: false,
+              },
+            },
+            error: null,
+          })),
+        },
+      },
+      verifyMembership: vi.fn(async () => ({
+        ok: true as const,
+        roomMode: "standard" as const,
+      })),
+    });
+
+    const response = await handleRealtimeSessionRequest(request(), deps);
+
+    expect(response.status).toBe(200);
+    expect(deps.admitSession).toHaveBeenCalledWith(ROOM_ID, ACTOR_ID);
+    expect(deps.createCall).toHaveBeenCalledOnce();
+  });
+
+  it("refuses an anonymous identity in a standard room before admission or paid provider work", async () => {
     const deps = dependencies({
       verifyMembership: vi.fn(async () => ({
         ok: true as const,
@@ -103,8 +133,8 @@ describe("Realtime session route", () => {
     await expect(response.json()).resolves.toEqual({
       ok: false,
       error: {
-        code: "demo_room_required",
-        message: "Live voice is available in the no-signup demo room.",
+        code: "permanent_email_auth_required",
+        message: "Verify your email before using live voice in a meeting room.",
       },
     });
     expect(deps.admitSession).not.toHaveBeenCalled();

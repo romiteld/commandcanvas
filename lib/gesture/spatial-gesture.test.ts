@@ -332,6 +332,47 @@ describe("spatial gesture reducer", () => {
     });
   });
 
+  it("keeps the pointed object available while the hand shape settles into a pinch", () => {
+    const targetedScene = {
+      ...scene,
+      targetedObjectId: "note-front",
+      objects: [
+        {
+          id: "note-front",
+          x: 200,
+          y: 150,
+          width: 180,
+          height: 140,
+          zIndex: 9,
+          pinned: false,
+          minimized: false,
+        },
+      ],
+    };
+
+    const grabbed = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      {
+        mode: "pinch",
+        // The fingertip shifts as thumb and index meet. This is outside the
+        // ordinary hover slop but still close to the object just targeted.
+        pointer: { x: 0.13, y: 0.4 },
+        timestamp: 1_000,
+      },
+      targetedScene,
+      { drawingEnabled: false, manipulationEnabled: true },
+    );
+
+    expect(grabbed.state).toMatchObject({
+      phase: "grabbing",
+      grab: { objectId: "note-front" },
+    });
+    expect(grabbed.effects).toContainEqual({
+      type: "object.select",
+      objectId: "note-front",
+    });
+  });
+
   it("requires a neutral observation after pinch release before drawing", () => {
     const objectScene: SpatialGestureScene = {
       ...scene,

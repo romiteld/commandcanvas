@@ -35,7 +35,31 @@ interface MembershipQueryBuilder {
 
 interface PrivateHandRelayServiceClient extends SupabaseUserVerifier {
   from(table: string): MembershipQueryBuilder;
+  rpc(
+    functionName: string,
+    parameters: Record<string, unknown>,
+  ): PromiseLike<{ data: unknown; error: unknown }>;
 }
+
+const admittedRelaySessionSchema = z
+  .object({ outcome: z.literal("admitted") })
+  .strict();
+const deniedRelaySessionSchema = z
+  .object({
+    outcome: z.literal("denied"),
+    code: z.enum([
+      "hand_relay_global_burst_rate_limit",
+      "hand_relay_global_daily_rate_limit",
+      "hand_relay_actor_rate_limit",
+      "hand_relay_room_rate_limit",
+    ]),
+    retryAfterSeconds: z.number().int().min(1).max(86_400),
+  })
+  .strict();
+const relaySessionAdmissionSchema = z.union([
+  admittedRelaySessionSchema,
+  deniedRelaySessionSchema,
+]);
 
 interface ServerPrivateHandRelayOptions {
   environment?: Readonly<Record<string, string | undefined>>;
@@ -52,6 +76,15 @@ interface ServerPrivateHandRelayOptions {
 export type ServerPrivateHandRelayDependenciesResult =
   | { ok: true; dependencies: PrivateHandRelaySessionRouteDependencies }
   | { ok: false };
+
+export function isPrivateHandRelayConfigured(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+) {
+  return (
+    readPrivateHandRelayConfig(environment).ok &&
+    readServerSupabaseConfig(environment).ok
+  );
+}
 
 export function createServerPrivateHandRelayDependencies(
   options: ServerPrivateHandRelayOptions = {},
@@ -103,6 +136,16 @@ export function createServerPrivateHandRelayDependencies(
         }
       },
       async startSession(input) {
+        // Admission is deliberately evaluated before the network probe. A
+        // denied anonymous/demo identity must not be able to spend relay
+        // bandwidth or wake the private service merely by requesting tokens.
+        const admission = await admitPrivateHandRelaySession(
+          client,
+          input.roomId,
+          input.actorUserId,
+        );
+        if (!admission.ok) return admission;
+
         const capability = await probePrivateHandRelayCapability(
           relayConfig.origin,
           input.signal,
@@ -144,6 +187,33 @@ export function createServerPrivateHandRelayDependencies(
       },
     },
   };
+}
+
+async function admitPrivateHandRelaySession(
+  client: PrivateHandRelayServiceClient,
+  roomId: string,
+  actorUserId: string,
+) {
+  try {
+    const response = await client.rpc("admit_private_hand_relay_session", {
+      p_room_id: roomId,
+      p_actor_user_id: actorUserId,
+    });
+    if (response.error)
+      return { ok: false as const, code: "relay_unavailable" as const };
+    const parsed = relaySessionAdmissionSchema.safeParse(response.data);
+    if (!parsed.success)
+      return { ok: false as const, code: "relay_unavailable" as const };
+    if (parsed.data.outcome === "denied")
+      return {
+        ok: false as const,
+        code: "rate_limited" as const,
+        retryAfterSeconds: parsed.data.retryAfterSeconds,
+      };
+    return { ok: true as const };
+  } catch {
+    return { ok: false as const, code: "relay_unavailable" as const };
+  }
 }
 
 type PrivateHandRelayConfigResult =

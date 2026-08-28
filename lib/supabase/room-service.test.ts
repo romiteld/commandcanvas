@@ -349,6 +349,32 @@ describe("CommandCanvas room service", () => {
     );
   });
 
+  it("refuses standard rooms before the legacy create capability is called", async () => {
+    const harness = createClient();
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).createRoom(
+      HOST_ID,
+      {
+        mode: "standard",
+        name: "Standard meeting",
+        displayName: "Danny",
+        color: "#275ed7",
+      } as never,
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "create_unavailable",
+        message: "Room could not be created.",
+      },
+    });
+    expect(harness.rawClient.rpc).not.toHaveBeenCalled();
+  });
+
   it("never returns the raw join token when room creation fails", async () => {
     const harness = createClient({
       rpcResults: [
@@ -472,7 +498,7 @@ describe("CommandCanvas room service", () => {
     });
     const mismatchHarness = createClient({
       tableResults: {
-        rooms: [{ data: { id: ROOM_ID }, error: null }],
+        rooms: [{ data: { id: ROOM_ID, mode: "demo" }, error: null }],
       },
       rpcResults: [
         {
@@ -516,6 +542,84 @@ describe("CommandCanvas room service", () => {
         p_requested_role: "participant",
       },
     );
+  });
+
+  it("joins only a demo room through the legacy join capability", async () => {
+    const harness = createClient({
+      tableResults: {
+        rooms: [{ data: { id: ROOM_ID, mode: "demo" }, error: null }],
+      },
+      rpcResults: [
+        {
+          data: {
+            roomId: ROOM_ID,
+            role: "participant",
+            joined: true,
+          },
+          error: null,
+        },
+      ],
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).joinRoom(PARTICIPANT_ID, {
+      slug: SLUG,
+      joinToken: JOIN_TOKEN,
+      displayName: "Sarah",
+      color: "#7558cf",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        roomId: ROOM_ID,
+        role: "participant",
+        joined: true,
+      },
+    });
+    expect(harness.traces[0]).toEqual({
+      table: "rooms",
+      select: "id, mode",
+      filters: [["slug", SLUG]],
+      orders: [],
+      cardinality: "maybeSingle",
+    });
+  });
+
+  it("collapses a standard room legacy join into the non-enumerating refusal", async () => {
+    const harness = createClient({
+      tableResults: {
+        rooms: [{ data: { id: ROOM_ID, mode: "standard" }, error: null }],
+      },
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).joinRoom(PARTICIPANT_ID, {
+      slug: SLUG,
+      joinToken: JOIN_TOKEN,
+      displayName: "Sarah",
+      color: "#7558cf",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "join_unavailable",
+        message: "Room is unavailable or the join link is invalid.",
+      },
+    });
+    expect(harness.traces[0]).toEqual({
+      table: "rooms",
+      select: "id, mode",
+      filters: [["slug", SLUG]],
+      orders: [],
+      cardinality: "maybeSingle",
+    });
+    expect(harness.rawClient.rpc).not.toHaveBeenCalled();
   });
 
   it("loads one exact room, all objects, and receipts in ascending revision order", async () => {

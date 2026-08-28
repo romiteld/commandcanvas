@@ -84,15 +84,43 @@ inputs rather than treating an unpinned model name as source.
 
 ## Runtime source
 
-The browser worker, tensor preprocessing, output parser, gesture state machine,
-and build script are in the same public repository:
+The browser worker, private-relay transport, tensor preprocessing, output
+parser, gesture state machine, and build script are in the same public
+repository:
 
 - `lib/gesture/yolo-hand-pose.worker.ts`
 - `lib/gesture/yolo-hand-pose-detector.ts`
 - `lib/gesture/spatial-vision-engine.ts`
 - `lib/gesture/hand-tracking-controller.ts`
 - `lib/gesture/spatial-gesture.ts`
+- `lib/gesture/private-hand-relay-contract.ts`
+- `lib/gesture/private-hand-relay-client.ts`
+- `lib/gesture/private-hand-relay-worker.ts`
+- `lib/gesture/private-hand-relay-route.ts`
+- `lib/gesture/private-hand-relay-server.ts`
 - `scripts/build-hand-worker.mjs`
+
+The optional native CUDA relay and its deployment boundary are also included as
+Corresponding Source:
+
+- `services/hand-relay/commandcanvas_hand_relay/`
+- `services/hand-relay/tests/`
+- `services/hand-relay/Dockerfile`
+- `services/hand-relay/compose.yaml`
+- `services/hand-relay/requirements.lock`
+- `services/hand-relay/requirements-ci.lock`
+- `services/hand-relay/requirements-dev.lock`
+- `services/hand-relay/.env.example`
+- `ops/hand-relay/caddy/hand-relay.Caddyfile`
+- `ops/hand-relay/manage-caddy-route.sh`
+- `ops/hand-relay/tests/manage-caddy-route.test.sh`
+
+The native service mounts the same tracked ONNX artifact read-only and verifies
+its complete SHA-256 plus exact input and output tensor shapes before warmup. It
+does not download or substitute another model. The runtime dependency versions
+are exactly pinned in `services/hand-relay/requirements.lock`. The public CI
+lane uses the exact non-GPU subset in `requirements-ci.lock`; developer test
+dependencies are pinned in `requirements-dev.lock`.
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party package
 copyrights, licenses, and upstream source locations.

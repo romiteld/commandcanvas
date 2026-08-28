@@ -18,6 +18,11 @@ const roomIdSchema = z.uuid();
 
 export type PrivateHandRelayStartResult =
   | { ok: true; relay: PrivateHandRelaySession }
+  | {
+      ok: false;
+      code: "rate_limited";
+      retryAfterSeconds: number;
+    }
   | { ok: false; code: "relay_unavailable" };
 
 export interface PrivateHandRelaySessionRouteDependencies {
@@ -107,6 +112,14 @@ export async function handlePrivateHandRelaySessionRequest(
   } catch {
     started = { ok: false, code: "relay_unavailable" };
   }
+  if (!started.ok && started.code === "rate_limited")
+    return jsonError(
+      429,
+      "relay_rate_limited",
+      "Private GPU hand tracking has reached its session-start limit. Local tracking remains active.",
+      true,
+      { "retry-after": String(started.retryAfterSeconds) },
+    );
   if (!started.ok)
     return jsonError(
       503,
@@ -144,21 +157,31 @@ function jsonError(
   code: string,
   message: string,
   localFallback = false,
+  additionalHeaders: Record<string, string> = {},
 ) {
-  return jsonResponse(status, {
-    ok: false,
-    ...(localFallback ? { fallback: "local" } : {}),
-    error: { code, message },
-  });
+  return jsonResponse(
+    status,
+    {
+      ok: false,
+      ...(localFallback ? { fallback: "local" } : {}),
+      error: { code, message },
+    },
+    additionalHeaders,
+  );
 }
 
-function jsonResponse(status: number, body: unknown) {
+function jsonResponse(
+  status: number,
+  body: unknown,
+  additionalHeaders: Record<string, string> = {},
+) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "x-content-type-options": "nosniff",
+      ...additionalHeaders,
     },
   });
 }

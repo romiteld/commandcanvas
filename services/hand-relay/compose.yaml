@@ -1,0 +1,47 @@
+name: commandcanvas-hand-relay
+
+services:
+  hand-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+          pids: 128
+        reservations:
+          memory: 512M
+          devices:
+            - driver: nvidia
+              device_ids:
+                - "${PRIVATE_HAND_RELAY_CUDA_DEVICE:-0}"
+              capabilities:
+                - gpu
+    ports:
+      - "127.0.0.1:8100:8100"
+    environment:
+      PRIVATE_HAND_RELAY_SIGNING_KEY: ${PRIVATE_HAND_RELAY_SIGNING_KEY:?set PRIVATE_HAND_RELAY_SIGNING_KEY}
+      PRIVATE_HAND_RELAY_ALLOWED_ORIGINS: ${PRIVATE_HAND_RELAY_ALLOWED_ORIGINS:?set PRIVATE_HAND_RELAY_ALLOWED_ORIGINS}
+      PRIVATE_HAND_RELAY_MODEL_PATH: /models/yolo26_hand_pose_320_fp16.onnx
+      PRIVATE_HAND_RELAY_BIND_HOST: 0.0.0.0
+      PRIVATE_HAND_RELAY_BIND_PORT: "8100"
+      PRIVATE_HAND_RELAY_MAX_CONNECTIONS: "${PRIVATE_HAND_RELAY_MAX_CONNECTIONS:-2}"
+      PRIVATE_HAND_RELAY_MAX_HANDSHAKES: "${PRIVATE_HAND_RELAY_MAX_HANDSHAKES:-8}"
+      PRIVATE_HAND_RELAY_GPU_MEM_LIMIT_BYTES: "${PRIVATE_HAND_RELAY_GPU_MEM_LIMIT_BYTES:-805306368}"
+      PRIVATE_HAND_RELAY_HANDSHAKE_TIMEOUT_SECONDS: "${PRIVATE_HAND_RELAY_HANDSHAKE_TIMEOUT_SECONDS:-5}"
+      PRIVATE_HAND_RELAY_FRAME_IDLE_TIMEOUT_SECONDS: "${PRIVATE_HAND_RELAY_FRAME_IDLE_TIMEOUT_SECONDS:-5}"
+      PRIVATE_HAND_RELAY_AUTHENTICATED_SESSION_TIMEOUT_SECONDS: "${PRIVATE_HAND_RELAY_AUTHENTICATED_SESSION_TIMEOUT_SECONDS:-1800}"
+      PRIVATE_HAND_RELAY_INFERENCE_TIMEOUT_SECONDS: "${PRIVATE_HAND_RELAY_INFERENCE_TIMEOUT_SECONDS:-2}"
+    volumes:
+      - ../../public/models/yolo26_hand_pose_320_fp16.onnx:/models/yolo26_hand_pose_320_fp16.onnx:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    shm_size: 128m
