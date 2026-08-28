@@ -11,10 +11,12 @@ import type {
 import { createHandTrackingController } from "@/lib/gesture/hand-tracking-controller";
 
 export interface SpatialCameraControlProps {
+  calibrationOpen?: boolean;
   createController?: (
     preferences: SpatialCameraControllerPreferences,
   ) => HandTrackingController;
   privateGpuRelayAvailable?: boolean;
+  onCalibrationOpenChange?: (open: boolean) => void;
   onObservation?: (observation: HandTrackingObservation) => void;
   onStatusChange?: (status: HandTrackingStatus) => void;
   onSpatialModeStarted?: () => void;
@@ -25,8 +27,10 @@ export interface SpatialCameraControllerPreferences {
 }
 
 export function SpatialCameraControl({
+  calibrationOpen,
   createController = () => createHandTrackingController(),
   privateGpuRelayAvailable = false,
+  onCalibrationOpenChange,
   onObservation,
   onStatusChange,
   onSpatialModeStarted,
@@ -54,23 +58,46 @@ export function SpatialCameraControl({
     pointConfidence?: number;
     pinchConfidence?: number;
   }>({});
-  const [previewExpanded, setPreviewExpanded] = useState(false);
+  const [internalCalibrationOpen, setInternalCalibrationOpen] = useState(false);
   const [lastObservation, setLastObservation] =
     useState<HandTrackingObservation | null>(null);
   const [videoAspectRatio, setVideoAspectRatio] = useState(4 / 3);
   const videoRef = useRef<HTMLVideoElement>(null);
   const spatialModeStartedRef = useRef(false);
   const spatialModeRequestedRef = useRef(false);
+  const calibrationOpenRef = useRef(false);
   const lifecycleStopIssuedRef = useRef(false);
   const observationHandlerRef = useRef(onObservation);
   const statusHandlerRef = useRef(onStatusChange);
   const spatialModeStartedHandlerRef = useRef(onSpatialModeStarted);
+  const calibrationOpenHandlerRef = useRef(onCalibrationOpenChange);
+
+  const previewExpanded = calibrationOpen ?? internalCalibrationOpen;
+
+  useEffect(() => {
+    calibrationOpenRef.current = previewExpanded;
+  }, [previewExpanded]);
+
+  function setPreviewExpanded(next: boolean) {
+    calibrationOpenRef.current = next;
+    setInternalCalibrationOpen(next);
+    calibrationOpenHandlerRef.current?.(next);
+  }
+
+  function returnToCanvas() {
+    setPreviewExpanded(false);
+    if (status.state !== "ready") return;
+    spatialModeStartedRef.current = true;
+    spatialModeRequestedRef.current = false;
+    spatialModeStartedHandlerRef.current?.();
+  }
 
   useEffect(() => {
     observationHandlerRef.current = onObservation;
     statusHandlerRef.current = onStatusChange;
     spatialModeStartedHandlerRef.current = onSpatialModeStarted;
-  }, [onObservation, onSpatialModeStarted, onStatusChange]);
+    calibrationOpenHandlerRef.current = onCalibrationOpenChange;
+  }, [onCalibrationOpenChange, onObservation, onSpatialModeStarted, onStatusChange]);
 
   useEffect(() => {
     const unsubscribeStatus = controller.subscribeStatus((next) => {
@@ -105,7 +132,7 @@ export function SpatialCameraControl({
               ? "pointConfidence"
               : "pinchConfidence"]: observation.confidence,
           }));
-        if (spatialModeStartedRef.current)
+        if (spatialModeStartedRef.current && !calibrationOpenRef.current)
           observationHandlerRef.current?.(observation);
       },
     );
@@ -213,13 +240,19 @@ export function SpatialCameraControl({
             type="button"
             aria-label={
               previewExpanded
-                ? "Collapse hand tracking preview"
-                : "Expand hand tracking preview"
+                ? "Close hand calibration"
+                : "Open hand calibration"
             }
             aria-expanded={previewExpanded}
-            onClick={() => setPreviewExpanded((current) => !current)}
+            onClick={() => {
+              if (previewExpanded) {
+                returnToCanvas();
+                return;
+              }
+              setPreviewExpanded(true);
+            }}
           >
-            {previewExpanded ? "Collapse" : "Expand"}
+            {previewExpanded ? "Done" : "Calibrate"}
           </button>
           <button
             type="button"
@@ -272,8 +305,14 @@ export function SpatialCameraControl({
             }}
           />
           <div className="camera-sensor-context">
-            <strong>Sensor preview only</strong>
-            <span>Your whole canvas is the hand control surface.</span>
+            <strong>
+              {previewExpanded ? "Calibration view only" : "Sensor preview only"}
+            </strong>
+            <span>
+              {previewExpanded
+                ? "Return to the canvas to move, draw, resize, or throw objects."
+                : "Your whole canvas is the hand control surface."}
+            </span>
           </div>
           <div className="camera-keypoint-overlay" aria-hidden="true">
             {trackedHands.flatMap((hand, handIndex) =>
@@ -418,25 +457,11 @@ export function SpatialCameraControl({
         <div className="camera-calibration-actions">
           <button
             type="button"
-            aria-label="Cancel spatial calibration"
-            onClick={() => {
-              stopTracking();
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            aria-label="Start spatial mode"
+            aria-label="Return to full canvas"
             disabled={status.state !== "ready"}
-            onClick={() => {
-              spatialModeStartedRef.current = true;
-              spatialModeRequestedRef.current = false;
-              setPreviewExpanded(false);
-              onSpatialModeStarted?.();
-            }}
+            onClick={returnToCanvas}
           >
-            Start Spatial Mode
+            Return to canvas
           </button>
         </div>
       ) : null}

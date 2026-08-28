@@ -2,6 +2,8 @@
 
 CommandCanvas is a shared spatial workspace where people, remote collaborators, the optional Live voice agent, and ChatGPT manipulate the same collection of semantic objects. Rough sketches and their spoken explanation become separate schema-validated visuals without destroying the source, and every supported canvas mutation remains attributable and reversible whether it was initiated by a human, participant, or agent.
 
+**Product landing page:** <https://commandcanvas.vercel.app>
+
 **Live no-signup demo:** <https://commandcanvas.vercel.app/demo>
 
 No signup, login form, password, third-party account, API key, or configuration is required to use the deployed judge route. Supabase Anonymous Auth creates a scoped authenticated browser identity behind the scenes.

@@ -472,23 +472,35 @@ describe("SpatialCameraControl", () => {
     expect(screen.queryByText(/Gesture self-check/)).toBeNull();
   });
 
-  it("expands the live calibration view and shows the tracked pointer", async () => {
+  it("opens a temporary calibration view and returns to the full canvas", async () => {
     const user = userEvent.setup();
     const fake = fakeController();
+    const onSpatialModeStarted = vi.fn();
+    const onObservation = vi.fn();
     const { container } = render(
-      <SpatialCameraControl createController={() => fake.controller} />,
+      <SpatialCameraControl
+        createController={() => fake.controller}
+        onObservation={onObservation}
+        onSpatialModeStarted={onSpatialModeStarted}
+      />,
     );
-    fake.setStatus({ state: "ready" });
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => fake.setStatus({ state: "ready" }));
+    onSpatialModeStarted.mockClear();
 
     await user.click(
-      screen.getByRole("button", { name: "Expand hand tracking preview" }),
+      screen.getByRole("button", { name: "Open hand calibration" }),
     );
     expect(container.querySelector(".spatial-camera-control")).toHaveClass(
       "is-expanded",
     );
     expect(
-      screen.getByRole("button", { name: "Collapse hand tracking preview" }),
+      screen.getByRole("button", { name: "Close hand calibration" }),
     ).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Calibration view only")).toBeVisible();
+    expect(
+      screen.getByText("Return to the canvas to move, draw, resize, or throw objects."),
+    ).toBeVisible();
 
     act(() =>
       fake.emit({
@@ -511,6 +523,27 @@ describe("SpatialCameraControl", () => {
     expect(screen.getByText("Confidence 91%")).toBeVisible();
     expect(screen.getByText("left hand")).toBeVisible();
     expect(screen.getByText("State point")).toBeVisible();
+    expect(onObservation).not.toHaveBeenCalled();
+
+    await user.click(
+      screen.getByRole("button", { name: "Return to full canvas" }),
+    );
+    expect(container.querySelector(".spatial-camera-control")).not.toHaveClass(
+      "is-expanded",
+    );
+    expect(onSpatialModeStarted).toHaveBeenCalledOnce();
+    expect(fake.controller.stop).not.toHaveBeenCalled();
+
+    act(() =>
+      fake.emit({
+        mode: "idle",
+        timestamp: 1_020,
+      }),
+    );
+    expect(onObservation).toHaveBeenCalledWith({
+      mode: "idle",
+      timestamp: 1_020,
+    });
   });
 
   it("presents the camera as a sensor preview rather than a movement boundary", () => {

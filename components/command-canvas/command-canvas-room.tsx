@@ -184,6 +184,7 @@ export function CommandCanvasRoom({
     Record<string, "discard-left" | "discard-right">
   >({});
   const [openDrawer, setOpenDrawer] = useState<WorkspaceDrawer>(null);
+  const [handCalibrationOpen, setHandCalibrationOpen] = useState(false);
   const [typedFallbackOpen, setTypedFallbackOpen] = useState(false);
   const [commandExecution, setCommandExecution] =
     useState<CommandExecutionState>({ status: "idle" });
@@ -269,6 +270,12 @@ export function CommandCanvasRoom({
     const timeoutId = window.setTimeout(() => setOpenDrawer("command"), 0);
     return () => window.clearTimeout(timeoutId);
   }, [commandDrawerRequestKey]);
+
+  useEffect(() => {
+    if (openDrawer === "system" || !handCalibrationOpen) return;
+    const timeoutId = window.setTimeout(() => setHandCalibrationOpen(false), 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [handCalibrationOpen, openDrawer]);
 
   useEffect(
     () => () => {
@@ -1403,6 +1410,7 @@ export function CommandCanvasRoom({
   }
 
   function handleHandObservation(observation: HandTrackingObservation) {
+    if (handCalibrationOpen) return;
     const canvasViewport = canvasViewportRef.current;
     if (!canvasViewport || interactionPending) return;
     const bounds = canvasViewport.getBoundingClientRect();
@@ -1721,6 +1729,26 @@ export function CommandCanvasRoom({
     }
   }
 
+  function openHandCalibration() {
+    const previewObjectId = gesturePreviewObjectId.current;
+    if (
+      previewObjectId &&
+      !gestureExitTimeoutsRef.current.has(previewObjectId)
+    )
+      clearObjectPreview(previewObjectId);
+    gesturePreviewObjectId.current = null;
+    spatialGestureState.current = {
+      ...createInitialSpatialGestureState(),
+      phase: "awaiting_neutral",
+    };
+    handTargetObjectIdRef.current = null;
+    setHandTargetObjectId(null);
+    setHandFeedback(null);
+    setGestureStrokePreview([]);
+    setHandCalibrationOpen(true);
+    setOpenDrawer("system");
+  }
+
   function beginHandDrawing() {
     spatialGestureState.current = createInitialSpatialGestureState();
     setGestureStrokePreview([]);
@@ -1923,7 +1951,7 @@ export function CommandCanvasRoom({
 
   return (
     <main
-      className={`command-canvas-shell${meetingMediaPanel ? " has-meeting-media" : ""}${drawingActive ? " is-drawing" : ""}`}
+      className={`command-canvas-shell${meetingMediaPanel ? " has-meeting-media" : ""}${drawingActive ? " is-drawing" : ""}${openDrawer === "system" ? " is-system-open" : ""}`}
       aria-label="Spatial command surface"
       aria-busy={interactionPending}
       onKeyDown={handleCanvasKeyboard}
@@ -2214,14 +2242,21 @@ export function CommandCanvasRoom({
               >
                 {handInteractionMode === "manipulate" ? (
                   <>
-                    <strong>MOVE OBJECTS</strong>
-                    <span>Reach toward an object · pinch to hold</span>
+                    <strong>HAND CONTROL · FULL CANVAS</strong>
+                    <span>Point at an object · pinch to hold</span>
                     <button
                       type="button"
                       aria-label="Draw with index finger"
                       onClick={beginHandDrawing}
                     >
                       Start draw
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Open hand calibration"
+                      onClick={openHandCalibration}
+                    >
+                      Calibrate
                     </button>
                   </>
                 ) : (
@@ -2443,7 +2478,10 @@ export function CommandCanvasRoom({
               eyebrow="Shared command surface"
               title="Command"
               closeLabel="Close command drawer"
-              onClose={() => setOpenDrawer(null)}
+              onClose={() => {
+                setHandCalibrationOpen(false);
+                setOpenDrawer(null);
+              }}
             />
             {realtimeVoice ? (
               <section className="voice-control-slot" data-command-drawer-lead>
@@ -2509,7 +2547,10 @@ export function CommandCanvasRoom({
               eyebrow="Quiet until needed"
               title="Inputs & services"
               closeLabel="Close system status drawer"
-              onClose={() => setOpenDrawer(null)}
+              onClose={() => {
+                setHandCalibrationOpen(false);
+                setOpenDrawer(null);
+              }}
             />
             <section className="service-stack" aria-label="Service status">
               <ServiceState
@@ -2526,10 +2567,21 @@ export function CommandCanvasRoom({
               <ServiceState label="Spatial input" value={spatialServiceState.value} tone={spatialServiceState.tone} />
             </section>
             <SpatialCameraControl
+              calibrationOpen={handCalibrationOpen}
               createController={createHandTrackingController}
               privateGpuRelayAvailable={privateGpuRelayAvailable}
+              onCalibrationOpenChange={(open) => {
+                if (open) {
+                  openHandCalibration();
+                  return;
+                }
+                setHandCalibrationOpen(false);
+              }}
               onObservation={handleHandObservation}
-              onSpatialModeStarted={() => setOpenDrawer(null)}
+              onSpatialModeStarted={() => {
+                setHandCalibrationOpen(false);
+                setOpenDrawer(null);
+              }}
               onStatusChange={(status) => {
                 setHandTrackingStatus(status);
                 if (status.state !== "ready") setHandFeedback(null);

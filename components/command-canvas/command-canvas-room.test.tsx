@@ -599,6 +599,142 @@ describe("CommandCanvasRoom", () => {
     expect(container.querySelector("[data-hand-cursor]")).not.toBeNull();
   });
 
+  it("returns active hand control to the full canvas instead of leaving the camera as the workspace", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+
+    expect(
+      screen.queryByRole("complementary", { name: "System status drawer" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("region", { name: "Hand interaction controls" }),
+    ).toHaveTextContent("HAND CONTROL · FULL CANVAS");
+    expect(
+      screen.getByRole("button", { name: "Open hand calibration" }),
+    ).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "Open hand calibration" }),
+    );
+
+    expect(
+      screen.getByRole("complementary", { name: "System status drawer" }),
+    ).toBeVisible();
+    expect(container.querySelector(".command-canvas-shell")).toHaveClass(
+      "is-system-open",
+    );
+    expect(
+      screen.getByRole("button", { name: "Close hand calibration" }),
+    ).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "Close hand calibration" }),
+    );
+    expect(
+      screen.queryByRole("complementary", { name: "System status drawer" }),
+    ).toBeNull();
+    expect(container.querySelector(".command-canvas-shell")).not.toHaveClass(
+      "is-system-open",
+    );
+  });
+
+  it("treats camera calibration as sensor-only input and never manipulates the hidden canvas", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-calibration", title: "Calibration target", x: 120 });
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+
+    act(() => {
+      hand.emit({ mode: "idle", timestamp: 990 });
+      hand.emit({
+        mode: "point",
+        pointer: { x: 0.19, y: 0.18 },
+        confidence: 0.98,
+        timestamp: 995,
+      });
+    });
+    expect(await screen.findByText("TARGET")).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Open hand calibration" }),
+    );
+
+    expect(
+      screen
+        .getByRole("button", { name: "Select Calibration target" })
+        .closest("article"),
+    ).not.toHaveClass("is-hand-target");
+
+    act(() =>
+      hand.emit({
+        mode: "pinch",
+        pointer: { x: 0.2, y: 0.3 },
+        confidence: 0.98,
+        timestamp: 1_000,
+      }),
+    );
+
+    expect(
+      screen.getByRole("complementary", { name: "System status drawer" }),
+    ).toBeVisible();
+    expect(
+      screen
+        .getByRole("button", { name: "Select Calibration target" })
+        .closest("article"),
+    ).not.toHaveClass("is-held");
+    expect(store.getState().canvas.receipts).toHaveLength(1);
+
+    await user.click(
+      screen.getByRole("button", { name: "Close hand calibration" }),
+    );
+    act(() =>
+      hand.emit({
+        mode: "pinch",
+        pointer: { x: 0.19, y: 0.18 },
+        confidence: 0.98,
+        timestamp: 1_010,
+      }),
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Select Calibration target" })
+        .closest("article"),
+    ).not.toHaveClass("is-held");
+
+    act(() => {
+      hand.emit({ mode: "idle", timestamp: 1_020 });
+      hand.emit({
+        mode: "point",
+        pointer: { x: 0.19, y: 0.18 },
+        confidence: 0.98,
+        timestamp: 1_030,
+      });
+    });
+    expect(await screen.findByText("TARGET")).toBeVisible();
+  });
+
   it("uses the whole viewport as the visible hand control plane and closes diagnostics on activity", async () => {
     const user = userEvent.setup();
     const hand = fakeHandController();
@@ -716,7 +852,7 @@ describe("CommandCanvasRoom", () => {
     hand.emit({ mode: "idle", timestamp: 1_032 });
 
     expect(Object.values(store.getState().canvas.objects)).toHaveLength(0);
-    expect(screen.getByText("MOVE OBJECTS")).toBeVisible();
+    expect(screen.getByText("HAND CONTROL · FULL CANVAS")).toBeVisible();
   });
 
   it("collects repeated finger lines into one sketch and one receipt when finished", async () => {
@@ -871,7 +1007,7 @@ describe("CommandCanvasRoom", () => {
         (object) => object.type === "sketch" && !object.deletedAt,
       ),
     ).toHaveLength(1);
-    expect(screen.getByText("MOVE OBJECTS")).toBeVisible();
+    expect(screen.getByText("HAND CONTROL · FULL CANVAS")).toBeVisible();
   });
 
   it("creates one selected thought card and receipts later completed speech inside it", async () => {

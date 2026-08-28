@@ -72,13 +72,29 @@ test("starts the local hand detector from a real browser camera stream and relea
     await expect(page.getByText("READY · show one hand")).toBeVisible();
     await expect(page.getByText("Engine YOLO26 Hand Pose")).toBeVisible();
 
+    await expect(
+      page.getByRole("complementary", { name: "System status drawer" }),
+    ).toBeHidden();
+    await expect(
+      page.getByRole("region", { name: "Hand interaction controls" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Open hand calibration" }).click();
+
     const viewport = page.viewportSize();
     const calibration = await page.locator(".camera-preview").boundingBox();
-    if (!viewport || !calibration)
+    const drawer = await page.locator(".persistent-system-drawer").boundingBox();
+    const canvas = await page.locator(".canvas-viewport").boundingBox();
+    if (!viewport || !calibration || !drawer || !canvas)
       throw new Error("Spatial calibration geometry is unavailable.");
-    expect(calibration.height).toBeGreaterThanOrEqual(
-      viewport.height * (testInfo.project.name === "chromium-mobile" ? 0.5 : 0.45),
+    expect(calibration.height).toBeLessThanOrEqual(
+      viewport.height * (testInfo.project.name === "chromium-mobile" ? 0.3 : 0.6),
     );
+    if (testInfo.project.name === "chromium-mobile") {
+      expect(drawer.height).toBeLessThanOrEqual(viewport.height * 0.5);
+      expect(Math.max(0, drawer.y - canvas.y)).toBeGreaterThan(
+        viewport.height * 0.4,
+      );
+    }
     expect(
       await page
         .getByLabel("Local hand tracking preview")
@@ -126,8 +142,7 @@ test("starts the local hand detector from a real browser camera stream and relea
       ),
     ).toBe(true);
 
-    // A successful explicit Enable click now enters spatial mode immediately;
-    // there is no second calibration/start click in the product flow.
+    await page.getByRole("button", { name: "Return to full canvas" }).click();
     await expect(
       page.getByRole("complementary", { name: "System status drawer" }),
     ).toBeHidden();
