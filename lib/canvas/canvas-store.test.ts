@@ -172,4 +172,79 @@ describe("canvas store", () => {
 
     expect(local.getState().selectedObjectId).toBeNull();
   });
+
+  it("maintains an ordered ephemeral multi-selection without mutating canvas state", () => {
+    const store = createCanvasStore("room-demo", dependencies());
+    store.getState().dispatch(newNote, "pointer");
+    store.getState().dispatch(
+      {
+        ...newNote,
+        object: { ...newNote.object, id: "note-2", title: "Risk" },
+      },
+      "pointer",
+    );
+    const canonical = store.getState().canvas;
+
+    store.getState().selectObject("note-1");
+    store.getState().toggleObjectSelection("note-2");
+    expect(store.getState().selectedObjectIds).toEqual(["note-1", "note-2"]);
+    expect(store.getState().selectedObjectId).toBe("note-2");
+    expect(store.getState().canvas).toBe(canonical);
+
+    store.getState().toggleObjectSelection("note-1");
+    expect(store.getState().selectedObjectIds).toEqual(["note-2"]);
+    expect(store.getState().selectedObjectId).toBe("note-2");
+    store.getState().toggleObjectSelection("note-2");
+    expect(store.getState().selectedObjectIds).toEqual([]);
+    expect(store.getState().selectedObjectId).toBeNull();
+  });
+
+  it("keeps surviving members selected when hydration deletes one selected object", () => {
+    const store = createCanvasStore("room-demo", dependencies());
+    store.getState().dispatch(newNote, "pointer");
+    store.getState().dispatch(
+      {
+        ...newNote,
+        object: { ...newNote.object, id: "note-2", title: "Risk" },
+      },
+      "pointer",
+    );
+    store.getState().selectObjects(["note-1", "note-2"]);
+    const current = store.getState().canvas;
+
+    store.getState().hydrateCanvas({
+      ...current,
+      revision: current.revision + 1,
+      objects: {
+        ...current.objects,
+        "note-2": {
+          ...current.objects["note-2"],
+          deletedAt: "2026-08-27T14:00:00.000Z",
+        },
+      },
+    });
+
+    expect(store.getState().selectedObjectIds).toEqual(["note-1"]);
+    expect(store.getState().selectedObjectId).toBe("note-1");
+  });
+
+  it("routes redo through the canonical command engine", () => {
+    const store = createCanvasStore("room-demo", dependencies());
+    store.getState().dispatch(newNote, "pointer");
+    store.getState().dispatch(
+      {
+        type: "object.transform",
+        objectId: "note-1",
+        transform: { rotation: 15 },
+      },
+      "pointer",
+    );
+    store.getState().dispatch({ type: "history.undo" }, "typed");
+
+    const result = store.getState().dispatch({ type: "history.redo" }, "typed");
+
+    expect(result.ok).toBe(true);
+    expect(store.getState().canvas.objects["note-1"]?.rotation).toBe(15);
+    expect(store.getState().canvas.receipts.at(-1)?.action).toBe("redo");
+  });
 });

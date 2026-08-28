@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   assertLiveProbeTarget,
+  assertWebMcpProbeTargets,
   requireProductionApiProxyOrigin,
 } from "@/lib/testing/live-probe-guards";
 
@@ -40,5 +41,22 @@ describe("live browser probe guards", () => {
     expect(() =>
       requireProductionApiProxyOrigin("http://commandcanvas.vercel.app"),
     ).toThrow("canonical CommandCanvas production origin");
+  });
+
+  it("requires the public opt-in when a loopback page proxies APIs to production", () => {
+    expect(() =>
+      assertWebMcpProbeTargets(
+        "http://127.0.0.1:3000",
+        "https://commandcanvas.vercel.app",
+        false,
+      ),
+    ).toThrow("WEBMCP_LIVE_PROBE=true");
+    expect(() =>
+      assertWebMcpProbeTargets(
+        "http://127.0.0.1:3000",
+        "https://commandcanvas.vercel.app",
+        true,
+      ),
+    ).not.toThrow();
   });
 });

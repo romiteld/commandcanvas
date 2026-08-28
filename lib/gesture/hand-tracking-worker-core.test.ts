@@ -11,7 +11,7 @@ function landmarks() {
 }
 
 describe("hand tracking worker runtime", () => {
-  it("initializes one-hand VIDEO detection from same-origin asset paths", async () => {
+  it("initializes two-hand VIDEO detection from same-origin asset paths", async () => {
     const detectForVideo = vi.fn();
     const loadDetector = vi.fn(async () => ({ detectForVideo, close: vi.fn() }));
     const postMessage = vi.fn();
@@ -27,19 +27,26 @@ describe("hand tracking worker runtime", () => {
       wasmBaseUrl: "/mediapipe/wasm",
       modelAssetUrl: "/mediapipe/hand_landmarker.task",
       runningMode: "VIDEO",
-      numHands: 1,
+      numHands: 2,
     });
     expect(postMessage).toHaveBeenCalledWith({ type: "ready" });
   });
 
-  it("closes each transferred frame and returns only semantic landmarks", async () => {
+  it("closes each frame and transports two tagged landmark sets", async () => {
     const close = vi.fn();
     const frame = { close } as unknown as ImageBitmap;
-    const hand = landmarks();
+    const leftHand = landmarks();
+    const rightHand = landmarks().map((point) => ({
+      ...point,
+      x: Math.min(1, point.x + 0.05),
+    }));
     const detector = {
       detectForVideo: vi.fn(() => ({
-        landmarks: [hand],
-        handedness: [[{ score: 0.93 }]],
+        landmarks: [leftHand, rightHand],
+        handedness: [
+          [{ score: 0.93, categoryName: "Left" }],
+          [{ score: 0.91, displayName: "Right" }],
+        ],
       })),
       close: vi.fn(),
     };
@@ -61,8 +68,10 @@ describe("hand tracking worker runtime", () => {
     expect(postMessage).toHaveBeenLastCalledWith({
       type: "result",
       timestamp: 42,
-      confidence: 0.93,
-      landmarks: hand,
+      hands: [
+        { handedness: "left", confidence: 0.93, landmarks: leftHand },
+        { handedness: "right", confidence: 0.91, landmarks: rightHand },
+      ],
     });
     expect(postMessage.mock.lastCall?.[0]).not.toHaveProperty("frame");
   });
@@ -88,8 +97,7 @@ describe("hand tracking worker runtime", () => {
     expect(postMessage).toHaveBeenLastCalledWith({
       type: "result",
       timestamp: 84,
-      confidence: null,
-      landmarks: null,
+      hands: [],
     });
   });
 });

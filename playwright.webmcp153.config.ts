@@ -1,14 +1,16 @@
 import { defineConfig, devices } from "@playwright/test";
 
-import { assertLiveProbeTarget } from "./lib/testing/live-probe-guards";
+import { assertWebMcpProbeTargets } from "./lib/testing/live-probe-guards";
 
 const baseURL =
   process.env.WEBMCP_BASE_URL ?? "http://127.0.0.1:3000";
 const executablePath =
   process.env.WEBMCP_CHROME_PATH ?? "/usr/bin/google-chrome";
+const apiProxyOrigin = process.env.WEBMCP_API_PROXY_ORIGIN;
 
-assertLiveProbeTarget(
+assertWebMcpProbeTargets(
   baseURL,
+  apiProxyOrigin,
   process.env.WEBMCP_LIVE_PROBE === "true",
 );
 

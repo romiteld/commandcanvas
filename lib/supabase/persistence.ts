@@ -44,7 +44,10 @@ const receiptActionSchema = z.enum([
   "minimize",
   "restore",
   "discard",
+  "group",
+  "ungroup",
   "undo",
+  "redo",
 ]);
 
 export const roomDataRowSchema = z
@@ -70,6 +73,7 @@ export const canvasObjectDataRowSchema = z
       "schedule",
       "sketch",
       "diagram",
+      "frame",
     ]),
     title: z.string().trim().min(1).max(120),
     x: z.number().finite().min(-1_000_000).max(1_000_000),
@@ -77,6 +81,8 @@ export const canvasObjectDataRowSchema = z
     width: z.number().finite().min(160).max(2_000),
     height: z.number().finite().min(80).max(1_400),
     z_index: z.number().int().min(0).max(100_000),
+    rotation: z.number().finite().min(-180).max(180).optional(),
+    parent_id: objectIdSchema.nullable().optional(),
     minimized: z.boolean(),
     pinned: z.boolean(),
     created_by: z.uuid(),
@@ -94,13 +100,22 @@ const persistedSnapshotSchema = z
   .object({
     id: objectIdSchema,
     roomId: z.uuid(),
-    type: z.enum(["note", "task_board", "schedule", "sketch", "diagram"]),
+    type: z.enum([
+      "note",
+      "task_board",
+      "schedule",
+      "sketch",
+      "diagram",
+      "frame",
+    ]),
     title: z.string().trim().min(1).max(120),
     x: z.number().finite().min(-1_000_000).max(1_000_000),
     y: z.number().finite().min(-1_000_000).max(1_000_000),
     width: z.number().finite().min(160).max(2_000),
     height: z.number().finite().min(80).max(1_400),
     zIndex: z.number().int().min(0).max(100_000),
+    rotation: z.number().finite().min(-180).max(180).optional(),
+    parentId: objectIdSchema.nullable().optional(),
     minimized: z.boolean(),
     pinned: z.boolean(),
     createdBy: z.uuid(),
@@ -295,11 +310,8 @@ export function parseCanvasPersistenceRows(
     validateLatestObjectStates(objectRows, objects, mappedReceipts);
 
     const receipts = mappedReceipts.map(({ receipt }) => receipt);
-    const undoneReceiptIds = receipts.flatMap((receipt) =>
-      receipt.action === "undo" && receipt.undoOfReceiptId
-        ? [receipt.undoOfReceiptId]
-        : [],
-    );
+    const { undoneReceiptIds, redoReceiptIds } =
+      reconstructHistory(mappedReceipts);
 
     return {
       ok: true,
@@ -309,6 +321,7 @@ export function parseCanvasPersistenceRows(
         objects,
         receipts,
         undoneReceiptIds,
+        redoReceiptIds,
       },
     };
   } catch (error) {
@@ -336,6 +349,8 @@ function mapObjectRow(row: CanvasObjectDataRow): CanvasObject | null {
     width: row.width,
     height: row.height,
     zIndex: row.z_index,
+    rotation: row.rotation,
+    parentId: row.parent_id,
     minimized: row.minimized,
     pinned: row.pinned,
     createdBy: row.created_by,
@@ -361,6 +376,8 @@ function mapSnapshot(
     width: value.width,
     height: value.height,
     zIndex: value.zIndex,
+    rotation: value.rotation,
+    parentId: value.parentId,
     minimized: value.minimized,
     pinned: value.pinned,
     createdBy: value.createdBy,
@@ -386,6 +403,7 @@ function mapCanvasObject(
     width: input.width,
     height: input.height,
     zIndex: input.zIndex,
+    ...(input.rotation !== undefined ? { rotation: input.rotation } : {}),
     payload: input.payload,
   });
   if (!newObject.success) return null;
@@ -401,6 +419,8 @@ function mapCanvasObject(
     deletedAt: input.deletedAt,
     version: input.version,
     metadata: input.metadata,
+    ...(input.rotation !== undefined ? { rotation: input.rotation } : {}),
+    ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
   };
 }
 
@@ -463,8 +483,11 @@ function validateReceiptShape(row: ReceiptDataRow, index: number) {
     invalidReceipt(index, "Receipt snapshots must match affected object IDs.");
 
   if (row.action === "undo") {
-    if (row.reversible || !row.undoes_receipt_id || row.inverse_command !== null)
+    if (row.reversible || !row.undoes_receipt_id)
       invalidReceipt(index, "Undo receipt invariants are invalid.");
+  } else if (row.action === "redo") {
+    if (!row.reversible || !row.undoes_receipt_id || row.inverse_command === null)
+      invalidReceipt(index, "Redo receipt invariants are invalid.");
   } else if (
     !row.reversible ||
     row.undoes_receipt_id !== null ||
@@ -639,6 +662,8 @@ export interface RpcMutableCanvasObject {
   width: number;
   height: number;
   zIndex: number;
+  rotation: number;
+  parentId: string | null;
   minimized: boolean;
   pinned: boolean;
   deletedAt: string | null;
@@ -687,14 +712,17 @@ export function buildCanvasMutationPlan(
   });
   if (!result.ok) return { ok: false, error: result.error };
 
-  if (result.receipt.action === "undo")
+  if (
+    result.receipt.action === "undo" ||
+    result.receipt.action === "redo"
+  )
     return {
       ok: true,
       plan: {
-        action: "undo",
+        action: result.receipt.action,
         description: result.receipt.description,
         changes: [],
-        reversible: false,
+        reversible: result.receipt.action === "redo",
         undoesReceiptId: result.receipt.undoOfReceiptId ?? null,
       },
     };
@@ -730,6 +758,8 @@ function toRpcMutableObject(object: CanvasObject): RpcMutableCanvasObject {
     width: object.width,
     height: object.height,
     zIndex: object.zIndex,
+    rotation: object.rotation ?? 0,
+    parentId: object.parentId ?? null,
     minimized: object.minimized,
     pinned: object.pinned,
     deletedAt: object.deletedAt,
@@ -744,6 +774,8 @@ function validateCanonicalCanvasState(state: CanvasState): boolean {
     !revisionSchema.safeParse(state.revision).success ||
     !Array.isArray(state.receipts) ||
     !Array.isArray(state.undoneReceiptIds) ||
+    (state.redoReceiptIds !== undefined &&
+      !Array.isArray(state.redoReceiptIds)) ||
     !state.objects ||
     typeof state.objects !== "object" ||
     Array.isArray(state.objects)
@@ -778,7 +810,11 @@ function validateCanonicalCanvasState(state: CanvasState): boolean {
 
   return (
     new Set(state.undoneReceiptIds).size === state.undoneReceiptIds.length &&
-    state.undoneReceiptIds.every((id) => receiptIds.has(id))
+    state.undoneReceiptIds.every((id) => receiptIds.has(id)) &&
+    new Set(state.redoReceiptIds ?? []).size ===
+      (state.redoReceiptIds ?? []).length &&
+    (state.redoReceiptIds ?? []).every((id) => receiptIds.has(id)) &&
+    validateHierarchy(state.objects)
   );
 }
 
@@ -792,6 +828,7 @@ function validateCanonicalObject(object: CanvasObject): boolean {
     width: object.width,
     height: object.height,
     zIndex: object.zIndex,
+    ...(object.rotation !== undefined ? { rotation: object.rotation } : {}),
     payload: object.payload,
   });
   return (
@@ -804,6 +841,81 @@ function validateCanonicalObject(object: CanvasObject): boolean {
     z.number().int().min(1).safeParse(object.version).success &&
     metadataSchema.safeParse(object.metadata).success &&
     typeof object.minimized === "boolean" &&
-    typeof object.pinned === "boolean"
+    typeof object.pinned === "boolean" &&
+    (object.rotation === undefined ||
+      z.number().finite().min(-180).max(180).safeParse(object.rotation)
+        .success) &&
+    (object.parentId === undefined ||
+      object.parentId === null ||
+      objectIdSchema.safeParse(object.parentId).success)
   );
+}
+
+function reconstructHistory(mappedReceipts: MappedReceipt[]) {
+  const receiptById = new Map<string, ActivityReceipt>();
+  const undone = new Set<string>();
+  const redoReceiptIds: string[] = [];
+  for (const [index, { receipt, row }] of mappedReceipts.entries()) {
+    receiptById.set(receipt.id, receipt);
+    if (receipt.action === "undo" && receipt.undoOfReceiptId) {
+      const target = receiptById.get(receipt.undoOfReceiptId);
+      if (!target || target.action === "undo")
+        invalidReceipt(index, "Undo receipt target is invalid.");
+      for (const targetId of historyEffectReceiptIds(target, receiptById))
+        undone.add(targetId);
+      if (row.inverse_command !== null) redoReceiptIds.push(receipt.id);
+      continue;
+    }
+    if (receipt.action === "redo" && receipt.undoOfReceiptId) {
+      const undo = receiptById.get(receipt.undoOfReceiptId);
+      if (undo?.action !== "undo" || !undo.undoOfReceiptId)
+        invalidReceipt(index, "Redo receipt target is invalid.");
+      const restored = receiptById.get(undo.undoOfReceiptId);
+      if (!restored) invalidReceipt(index, "Redo receipt history is incomplete.");
+      for (const restoredId of historyEffectReceiptIds(restored, receiptById))
+        undone.delete(restoredId);
+      const targetIndex = redoReceiptIds.lastIndexOf(receipt.undoOfReceiptId);
+      if (targetIndex < 0)
+        invalidReceipt(index, "Redo receipt is not available in history.");
+      redoReceiptIds.splice(targetIndex, 1);
+      continue;
+    }
+    redoReceiptIds.length = 0;
+  }
+  return { undoneReceiptIds: [...undone], redoReceiptIds };
+}
+
+function historyEffectReceiptIds(
+  receipt: ActivityReceipt,
+  receiptById: Map<string, ActivityReceipt>,
+  visited = new Set<string>(),
+): string[] {
+  if (visited.has(receipt.id)) return [];
+  visited.add(receipt.id);
+  if (receipt.action !== "redo" || !receipt.undoOfReceiptId)
+    return [receipt.id];
+  const targetUndo = receiptById.get(receipt.undoOfReceiptId);
+  const restored = targetUndo?.undoOfReceiptId
+    ? receiptById.get(targetUndo.undoOfReceiptId)
+    : undefined;
+  return restored
+    ? [receipt.id, ...historyEffectReceiptIds(restored, receiptById, visited)]
+    : [receipt.id];
+}
+
+function validateHierarchy(objects: Record<string, CanvasObject>) {
+  for (const object of Object.values(objects)) {
+    if (object.deletedAt || !object.parentId) continue;
+    const parent = objects[object.parentId];
+    if (!parent || parent.deletedAt || parent.type !== "frame") return false;
+    const visited = new Set([object.id]);
+    let cursor: CanvasObject | undefined = parent;
+    while (cursor?.parentId) {
+      if (visited.has(cursor.id)) return false;
+      visited.add(cursor.id);
+      cursor = objects[cursor.parentId];
+      if (!cursor || cursor.deletedAt || cursor.type !== "frame") return false;
+    }
+  }
+  return true;
 }

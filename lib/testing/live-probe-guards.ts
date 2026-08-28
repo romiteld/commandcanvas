@@ -5,14 +5,25 @@ export function assertLiveProbeTarget(
   rawTarget: string,
   liveProbeApproved: boolean,
 ) {
-  const target = parseOrigin(rawTarget, "WebMCP probe target");
+  const target = parseOrigin(rawTarget, "Browser probe target");
   if (isLoopback(target)) return;
   if (target.protocol !== "https:")
-    throw new Error("A public WebMCP probe target must use HTTPS.");
+    throw new Error("A public browser probe target must use HTTPS.");
   if (!liveProbeApproved)
     throw new Error(
-      "Set WEBMCP_LIVE_PROBE=true to authorize a non-loopback WebMCP probe.",
+      "Set WEBMCP_LIVE_PROBE=true to authorize a non-loopback browser probe.",
     );
+}
+
+export function assertWebMcpProbeTargets(
+  rawTarget: string,
+  rawApiProxyOrigin: string | undefined,
+  liveProbeApproved: boolean,
+) {
+  assertLiveProbeTarget(rawTarget, liveProbeApproved);
+  if (!rawApiProxyOrigin) return;
+  const apiProxyOrigin = requireProductionApiProxyOrigin(rawApiProxyOrigin);
+  assertLiveProbeTarget(apiProxyOrigin, liveProbeApproved);
 }
 
 export function requireProductionApiProxyOrigin(rawOrigin: string) {

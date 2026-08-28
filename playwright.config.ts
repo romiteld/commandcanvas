@@ -30,7 +30,7 @@ export default defineConfig({
     },
     {
       name: "webkit-mobile-safari",
-      testMatch: /realtime-input\.spec\.ts/,
+      testMatch: /(realtime-input|hand-worker-webkit)\.spec\.ts/,
       use: { ...devices["iPhone 15"] },
     },
     {

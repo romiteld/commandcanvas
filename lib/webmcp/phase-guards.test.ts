@@ -47,6 +47,7 @@ describe("WebMCP phase availability", () => {
     expect(getPhaseAvailableToolNames(activeRoom)).toEqual([
       "get_canvas_state",
       "create_object",
+      "history_action",
     ]);
   });
 
@@ -73,6 +74,8 @@ describe("WebMCP phase availability", () => {
       "transform_object",
       "set_object_state",
       "discard_object",
+      "organize_objects",
+      "history_action",
       "transform_sketch",
       "prepare_meeting_packet",
       "request_packet_send",
@@ -133,6 +136,14 @@ describe("evaluateToolGuard", () => {
       ok: false,
       code: "not_available",
       message: "not available yet: select a sketch first",
+    });
+    expect(evaluateToolGuard("organize_objects", context(activeRoom))).toEqual({
+      ok: false,
+      code: "not_available",
+      message: "not available yet: add canvas content first",
+    });
+    expect(evaluateToolGuard("history_action", context(activeRoom))).toEqual({
+      ok: true,
     });
   });
 

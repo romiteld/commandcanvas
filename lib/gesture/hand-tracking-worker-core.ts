@@ -2,19 +2,34 @@ import type { HandLandmarks } from "@/lib/gesture/hand-intent";
 
 export interface HandDetectorResult {
   landmarks: readonly (readonly { x: number; y: number; z?: number }[])[];
-  handedness: readonly (readonly { score?: number }[])[];
+  handedness: readonly (readonly {
+    score?: number;
+    categoryName?: string;
+    displayName?: string;
+  }[])[];
 }
 
 export interface HandDetector {
-  detectForVideo(frame: ImageBitmap, timestamp: number): HandDetectorResult;
-  close(): void;
+  detectForVideo(
+    frame: ImageBitmap,
+    timestamp: number,
+  ): HandDetectorResult | Promise<HandDetectorResult>;
+  close(): void | Promise<void>;
 }
 
 export interface HandDetectorLoadOptions {
   wasmBaseUrl: string;
   modelAssetUrl: string;
   runningMode: "VIDEO";
-  numHands: 1;
+  numHands: 2;
+}
+
+export type TrackedHandedness = "left" | "right" | "unknown";
+
+export interface TrackedHandLandmarks {
+  handedness: TrackedHandedness;
+  confidence: number;
+  landmarks: HandLandmarks;
 }
 
 export type HandTrackingWorkerInboundMessage =
@@ -31,8 +46,7 @@ export type HandTrackingWorkerOutboundMessage =
   | {
       type: "result";
       timestamp: number;
-      confidence: number | null;
-      landmarks: HandLandmarks | null;
+      hands: readonly TrackedHandLandmarks[];
     }
   | { type: "error"; message: string };
 
@@ -48,32 +62,46 @@ export function createHandTrackingWorkerRuntime(dependencies: {
   return {
     async handleMessage(message) {
       if (message.type === "initialize") {
-        detector?.close();
+        await detector?.close();
         detector = await dependencies.loadDetector({
           wasmBaseUrl: message.wasmBaseUrl,
           modelAssetUrl: message.modelAssetUrl,
           runningMode: "VIDEO",
-          numHands: 1,
+          numHands: 2,
         });
         dependencies.postMessage({ type: "ready" });
         return;
       }
       if (message.type === "dispose") {
-        detector?.close();
+        await detector?.close();
         detector = null;
         return;
       }
 
       try {
         if (!detector) throw new Error("Hand detector is not ready.");
-        const result = detector.detectForVideo(message.frame, message.timestamp);
-        const firstHand = result.landmarks[0];
-        const valid = parseLandmarks(firstHand);
+        const result = await detector.detectForVideo(
+          message.frame,
+          message.timestamp,
+        );
+        const hands = result.landmarks.slice(0, 2).flatMap((points, index) => {
+          const landmarks = parseLandmarks(points);
+          if (!landmarks) return [];
+          const category = result.handedness[index]?.[0];
+          return [
+            {
+              handedness: normalizeHandedness(
+                category?.categoryName ?? category?.displayName,
+              ),
+              confidence: normalizeConfidence(category?.score),
+              landmarks,
+            } satisfies TrackedHandLandmarks,
+          ];
+        });
         dependencies.postMessage({
           type: "result",
           timestamp: message.timestamp,
-          confidence: valid ? normalizeConfidence(result.handedness[0]?.[0]?.score) : null,
-          landmarks: valid,
+          hands,
         });
       } catch (error) {
         dependencies.postMessage({
@@ -115,4 +143,10 @@ function normalizeConfidence(score: number | undefined) {
   return typeof score === "number" && Number.isFinite(score)
     ? Math.min(1, Math.max(0, score))
     : 1;
+}
+
+function normalizeHandedness(value: string | undefined): TrackedHandedness {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "left" || normalized === "right") return normalized;
+  return "unknown";
 }

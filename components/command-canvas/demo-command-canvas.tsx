@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CommandCanvasRoom } from "@/components/command-canvas/command-canvas-room";
+import { MeetingFilmstrip } from "@/components/command-canvas/meeting-filmstrip";
 import {
   MeetingPacketPanel,
   type MeetingPacketActivityView,
@@ -22,6 +23,8 @@ import {
   type DemoRoomSnapshot,
 } from "@/lib/demo/room-session";
 import type { DemoRoomRealtimeClient } from "@/lib/demo/room-session";
+import type { MeetingMediaClient } from "@/lib/meeting/media-controller";
+import { createSharedCameraHandController } from "@/lib/gesture/shared-camera-controller";
 import type { BrowserRoomClient } from "@/lib/supabase/browser-room";
 import { createBrowserSupabaseClient } from "@/lib/supabase/browser-client";
 import { createBrowserRoomApi } from "@/lib/supabase/room-api";
@@ -50,6 +53,14 @@ export interface DemoCommandCanvasEnvironment {
 
 interface DemoCommandCanvasProps {
   environment?: DemoCommandCanvasEnvironment;
+}
+
+interface DemoRoomBootstrapOperation {
+  environment: DemoCommandCanvasEnvironment;
+  promise: Promise<DemoRoomBootstrapResult>;
+  activeConsumers: number;
+  session: DemoRoomSession | null;
+  disposed: boolean;
 }
 
 type DemoView =
@@ -112,6 +123,21 @@ export function DemoCommandCanvas({
   const packetWorkflowRef = useRef(packetWorkflow);
   const packetOperationActive = useRef(false);
   const webMcpRegistryRef = useRef<WebMcpRegistry | null>(null);
+  const meetingMediaStreamRef = useRef<MediaStream | null>(null);
+  const bootstrapOperationRef = useRef<DemoRoomBootstrapOperation | null>(null);
+  const handleMeetingMediaStreamChange = useCallback(
+    (stream: MediaStream | null) => {
+      meetingMediaStreamRef.current = stream;
+    },
+    [],
+  );
+  const createMeetingAwareHandController = useCallback(
+    () =>
+      createSharedCameraHandController({
+        getMeetingStream: () => meetingMediaStreamRef.current,
+      }),
+    [],
+  );
   const readyRoom = view.status === "ready" ? view.room : null;
   const sketchTransformer = useMemo(() => {
     if (!readyRoom) return null;
@@ -510,9 +536,29 @@ export function DemoCommandCanvas({
     let session: DemoRoomSession | null = null;
     let unsubscribe: () => void = () => undefined;
 
-    void environment.bootstrap().then(async (result) => {
+    let operation = bootstrapOperationRef.current;
+    if (!operation || operation.environment !== environment) {
+      operation = {
+        environment,
+        promise: environment.bootstrap(),
+        activeConsumers: 0,
+        session: null,
+        disposed: false,
+      };
+      bootstrapOperationRef.current = operation;
+    }
+    operation.activeConsumers += 1;
+
+    const disposeOperation = async () => {
+      if (operation.disposed || !operation.session) return;
+      operation.disposed = true;
+      await operation.session.dispose();
+    };
+
+    void operation.promise.then(async (result) => {
+      if (result.ok) operation.session = result.session;
       if (!active) {
-        if (result.ok) await result.session.dispose();
+        if (operation.activeConsumers === 0) await disposeOperation();
         return;
       }
       if (!result.ok) {
@@ -524,7 +570,7 @@ export function DemoCommandCanvas({
       if (result.role === "host") {
         const persisted = await result.session.loadLatestPacketWorkflow();
         if (!active) {
-          await result.session.dispose();
+          if (operation.activeConsumers === 0) await disposeOperation();
           return;
         }
         if (persisted.ok)
@@ -550,7 +596,8 @@ export function DemoCommandCanvas({
     return () => {
       active = false;
       unsubscribe();
-      if (session) void session.dispose();
+      operation.activeConsumers = Math.max(0, operation.activeConsumers - 1);
+      if (operation.activeConsumers === 0) void disposeOperation();
     };
   }, [environment]);
 
@@ -758,6 +805,16 @@ export function DemoCommandCanvas({
     color: participant.color,
     role: participant.role,
   }));
+  const meetingParticipants = new Map(
+    participants.map((participant) => [participant.id, participant]),
+  );
+  if (snapshot.membership)
+    meetingParticipants.set(snapshot.membership.userId, {
+      id: snapshot.membership.userId,
+      displayName: snapshot.membership.displayName,
+      color: snapshot.membership.color,
+      role: snapshot.membership.role,
+    });
   const participantById = new Map(
     snapshot.presence.map((participant) => [participant.participantId, participant]),
   );
@@ -913,6 +970,26 @@ export function DemoCommandCanvas({
         onCanvasPointerWorldMove={(point) => {
           void room.session.publishCursor(point);
         }}
+        createHandTrackingController={createMeetingAwareHandController}
+        realtimeVoice={{
+          roomId: snapshot.roomId!,
+          getAccessToken: room.session.getAccessToken,
+          disabled:
+            snapshot.status !== "ready" && snapshot.status !== "degraded",
+        }}
+        meetingMediaPanel={
+          room.meetingMediaClient && snapshot.membership ? (
+            <MeetingFilmstrip
+              roomId={snapshot.roomId!}
+              localParticipantId={snapshot.membership.userId}
+              participants={[...meetingParticipants.values()]}
+              getAccessToken={room.session.getAccessToken}
+              client={room.meetingMediaClient}
+              onLocalStreamChange={handleMeetingMediaStreamChange}
+            />
+          ) : undefined
+        }
+        commandDrawerRequestKey={packetWorkflow.stagedSend?.id}
         meetingPacketPanel={meetingPacketPanel}
       />
     </div>
@@ -1019,7 +1096,7 @@ async function bootstrapBrowserDemoRoom() {
     };
 
   const client = clientResult.client;
-  return bootstrapDemoRoom({
+  const bootstrapped = await bootstrapDemoRoom({
     search: window.location.search,
     origin: window.location.origin,
     storage: window.sessionStorage,
@@ -1039,6 +1116,12 @@ async function bootstrapBrowserDemoRoom() {
         now: () => new Date(),
       }),
   });
+  return bootstrapped.ok
+    ? {
+        ...bootstrapped,
+        meetingMediaClient: client as unknown as MeetingMediaClient,
+      }
+    : bootstrapped;
 }
 
 function describeCollaboration(snapshot: DemoRoomSnapshot) {

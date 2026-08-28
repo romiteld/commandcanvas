@@ -92,3 +92,21 @@ export function createServerServiceClient<Client = SupabaseClient>(
     },
   });
 }
+
+export function createServerUserVerifierClient<Client = SupabaseClient>(
+  config: ServerSupabaseConfig,
+  factory: ServerServiceClientFactory<Client> =
+    createSupabaseClient as unknown as ServerServiceClientFactory<Client>,
+): Client {
+  if (typeof window !== "undefined") {
+    throw new Error("The Supabase user verifier is server-only.");
+  }
+
+  return factory(config.supabaseUrl, config.publishableKey, {
+    auth: {
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      persistSession: false,
+    },
+  });
+}

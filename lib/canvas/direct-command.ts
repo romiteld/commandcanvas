@@ -11,7 +11,15 @@ export type DirectCanvasIntent =
   | { type: "minimize_selected" }
   | { type: "restore_selected" }
   | { type: "discard_selected" }
-  | { type: "undo" };
+  | { type: "undo" }
+  | { type: "redo" }
+  | { type: "focus_selected" }
+  | { type: "group_selected" }
+  | { type: "ungroup_selected" }
+  | {
+      type: "rotate_selected";
+      direction: "clockwise" | "counterclockwise";
+    };
 
 export type DirectCanvasCommandParseResult =
   | { ok: true; intent: DirectCanvasIntent }
@@ -111,6 +119,40 @@ export function parseDirectCanvasCommand(
     {
       intent: { type: "undo" },
       matches: /\bundo\b/.test(normalized),
+    },
+    {
+      intent: { type: "redo" },
+      matches: /\bredo\b/.test(normalized),
+    },
+    {
+      intent: { type: "focus_selected" },
+      matches:
+        /\b(?:maximize|focus)\b/.test(normalized) ||
+        /\bzoom in (?:on )?(?:this|that|it|the object)\b/.test(normalized),
+    },
+    {
+      intent: { type: "ungroup_selected" },
+      matches: /\bungroup\b/.test(normalized),
+    },
+    {
+      intent: { type: "group_selected" },
+      matches: /\bgroup\b/.test(normalized) && !/\bungroup\b/.test(normalized),
+    },
+    {
+      intent: {
+        type: "rotate_selected",
+        direction: "counterclockwise",
+      },
+      matches:
+        /\brotate\b/.test(normalized) &&
+        /\b(?:counterclockwise|anticlockwise|left)\b/.test(normalized),
+    },
+    {
+      intent: { type: "rotate_selected", direction: "clockwise" },
+      matches:
+        /\brotate\b/.test(normalized) &&
+        /\b(?:clockwise|right)\b/.test(normalized) &&
+        !/\b(?:counterclockwise|anticlockwise)\b/.test(normalized),
     },
   ];
 

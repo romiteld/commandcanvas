@@ -74,6 +74,7 @@ describe("browser room state loader", () => {
         objects: {},
         receipts: [],
         undoneReceiptIds: [],
+        redoReceiptIds: [],
       },
     });
     expect(harness.calls.filter((call) => call.table === "rooms")).toHaveLength(2);

@@ -36,14 +36,16 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
 
     render(<LocalCommandCanvas />);
 
-    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(8));
-    expect(screen.getByText("8 Site Tools registered")).toBeInTheDocument();
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(10));
+    expect(screen.getByText("10 Site Tools registered")).toBeInTheDocument();
     expect(registered.map((tool) => tool.name)).toEqual([
       "get_canvas_state",
       "create_object",
       "transform_object",
       "set_object_state",
       "discard_object",
+      "organize_objects",
+      "history_action",
       "transform_sketch",
       "prepare_meeting_packet",
       "request_packet_send",

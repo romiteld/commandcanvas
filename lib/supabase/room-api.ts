@@ -123,13 +123,22 @@ const canvasObjectSchema = z
   .object({
     id: objectIdSchema,
     roomId: z.uuid(),
-    type: z.enum(["note", "task_board", "schedule", "sketch", "diagram"]),
+    type: z.enum([
+      "note",
+      "task_board",
+      "schedule",
+      "sketch",
+      "diagram",
+      "frame",
+    ]),
     title: z.string(),
     x: z.number(),
     y: z.number(),
     width: z.number(),
     height: z.number(),
     zIndex: z.number(),
+    rotation: z.number().finite().min(-180).max(180).optional(),
+    parentId: objectIdSchema.nullable().optional(),
     minimized: z.boolean(),
     pinned: z.boolean(),
     createdBy: z.uuid(),
@@ -151,6 +160,7 @@ const canvasObjectSchema = z
       width: value.width,
       height: value.height,
       zIndex: value.zIndex,
+      ...(value.rotation !== undefined ? { rotation: value.rotation } : {}),
       payload: value.payload,
     });
     if (!object.success) {
@@ -171,6 +181,8 @@ const canvasObjectSchema = z
       deletedAt: value.deletedAt,
       version: value.version,
       metadata: value.metadata,
+      ...(value.rotation !== undefined ? { rotation: value.rotation } : {}),
+      ...(value.parentId !== undefined ? { parentId: value.parentId } : {}),
     };
   });
 
@@ -213,7 +225,10 @@ const activityReceiptSchema = z
       "minimize",
       "restore",
       "discard",
+      "group",
+      "ungroup",
       "undo",
+      "redo",
     ]),
     affectedObjectIds: z.array(objectIdSchema).min(1).max(50),
     before: receiptObjectStateSchema,
@@ -251,6 +266,7 @@ const canvasStateSchema = z
     objects: z.record(z.string(), canvasObjectSchema),
     receipts: z.array(activityReceiptSchema),
     undoneReceiptIds: z.array(z.uuid()),
+    redoReceiptIds: z.array(z.uuid()).optional().default([]),
   })
   .strict()
   .superRefine((state, context) => {
@@ -261,6 +277,32 @@ const canvasStateSchema = z
           path: ["objects", objectId],
           message: "Canvas object identity does not match its state key and room.",
         });
+      if (!object.deletedAt && object.parentId) {
+        const parent = state.objects[object.parentId];
+        if (!parent || parent.deletedAt || parent.type !== "frame")
+          context.addIssue({
+            code: "custom",
+            path: ["objects", objectId, "parentId"],
+            message: "Canvas object parent must be an active frame.",
+          });
+      }
+      if (object.deletedAt) continue;
+      const visited = new Set([objectId]);
+      let cursor = object;
+      while (cursor.parentId) {
+        if (visited.has(cursor.parentId)) {
+          context.addIssue({
+            code: "custom",
+            path: ["objects", objectId, "parentId"],
+            message: "Canvas frame hierarchy cannot contain a cycle.",
+          });
+          break;
+        }
+        visited.add(cursor.parentId);
+        const parent = state.objects[cursor.parentId];
+        if (!parent) break;
+        cursor = parent;
+      }
     }
 
     let previousRevision = 0;
@@ -294,6 +336,12 @@ const canvasStateSchema = z
         code: "custom",
         path: ["undoneReceiptIds"],
         message: "Undone receipt IDs must reference canvas receipts.",
+      });
+    if (state.redoReceiptIds.some((id) => !receiptIds.has(id)))
+      context.addIssue({
+        code: "custom",
+        path: ["redoReceiptIds"],
+        message: "Redo receipt IDs must reference canvas receipts.",
       });
   });
 
@@ -354,8 +402,11 @@ const errorResponseSchema = z
           "room_unavailable",
           "stale_revision",
           "object_pinned",
+          "invalid_hierarchy",
+          "frame_not_empty",
           "command_conflict",
           "nothing_to_undo",
+          "nothing_to_redo",
           "invalid_command",
           "invalid_persisted_state",
           "mutation_unavailable",

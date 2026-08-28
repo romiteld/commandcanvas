@@ -48,6 +48,9 @@ const objectIdSchema = z
   .regex(/^[a-z][a-z0-9-]*$/);
 
 const coordinateSchema = z.number().finite().min(-1_000_000).max(1_000_000);
+const rotationSchema = z.number().finite().min(-180).max(180);
+const titleSchema = z.string().trim().min(1).max(120);
+const zIndexSchema = z.number().int().min(0).max(100_000);
 
 const spatialTransformSchema = z
   .object({
@@ -55,6 +58,7 @@ const spatialTransformSchema = z
     y: coordinateSchema.optional(),
     width: z.number().finite().min(160).max(2_000).optional(),
     height: z.number().finite().min(80).max(1_400).optional(),
+    rotation: rotationSchema.optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0);
@@ -88,6 +92,39 @@ export const WEBMCP_TOOL_INPUT_SCHEMAS = {
     })
     .strict(),
   discard_object: z.object({ objectId: objectIdSchema }).strict(),
+  organize_objects: z.discriminatedUnion("action", [
+    z
+      .object({
+        action: z.literal("group"),
+        objectIds: z
+          .array(objectIdSchema)
+          .min(1)
+          .max(20)
+          .refine((ids) => new Set(ids).size === ids.length),
+        frame: z
+          .object({
+            id: objectIdSchema,
+            title: titleSchema,
+            x: coordinateSchema,
+            y: coordinateSchema,
+            width: z.number().finite().min(160).max(2_000),
+            height: z.number().finite().min(80).max(1_400),
+            zIndex: zIndexSchema,
+            tone: z.enum(["coral", "sky", "sand", "violet"]),
+          })
+          .strict(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("ungroup"),
+        frameId: objectIdSchema,
+      })
+      .strict(),
+  ]),
+  history_action: z
+    .object({ action: z.enum(["undo", "redo"]) })
+    .strict(),
   transform_sketch: z
     .object({
       sketchId: objectIdSchema,
@@ -145,7 +182,7 @@ export const WEBMCP_TOOL_CATALOG = {
   },
   transform_object: {
     description:
-      "Move or resize one existing, unpinned canvas object through the canonical mutation pipeline.",
+      "Move, resize, or rotate one existing, unpinned canvas object through the canonical mutation pipeline.",
     inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.transform_object,
     annotations: { readOnlyHint: false, untrustedContentHint: true },
     humanApproval: "not_required",
@@ -161,6 +198,20 @@ export const WEBMCP_TOOL_CATALOG = {
     description:
       "Move one canvas object to recoverable trash; this never performs permanent deletion.",
     inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.discard_object,
+    annotations: { readOnlyHint: false, untrustedContentHint: true },
+    humanApproval: "not_required",
+  },
+  organize_objects: {
+    description:
+      "Group explicit canvas objects inside a semantic frame, or ungroup an existing frame, through one reversible mutation.",
+    inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.organize_objects,
+    annotations: { readOnlyHint: false, untrustedContentHint: true },
+    humanApproval: "not_required",
+  },
+  history_action: {
+    description:
+      "Undo or redo the latest reversible shared canvas mutation and record an attributable history receipt.",
+    inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.history_action,
     annotations: { readOnlyHint: false, untrustedContentHint: true },
     humanApproval: "not_required",
   },

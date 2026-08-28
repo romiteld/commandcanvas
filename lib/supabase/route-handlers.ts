@@ -13,6 +13,7 @@ import {
 } from "@/lib/supabase/server-auth";
 import {
   createServerServiceClient,
+  createServerUserVerifierClient,
   readServerSupabaseConfig,
 } from "@/lib/supabase/server-client";
 import type {
@@ -39,13 +40,14 @@ export function createServerRoomRouteDependencies(): ServerRoomRouteDependencies
   if (!config.ok) return { ok: false };
 
   try {
-    const client = createServerServiceClient<
-      RoomServiceClient & SupabaseUserVerifier
-    >(config.config);
+    const client = createServerServiceClient<RoomServiceClient>(config.config);
+    const verifier = createServerUserVerifierClient<SupabaseUserVerifier>(
+      config.config,
+    );
     return {
       ok: true,
       dependencies: {
-        verifier: client,
+        verifier,
         service: createRoomService(client),
       },
     };
@@ -319,6 +321,16 @@ function commandServiceError(code: RoomServiceErrorCode): Response {
         code,
         message: "Unpin the object before moving or resizing it.",
       });
+    case "invalid_hierarchy":
+      return errorResponse(409, {
+        code,
+        message: "That frame or group hierarchy is no longer valid.",
+      });
+    case "frame_not_empty":
+      return errorResponse(409, {
+        code,
+        message: "Ungroup the frame before moving it to trash.",
+      });
     case "command_conflict":
       return errorResponse(409, {
         code,
@@ -334,6 +346,11 @@ function commandServiceError(code: RoomServiceErrorCode): Response {
       return errorResponse(409, {
         code,
         message: "There is nothing left to undo.",
+      });
+    case "nothing_to_redo":
+      return errorResponse(409, {
+        code,
+        message: "There is nothing left to redo.",
       });
     case "invalid_command":
       return errorResponse(400, {

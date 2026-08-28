@@ -18,12 +18,78 @@ describe("WebMCP live canvas state contract", () => {
       "transform_object",
       "set_object_state",
       "discard_object",
+      "organize_objects",
+      "history_action",
     ] as const) {
       expect(
         WEBMCP_TOOL_CATALOG[toolName].annotations.untrustedContentHint,
         `${toolName} can return a receipt containing an object title`,
       ).toBe(true);
     }
+  });
+
+  it("accepts a bounded rotation and rejects values outside the canonical canvas range", () => {
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.transform_object.safeParse({
+        objectId: "note-launch",
+        transform: { rotation: 180 },
+      }).success,
+    ).toBe(true);
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.transform_object.safeParse({
+        objectId: "note-launch",
+        transform: { rotation: 180.01 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("validates the two organization operations without accepting mixed branch fields", () => {
+    const frame = {
+      id: "frame-launch",
+      title: "Launch plan",
+      x: 20,
+      y: 40,
+      width: 900,
+      height: 620,
+      zIndex: 1,
+      tone: "violet" as const,
+    };
+
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.organize_objects.safeParse({
+        action: "group",
+        objectIds: ["note-launch", "board-launch"],
+        frame,
+      }).success,
+    ).toBe(true);
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.organize_objects.safeParse({
+        action: "ungroup",
+        frameId: "frame-launch",
+      }).success,
+    ).toBe(true);
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.organize_objects.safeParse({
+        action: "ungroup",
+        frameId: "frame-launch",
+        objectIds: ["note-launch"],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("limits history actions to canonical undo and redo operations", () => {
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.history_action.safeParse({ action: "undo" })
+        .success,
+    ).toBe(true);
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.history_action.safeParse({ action: "redo" })
+        .success,
+    ).toBe(true);
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.history_action.safeParse({ action: "reset" })
+        .success,
+    ).toBe(false);
   });
 });
 

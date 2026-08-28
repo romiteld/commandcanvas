@@ -158,6 +158,7 @@ export interface DemoRoomSessionDependencies {
 
 export interface DemoRoomSession {
   getSnapshot: () => DemoRoomSnapshot;
+  getAccessToken: () => string | null;
   subscribe: (listener: () => void) => () => void;
   start: (intent: DemoRoomStartIntent) => Promise<DemoRoomStartResult>;
   submitCommand: (
@@ -302,6 +303,10 @@ export function createDemoRoomSession(
 
   function getSnapshot() {
     return snapshot;
+  }
+
+  function getAccessToken() {
+    return noSignupSession?.access_token ?? null;
   }
 
   function subscribe(listener: () => void) {
@@ -918,6 +923,7 @@ export function createDemoRoomSession(
 
   return {
     getSnapshot,
+    getAccessToken,
     subscribe,
     start,
     submitCommand,

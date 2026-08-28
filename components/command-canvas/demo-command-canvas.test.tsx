@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -179,6 +180,7 @@ function readyEnvironment(options?: {
   );
   const session: DemoRoomSession = {
     getSnapshot: () => snapshot,
+    getAccessToken: () => "header.payload.signature",
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -255,6 +257,24 @@ function readyEnvironment(options?: {
 }
 
 describe("DemoCommandCanvas", () => {
+  it("bootstraps one no-signup identity and room under React Strict Mode", async () => {
+    const harness = readyEnvironment();
+    const bootstrap = vi.spyOn(harness.environment, "bootstrap");
+
+    const view = render(
+      <StrictMode>
+        <DemoCommandCanvas environment={harness.environment} />
+      </StrictMode>,
+    );
+
+    expect(await screen.findByText("Live demo room")).toBeVisible();
+    expect(bootstrap).toHaveBeenCalledOnce();
+    expect(harness.session.dispose).not.toHaveBeenCalled();
+
+    view.unmount();
+    await waitFor(() => expect(harness.session.dispose).toHaveBeenCalledOnce());
+  });
+
   it("wires authenticated sketch and packet APIs into the default room session", async () => {
     const harness = readyEnvironment();
     const browserApi = { transform: vi.fn() };
@@ -415,6 +435,9 @@ describe("DemoCommandCanvas", () => {
     try {
       render(<DemoCommandCanvas environment={harness.environment} />);
       await screen.findByText("Live demo room");
+      await user.click(
+        screen.getByRole("button", { name: "Open command drawer" }),
+      );
       await waitFor(() => {
         expect(
           registeredTools.some((tool) => tool.name === "prepare_meeting_packet"),
@@ -528,6 +551,9 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
     await user.click(
+      screen.getByRole("button", { name: "Open command drawer" }),
+    );
+    await user.click(
       screen.getByRole("button", { name: "Prepare meeting packet" }),
     );
 
@@ -539,6 +565,7 @@ describe("DemoCommandCanvas", () => {
   });
 
   it("reconstructs the persisted packet workflow and immutable receipts after reload", async () => {
+    const user = userEvent.setup();
     const loadLatestPacketWorkflow = vi.fn(async () => ({
       ok: true as const,
       value: {
@@ -593,6 +620,10 @@ describe("DemoCommandCanvas", () => {
     });
 
     render(<DemoCommandCanvas environment={harness.environment} />);
+    await screen.findByText("Live demo room");
+    await user.click(
+      screen.getByRole("button", { name: "Open command drawer" }),
+    );
 
     expect(await screen.findByText("Approved packet v2")).toBeVisible();
     expect(loadLatestPacketWorkflow).toHaveBeenCalledOnce();
@@ -683,6 +714,9 @@ describe("DemoCommandCanvas", () => {
 
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
+    await user.click(
+      screen.getByRole("button", { name: "Open command drawer" }),
+    );
     await user.click(
       screen.getByRole("button", { name: "Prepare meeting packet" }),
     );
@@ -784,6 +818,9 @@ describe("DemoCommandCanvas", () => {
 
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
+    await user.click(
+      screen.getByRole("button", { name: "Open command drawer" }),
+    );
     await user.click(
       screen.getByRole("button", { name: "Prepare meeting packet" }),
     );
@@ -917,6 +954,7 @@ describe("DemoCommandCanvas", () => {
     });
 
     render(<DemoCommandCanvas environment={harness.environment} />);
+    await screen.findByText("Live demo room");
 
     expect(await screen.findByRole("heading", { name: "Send packet?" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "SEND" }));
@@ -950,6 +988,7 @@ describe("DemoCommandCanvas", () => {
   });
 
   it("renders only actual Presence participants and one remote cursor", async () => {
+    const user = userEvent.setup();
     const { environment } = readyEnvironment();
     const { container } = render(<DemoCommandCanvas environment={environment} />);
 
@@ -961,6 +1000,13 @@ describe("DemoCommandCanvas", () => {
       container.querySelector(`[data-remote-cursor="${SARAH_ID}"]`),
     ).not.toBeNull();
     expect(screen.queryByText(/fixture collaborator/i)).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Open command drawer" }),
+    );
+    expect(screen.getByRole("button", { name: "Start live voice" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Run direct command" })).toBeNull();
+    await user.click(screen.getByText("Type a command instead"));
+    expect(screen.getByRole("button", { name: "Run direct command" })).toBeVisible();
   });
 
   it("copies the host invite and exposes an exact reset action", async () => {

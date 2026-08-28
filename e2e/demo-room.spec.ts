@@ -13,6 +13,7 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
     process.env.RUN_SUPABASE_E2E !== "true" ||
       testInfo.project.name !== "chromium-desktop",
   );
+  test.setTimeout(120_000);
 
   const contextA = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const contextB = await browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -44,7 +45,11 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
     ).toBeVisible();
     await expect(pageA.getByText("Revision 3")).toBeVisible();
     await expect(pageA.getByLabel("1 participant present")).toBeVisible();
+    await pageA.getByRole("button", { name: "Open system status" }).click();
     await expect(pageA.getByText("Site Tools unavailable")).toBeVisible();
+    await pageA
+      .getByRole("button", { name: "Close system status drawer" })
+      .click();
 
     roomId = await roomCapture.resolveRoomId();
     expect(roomId).toMatch(/^[0-9a-f-]{36}$/);
@@ -65,6 +70,7 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
       timeout: 15_000,
     });
 
+    await pageB.getByRole("button", { name: "Open system status" }).click();
     await contextB.setOffline(true);
     await expect(
       pageB.getByText("Realtime unavailable · state preserved"),
@@ -73,6 +79,9 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
     await expect(
       pageB.getByText("2 present via Supabase Realtime"),
     ).toBeVisible({ timeout: 20_000 });
+    await pageB
+      .getByRole("button", { name: "Close system status drawer" })
+      .click();
     await expect(pageA.getByLabel("2 participants present")).toBeVisible({
       timeout: 20_000,
     });
@@ -95,9 +104,46 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
     await expect(pageA.getByText("Revision 4")).toBeVisible();
     await expect(pageB.getByText("R4 · collaborator")).toBeVisible();
 
+    await pageB
+      .getByRole("button", { name: "Enable multiple selection" })
+      .click();
+    await pageB.getByRole("button", { name: "Select Decision" }).click();
+    await pageB.getByRole("button", { name: "Select New thought" }).click();
+    await pageB
+      .getByRole("button", { name: "Group selected objects" })
+      .click();
+    await expect(pageA.getByText("Sarah grouped 2 objects in “Frame 5”.")).toBeVisible({
+      timeout: 15_000,
+    });
+
+    await pageB.getByRole("button", { name: "Rotate clockwise" }).click();
+    await expect(
+      pageA.getByText("Sarah transformed “Frame 5” and its contents spatially."),
+    ).toBeVisible({ timeout: 15_000 });
+
+    await pageB.getByRole("button", { name: "Undo last change" }).click();
+    await expect(pageA.getByText(/Sarah undid: Sarah transformed “Frame 5”/)).toBeVisible({
+      timeout: 15_000,
+    });
+    await pageB.getByRole("button", { name: "Redo last undone change" }).click();
+    await expect(pageA.getByText(/Sarah redid: Sarah transformed “Frame 5”/)).toBeVisible({
+      timeout: 15_000,
+    });
+
+    await pageB
+      .getByRole("button", { name: "Ungroup selected frame" })
+      .click();
+    await expect(pageA.getByText("Sarah ungrouped “Frame 5”.")).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(pageA.getByText("Revision 9")).toBeVisible();
+
     await pageB.reload();
     await expect(pageB.getByText("Live demo room")).toBeVisible({ timeout: 20_000 });
-    await expect(pageB.getByText("Revision 4")).toBeVisible();
+    await expect(pageB.getByText("Revision 9")).toBeVisible();
+    await expect(
+      pageB.getByRole("button", { name: "Select Frame 5" }),
+    ).toHaveCount(0);
     await expect(pageB.getByLabel("2 participants present")).toBeVisible({
       timeout: 15_000,
     });
@@ -131,8 +177,11 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
     });
     expect(browserErrors).toEqual([]);
   } finally {
-    roomCapture.stop();
-    roomId ??= await roomCapture.resolveRoomId();
+    try {
+      roomId ??= await roomCapture.resolveRoomId();
+    } finally {
+      roomCapture.stop();
+    }
     let cleanupError: unknown;
     try {
       if (roomId) await deleteHostedRoom(pageA, roomId);

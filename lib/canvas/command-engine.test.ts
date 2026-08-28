@@ -293,4 +293,305 @@ describe("applyCanvasCommand", () => {
     expect(result.state.objects).toEqual({});
     expect(result.state.receipts).toEqual([]);
   });
+
+  it("rotates an object through the same transform receipt and undo path", () => {
+    const created = applyCanvasCommand(
+      createEmptyCanvasState("room-demo"),
+      createNoteCommand(),
+      runtime,
+    );
+    if (!created.ok) throw new Error("fixture creation failed");
+
+    const rotated = applyCanvasCommand(
+      created.state,
+      command(1, {
+        type: "object.transform",
+        objectId: "note-1",
+        transform: { rotation: 15 },
+      }),
+      runtime,
+    );
+    if (!rotated.ok) throw new Error("expected rotation to succeed");
+
+    expect(rotated.state.objects["note-1"]).toMatchObject({
+      rotation: 15,
+      version: 2,
+    });
+    expect(rotated.receipt).toMatchObject({
+      action: "transform",
+      affectedObjectIds: ["note-1"],
+    });
+    const undone = applyCanvasCommand(
+      rotated.state,
+      command(2, { type: "history.undo" }),
+      runtime,
+    );
+    expect(undone.ok && undone.state.objects["note-1"]?.rotation).toBe(0);
+  });
+
+  it("groups multiple objects into an attributable frame and undoes atomically", () => {
+    const first = applyCanvasCommand(
+      createEmptyCanvasState("room-demo"),
+      createNoteCommand(),
+      runtime,
+    );
+    if (!first.ok) throw new Error("fixture creation failed");
+    const second = applyCanvasCommand(
+      first.state,
+      command(1, {
+        type: "object.create",
+        object: {
+          id: "note-2",
+          type: "note",
+          title: "Delivery risk",
+          x: 460,
+          y: 120,
+          width: 280,
+          height: 190,
+          zIndex: 2,
+          payload: { text: "Keep the fallback honest.", tone: "sky" },
+        },
+      }),
+      runtime,
+    );
+    if (!second.ok) throw new Error("fixture creation failed");
+
+    const grouped = applyCanvasCommand(
+      second.state,
+      command(2, {
+        type: "objects.group",
+        objectIds: ["note-1", "note-2"],
+        frame: {
+          id: "frame-planning",
+          type: "frame",
+          title: "Planning cluster",
+          x: 80,
+          y: 40,
+          width: 700,
+          height: 310,
+          zIndex: 0,
+          payload: { tone: "sky" },
+        },
+      }),
+      runtime,
+    );
+    if (!grouped.ok) throw new Error("expected grouping to succeed");
+
+    expect(grouped.state.objects["frame-planning"]).toMatchObject({
+      type: "frame",
+      parentId: null,
+      rotation: 0,
+      version: 1,
+    });
+    expect(grouped.state.objects["note-1"]).toMatchObject({
+      parentId: "frame-planning",
+      version: 2,
+    });
+    expect(grouped.state.objects["note-2"]).toMatchObject({
+      parentId: "frame-planning",
+      version: 2,
+    });
+    expect(grouped.receipt).toMatchObject({
+      action: "group",
+      affectedObjectIds: ["frame-planning", "note-1", "note-2"],
+      description: "Danny grouped 2 objects in “Planning cluster”.",
+    });
+
+    const undone = applyCanvasCommand(
+      grouped.state,
+      command(3, { type: "history.undo" }),
+      runtime,
+    );
+    if (!undone.ok) throw new Error("expected group undo to succeed");
+    expect(undone.state.objects["frame-planning"]).toBeUndefined();
+    expect(undone.state.objects["note-1"]?.parentId).toBeNull();
+    expect(undone.state.objects["note-2"]?.parentId).toBeNull();
+  });
+
+  it("moves a frame and its descendants in one canonical transform receipt", () => {
+    let state = createEmptyCanvasState("room-demo");
+    for (const envelope of [
+      createNoteCommand(),
+      command(1, {
+        type: "object.create",
+        object: {
+          id: "frame-planning",
+          type: "frame",
+          title: "Planning cluster",
+          x: 80,
+          y: 40,
+          width: 500,
+          height: 300,
+          zIndex: 0,
+          payload: { tone: "violet" },
+        },
+      }),
+    ]) {
+      const result = applyCanvasCommand(state, envelope, runtime);
+      if (!result.ok) throw new Error("fixture creation failed");
+      state = result.state;
+    }
+    const grouped = applyCanvasCommand(
+      state,
+      command(2, {
+        type: "objects.group",
+        objectIds: ["note-1", "frame-planning"],
+        frame: {
+          id: "frame-outer",
+          type: "frame",
+          title: "Outer frame",
+          x: 40,
+          y: 20,
+          width: 600,
+          height: 380,
+          zIndex: 0,
+          payload: { tone: "sand" },
+        },
+      }),
+      runtime,
+    );
+    if (!grouped.ok) throw new Error("fixture grouping failed");
+
+    const moved = applyCanvasCommand(
+      grouped.state,
+      command(3, {
+        type: "object.transform",
+        objectId: "frame-outer",
+        transform: { x: 140, y: 70 },
+      }),
+      runtime,
+    );
+    if (!moved.ok) throw new Error("expected frame move to succeed");
+
+    expect(moved.state.objects["frame-outer"]).toMatchObject({ x: 140, y: 70 });
+    expect(moved.state.objects["note-1"]).toMatchObject({ x: 220, y: 130 });
+    expect(moved.state.objects["frame-planning"]).toMatchObject({ x: 180, y: 90 });
+    expect(moved.receipt.affectedObjectIds).toEqual([
+      "frame-outer",
+      "note-1",
+      "frame-planning",
+    ]);
+  });
+
+  it("ungroups a frame by promoting its direct children and preserving the frame for undo", () => {
+    const first = applyCanvasCommand(
+      createEmptyCanvasState("room-demo"),
+      createNoteCommand(),
+      runtime,
+    );
+    if (!first.ok) throw new Error("fixture creation failed");
+    const grouped = applyCanvasCommand(
+      first.state,
+      command(1, {
+        type: "objects.group",
+        objectIds: ["note-1"],
+        frame: {
+          id: "frame-planning",
+          type: "frame",
+          title: "Planning cluster",
+          x: 80,
+          y: 40,
+          width: 400,
+          height: 280,
+          zIndex: 0,
+          payload: { tone: "coral" },
+        },
+      }),
+      runtime,
+    );
+    if (!grouped.ok) throw new Error("fixture grouping failed");
+
+    const ungrouped = applyCanvasCommand(
+      grouped.state,
+      command(2, { type: "objects.ungroup", frameId: "frame-planning" }),
+      runtime,
+    );
+    if (!ungrouped.ok) throw new Error("expected ungroup to succeed");
+
+    expect(ungrouped.state.objects["note-1"]?.parentId).toBeNull();
+    expect(ungrouped.state.objects["frame-planning"]?.deletedAt).toBe(
+      "2026-08-27T12:00:02.000Z",
+    );
+    expect(ungrouped.receipt).toMatchObject({
+      action: "ungroup",
+      affectedObjectIds: ["frame-planning", "note-1"],
+    });
+  });
+
+  it("redoes the latest undo and clears redo history after a new mutation", () => {
+    const created = applyCanvasCommand(
+      createEmptyCanvasState("room-demo"),
+      createNoteCommand(),
+      runtime,
+    );
+    if (!created.ok) throw new Error("fixture creation failed");
+    const moved = applyCanvasCommand(
+      created.state,
+      command(1, {
+        type: "object.transform",
+        objectId: "note-1",
+        transform: { x: 540 },
+      }),
+      runtime,
+    );
+    if (!moved.ok) throw new Error("fixture transform failed");
+    const undone = applyCanvasCommand(
+      moved.state,
+      command(2, { type: "history.undo" }),
+      runtime,
+    );
+    if (!undone.ok) throw new Error("fixture undo failed");
+
+    const redone = applyCanvasCommand(
+      undone.state,
+      command(3, { type: "history.redo" }),
+      runtime,
+    );
+    if (!redone.ok) throw new Error("expected redo to succeed");
+    expect(redone.state.objects["note-1"]?.x).toBe(540);
+    expect(redone.receipt).toMatchObject({
+      action: "redo",
+      undoOfReceiptId: undone.receipt.id,
+      affectedObjectIds: ["note-1"],
+    });
+    expect(redone.state.undoneReceiptIds).toEqual([]);
+    expect(redone.state.redoReceiptIds).toEqual([]);
+
+    const undoAgain = applyCanvasCommand(
+      redone.state,
+      command(4, { type: "history.undo" }),
+      runtime,
+    );
+    if (!undoAgain.ok) throw new Error("expected undo after redo to succeed");
+    expect(undoAgain.receipt.undoOfReceiptId).toBe(redone.receipt.id);
+    expect(undoAgain.state.objects["note-1"]?.x).toBe(120);
+    const undoPrior = applyCanvasCommand(
+      undoAgain.state,
+      command(5, { type: "history.undo" }),
+      runtime,
+    );
+    if (!undoPrior.ok) throw new Error("expected prior undo to succeed");
+    expect(undoPrior.receipt.undoOfReceiptId).toBe(created.receipt.id);
+    expect(undoPrior.state.objects["note-1"]).toBeUndefined();
+    const branched = applyCanvasCommand(
+      undoAgain.state,
+      command(5, {
+        type: "object.set_flags",
+        objectId: "note-1",
+        flags: { minimized: true },
+      }),
+      runtime,
+    );
+    if (!branched.ok) throw new Error("expected branch mutation to succeed");
+    expect(branched.state.redoReceiptIds).toEqual([]);
+    const refusedRedo = applyCanvasCommand(
+      branched.state,
+      command(6, { type: "history.redo" }),
+      runtime,
+    );
+    expect(refusedRedo).toMatchObject({
+      ok: false,
+      error: { code: "NOTHING_TO_REDO" },
+    });
+  });
 });

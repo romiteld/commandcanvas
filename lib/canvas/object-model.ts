@@ -10,6 +10,7 @@ const coordinateSchema = z.number().finite().min(-1_000_000).max(1_000_000);
 const widthSchema = z.number().finite().min(160).max(2_000);
 const heightSchema = z.number().finite().min(80).max(1_400);
 const zIndexSchema = z.number().int().min(0).max(100_000);
+const rotationSchema = z.number().finite().min(-180).max(180);
 
 const spatialFields = {
   id: objectIdSchema,
@@ -19,6 +20,7 @@ const spatialFields = {
   width: widthSchema,
   height: heightSchema,
   zIndex: zIndexSchema,
+  rotation: rotationSchema.optional(),
 };
 
 export const notePayloadSchema = z
@@ -147,6 +149,12 @@ export const diagramPayloadSchema = z
     }
   });
 
+export const framePayloadSchema = z
+  .object({
+    tone: z.enum(["coral", "sky", "sand", "violet"]),
+  })
+  .strict();
+
 const newNoteObjectSchema = z
   .object({
     ...spatialFields,
@@ -187,12 +195,21 @@ const newDiagramObjectSchema = z
   })
   .strict();
 
+const newFrameObjectSchema = z
+  .object({
+    ...spatialFields,
+    type: z.literal("frame"),
+    payload: framePayloadSchema,
+  })
+  .strict();
+
 export const newCanvasObjectSchema = z.discriminatedUnion("type", [
   newNoteObjectSchema,
   newTaskBoardObjectSchema,
   newScheduleObjectSchema,
   newSketchObjectSchema,
   newDiagramObjectSchema,
+  newFrameObjectSchema,
 ]);
 
 const transformSchema = z
@@ -201,6 +218,7 @@ const transformSchema = z
     y: coordinateSchema.optional(),
     width: widthSchema.optional(),
     height: heightSchema.optional(),
+    rotation: rotationSchema.optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0);
@@ -232,7 +250,25 @@ export const canvasCommandSchema = z.discriminatedUnion("type", [
   z
     .object({ type: z.literal("object.discard"), objectId: objectIdSchema })
     .strict(),
+  z
+    .object({
+      type: z.literal("objects.group"),
+      objectIds: z
+        .array(objectIdSchema)
+        .min(1)
+        .max(20)
+        .refine((ids) => new Set(ids).size === ids.length),
+      frame: newFrameObjectSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("objects.ungroup"),
+      frameId: objectIdSchema,
+    })
+    .strict(),
   z.object({ type: z.literal("history.undo") }).strict(),
+  z.object({ type: z.literal("history.redo") }).strict(),
 ]);
 
 export type NotePayload = z.infer<typeof notePayloadSchema>;
@@ -240,8 +276,10 @@ export type TaskBoardPayload = z.infer<typeof taskBoardPayloadSchema>;
 export type SchedulePayload = z.infer<typeof schedulePayloadSchema>;
 export type SketchPayload = z.infer<typeof sketchPayloadSchema>;
 export type DiagramPayload = z.infer<typeof diagramPayloadSchema>;
+export type FramePayload = z.infer<typeof framePayloadSchema>;
 export type NewCanvasObject = z.infer<typeof newCanvasObjectSchema>;
 export type NewNoteObject = Extract<NewCanvasObject, { type: "note" }>;
+export type NewFrameObject = Extract<NewCanvasObject, { type: "frame" }>;
 export type CanvasCommand = z.infer<typeof canvasCommandSchema>;
 
 export interface PersistedObjectFields {
@@ -254,6 +292,8 @@ export interface PersistedObjectFields {
   deletedAt: string | null;
   version: number;
   metadata: Record<string, unknown>;
+  rotation?: number;
+  parentId?: string | null;
 }
 
 export type CanvasObject = NewCanvasObject & PersistedObjectFields;

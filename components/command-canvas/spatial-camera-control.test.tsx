@@ -5,15 +5,29 @@ import { describe, expect, it, vi } from "vitest";
 import { SpatialCameraControl } from "@/components/command-canvas/spatial-camera-control";
 import type {
   HandTrackingController,
+  HandTrackingEngineStatus,
   HandTrackingObservation,
   HandTrackingStatus,
 } from "@/lib/gesture/hand-tracking-controller";
+import type { HandLandmarks } from "@/lib/gesture/hand-intent";
+
+function trackedLandmarks(): HandLandmarks {
+  return Array.from({ length: 21 }, (_, index) => ({
+    x: 0.2 + index * 0.02,
+    y: 0.25 + index * 0.01,
+    z: 0,
+  })) as unknown as HandLandmarks;
+}
 
 function fakeController() {
   let status: HandTrackingStatus = { state: "off" };
   const statusListeners = new Set<(next: HandTrackingStatus) => void>();
   const observationListeners = new Set<
     (next: HandTrackingObservation) => void
+  >();
+  let engineStatus: HandTrackingEngineStatus | null = null;
+  const engineListeners = new Set<
+    (next: HandTrackingEngineStatus | null) => void
   >();
   const controller: HandTrackingController = {
     getStatus: () => status,
@@ -24,6 +38,11 @@ function fakeController() {
     subscribeObservations(listener) {
       observationListeners.add(listener);
       return () => observationListeners.delete(listener);
+    },
+    getEngineStatus: () => engineStatus,
+    subscribeEngineStatus(listener) {
+      engineListeners.add(listener);
+      return () => engineListeners.delete(listener);
     },
     start: vi.fn(async () => undefined),
     stop: vi.fn(() => undefined),
@@ -37,11 +56,16 @@ function fakeController() {
     emit(next: HandTrackingObservation) {
       observationListeners.forEach((listener) => listener(next));
     },
+    setEngine(next: HandTrackingEngineStatus | null) {
+      engineStatus = next;
+      engineListeners.forEach((listener) => listener(next));
+    },
   };
 }
 
 describe("SpatialCameraControl", () => {
-  it("keeps the camera session alive when canvas observation handlers refresh", () => {
+  it("keeps the camera session alive when canvas observation handlers refresh", async () => {
+    const user = userEvent.setup();
     const fake = fakeController();
     const first = vi.fn();
     const second = vi.fn();
@@ -51,7 +75,9 @@ describe("SpatialCameraControl", () => {
         onObservation={first}
       />,
     );
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => fake.setStatus({ state: "ready" }));
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
 
     rerender(
       <SpatialCameraControl
@@ -80,7 +106,7 @@ describe("SpatialCameraControl", () => {
 
     expect(
       screen.getByText(
-        "Camera frames stay in this browser. When hand input is enabled, the detector model downloads from Google. Only semantic canvas commands are shared.",
+        "Camera frames stay in this browser. The active local hand-pose engine downloads its model in your browser. Only semantic canvas commands are shared.",
       ),
     ).toBeVisible();
     expect(fake.controller.start).not.toHaveBeenCalled();
@@ -92,6 +118,9 @@ describe("SpatialCameraControl", () => {
     expect(fake.controller.start).toHaveBeenCalledWith(
       expect.objectContaining({ muted: true }),
     );
+    expect(
+      screen.getByRole("button", { name: "Start spatial mode" }),
+    ).toBeDisabled();
   });
 
   it("shows ready separately from a real detected hand and disables cleanly", async () => {
@@ -109,6 +138,7 @@ describe("SpatialCameraControl", () => {
     fake.setStatus({ state: "ready" });
     expect(await screen.findByText("Hand input ready · local only")).toBeVisible();
     expect(screen.queryByText(/hand detected/i)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
 
     fake.emit({
       mode: "pinch",
@@ -116,13 +146,62 @@ describe("SpatialCameraControl", () => {
       confidence: 0.95,
       timestamp: 1_000,
     });
-    expect(await screen.findByText("Hand detected · pinch to move")).toBeVisible();
+    expect(await screen.findByText("PINCH · ready to hold")).toBeVisible();
     expect(onObservation).toHaveBeenCalledWith(
       expect.objectContaining({ mode: "pinch" }),
     );
 
     await user.click(screen.getByRole("button", { name: "Disable hand input" }));
     expect(fake.controller.stop).toHaveBeenCalledOnce();
+  });
+
+  it("visibly identifies YOLO as primary and labels a runtime fallback", async () => {
+    const fake = fakeController();
+    render(<SpatialCameraControl createController={() => fake.controller} />);
+
+    act(() => {
+      fake.setEngine({
+        id: "yolo26-hand-pose-2abb91",
+        displayName: "YOLO26 Hand Pose",
+        runtime: "onnx-runtime-web",
+        fallback: false,
+      });
+      fake.setStatus({ state: "ready" });
+    });
+    expect(await screen.findByText("Engine YOLO26 Hand Pose")).toBeVisible();
+
+    act(() =>
+      fake.setEngine({
+        id: "mediapipe-hand-landmarker-v1",
+        displayName: "MediaPipe Hand Landmarker",
+        runtime: "mediapipe-tasks-vision",
+        fallback: true,
+      }),
+    );
+    expect(
+      await screen.findByText("Fallback MediaPipe Hand Landmarker"),
+    ).toBeVisible();
+  });
+
+  it("hands control back to the canvas as soon as spatial mode starts", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    const onSpatialModeStarted = vi.fn();
+    render(
+      <SpatialCameraControl
+        createController={() => fake.controller}
+        onSpatialModeStarted={onSpatialModeStarted}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => fake.setStatus({ state: "ready" }));
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+
+    expect(onSpatialModeStarted).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole("button", { name: "Start spatial mode" }),
+    ).toBeNull();
   });
 
   it("reports point and pinch as separate real-session self-checks", async () => {
@@ -139,6 +218,9 @@ describe("SpatialCameraControl", () => {
         mode: "point",
         pointer: { x: 0.3, y: 0.4 },
         confidence: 0.91,
+        handedness: "left",
+        landmarks: trackedLandmarks(),
+        pinchDistance: 0.12,
         timestamp: 1_000,
       }),
     );
@@ -164,6 +246,91 @@ describe("SpatialCameraControl", () => {
 
     act(() => fake.setStatus({ state: "off" }));
     expect(screen.queryByText(/Gesture self-check/)).toBeNull();
+  });
+
+  it("expands the live calibration view and shows the tracked pointer", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    const { container } = render(
+      <SpatialCameraControl createController={() => fake.controller} />,
+    );
+    fake.setStatus({ state: "ready" });
+
+    await user.click(
+      screen.getByRole("button", { name: "Expand hand tracking preview" }),
+    );
+    expect(container.querySelector(".spatial-camera-control")).toHaveClass(
+      "is-expanded",
+    );
+    expect(
+      screen.getByRole("button", { name: "Collapse hand tracking preview" }),
+    ).toHaveAttribute("aria-expanded", "true");
+
+    act(() =>
+      fake.emit({
+        mode: "point",
+        pointer: { x: 0.3, y: 0.4 },
+        confidence: 0.91,
+        handedness: "left",
+        landmarks: trackedLandmarks(),
+        pinchDistance: 0.12,
+        timestamp: 1_000,
+      }),
+    );
+    expect(container.querySelectorAll("[data-tracked-hand-pointer]")).toHaveLength(
+      1,
+    );
+    expect(container.querySelectorAll("[data-hand-keypoint]")).toHaveLength(21);
+    expect(container.querySelectorAll("[data-hand-connection]")).toHaveLength(21);
+    expect(screen.getByText("Pinch 0.120")).toBeVisible();
+    expect(screen.getByText("21-point hand landmarks")).toBeVisible();
+    expect(screen.getByText("Confidence 91%")).toBeVisible();
+    expect(screen.getByText("left hand")).toBeVisible();
+    expect(screen.getByText("State point")).toBeVisible();
+  });
+
+  it("shows open-palm and bimanual resize feedback without miscounting the pinch self-check", async () => {
+    const fake = fakeController();
+    render(<SpatialCameraControl createController={() => fake.controller} />);
+    fake.setStatus({ state: "ready" });
+
+    act(() =>
+      fake.emit({
+        mode: "open_palm",
+        pointer: { x: 0.5, y: 0.5 },
+        confidence: 0.94,
+        handedness: "left",
+        timestamp: 1_000,
+      }),
+    );
+    expect(
+      await screen.findByText("OPEN · hold steady to focus"),
+    ).toBeVisible();
+    expect(screen.getByText("Gesture self-check · 0/2")).toBeVisible();
+
+    act(() =>
+      fake.emit({
+        mode: "bimanual_pinch",
+        hands: [
+          {
+            handedness: "left",
+            pointer: { x: 0.3, y: 0.5 },
+            confidence: 0.95,
+          },
+          {
+            handedness: "right",
+            pointer: { x: 0.7, y: 0.5 },
+            confidence: 0.96,
+          },
+        ],
+        center: { x: 0.5, y: 0.5 },
+        span: 0.4,
+        timestamp: 1_016,
+      }),
+    );
+    expect(
+      await screen.findByText("TWO HANDS · spread to resize"),
+    ).toBeVisible();
   });
 
   it.each([

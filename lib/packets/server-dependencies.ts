@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseUserVerifier } from "@/lib/supabase/server-auth";
 import {
   createServerServiceClient,
+  createServerUserVerifierClient,
   readServerSupabaseConfig,
 } from "@/lib/supabase/server-client";
 import {
@@ -20,13 +21,14 @@ export function createServerPacketRouteDependencies(): ServerPacketRouteDependen
   if (!config.ok) return { ok: false };
 
   try {
-    const client = createServerServiceClient<
-      PacketServiceClient & SupabaseUserVerifier
-    >(config.config);
+    const client = createServerServiceClient<PacketServiceClient>(config.config);
+    const verifier = createServerUserVerifierClient<SupabaseUserVerifier>(
+      config.config,
+    );
     return {
       ok: true,
       dependencies: {
-        verifier: client,
+        verifier,
         service: createPacketService(client),
       },
     };

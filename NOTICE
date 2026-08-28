@@ -1,0 +1,9 @@
+CommandCanvas
+Copyright (C) 2026 Daniel Romitelli
+
+This release is licensed under the GNU Affero General Public License,
+version 3 only. See LICENSE.
+
+Third-party components and the embedded hand-pose model retain their own
+copyrights and applicable license notices. See THIRD_PARTY_NOTICES.md and
+SOURCE.md.

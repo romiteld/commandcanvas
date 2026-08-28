@@ -109,6 +109,7 @@ export class WebMcpRegistry {
     }
 
     for (const toolName of desiredNames) {
+      if (this.#disposed) return;
       if (this.#registrations.has(toolName)) continue;
 
       const controller = new AbortController();

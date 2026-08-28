@@ -157,6 +157,8 @@ function createdObjectRow(actorUserId: string) {
     width: 280,
     height: 190,
     z_index: 1,
+    rotation: 0,
+    parent_id: null,
     minimized: false,
     pinned: false,
     created_by: actorUserId,
@@ -182,9 +184,11 @@ function createdSnapshot(actorUserId: string) {
     x: 120,
     y: 80,
     width: 280,
-    height: 190,
-    zIndex: 1,
-    minimized: false,
+            height: 190,
+            zIndex: 1,
+            rotation: 0,
+            parentId: null,
+            minimized: false,
     pinned: false,
     createdBy: actorUserId,
     createdAt: CREATED_AT,
@@ -537,6 +541,7 @@ describe("CommandCanvas room service", () => {
         objects: {},
         receipts: [],
         undoneReceiptIds: [],
+        redoReceiptIds: [],
       },
     });
     expect(harness.traces).toEqual([
@@ -666,6 +671,7 @@ describe("CommandCanvas room service", () => {
         objects: {},
         receipts: [],
         undoneReceiptIds: [],
+        redoReceiptIds: [],
       },
     });
     expect(harness.traces.filter(({ table }) => table === "rooms")).toHaveLength(
@@ -859,6 +865,40 @@ describe("CommandCanvas room service", () => {
     expect(harness.rawClient.rpc).not.toHaveBeenCalled();
   });
 
+  it("returns the canonical nothing-to-redo refusal before the mutation RPC", async () => {
+    const harness = createClient({
+      tableResults: {
+        room_members: [{ data: memberRow("host", "Danny"), error: null }],
+        rooms: [
+          { data: emptyRoomRow, error: null },
+          { data: emptyRoomRow, error: null },
+        ],
+        canvas_objects: [{ data: [], error: null }],
+        receipts: [{ data: [], error: null }],
+      },
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).commitCommand(HOST_ID, {
+      commandId: COMMAND_ID,
+      roomId: ROOM_ID,
+      baseRevision: 0,
+      source: "typed",
+      command: { type: "history.redo" },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "nothing_to_redo",
+        message: "There is nothing left to redo.",
+      },
+    });
+    expect(harness.rawClient.rpc).not.toHaveBeenCalled();
+  });
+
   it("derives a host human actor and sends only the canonical mutation plan", async () => {
     const harness = successfulCommitClient({
       member: memberRow("host", "Danny"),
@@ -894,6 +934,8 @@ describe("CommandCanvas room service", () => {
               width: 280,
               height: 190,
               zIndex: 1,
+              rotation: 0,
+              parentId: null,
               minimized: false,
               pinned: false,
               deletedAt: null,

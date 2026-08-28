@@ -16,6 +16,7 @@ import type {
   DemoRoomSession,
   DemoRoomStartIntent,
 } from "@/lib/demo/room-session";
+import type { MeetingMediaClient } from "@/lib/meeting/media-controller";
 
 interface DemoSessionStorage {
   getItem: (key: string) => string | null;
@@ -42,6 +43,7 @@ export type DemoRoomBootstrapResult =
       store: StoreApi<CanvasStoreState>;
       role: "host" | "participant";
       inviteUrl: string | null;
+      meetingMediaClient?: MeetingMediaClient;
     }
   | { ok: false; code: string; message: string };
 

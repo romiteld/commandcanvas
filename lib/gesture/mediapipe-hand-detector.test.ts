@@ -17,7 +17,7 @@ describe("MediaPipe hand detector adapter", () => {
         wasmBaseUrl: "/mediapipe/wasm",
         modelAssetUrl: "/mediapipe/hand_landmarker.task",
         runningMode: "VIDEO",
-        numHands: 1,
+        numHands: 2,
       },
       { resolveVisionTasks, createDetector },
     );
@@ -28,7 +28,7 @@ describe("MediaPipe hand detector adapter", () => {
         modelAssetPath: "/mediapipe/hand_landmarker.task",
       },
       runningMode: "VIDEO",
-      numHands: 1,
+      numHands: 2,
       minHandDetectionConfidence: 0.75,
       minHandPresenceConfidence: 0.75,
       minTrackingConfidence: 0.7,

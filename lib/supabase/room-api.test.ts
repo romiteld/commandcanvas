@@ -68,6 +68,7 @@ const authoritativeState: CanvasState = {
     },
   ],
   undoneReceiptIds: [],
+  redoReceiptIds: [],
 };
 
 const commandInput: CommandRequest = {
@@ -315,6 +316,39 @@ describe("browser room API", () => {
     const requestBody = fetcher.mock.calls[0]?.[1]?.body;
     expect(typeof requestBody).toBe("string");
     expect(JSON.parse(requestBody as string)).toEqual(commandInput);
+  });
+
+  it("rejects an authoritative canvas whose object references a missing frame", async () => {
+    const fetcher = vi.fn<RoomApiFetch>(async () =>
+      Response.json({
+        ok: true,
+        mutation: {
+          roomId: ROOM_ID,
+          revision: 1,
+          receiptId: RECEIPT_ID,
+          state: {
+            ...authoritativeState,
+            objects: {
+              [noteObject.id]: { ...noteObject, parentId: "frame-missing" },
+            },
+          },
+        },
+      }),
+    );
+
+    const result = await createBrowserRoomApi({
+      accessToken: JWT,
+      fetcher,
+    }).commitCommand(commandInput);
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "invalid_response",
+        message: "Canvas command could not be committed.",
+        status: 200,
+      },
+    });
   });
 
   it("preserves the allowlisted demo storage-cap refusal from a command", async () => {

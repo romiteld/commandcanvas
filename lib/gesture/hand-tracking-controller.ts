@@ -5,9 +5,19 @@ import {
   type HandLandmarks,
 } from "@/lib/gesture/hand-intent";
 import type {
+  HandDetector,
+  HandDetectorLoadOptions,
   HandTrackingWorkerInboundMessage,
   HandTrackingWorkerOutboundMessage,
+  TrackedHandedness,
 } from "@/lib/gesture/hand-tracking-worker-core";
+import { createHandTrackingWorkerRuntime } from "@/lib/gesture/hand-tracking-worker-core";
+import {
+  createDefaultSpatialVisionEnginePlan,
+  type SpatialVisionEngine,
+  type SpatialVisionEngineDescriptor,
+  type SpatialVisionEnginePlan,
+} from "@/lib/gesture/spatial-vision-engine";
 
 export type HandTrackingStatus =
   | { state: "off" | "starting" | "ready" }
@@ -15,12 +25,31 @@ export type HandTrackingStatus =
 
 export type HandTrackingObservation =
   | {
-      mode: "point" | "pinch";
+      mode: "point" | "pinch" | "open_palm";
       pointer: { x: number; y: number };
       confidence: number;
+      handedness?: TrackedHandedness;
+      landmarks?: HandLandmarks;
+      pinchDistance?: number;
+      trackingState?: "tracked" | "grace";
       timestamp: number;
     }
-  | { mode: "idle"; timestamp: number };
+  | {
+      mode: "bimanual_pinch";
+      hands: readonly [HandTrackingPointer, HandTrackingPointer];
+      center: { x: number; y: number };
+      span: number;
+      timestamp: number;
+    }
+  | { mode: "idle"; timestamp: number; trackingState?: "lost" };
+
+export interface HandTrackingPointer {
+  handedness: TrackedHandedness;
+  pointer: { x: number; y: number };
+  confidence: number;
+  landmarks?: HandLandmarks;
+  pinchDistance?: number;
+}
 
 export interface HandTrackingWorkerLike {
   onmessage: ((event: MessageEvent<HandTrackingWorkerOutboundMessage>) => void) | null;
@@ -35,15 +64,36 @@ export interface HandTrackingController {
   subscribeObservations(
     listener: (observation: HandTrackingObservation) => void,
   ): () => void;
+  getEngineStatus?(): HandTrackingEngineStatus | null;
+  subscribeEngineStatus?(
+    listener: (engine: HandTrackingEngineStatus | null) => void,
+  ): () => void;
   start(video: HTMLVideoElement): Promise<void>;
   stop(): void;
 }
 
+export interface HandTrackingEngineStatus {
+  id: string;
+  displayName: string;
+  runtime: string;
+  fallback: boolean;
+}
+
 export interface HandTrackingControllerDependencies {
+  getSharedMediaStream?: () =>
+    | MediaStream
+    | null
+    | Promise<MediaStream | null>;
   getUserMedia?: (
     constraints: MediaStreamConstraints,
   ) => Promise<MediaStream>;
   createWorker?: () => HandTrackingWorkerLike;
+  createWorkerForEngine?: (
+    engine: SpatialVisionEngineDescriptor,
+  ) => HandTrackingWorkerLike;
+  loadDetector?: (options: HandDetectorLoadOptions) => Promise<HandDetector>;
+  visionEnginePlan?: SpatialVisionEnginePlan;
+  supportsWorkerCanvas?: boolean;
   createImageBitmap?: (source: CanvasImageSource) => Promise<ImageBitmap>;
   requestAnimationFrame?: (callback: FrameRequestCallback) => number;
   cancelAnimationFrame?: (handle: number) => void;
@@ -55,6 +105,7 @@ export interface HandTrackingControllerDependencies {
 
 const UNAVAILABLE_MESSAGE =
   "Local hand tracking is unavailable in this browser.";
+const PINCH_TRACKING_GRACE_MS = 180;
 
 export function createHandTrackingController(
   provided: HandTrackingControllerDependencies = {},
@@ -64,7 +115,11 @@ export function createHandTrackingController(
   const observationListeners = new Set<
     (observation: HandTrackingObservation) => void
   >();
+  const engineListeners = new Set<
+    (engine: HandTrackingEngineStatus | null) => void
+  >();
   let status: HandTrackingStatus = { state: "off" };
+  let engineStatus: HandTrackingEngineStatus | null = null;
   let nextRunId = 0;
   let activeRun: HandTrackingRun | null = null;
 
@@ -75,6 +130,18 @@ export function createHandTrackingController(
 
   function emit(observation: HandTrackingObservation) {
     observationListeners.forEach((listener) => listener(observation));
+  }
+
+  function setEngineStatus(engine: SpatialVisionEngine | null, fallback = false) {
+    engineStatus = engine
+      ? {
+          id: engine.descriptor.id,
+          displayName: engine.descriptor.displayName,
+          runtime: engine.descriptor.runtime,
+          fallback,
+        }
+      : null;
+    engineListeners.forEach((listener) => listener(engineStatus));
   }
 
   function clearRunResources(run: HandTrackingRun) {
@@ -95,10 +162,13 @@ export function createHandTrackingController(
       run.worker.terminate();
     }
     run.worker = null;
-    for (const track of run.stream?.getTracks() ?? []) track.stop();
+    if (run.ownsStream)
+      for (const track of run.stream?.getTracks() ?? []) track.stop();
     if (run.video.srcObject === run.stream) run.video.srcObject = null;
     run.stream = null;
-    run.intentState = createInitialHandIntentState();
+    run.ownsStream = false;
+    run.intentStates.clear();
+    run.lastSingleObservation = null;
   }
 
   function failUnavailable(
@@ -113,6 +183,86 @@ export function createHandTrackingController(
     clearRunResources(run);
     activeRun = null;
     setStatus({ state: "unavailable", message });
+  }
+
+  function startEngineWorker(run: HandTrackingRun, engineIndex: number) {
+    const engine = dependencies.visionEngines[engineIndex];
+    const createWorkerForEngine = dependencies.createWorkerForEngine;
+    if (!engine || !createWorkerForEngine) throw new Error(UNAVAILABLE_MESSAGE);
+    const worker = createWorkerForEngine(engine);
+    run.engineIndex = engineIndex;
+    run.worker = worker;
+    setEngineStatus(engine, engineIndex > 0);
+    worker.onmessage = (event) =>
+      handleWorkerMessage(run, worker, event.data);
+    worker.onerror = (event) => {
+      if (activeRun !== run || run.cancelled || run.worker !== worker) return;
+      handleEngineFailure(
+        run,
+        worker,
+        event.message || `${engine.descriptor.displayName} worker failed.`,
+      );
+    };
+    run.readyTimeout = dependencies.setTimeout(() => {
+      handleEngineFailure(
+        run,
+        worker,
+        `${engine.descriptor.displayName} did not become ready in time.`,
+      );
+    }, dependencies.workerReadyTimeoutMs);
+    worker.postMessage({
+      type: "initialize",
+      wasmBaseUrl: engine.detectorLoadOptions.wasmBaseUrl,
+      modelAssetUrl: engine.detectorLoadOptions.modelAssetUrl,
+    });
+  }
+
+  function handleEngineFailure(
+    run: HandTrackingRun,
+    worker: HandTrackingWorkerLike,
+    message: string,
+  ) {
+    if (
+      activeRun !== run ||
+      run.cancelled ||
+      run.worker !== worker
+    )
+      return;
+    run.frameInFlight = false;
+    if (run.readyTimeout !== null) {
+      dependencies.clearTimeout(run.readyTimeout);
+      run.readyTimeout = null;
+    }
+    const nextEngineIndex = run.engineIndex + 1;
+    if (nextEngineIndex >= dependencies.visionEngines.length) {
+      failUnavailable(run, message);
+      return;
+    }
+
+    if (run.animationFrame !== null && dependencies.cancelAnimationFrame)
+      dependencies.cancelAnimationFrame(run.animationFrame);
+    run.animationFrame = null;
+    try {
+      worker.postMessage({ type: "dispose" });
+    } catch {
+      // Termination below is definitive.
+    }
+    worker.terminate();
+    run.worker = null;
+    run.intentStates.clear();
+    run.lastSingleObservation = null;
+    emit({ mode: "idle", timestamp: dependencies.now(), trackingState: "lost" });
+    setStatus({ state: "starting" });
+    try {
+      startEngineWorker(run, nextEngineIndex);
+    } catch (fallbackError) {
+      failUnavailable(
+        run,
+        fallbackError instanceof Error && fallbackError.message.trim()
+          ? fallbackError.message
+          : message,
+      );
+    }
   }
 
   function scheduleFrame(run: HandTrackingRun) {
@@ -160,9 +310,10 @@ export function createHandTrackingController(
 
   function handleWorkerMessage(
     run: HandTrackingRun,
+    worker: HandTrackingWorkerLike,
     message: HandTrackingWorkerOutboundMessage,
   ) {
-    if (activeRun !== run || run.cancelled) return;
+    if (activeRun !== run || run.cancelled || run.worker !== worker) return;
     if (message.type === "ready") {
       if (run.readyTimeout !== null) {
         dependencies.clearTimeout(run.readyTimeout);
@@ -177,37 +328,121 @@ export function createHandTrackingController(
     }
     if (message.type === "error") {
       run.frameInFlight = false;
-      failUnavailable(run, message.message || "Local hand inference failed.");
+      handleEngineFailure(
+        run,
+        worker,
+        message.message || "Local hand inference failed.",
+      );
       return;
     }
 
     run.frameInFlight = false;
-    if (!message.landmarks || message.confidence === null) {
-      run.intentState = createInitialHandIntentState();
-      emit({ mode: "idle", timestamp: message.timestamp });
+    if (message.hands.length === 0) {
+      emitLossOrGrace(run, message.timestamp);
       return;
     }
-    const transition = interpretHandFrame(
-      run.intentState,
-      {
-        landmarks: message.landmarks as HandLandmarks,
-        confidence: message.confidence,
-        timestamp: message.timestamp,
-      },
-      dependencies.now(),
-      { mirrorX: true },
-    );
-    run.intentState = transition.state;
-    if (!transition.output.accepted) {
-      emit({ mode: "idle", timestamp: message.timestamp });
-      return;
-    }
-    emit({
-      mode: transition.output.mode,
-      pointer: transition.output.pointer,
-      confidence: transition.output.confidence,
-      timestamp: transition.output.timestamp,
+    const activeKeys = new Set<string>();
+    const interpreted = message.hands.map((hand, index) => {
+      const key = handStateKey(hand.handedness, index);
+      activeKeys.add(key);
+      const transition = interpretHandFrame(
+        run.intentStates.get(key) ?? createInitialHandIntentState(),
+        {
+          landmarks: hand.landmarks as HandLandmarks,
+          confidence: hand.confidence,
+          timestamp: message.timestamp,
+        },
+        dependencies.now(),
+        { mirrorX: true },
+      );
+      if (transition.output.accepted)
+        run.intentStates.set(key, transition.state);
+      return { hand, transition };
     });
+    for (const key of run.intentStates.keys()) {
+      if (!activeKeys.has(key)) run.intentStates.delete(key);
+    }
+    const accepted = interpreted.filter(
+      (entry) => entry.transition.output.accepted,
+    );
+    const pinches = accepted.flatMap((entry) => {
+      const output = entry.transition.output;
+      return output.accepted && output.mode === "pinch"
+        ? [{ hand: entry.hand, output }]
+        : [];
+    });
+    if (pinches.length >= 2) {
+      const hands = pinches.slice(0, 2).map(({ hand, output }) => ({
+        handedness: hand.handedness,
+        pointer: output.pointer,
+        confidence: output.confidence,
+        landmarks: hand.landmarks,
+        pinchDistance: output.pinchDistance,
+      })) as unknown as [HandTrackingPointer, HandTrackingPointer];
+      const [first, second] = hands;
+      emit({
+        mode: "bimanual_pinch",
+        hands,
+        center: {
+          x: rounded((first.pointer.x + second.pointer.x) / 2),
+          y: rounded((first.pointer.y + second.pointer.y) / 2),
+        },
+        span: rounded(
+          Math.hypot(
+            first.pointer.x - second.pointer.x,
+            first.pointer.y - second.pointer.y,
+          ),
+        ),
+        timestamp: message.timestamp,
+      });
+      run.lastSingleObservation = null;
+      return;
+    }
+    const primary = accepted.sort(
+      (left, right) =>
+        handModePriority(right.transition.output.mode) -
+        handModePriority(left.transition.output.mode),
+    )[0];
+    if (!primary || !primary.transition.output.accepted) {
+      emitLossOrGrace(run, message.timestamp);
+      return;
+    }
+    const output = primary.transition.output;
+    const observation: Extract<
+      HandTrackingObservation,
+      { mode: "point" | "pinch" | "open_palm" }
+    > = {
+      mode: output.mode,
+      pointer: output.pointer,
+      confidence: output.confidence,
+      handedness: primary.hand.handedness,
+      landmarks: primary.hand.landmarks,
+      pinchDistance: output.pinchDistance,
+      trackingState: "tracked",
+      timestamp: output.timestamp,
+    };
+    run.lastSingleObservation = observation;
+    emit(observation);
+  }
+
+  function emitLossOrGrace(run: HandTrackingRun, timestamp: number) {
+    const previous = run.lastSingleObservation;
+    if (
+      previous?.mode === "pinch" &&
+      timestamp >= previous.timestamp &&
+      timestamp - previous.timestamp <= PINCH_TRACKING_GRACE_MS
+    ) {
+      emit({
+        ...previous,
+        confidence: rounded(previous.confidence * 0.85),
+        timestamp,
+        trackingState: "grace",
+      });
+      return;
+    }
+    run.lastSingleObservation = null;
+    run.intentStates.clear();
+    emit({ mode: "idle", timestamp, trackingState: "lost" });
   }
 
   return {
@@ -220,11 +455,16 @@ export function createHandTrackingController(
       observationListeners.add(listener);
       return () => observationListeners.delete(listener);
     },
+    getEngineStatus: () => engineStatus,
+    subscribeEngineStatus(listener) {
+      engineListeners.add(listener);
+      return () => engineListeners.delete(listener);
+    },
     async start(targetVideo) {
       if (status.state === "starting" || status.state === "ready") return;
       if (
-        !dependencies.getUserMedia ||
-        !dependencies.createWorker ||
+        (!dependencies.getSharedMediaStream && !dependencies.getUserMedia) ||
+        !dependencies.createWorkerForEngine ||
         !dependencies.createImageBitmap ||
         !dependencies.requestAnimationFrame ||
         !dependencies.cancelAnimationFrame
@@ -238,21 +478,14 @@ export function createHandTrackingController(
       activeRun = run;
       setStatus({ state: "starting" });
       try {
-        const mediaOperation = dependencies.getUserMedia({
-          audio: false,
-          video: {
-            facingMode: "user",
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            frameRate: { ideal: 30, max: 30 },
-          },
-        });
+        const mediaOperation = acquireMediaStream(dependencies);
         const mediaResult = await waitForRunOrStop(run, mediaOperation);
         if (mediaResult.stopped) {
-          void mediaOperation.then(stopStream, () => undefined);
+          void mediaOperation.then(releaseAcquiredStream, () => undefined);
           return;
         }
-        run.stream = mediaResult.value;
+        run.stream = mediaResult.value.stream;
+        run.ownsStream = mediaResult.value.owned;
         if (activeRun !== run || run.cancelled) {
           clearRunResources(run);
           return;
@@ -266,30 +499,11 @@ export function createHandTrackingController(
           clearRunResources(run);
           return;
         }
-        run.worker = dependencies.createWorker();
-
         const ready = new Promise<void>((resolve, reject) => {
           run.resolveReady = resolve;
           run.rejectReady = reject;
         });
-        run.worker.onmessage = (event) =>
-          handleWorkerMessage(run, event.data);
-        run.worker.onerror = (event) => {
-          if (activeRun !== run || run.cancelled) return;
-          failUnavailable(run, event.message || "The local hand worker failed.");
-        };
-        run.readyTimeout = dependencies.setTimeout(() => {
-          failUnavailable(
-            run,
-            "Local hand tracking did not become ready in time.",
-          );
-        }, dependencies.workerReadyTimeoutMs);
-        run.worker.postMessage({
-          type: "initialize",
-          wasmBaseUrl: "/mediapipe/wasm",
-          modelAssetUrl:
-            "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-        });
+        startEngineWorker(run, 0);
         const readyResult = await waitForRunOrStop(run, ready);
         if (readyResult.stopped) return;
       } catch (error) {
@@ -324,6 +538,7 @@ export function createHandTrackingController(
         run.resolveStop();
         clearRunResources(run);
       }
+      setEngineStatus(null);
       setStatus({ state: "off" });
       emit({ mode: "idle", timestamp: dependencies.now() });
     },
@@ -334,10 +549,16 @@ interface HandTrackingRun {
   readonly id: number;
   readonly video: HTMLVideoElement;
   stream: MediaStream | null;
+  ownsStream: boolean;
   worker: HandTrackingWorkerLike | null;
+  engineIndex: number;
   animationFrame: number | null;
   frameInFlight: boolean;
-  intentState: HandIntentState;
+  intentStates: Map<string, HandIntentState>;
+  lastSingleObservation: Extract<
+    HandTrackingObservation,
+    { mode: "point" | "pinch" | "open_palm" }
+  > | null;
   cancelled: boolean;
   readonly stopped: Promise<void>;
   readonly resolveStop: () => void;
@@ -355,10 +576,13 @@ function createRun(id: number, video: HTMLVideoElement): HandTrackingRun {
     id,
     video,
     stream: null,
+    ownsStream: false,
     worker: null,
+    engineIndex: 0,
     animationFrame: null,
     frameInFlight: false,
-    intentState: createInitialHandIntentState(),
+    intentStates: new Map(),
+    lastSingleObservation: null,
     cancelled: false,
     stopped,
     resolveStop,
@@ -366,6 +590,27 @@ function createRun(id: number, video: HTMLVideoElement): HandTrackingRun {
     rejectReady: null,
     readyTimeout: null,
   };
+}
+
+function handStateKey(handedness: TrackedHandedness, index: number) {
+  return handedness === "unknown" ? `unknown-${index}` : handedness;
+}
+
+function handModePriority(mode: string) {
+  switch (mode) {
+    case "pinch":
+      return 3;
+    case "open_palm":
+      return 2;
+    case "point":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function rounded(value: number) {
+  return Math.round(value * 1_000_000) / 1_000_000;
 }
 
 async function waitForRunOrStop<T>(
@@ -382,24 +627,78 @@ function stopStream(stream: MediaStream) {
   for (const track of stream.getTracks()) track.stop();
 }
 
+async function acquireMediaStream(
+  dependencies: ResolvedHandTrackingControllerDependencies,
+): Promise<{ stream: MediaStream; owned: boolean }> {
+  const shared = await dependencies.getSharedMediaStream?.();
+  if (shared) return { stream: shared, owned: false };
+  if (!dependencies.getUserMedia) throw new Error(UNAVAILABLE_MESSAGE);
+  const stream = await dependencies.getUserMedia({
+    audio: false,
+    video: {
+      facingMode: "user",
+      width: { ideal: 640 },
+      height: { ideal: 480 },
+      frameRate: { ideal: 30, max: 30 },
+    },
+  });
+  return { stream, owned: true };
+}
+
+function releaseAcquiredStream(acquired: {
+  stream: MediaStream;
+  owned: boolean;
+}) {
+  if (acquired.owned) stopStream(acquired.stream);
+}
+
 function resolveDependencies(
   provided: HandTrackingControllerDependencies,
 ): ResolvedHandTrackingControllerDependencies {
+  const plan = provided.visionEnginePlan ?? createDefaultSpatialVisionEnginePlan();
+  const useFallback = Boolean(
+    provided.visionEnginePlan ||
+      provided.createWorkerForEngine ||
+      (!provided.createWorker && !provided.loadDetector),
+  );
+  const visionEngines = useFallback
+    ? [plan.primary, plan.fallback]
+    : [plan.primary];
+  const supportsWorkerCanvas =
+    provided.supportsWorkerCanvas ??
+    (provided.createWorker || provided.createWorkerForEngine
+      ? true
+      : typeof globalThis.OffscreenCanvas === "function");
+  const canCreateBrowserWorker = typeof Worker !== "undefined";
+  const canCreateInPageEndpoint = typeof document !== "undefined";
+  const createWorkerForEngine = provided.createWorkerForEngine
+    ? (engine: SpatialVisionEngine) =>
+        provided.createWorkerForEngine!(engine.descriptor)
+    : provided.createWorker && supportsWorkerCanvas
+      ? () => provided.createWorker!()
+      : canCreateBrowserWorker || canCreateInPageEndpoint
+        ? (engine: SpatialVisionEngine) => {
+            if (supportsWorkerCanvas && engine.worker && canCreateBrowserWorker)
+              return new Worker(engine.worker.scriptUrl, {
+                type: "module",
+                name: engine.worker.name,
+              }) as unknown as HandTrackingWorkerLike;
+            if (canCreateInPageEndpoint)
+              return createInPageHandTrackingWorker(
+                provided.loadDetector ?? engine.loadDetector,
+              );
+            throw new Error(UNAVAILABLE_MESSAGE);
+          }
+        : undefined;
   return {
+    visionEngines,
+    getSharedMediaStream: provided.getSharedMediaStream,
     getUserMedia:
       provided.getUserMedia ??
       (typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia
         ? navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices)
         : undefined),
-    createWorker:
-      provided.createWorker ??
-      (typeof Worker !== "undefined"
-        ? () =>
-            new Worker("/workers/hand-landmarker.js", {
-              type: "module",
-              name: "commandcanvas-hand-tracker",
-            }) as unknown as HandTrackingWorkerLike
-        : undefined),
+    createWorkerForEngine,
     createImageBitmap:
       provided.createImageBitmap ??
       (typeof globalThis.createImageBitmap === "function"
@@ -422,14 +721,60 @@ function resolveDependencies(
     clearTimeout:
       provided.clearTimeout ??
       ((handle) => globalThis.clearTimeout(handle)),
-    workerReadyTimeoutMs: provided.workerReadyTimeoutMs ?? 15_000,
+    workerReadyTimeoutMs: provided.workerReadyTimeoutMs ?? 45_000,
     now: provided.now ?? (() => performance.now()),
   };
 }
 
+function createInPageHandTrackingWorker(
+  loadDetector: (options: HandDetectorLoadOptions) => Promise<HandDetector>,
+): HandTrackingWorkerLike {
+  let terminated = false;
+  let operation = Promise.resolve();
+  const endpoint: HandTrackingWorkerLike = {
+    onmessage: null,
+    onerror: null,
+    postMessage(message) {
+      if (terminated) {
+        if (message.type === "frame") message.frame.close();
+        return;
+      }
+      operation = operation
+        .then(() => runtime.handleMessage(message))
+        .catch((error: unknown) => {
+          if (terminated) return;
+          endpoint.onmessage?.({
+            data: {
+              type: "error",
+              message:
+                error instanceof Error && error.message.trim()
+                  ? error.message
+                  : "Local hand tracking could not start.",
+            },
+          } as MessageEvent<HandTrackingWorkerOutboundMessage>);
+        });
+    },
+    terminate() {
+      if (terminated) return;
+      terminated = true;
+      operation = operation.then(() => runtime.handleMessage({ type: "dispose" }));
+    },
+  };
+  const runtime = createHandTrackingWorkerRuntime({
+    loadDetector,
+    postMessage(message) {
+      if (!terminated)
+        endpoint.onmessage?.({ data: message } as MessageEvent<HandTrackingWorkerOutboundMessage>);
+    },
+  });
+  return endpoint;
+}
+
 interface ResolvedHandTrackingControllerDependencies {
+  visionEngines: readonly SpatialVisionEngine[];
+  getSharedMediaStream?: HandTrackingControllerDependencies["getSharedMediaStream"];
   getUserMedia?: HandTrackingControllerDependencies["getUserMedia"];
-  createWorker?: HandTrackingControllerDependencies["createWorker"];
+  createWorkerForEngine?: (engine: SpatialVisionEngine) => HandTrackingWorkerLike;
   createImageBitmap?: HandTrackingControllerDependencies["createImageBitmap"];
   requestAnimationFrame?: HandTrackingControllerDependencies["requestAnimationFrame"];
   cancelAnimationFrame?: HandTrackingControllerDependencies["cancelAnimationFrame"];

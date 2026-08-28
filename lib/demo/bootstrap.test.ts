@@ -70,6 +70,7 @@ function fakeSessionFactory(options?: {
     const listeners = new Set<() => void>();
     const createdSession: DemoRoomSession = {
       getSnapshot: () => snapshot,
+      getAccessToken: () => "header.payload.signature",
       subscribe: (listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);

@@ -4,6 +4,8 @@ export const WEBMCP_TOOL_NAMES = [
   "transform_object",
   "set_object_state",
   "discard_object",
+  "organize_objects",
+  "history_action",
   "transform_sketch",
   "prepare_meeting_packet",
   "request_packet_send",
@@ -51,11 +53,12 @@ export type WebMcpGuardResult =
  */
 export const WEBMCP_PHASE_TOOL_MATRIX = {
   no_room: [],
-  room_active: ["get_canvas_state", "create_object"],
+  room_active: ["get_canvas_state", "create_object", "history_action"],
   content_exists: [
     "transform_object",
     "set_object_state",
     "discard_object",
+    "organize_objects",
     "prepare_meeting_packet",
   ],
   selection_active: ["transform_sketch"],
@@ -70,6 +73,8 @@ const PHASE_REQUIRED_BY_TOOL: Record<WebMcpToolName, WebMcpPhase> = {
   transform_object: "content_exists",
   set_object_state: "content_exists",
   discard_object: "content_exists",
+  organize_objects: "content_exists",
+  history_action: "room_active",
   transform_sketch: "selection_active",
   prepare_meeting_packet: "content_exists",
   request_packet_send: "packet_approved",

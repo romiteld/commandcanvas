@@ -2,6 +2,7 @@
   "name": "commandcanvas",
   "version": "0.1.0",
   "author": "Daniel Romitelli",
+  "license": "AGPL-3.0-only",
   "private": true,
   "engines": {
     "node": ">=22.14.0 <23"
@@ -25,6 +26,7 @@
     "@mediapipe/tasks-vision": "1.0.1",
     "@supabase/supabase-js": "2.112.4",
     "next": "16.3.3",
+    "onnxruntime-web": "1.29.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "server-only": "0.0.1",

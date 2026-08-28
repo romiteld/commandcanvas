@@ -95,6 +95,8 @@ describe("WebMcpRegistry registration", () => {
       "transform_object",
       "set_object_state",
       "discard_object",
+      "organize_objects",
+      "history_action",
       "transform_sketch",
       "prepare_meeting_packet",
       "request_packet_send",
@@ -130,6 +132,7 @@ describe("WebMcpRegistry registration", () => {
     expect(registry.registeredToolNames()).toEqual([
       "get_canvas_state",
       "create_object",
+      "history_action",
     ]);
 
     context = hostContext({
@@ -145,6 +148,8 @@ describe("WebMcpRegistry registration", () => {
       "transform_object",
       "set_object_state",
       "discard_object",
+      "organize_objects",
+      "history_action",
       "transform_sketch",
       "prepare_meeting_packet",
     ]);
@@ -171,11 +176,43 @@ describe("WebMcpRegistry registration", () => {
       adapters: adapters(),
     });
     await registry.sync();
-    expect(target.calls).toHaveLength(8);
+    expect(target.calls).toHaveLength(10);
 
     registry.dispose();
 
     expect(target.calls.every((call) => call.signal.aborted)).toBe(true);
+    expect(registry.registeredToolNames()).toEqual([]);
+  });
+
+  it("does not register more tools after disposal interrupts an in-flight sync", async () => {
+    const firstRegistration = deferred<void>();
+    const calls: Array<{
+      tool: RegisteredWebMcpTool;
+      signal: AbortSignal;
+    }> = [];
+    const target: WebMcpRegistrationTarget = {
+      async registerTool(tool, options) {
+        calls.push({ tool, signal: options.signal });
+        if (calls.length === 1) await firstRegistration.promise;
+      },
+    };
+    const registry = new WebMcpRegistry({
+      mode: "static",
+      target,
+      getContext: () => hostContext(),
+      adapters: adapters(),
+    });
+
+    const sync = registry.sync();
+    await Promise.resolve();
+    expect(calls.map(({ tool }) => tool.name)).toEqual(["get_canvas_state"]);
+
+    registry.dispose();
+    expect(calls[0]?.signal.aborted).toBe(true);
+    firstRegistration.resolve();
+    await sync;
+
+    expect(calls.map(({ tool }) => tool.name)).toEqual(["get_canvas_state"]);
     expect(registry.registeredToolNames()).toEqual([]);
   });
 
@@ -219,6 +256,38 @@ describe("WebMcpRegistry execution boundary", () => {
 
     const result = await target.latest("transform_object").execute(
       { objectId: "note-1", transform: { x: 400 } },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      code: "not_available",
+      message: "not available yet: add canvas content first",
+    });
+    expect(adapterCalls).toBe(0);
+  });
+
+  it("applies the same authoritative content guard to organization in static mode", async () => {
+    const target = new RecordingRegistrationTarget();
+    let adapterCalls = 0;
+    const registry = new WebMcpRegistry({
+      mode: "static",
+      target,
+      getContext: () => hostContext(),
+      adapters: adapters({
+        executeTool: async () => {
+          adapterCalls += 1;
+          return completed("should not execute");
+        },
+      }),
+    });
+    await registry.sync();
+
+    const result = await target.latest("organize_objects").execute(
+      {
+        action: "ungroup",
+        frameId: "frame-launch",
+      },
       { signal: new AbortController().signal },
     );
 

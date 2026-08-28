@@ -281,7 +281,22 @@ describe("canvas WebMCP adapters", () => {
         })),
       },
     });
-    hydrate(store, [note, taskBoard, schedule, sketch, diagram]);
+    const frame = {
+      ...persistObject({
+        id: "frame-planning",
+        type: "frame",
+        title: "Planning frame",
+        x: 40,
+        y: 40,
+        width: 1_200,
+        height: 900,
+        zIndex: 0,
+        rotation: 15,
+        payload: { tone: "violet" },
+      }),
+      parentId: null,
+    };
+    hydrate(store, [note, taskBoard, schedule, sketch, diagram, frame]);
 
     const result = await adapters.executeTool({
       toolName: "get_canvas_state",
@@ -326,6 +341,11 @@ describe("canvas WebMCP adapters", () => {
       edgeCount: 60,
       returnedEdgeCount: 16,
       omittedEdgeCount: 44,
+    });
+    expect(summaries["frame-planning"]).toMatchObject({
+      spatial: { rotation: 15 },
+      state: { parentId: null },
+      payload: { tone: "violet", container: true },
     });
   });
 
@@ -546,6 +566,210 @@ describe("canvas WebMCP adapters", () => {
       message: "Unpin “Pinned context” before moving or resizing it.",
     });
     expect(store.getState().canvas.revision).toBe(2);
+  });
+
+  it("rotates through the canonical mutation and receipt pipeline", async () => {
+    const { store, adapters } = fixture();
+    store.getState().dispatch(
+      {
+        type: "object.create",
+        object: {
+          id: "note-rotate",
+          type: "note",
+          title: "Rotate me",
+          x: 100,
+          y: 100,
+          width: 280,
+          height: 190,
+          zIndex: 1,
+          payload: { text: "Spatial note", tone: "sky" },
+        },
+      },
+      "pointer",
+    );
+
+    const result = await adapters.executeTool({
+      toolName: "transform_object",
+      input: { objectId: "note-rotate", transform: { rotation: -45 } },
+      signal: new AbortController().signal,
+      context: {
+        ...context,
+        phase: { ...context.phase, hasContent: true },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: "completed",
+      message: "ChatGPT transformed “Rotate me” spatially.",
+    });
+    expect(store.getState().canvas.objects["note-rotate"]).toMatchObject({
+      rotation: -45,
+      version: 2,
+    });
+    expect(store.getState().canvas.receipts.at(-1)).toMatchObject({
+      source: "webmcp",
+      action: "transform",
+      affectedObjectIds: ["note-rotate"],
+    });
+  });
+
+  it("groups and ungroups explicit objects through canonical frame mutations", async () => {
+    const { store, adapters } = fixture();
+    for (const [id, x] of [
+      ["note-one", 100],
+      ["note-two", 420],
+    ] as const)
+      store.getState().dispatch(
+        {
+          type: "object.create",
+          object: {
+            id,
+            type: "note",
+            title: id === "note-one" ? "First note" : "Second note",
+            x,
+            y: 120,
+            width: 280,
+            height: 190,
+            zIndex: 2,
+            payload: { text: "Group this", tone: "sand" },
+          },
+        },
+        "pointer",
+      );
+
+    const grouped = await adapters.executeTool({
+      toolName: "organize_objects",
+      input: {
+        action: "group",
+        objectIds: ["note-one", "note-two"],
+        frame: {
+          id: "frame-notes",
+          title: "Launch notes",
+          x: 60,
+          y: 80,
+          width: 700,
+          height: 300,
+          zIndex: 1,
+          tone: "violet",
+        },
+      },
+      signal: new AbortController().signal,
+      context: {
+        ...context,
+        phase: { ...context.phase, hasContent: true },
+      },
+    });
+
+    expect(grouped).toMatchObject({
+      ok: true,
+      status: "completed",
+      message: "ChatGPT grouped 2 objects in “Launch notes”.",
+    });
+    expect(store.getState().canvas.objects["frame-notes"]).toMatchObject({
+      type: "frame",
+      title: "Launch notes",
+      rotation: 0,
+      payload: { tone: "violet" },
+    });
+    expect(store.getState().canvas.objects["note-one"].parentId).toBe(
+      "frame-notes",
+    );
+    expect(store.getState().canvas.objects["note-two"].parentId).toBe(
+      "frame-notes",
+    );
+
+    const ungrouped = await adapters.executeTool({
+      toolName: "organize_objects",
+      input: { action: "ungroup", frameId: "frame-notes" },
+      signal: new AbortController().signal,
+      context: {
+        ...context,
+        phase: { ...context.phase, hasContent: true },
+      },
+    });
+
+    expect(ungrouped).toMatchObject({
+      ok: true,
+      status: "completed",
+      message: "ChatGPT ungrouped “Launch notes”.",
+    });
+    expect(store.getState().canvas.objects["frame-notes"].deletedAt).not.toBeNull();
+    expect(store.getState().canvas.objects["note-one"].parentId).toBeNull();
+    expect(store.getState().canvas.receipts.slice(-2).map(({ action }) => action)).toEqual([
+      "group",
+      "ungroup",
+    ]);
+  });
+
+  it("undoes and redoes the latest mutation through the shared history", async () => {
+    const { store, adapters } = fixture();
+    store.getState().dispatch(
+      {
+        type: "object.create",
+        object: {
+          id: "note-history",
+          type: "note",
+          title: "History note",
+          x: 100,
+          y: 100,
+          width: 280,
+          height: 190,
+          zIndex: 1,
+          payload: { text: "Undo this", tone: "coral" },
+        },
+      },
+      "pointer",
+    );
+
+    const undone = await adapters.executeTool({
+      toolName: "history_action",
+      input: { action: "undo" },
+      signal: new AbortController().signal,
+      context,
+    });
+    expect(undone).toMatchObject({
+      ok: true,
+      status: "completed",
+      message: "ChatGPT undid: Danny created “History note”.",
+    });
+    expect(store.getState().canvas.objects["note-history"]).toBeUndefined();
+
+    const redone = await adapters.executeTool({
+      toolName: "history_action",
+      input: { action: "redo" },
+      signal: new AbortController().signal,
+      context,
+    });
+    expect(redone).toMatchObject({
+      ok: true,
+      status: "completed",
+      message: "ChatGPT redid: Danny created “History note”.",
+    });
+    expect(store.getState().canvas.objects["note-history"]).toMatchObject({
+      title: "History note",
+    });
+    expect(store.getState().canvas.receipts.slice(-2).map(({ action }) => action)).toEqual([
+      "undo",
+      "redo",
+    ]);
+  });
+
+  it("returns a truthful availability failure when shared history is empty", async () => {
+    const { adapters } = fixture();
+
+    const result = await adapters.executeTool({
+      toolName: "history_action",
+      input: { action: "undo" },
+      signal: new AbortController().signal,
+      context,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      code: "not_available",
+      message: "There is nothing left to undo.",
+    });
   });
 
   it("delegates stable mutations to an injected durable room dispatcher", async () => {

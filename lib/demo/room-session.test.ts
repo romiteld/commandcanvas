@@ -236,6 +236,25 @@ function createHarness(options?: {
 }
 
 describe("authenticated token rotation", () => {
+  it("exposes only the current bearer token to authenticated browser adapters", async () => {
+    const harness = createHarness();
+
+    expect(harness.session.getAccessToken()).toBeNull();
+    await harness.session.start({
+      kind: "host",
+      roomName: "CommandCanvas demo",
+      displayName: "Danny",
+      color: "#0ea5e9",
+    });
+    expect(harness.session.getAccessToken()).toBe(SESSION.access_token);
+
+    harness.emitAuthStateChange("TOKEN_REFRESHED", REFRESHED_SESSION);
+    expect(harness.session.getAccessToken()).toBe(REFRESHED_SESSION.access_token);
+
+    await harness.session.dispose();
+    expect(harness.session.getAccessToken()).toBeNull();
+  });
+
   it("uses a refreshed token for room, vision, packet, and Realtime recovery work", async () => {
     const refreshedCommit = vi.fn<BrowserRoomApi["commitCommand"]>(async () => ({
       ok: true as const,

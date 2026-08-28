@@ -40,7 +40,7 @@ export interface NormalizedHandPointer {
   readonly y: number;
 }
 
-export type HandIntentMode = "idle" | "point" | "pinch";
+export type HandIntentMode = "idle" | "point" | "pinch" | "open_palm";
 
 export type HandFrameRefusal =
   | "malformed_frame"
@@ -54,7 +54,7 @@ export type HandFrameRefusal =
 export type HandIntentOutput =
   | {
       readonly accepted: true;
-      readonly mode: "point" | "pinch";
+      readonly mode: "point" | "pinch" | "open_palm";
       readonly pointer: NormalizedHandPointer;
       readonly confidence: number;
       readonly timestamp: number;
@@ -72,6 +72,7 @@ export type HandIntentOutput =
 export interface HandIntentState {
   readonly filteredIndexTip: NormalizedHandPointer | null;
   readonly filteredThumbTip: NormalizedHandPointer | null;
+  readonly filteredPalmCenter: NormalizedHandPointer | null;
   readonly pinchLatched: boolean;
   readonly lastAcceptedTimestamp: number | null;
 }
@@ -96,8 +97,8 @@ export interface HandIntentConfig {
 
 export const DEFAULT_HAND_INTENT_CONFIG: HandIntentConfig = Object.freeze({
   smoothingAlpha: 0.35,
-  pinchEngageDistance: 0.045,
-  pinchReleaseDistance: 0.075,
+  pinchEngageDistance: 0.06,
+  pinchReleaseDistance: 0.1,
   minConfidence: 0.75,
   maxFrameAgeMs: 160,
   maxFutureSkewMs: 50,
@@ -113,11 +114,13 @@ const OTHER_FINGER_JOINTS = [
   { pip: 14, tip: 16 },
   { pip: 18, tip: 20 },
 ] as const;
+const PALM_CENTER_INDICES = [0, 5, 9, 13, 17] as const;
 
 export function createInitialHandIntentState(): HandIntentState {
   return {
     filteredIndexTip: null,
     filteredThumbTip: null,
+    filteredPalmCenter: null,
     pinchLatched: false,
     lastAcceptedTimestamp: null,
   };
@@ -180,6 +183,11 @@ export function interpretHandFrame(
     rawThumbTip,
     config.smoothingAlpha,
   );
+  const filteredPalmCenter = smoothPoint(
+    state.filteredPalmCenter,
+    palmCenter(frame.landmarks, config.mirrorX),
+    config.smoothingAlpha,
+  );
   const pinchDistance = rounded(
     Math.hypot(
       filteredIndexTip.x - filteredThumbTip.x,
@@ -189,16 +197,21 @@ export function interpretHandFrame(
   const pinchLatched = state.pinchLatched
     ? pinchDistance < config.pinchReleaseDistance
     : pinchDistance <= config.pinchEngageDistance;
-  if (!pinchLatched && !isDeliberateIndexPoint(frame.landmarks))
+  const deliberatePoint = isDeliberateIndexPoint(frame.landmarks);
+  const openPalm = isOpenPalm(frame.landmarks);
+  if (!pinchLatched && !deliberatePoint && !openPalm)
     return refuse(
       "no_deliberate_gesture",
       now,
       frame.timestamp,
       frame.confidence,
     );
+  const activePointer = openPalm && !pinchLatched
+    ? filteredPalmCenter
+    : filteredIndexTip;
   const pointer = {
-    x: rounded(filteredIndexTip.x),
-    y: rounded(filteredIndexTip.y),
+    x: rounded(activePointer.x),
+    y: rounded(activePointer.y),
   };
 
   return {
@@ -208,12 +221,16 @@ export function interpretHandFrame(
         x: rounded(filteredThumbTip.x),
         y: rounded(filteredThumbTip.y),
       },
+      filteredPalmCenter: {
+        x: rounded(filteredPalmCenter.x),
+        y: rounded(filteredPalmCenter.y),
+      },
       pinchLatched,
       lastAcceptedTimestamp: frame.timestamp,
     },
     output: {
       accepted: true,
-      mode: pinchLatched ? "pinch" : "point",
+      mode: pinchLatched ? "pinch" : openPalm ? "open_palm" : "point",
       pointer,
       confidence: frame.confidence,
       timestamp: frame.timestamp,
@@ -233,6 +250,36 @@ function isDeliberateIndexPoint(landmarks: HandLandmarks) {
       distance(wrist, landmarks[pip]) * 1.05,
   ).length;
   return indexExtended && foldedOtherFingers >= 2;
+}
+
+function isOpenPalm(landmarks: HandLandmarks) {
+  const wrist = landmarks[WRIST_INDEX];
+  return [
+    { pip: INDEX_PIP_INDEX, tip: INDEX_TIP_INDEX },
+    ...OTHER_FINGER_JOINTS,
+  ].every(
+    ({ pip, tip }) => {
+      const pipDistance = distance(wrist, landmarks[pip]);
+      return (
+        pipDistance >= 0.05 &&
+        distance(wrist, landmarks[tip]) >= pipDistance * 1.15
+      );
+    },
+  );
+}
+
+function palmCenter(landmarks: HandLandmarks, mirrorX: boolean) {
+  const total = PALM_CENTER_INDICES.reduce(
+    (sum, index) => {
+      const point = transformPoint(landmarks[index], mirrorX);
+      return { x: sum.x + point.x, y: sum.y + point.y };
+    },
+    { x: 0, y: 0 },
+  );
+  return {
+    x: total.x / PALM_CENTER_INDICES.length,
+    y: total.y / PALM_CENTER_INDICES.length,
+  };
 }
 
 function distance(left: HandLandmark, right: HandLandmark) {

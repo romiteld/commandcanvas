@@ -156,4 +156,20 @@ describe("newCanvasObjectSchema", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it("accepts a bounded rotatable frame and rejects unsafe rotation", () => {
+    const frame = {
+      id: "frame-planning",
+      type: "frame",
+      title: "Planning cluster",
+      ...geometry,
+      rotation: 15,
+      payload: { tone: "sky" },
+    };
+
+    expect(newCanvasObjectSchema.safeParse(frame).success).toBe(true);
+    expect(
+      newCanvasObjectSchema.safeParse({ ...frame, rotation: 181 }).success,
+    ).toBe(false);
+  });
 });

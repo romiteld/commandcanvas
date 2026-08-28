@@ -361,14 +361,20 @@ test("keeps the ordinary-browser canvas usable under an iPhone WebKit profile", 
   page.on("pageerror", (error) => browserErrors.push(error.message));
 
   await page.goto("/");
+  await page.getByRole("button", { name: "Open system status" }).tap();
   await expect(page.getByText("Site Tools unavailable")).toBeVisible();
+  await page
+    .getByRole("button", { name: "Close system status drawer" })
+    .tap();
   await expect(page.getByRole("region", { name: "Infinite canvas" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Create note" }).tap();
+  // The Next.js development indicator overlaps the dock's lower-left corner;
+  // use an unobscured dock target while retaining a trusted WebKit tap.
+  await page.getByRole("button", { name: "Create task board" }).tap();
   await expect(
-    page.getByRole("button", { name: "Select New thought" }),
+    page.getByRole("button", { name: "Select Launch board" }),
   ).toBeVisible();
-  await expect(page.getByText("Danny created “New thought”.")).toBeVisible();
+  await expect(page.getByText("Danny created “Launch board”.")).toBeVisible();
 
   const overflow = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,

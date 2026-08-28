@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -16,6 +16,7 @@ import type {
   HandTrackingObservation,
   HandTrackingStatus,
 } from "@/lib/gesture/hand-tracking-controller";
+import type { RealtimeVoiceControllerOptions } from "@/lib/realtime-voice/client";
 
 function dependencies(): CanvasStoreDependencies {
   let id = 0;
@@ -141,22 +142,392 @@ function setCanvasBounds(
 }
 
 describe("CommandCanvasRoom", () => {
-  it("renders a host-controlled meeting packet workflow inside the command rail", () => {
+  it("offers the complete AGPL source from the browser-visible system drawer", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+
+    render(<CommandCanvasRoom store={store} />);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+
+    expect(
+      screen.getByRole("link", { name: "Source · AGPL-3.0" }),
+    ).toHaveAttribute(
+      "href",
+      expect.stringMatching(
+        /^https:\/\/github\.com\/romiteld\/commandcanvas\/tree\/(?:main|[0-9a-f]{40})$/,
+      ),
+    );
+  });
+
+  it("auto-fits a seeded workspace once on a compact viewport", async () => {
+    const store = createCanvasStore("room-mobile-seed", dependencies());
+    seedNote(store, { id: "seed-left", title: "Launch board", x: 90 });
+    seedNote(store, { id: "seed-right", title: "Schedule", x: 760 });
+    const { container } = render(<CommandCanvasRoom store={store} />);
+    setCanvasBounds(container, { width: 390, height: 620 });
+
+    await waitFor(() => {
+      expect(store.getState().viewport.scale).toBeLessThan(1);
+    });
+
+    const fitted = store.getState().viewport;
+    const left = store.getState().canvas.objects["seed-left"];
+    const right = store.getState().canvas.objects["seed-right"];
+    expect(left.x * fitted.scale + fitted.x).toBeGreaterThanOrEqual(0);
+    expect(
+      (right.x + right.width) * fitted.scale + fitted.x,
+    ).toBeLessThanOrEqual(390);
+  });
+
+  it("reserves a top-edge media row so meeting video does not cover the canvas", () => {
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        meetingMediaPanel={<section aria-label="Meeting video">Video tiles</section>}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "Meeting video" })).toBeVisible();
+    expect(container.querySelector(".command-canvas-shell")).toHaveClass(
+      "has-meeting-media",
+    );
+    expect(
+      screen.getByRole("region", { name: "Infinite canvas" }),
+    ).toBeVisible();
+  });
+
+  it("keeps command, approval, and system scaffolding in an opt-in overlay drawer", async () => {
+    const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     render(
       <CommandCanvasRoom
         store={store}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+        }}
         meetingPacketPanel={
           <section aria-label="Meeting packet workflow">Packet review</section>
         }
       />,
     );
 
+    expect(
+      screen.getByRole("region", { name: "Infinite canvas" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("complementary", { name: "Command drawer" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Meeting packet workflow" }),
+    ).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
+
+    expect(
+      screen.getByRole("complementary", { name: "Command drawer" }),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Live voice command")).toBeVisible();
     expect(screen.getByLabelText("Meeting packet workflow")).toBeVisible();
     expect(screen.getByText("Packet review")).toBeVisible();
+    expect(
+      screen.getByText("Type a command instead"),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("textbox", { name: "Direct canvas command" }),
+    ).toBeNull();
+    await user.click(screen.getByText("Type a command instead"));
+    expect(
+      screen.getByRole("textbox", { name: "Direct canvas command" }),
+    ).toBeVisible();
+    expect(
+      screen
+        .getByRole("button", { name: "Voice transcription unavailable" })
+        .closest(".typed-command-fallback"),
+    ).toHaveClass("has-realtime-voice");
+
+    await user.click(screen.getByRole("button", { name: "Close command drawer" }));
+    expect(
+      screen.queryByRole("complementary", { name: "Command drawer" }),
+    ).toBeNull();
   });
 
-  it("commits an index-finger trace through the canonical gesture command path", async () => {
+  it("does not pan the canvas when an overlay control moves under a pointer", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(<CommandCanvasRoom store={store} />);
+
+    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
+    const close = screen.getByRole("button", { name: "Close command drawer" });
+    const viewport = container.querySelector<HTMLElement>(".canvas-viewport");
+    if (!viewport) throw new Error("Canvas viewport fixture was not rendered.");
+    const before = store.getState().viewport;
+
+    fireEvent.pointerDown(close, {
+      pointerId: 17,
+      clientX: 100,
+      clientY: 100,
+    });
+    fireEvent.pointerMove(viewport, {
+      pointerId: 17,
+      clientX: 96,
+      clientY: 100,
+    });
+    fireEvent.pointerUp(viewport, {
+      pointerId: 17,
+      clientX: 96,
+      clientY: 100,
+    });
+
+    expect(store.getState().viewport).toEqual(before);
+  });
+
+  it("routes Realtime tool intents through the canonical voice mutation pipeline", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    let options: RealtimeVoiceControllerOptions | undefined;
+    const idleState = { status: "idle" as const };
+    const controller = {
+      getState: () => idleState,
+      subscribe: () => () => undefined,
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(),
+      resumeAudio: vi.fn(async () => true),
+    };
+
+    render(
+      <CommandCanvasRoom
+        store={store}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+          createController(nextOptions) {
+            options = nextOptions;
+            return controller;
+          },
+        }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
+    expect(screen.getByRole("button", { name: "Start live voice" })).toBeVisible();
+
+    let result:
+      | { ok: true; message: string }
+      | { ok: false; message: string }
+      | undefined;
+    await act(async () => {
+      result = await options?.onIntent({ type: "create_board" }, "voice");
+    });
+
+    expect(result).toEqual({ ok: true, message: "Board command submitted." });
+    expect(
+      Object.values(store.getState().canvas.objects).some(
+        (object) => object.type === "task_board" && !object.deletedAt,
+      ),
+    ).toBe(true);
+    expect(store.getState().canvas.receipts.at(-1)?.source).toBe("voice");
+  });
+
+  it("routes expanded Realtime spatial intents through selection and canonical history", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-first", title: "First note", x: 40 });
+    seedNote(store, { id: "note-second", title: "Second note", x: 400 });
+    let options: RealtimeVoiceControllerOptions | undefined;
+    const idleState = { status: "idle" as const };
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+          createController(nextOptions) {
+            options = nextOptions;
+            return {
+              getState: () => idleState,
+              subscribe: () => () => undefined,
+              start: vi.fn(async () => undefined),
+              stop: vi.fn(),
+              resumeAudio: vi.fn(async () => true),
+            };
+          },
+        }}
+      />,
+    );
+    setCanvasBounds(container);
+
+    await user.click(screen.getByRole("button", { name: "Select First note" }));
+    await user.keyboard("{Shift>}");
+    await user.click(screen.getByRole("button", { name: "Select Second note" }));
+    await user.keyboard("{/Shift}");
+
+    let result: Awaited<ReturnType<RealtimeVoiceControllerOptions["onIntent"]>>;
+    await act(async () => {
+      result = await options!.onIntent({ type: "group_selected" }, "voice");
+    });
+    expect(result!).toEqual({ ok: true, message: "Group command submitted." });
+    const frame = Object.values(store.getState().canvas.objects).find(
+      (object) => object.type === "frame" && !object.deletedAt,
+    );
+    expect(frame).toBeDefined();
+    expect(store.getState().canvas.receipts.at(-1)?.source).toBe("voice");
+
+    await act(async () => {
+      result = await options!.onIntent({ type: "focus_selected" }, "voice");
+    });
+    expect(result!).toEqual({ ok: true, message: "Focus command applied." });
+    expect(store.getState().viewport.scale).toBeGreaterThan(1);
+
+    await act(async () => {
+      result = await options!.onIntent(
+        { type: "rotate_selected", direction: "clockwise" },
+        "voice",
+      );
+    });
+    expect(result!).toEqual({ ok: true, message: "Rotate command submitted." });
+    expect(store.getState().canvas.objects[frame!.id]?.rotation).toBe(15);
+
+    await act(async () => {
+      await options!.onIntent({ type: "undo" }, "voice");
+      result = await options!.onIntent({ type: "redo" }, "voice");
+    });
+    expect(result!).toEqual({ ok: true, message: "Redo command submitted." });
+    expect(store.getState().canvas.objects[frame!.id]?.rotation).toBe(15);
+
+    await act(async () => {
+      result = await options!.onIntent({ type: "ungroup_selected" }, "voice");
+    });
+    expect(result!).toEqual({ ok: true, message: "Ungroup command submitted." });
+    expect(store.getState().canvas.objects["note-first"]?.parentId).toBeNull();
+    expect(store.getState().canvas.objects["note-second"]?.parentId).toBeNull();
+  });
+
+  it("keeps an active Realtime session mounted when the command drawer closes", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    const idleState = { status: "idle" as const };
+    const controller = {
+      getState: () => idleState,
+      subscribe: () => () => undefined,
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(),
+      resumeAudio: vi.fn(async () => true),
+    };
+
+    render(
+      <CommandCanvasRoom
+        store={store}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+          createController: () => controller,
+        }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Start live voice" }));
+    await user.click(screen.getByRole("button", { name: "Close command drawer" }));
+
+    expect(controller.start).toHaveBeenCalledOnce();
+    expect(controller.stop).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("complementary", { name: "Command drawer" }),
+    ).toBeNull();
+  });
+
+  it("opens the command drawer when a consequential approval requests attention", async () => {
+    const store = createCanvasStore("room-local", dependencies());
+    const { rerender } = render(
+      <CommandCanvasRoom
+        store={store}
+        meetingPacketPanel={
+          <section aria-label="Packet approval">Review exact recipients</section>
+        }
+      />,
+    );
+    expect(
+      screen.queryByRole("complementary", { name: "Command drawer" }),
+    ).toBeNull();
+
+    rerender(
+      <CommandCanvasRoom
+        store={store}
+        commandDrawerRequestKey="send-request-1"
+        meetingPacketPanel={
+          <section aria-label="Packet approval">Review exact recipients</section>
+        }
+      />,
+    );
+
+    expect(
+      await screen.findByRole("complementary", { name: "Command drawer" }),
+    ).toBeVisible();
+    expect(screen.getByText("Review exact recipients")).toBeVisible();
+  });
+
+  it("shows the current hand mode and grabbed object on the canvas itself", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-spatial", title: "Spatial note", x: 200 });
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    hand.setStatus({ state: "ready" });
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    hand.emit({
+      mode: "point",
+      pointer: { x: 0.72, y: 0.42 },
+      confidence: 0.97,
+      timestamp: 1_000,
+    });
+
+    expect(await screen.findByText("POINT")).toBeVisible();
+    expect(container.querySelector("[data-hand-cursor]")).not.toBeNull();
+
+    hand.emit({ mode: "idle", timestamp: 1_008 });
+    hand.emit({
+      mode: "point",
+      pointer: { x: 0.19, y: 0.18 },
+      confidence: 0.97,
+      timestamp: 1_012,
+    });
+    expect(await screen.findByText("TARGET")).toBeVisible();
+    expect(
+      screen
+        .getByRole("button", { name: "Select Spatial note" })
+        .closest("article"),
+    ).toHaveClass("is-hand-target");
+
+    hand.emit({ mode: "idle", timestamp: 1_014 });
+    hand.emit({
+      mode: "pinch",
+      pointer: { x: 0.25, y: 0.18 },
+      confidence: 0.97,
+      timestamp: 1_016,
+    });
+
+    expect(await screen.findByText("HELD")).toBeVisible();
+    expect(
+      screen
+        .getByRole("button", { name: "Select Spatial note" })
+        .closest("article"),
+    ).toHaveClass("is-held");
+    expect(screen.getAllByText("Throw to trash")).toHaveLength(2);
+    expect(screen.getByText("Minimize dock")).toBeVisible();
+  });
+
+  it("closes calibration automatically and keeps enabled hand input active", async () => {
     const user = userEvent.setup();
     const hand = fakeHandController();
     const store = createCanvasStore("room-local", dependencies());
@@ -167,8 +538,43 @@ describe("CommandCanvasRoom", () => {
       />,
     );
     setCanvasBounds(container);
+
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     hand.setStatus({ state: "ready" });
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+
+    expect(
+      screen.queryByRole("complementary", { name: "System status drawer" }),
+    ).toBeNull();
+    expect(hand.controller.stop).not.toHaveBeenCalled();
+
+    hand.emit({
+      mode: "point",
+      pointer: { x: 0.4, y: 0.35 },
+      confidence: 0.98,
+      timestamp: 1_040,
+    });
+
+    expect(await screen.findByText("POINT")).toBeVisible();
+    expect(container.querySelector("[data-hand-cursor]")).not.toBeNull();
+  });
+
+  it("keeps pointing non-mutating until the user explicitly arms hand drawing", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    hand.setStatus({ state: "ready" });
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
     expect(await screen.findAllByText("Hand input ready · local only")).toHaveLength(2);
     expect(screen.queryByText("Camera off")).toBeNull();
 
@@ -186,9 +592,73 @@ describe("CommandCanvasRoom", () => {
     });
     hand.emit({ mode: "idle", timestamp: 1_032 });
 
-    const sketch = Object.values(store.getState().canvas.objects).find(
+    expect(Object.values(store.getState().canvas.objects)).toHaveLength(0);
+    expect(screen.getByText("MOVE OBJECTS")).toBeVisible();
+  });
+
+  it("collects repeated finger lines into one sketch and one receipt when finished", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    hand.setStatus({ state: "ready" });
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    await user.click(
+      screen.getByRole("button", { name: "Draw with index finger" }),
+    );
+
+    act(() => {
+      hand.emit({
+        mode: "point",
+        pointer: { x: 0.2, y: 0.3 },
+        confidence: 0.96,
+        timestamp: 1_000,
+      });
+      hand.emit({
+        mode: "point",
+        pointer: { x: 0.26, y: 0.36 },
+        confidence: 0.96,
+        timestamp: 1_016,
+      });
+      hand.emit({ mode: "idle", timestamp: 1_032 });
+      hand.emit({
+        mode: "point",
+        pointer: { x: 0.26, y: 0.36 },
+        confidence: 0.96,
+        timestamp: 1_048,
+      });
+      hand.emit({
+        mode: "point",
+        pointer: { x: 0.3, y: 0.48 },
+        confidence: 0.96,
+        timestamp: 1_064,
+      });
+      hand.emit({ mode: "idle", timestamp: 1_080 });
+    });
+
+    expect(Object.values(store.getState().canvas.objects)).toHaveLength(0);
+    expect(screen.getByText("2 strokes ready")).toBeVisible();
+    expect(
+      screen.queryByRole("complementary", { name: /drawer/i }),
+    ).toBeNull();
+
+    await user.click(
+      screen.getByRole("button", { name: "Finish hand sketch" }),
+    );
+
+    const sketches = Object.values(store.getState().canvas.objects).filter(
       (object) => object.type === "sketch",
     );
+    expect(sketches).toHaveLength(1);
+    const sketch = sketches[0];
     expect(sketch).toMatchObject({
       type: "sketch",
       title: "Finger sketch",
@@ -202,10 +672,132 @@ describe("CommandCanvasRoom", () => {
               { x: 76, y: 46 },
             ],
           },
+          {
+            points: [
+              { x: 76, y: 46 },
+              { x: 116, y: 106 },
+            ],
+          },
         ],
       },
     });
+    expect(store.getState().canvas.receipts).toHaveLength(1);
     expect(store.getState().canvas.receipts.at(-1)?.source).toBe("gesture");
+  });
+
+  it("keeps ten independent hand-drawn lines in one sketch without opening drawers", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    hand.setStatus({ state: "ready" });
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    await user.click(
+      screen.getByRole("button", { name: "Draw with index finger" }),
+    );
+
+    act(() => {
+      for (let index = 0; index < 10; index += 1) {
+        const timestamp = 2_000 + index * 48;
+        hand.emit({
+          mode: "point",
+          pointer: { x: 0.12 + index * 0.025, y: 0.2 + index * 0.02 },
+          confidence: 0.96,
+          timestamp,
+        });
+        hand.emit({
+          mode: "point",
+          pointer: { x: 0.15 + index * 0.025, y: 0.24 + index * 0.02 },
+          confidence: 0.96,
+          timestamp: timestamp + 16,
+        });
+        hand.emit({ mode: "idle", timestamp: timestamp + 32 });
+      }
+    });
+
+    expect(screen.getByText("10 strokes ready")).toBeVisible();
+    expect(Object.values(store.getState().canvas.objects)).toHaveLength(0);
+    expect(screen.queryByRole("complementary", { name: /drawer/i })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Finish hand sketch" }));
+
+    const objects = Object.values(store.getState().canvas.objects);
+    expect(objects).toHaveLength(1);
+    expect(objects[0]).toMatchObject({
+      type: "sketch",
+      payload: { strokes: expect.arrayContaining(Array.from({ length: 10 }, () => expect.any(Object))) },
+    });
+    if (objects[0]?.type === "sketch")
+      expect(objects[0].payload.strokes).toHaveLength(10);
+    expect(store.getState().canvas.receipts).toHaveLength(1);
+    expect(screen.queryByRole("complementary", { name: /drawer/i })).toBeNull();
+  });
+
+  it("erases a stroke inside the active hand-drawing session without creating another object", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    hand.setStatus({ state: "ready" });
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+
+    act(() => {
+      for (let index = 0; index < 3; index += 1) {
+        const timestamp = 3_000 + index * 48;
+        hand.emit({
+          mode: "point",
+          pointer: { x: 0.2 + index * 0.1, y: 0.3 },
+          confidence: 0.96,
+          timestamp,
+        });
+        hand.emit({
+          mode: "point",
+          pointer: { x: 0.25 + index * 0.1, y: 0.35 },
+          confidence: 0.96,
+          timestamp: timestamp + 16,
+        });
+        hand.emit({ mode: "idle", timestamp: timestamp + 32 });
+      }
+    });
+    expect(screen.getByText("3 strokes ready")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Use hand eraser" }));
+    act(() => {
+      hand.emit({
+        mode: "point",
+        pointer: { x: 0.325, y: 0.325 },
+        confidence: 0.96,
+        timestamp: 3_200,
+      });
+      hand.emit({ mode: "idle", timestamp: 3_216 });
+    });
+
+    expect(screen.getByText("2 strokes ready")).toBeVisible();
+    expect(Object.values(store.getState().canvas.objects)).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "Finish hand sketch" }));
+    const objects = Object.values(store.getState().canvas.objects);
+    expect(objects).toHaveLength(1);
+    if (objects[0]?.type === "sketch")
+      expect(objects[0].payload.strokes).toHaveLength(2);
+    expect(store.getState().canvas.receipts).toHaveLength(1);
+    expect(screen.queryByRole("complementary", { name: /drawer/i })).toBeNull();
   });
 
   it("commits a pinch drag as one canonical object transform", async () => {
@@ -236,8 +828,10 @@ describe("CommandCanvasRoom", () => {
       />,
     );
     setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     hand.setStatus({ state: "ready" });
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
 
     hand.emit({
       mode: "pinch",
@@ -256,6 +850,240 @@ describe("CommandCanvasRoom", () => {
     expect(store.getState().canvas.objects["note-spatial"]).toMatchObject({
       x: 300,
       y: 200,
+      version: 2,
+    });
+    expect(store.getState().canvas.receipts.at(-1)).toMatchObject({
+      source: "gesture",
+      action: "transform",
+      affectedObjectIds: ["note-spatial"],
+    });
+  });
+
+  it("throws a held object through the left edge into recoverable trash immediately", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-spatial", title: "Spatial note", x: 200 });
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    hand.setStatus({ state: "ready" });
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+
+    hand.emit({
+      mode: "pinch",
+      pointer: { x: 0.25, y: 0.18 },
+      confidence: 0.97,
+      timestamp: 1_000,
+    });
+    hand.emit({
+      mode: "pinch",
+      pointer: { x: 0.04, y: 0.18 },
+      confidence: 0.97,
+      timestamp: 1_200,
+    });
+    hand.emit({ mode: "idle", timestamp: 1_216 });
+
+    expect(store.getState().canvas.objects["note-spatial"]?.deletedAt).toBeNull();
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("button", { name: "Select Spatial note" })
+          .closest("article"),
+      ).toHaveAttribute("data-gesture-exit", "discard-left");
+    });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => {
+      expect(
+        store.getState().canvas.objects["note-spatial"]?.deletedAt,
+      ).not.toBeNull();
+    });
+    expect(store.getState().canvas.receipts.at(-1)).toMatchObject({
+        source: "gesture",
+        action: "discard",
+        affectedObjectIds: ["note-spatial"],
+      });
+    await user.click(screen.getByRole("button", { name: "Undo last change" }));
+    expect(store.getState().canvas.objects["note-spatial"]?.deletedAt).toBeNull();
+  });
+
+  it("keeps pinned objects protected from edge-throw discard", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-spatial", title: "Spatial note", x: 200 });
+    store.getState().dispatch(
+      {
+        type: "object.set_flags",
+        objectId: "note-spatial",
+        flags: { pinned: true },
+      },
+      "system",
+    );
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    hand.setStatus({ state: "ready" });
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+
+    hand.emit({
+      mode: "pinch",
+      pointer: { x: 0.25, y: 0.18 },
+      confidence: 0.97,
+      timestamp: 1_000,
+    });
+    hand.emit({
+      mode: "pinch",
+      pointer: { x: 0.04, y: 0.18 },
+      confidence: 0.97,
+      timestamp: 1_200,
+    });
+    hand.emit({ mode: "idle", timestamp: 1_216 });
+    expect(store.getState().canvas.objects["note-spatial"]?.deletedAt).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("minimizes through the distinct bottom dock and keeps it reversible through universal undo", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-spatial", title: "Spatial note", x: 200 });
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    hand.setStatus({ state: "ready" });
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+
+    hand.emit({
+      mode: "pinch",
+      pointer: { x: 0.25, y: 0.18 },
+      confidence: 0.97,
+      timestamp: 1_000,
+    });
+    hand.emit({
+      mode: "pinch",
+      pointer: { x: 0.25, y: 0.96 },
+      confidence: 0.97,
+      timestamp: 1_200,
+    });
+    hand.emit({ mode: "idle", timestamp: 1_216 });
+    expect(store.getState().canvas.objects["note-spatial"]?.minimized).toBe(true);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(store.getState().canvas.receipts.at(-1)?.source).toBe("gesture");
+    await user.click(screen.getByRole("button", { name: "Undo last change" }));
+    expect(store.getState().canvas.objects["note-spatial"]?.minimized).toBe(false);
+  });
+
+  it("restores a minimized object through deliberate open-palm dwell", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-spatial", title: "Spatial note", x: 200 });
+    store.getState().dispatch(
+      {
+        type: "object.set_flags",
+        objectId: "note-spatial",
+        flags: { minimized: true },
+      },
+      "system",
+    );
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    hand.setStatus({ state: "ready" });
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+
+    hand.emit({
+      mode: "open_palm",
+      pointer: { x: 0.25, y: 0.12 },
+      confidence: 0.96,
+      timestamp: 1_000,
+    });
+    expect(await screen.findByText("PALM · HOLD 0%")).toBeVisible();
+    hand.emit({
+      mode: "open_palm",
+      pointer: { x: 0.25, y: 0.12 },
+      confidence: 0.96,
+      timestamp: 1_660,
+    });
+
+    expect(store.getState().canvas.objects["note-spatial"]?.minimized).toBe(false);
+    expect(store.getState().canvas.receipts.at(-1)).toMatchObject({
+      source: "gesture",
+      action: "restore",
+      affectedObjectIds: ["note-spatial"],
+    });
+  });
+
+  it("commits two-hand span resize through one canonical gesture transform", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-spatial", title: "Spatial note", x: 200 });
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Select Spatial note" }));
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    hand.setStatus({ state: "ready" });
+    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    const bimanual = (span: number, leftX: number, rightX: number, timestamp: number) =>
+      hand.emit({
+        mode: "bimanual_pinch",
+        hands: [
+          {
+            handedness: "left",
+            pointer: { x: leftX, y: 0.3 },
+            confidence: 0.96,
+          },
+          {
+            handedness: "right",
+            pointer: { x: rightX, y: 0.3 },
+            confidence: 0.96,
+          },
+        ],
+        center: { x: (leftX + rightX) / 2, y: 0.3 },
+        span,
+        timestamp,
+      });
+
+    bimanual(0.3, 0.35, 0.65, 1_000);
+    expect(await screen.findByText("RESIZING")).toBeVisible();
+    bimanual(0.45, 0.275, 0.725, 1_100);
+    hand.emit({ mode: "idle", timestamp: 1_116 });
+
+    expect(store.getState().canvas.objects["note-spatial"]).toMatchObject({
+      width: 420,
+      height: 285,
       version: 2,
     });
     expect(store.getState().canvas.receipts.at(-1)).toMatchObject({
@@ -322,6 +1150,25 @@ describe("CommandCanvasRoom", () => {
     expect(Object.values(store.getState().canvas.objects)[0]?.type).toBe(
       "schedule",
     );
+  });
+
+  it("spawns consecutive semantic objects into distinct spatial slots", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    render(<CommandCanvasRoom store={store} />);
+
+    await user.click(screen.getByRole("button", { name: "Create task board" }));
+    await user.click(screen.getByRole("button", { name: "Create schedule" }));
+
+    const board = Object.values(store.getState().canvas.objects).find(
+      (object) => object.type === "task_board",
+    );
+    const schedule = Object.values(store.getState().canvas.objects).find(
+      (object) => object.type === "schedule",
+    );
+    expect(board).toBeDefined();
+    expect(schedule).toBeDefined();
+    expect(schedule!.x).toBeGreaterThanOrEqual(board!.x + board!.width + 80);
   });
 
   it("places toolbar-created objects at their screen anchors after viewport translation and scaling", async () => {
@@ -498,6 +1345,12 @@ describe("CommandCanvasRoom", () => {
       screen.getByRole("img", {
         name: "Architecture diagram: Browser to API.",
       }),
+    ).toBeVisible();
+    expect(screen.getByText("Agent structured")).toBeVisible();
+    expect(
+      screen.getByLabelText(
+        "Transformation from Rough architecture to Usable architecture",
+      ),
     ).toBeVisible();
     expect(store.getState().canvas.objects["sketch-source"]?.deletedAt).toBeNull();
   });
@@ -784,8 +1637,9 @@ describe("CommandCanvasRoom", () => {
 
     await user.click(screen.getByRole("button", { name: "Create sketch" }));
     expect(
-      screen.getByRole("dialog", { name: "Draw a rough sketch" }),
+      screen.getByRole("region", { name: "Draw directly on the canvas" }),
     ).toBeVisible();
+    expect(screen.queryByRole("dialog")).toBeNull();
     const surface = screen.getByRole("img", {
       name: "Sketch draft surface",
     }) as unknown as SVGSVGElement;
@@ -830,7 +1684,7 @@ describe("CommandCanvasRoom", () => {
       },
     });
     expect(
-      screen.queryByRole("dialog", { name: "Draw a rough sketch" }),
+      screen.queryByRole("region", { name: "Draw directly on the canvas" }),
     ).toBeNull();
     expect(store.getState().canvas.revision).toBe(0);
   });
@@ -854,11 +1708,122 @@ describe("CommandCanvasRoom", () => {
     expect(screen.getByText(/Danny undid: Danny pinned/)).toBeInTheDocument();
   });
 
-  it("keeps every future integration visibly honest in local mode", () => {
+  it("groups a modifier multi-selection into a movable frame and ungroups through canonical receipts", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-first", title: "First note", x: 40 });
+    seedNote(store, { id: "note-second", title: "Second note", x: 400 });
+    render(<CommandCanvasRoom store={store} />);
+
+    await user.click(screen.getByRole("button", { name: "Select First note" }));
+    await user.keyboard("{Shift>}");
+    await user.click(screen.getByRole("button", { name: "Select Second note" }));
+    await user.keyboard("{/Shift}");
+
+    expect(store.getState().selectedObjectIds).toEqual([
+      "note-first",
+      "note-second",
+    ]);
+    await user.click(screen.getByRole("button", { name: "Group selected objects" }));
+
+    const frame = Object.values(store.getState().canvas.objects).find(
+      (object) => !object.deletedAt && object.type === "frame",
+    );
+    expect(frame).toBeDefined();
+    expect(store.getState().canvas.objects["note-first"]?.parentId).toBe(frame?.id);
+    expect(store.getState().canvas.objects["note-second"]?.parentId).toBe(frame?.id);
+    expect(store.getState().canvas.receipts.at(-1)?.action).toBe("group");
+    expect(
+      screen.getByRole("button", { name: `Select ${frame?.title}` }),
+    ).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "Ungroup selected frame" }),
+    );
+    expect(store.getState().canvas.objects["note-first"]?.parentId).toBeNull();
+    expect(store.getState().canvas.objects["note-second"]?.parentId).toBeNull();
+    expect(store.getState().canvas.objects[frame?.id ?? ""]?.deletedAt).not.toBeNull();
+    expect(store.getState().canvas.receipts.at(-1)?.action).toBe("ungroup");
+  });
+
+  it("supports touch-friendly multi-select and keyboard group, undo, and redo", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-first", title: "First note", x: 40 });
+    seedNote(store, { id: "note-second", title: "Second note", x: 400 });
+    render(<CommandCanvasRoom store={store} />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Enable multiple selection" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Select First note" }));
+    await user.click(screen.getByRole("button", { name: "Select Second note" }));
+    expect(store.getState().selectedObjectIds).toEqual([
+      "note-first",
+      "note-second",
+    ]);
+
+    fireEvent.keyDown(screen.getByRole("main"), { key: "g", ctrlKey: true });
+    expect(store.getState().canvas.receipts.at(-1)?.action).toBe("group");
+    fireEvent.keyDown(screen.getByRole("main"), { key: "z", ctrlKey: true });
+    expect(
+      Object.values(store.getState().canvas.objects).some(
+        (object) => object.type === "frame" && !object.deletedAt,
+      ),
+    ).toBe(false);
+    fireEvent.keyDown(screen.getByRole("main"), { key: "y", ctrlKey: true });
+    expect(
+      Object.values(store.getState().canvas.objects).some(
+        (object) => object.type === "frame" && !object.deletedAt,
+      ),
+    ).toBe(true);
+    expect(store.getState().canvas.receipts.at(-1)?.action).toBe("redo");
+  });
+
+  it("rotates the primary object through a canonical transform receipt", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-first", title: "First note", x: 40 });
+    const { container } = render(<CommandCanvasRoom store={store} />);
+
+    await user.click(screen.getByRole("button", { name: "Select First note" }));
+    await user.click(screen.getByRole("button", { name: "Rotate clockwise" }));
+
+    expect(store.getState().canvas.objects["note-first"]).toMatchObject({
+      rotation: 15,
+      version: 2,
+    });
+    expect(store.getState().canvas.receipts.at(-1)?.action).toBe("transform");
+    expect(container.querySelector(".canvas-object")).toHaveStyle({
+      transform: "rotate(15deg)",
+    });
+  });
+
+  it("lifts primary spatial controls above overlapping objects without mutating durable z order", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-first", title: "First note", x: 40 });
+    seedNote(store, { id: "note-second", title: "Second note", x: 400 });
+    render(<CommandCanvasRoom store={store} />);
+
+    await user.click(screen.getByRole("button", { name: "Select First note" }));
+
+    const selectedCard = screen
+      .getByRole("button", { name: "Select First note" })
+      .closest("article");
+    expect(selectedCard).toHaveStyle({ zIndex: 1_000_000 });
+    expect(screen.getByRole("button", { name: "Focus object" })).toBeVisible();
+    expect(store.getState().canvas.objects["note-first"]?.zIndex).toBe(40);
+    expect(store.getState().canvas.objects["note-second"]?.zIndex).toBe(400);
+  });
+
+  it("keeps every future integration visibly honest in local mode", async () => {
+    const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     render(<CommandCanvasRoom store={store} />);
 
     expect(screen.getByText("Local room")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
     expect(screen.getByText("WebMCP not exercised")).toBeInTheDocument();
     expect(screen.getByText("Realtime not connected")).toHaveAttribute(
       "role",
@@ -992,6 +1957,7 @@ describe("CommandCanvasRoom", () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     render(<CommandCanvasRoom store={store} />);
+    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
     const input = screen.getByRole("textbox", {
       name: "Direct canvas command",
     });
@@ -1018,6 +1984,7 @@ describe("CommandCanvasRoom", () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     render(<CommandCanvasRoom store={store} />);
+    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
     const input = screen.getByRole("textbox", {
       name: "Direct canvas command",
     });
@@ -1044,6 +2011,7 @@ describe("CommandCanvasRoom", () => {
     seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
     seedNote(store, { id: "note-risk", title: "Risk note", x: 340 });
     render(<CommandCanvasRoom store={store} />);
+    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
 
     await user.click(screen.getByRole("button", { name: "Select Launch note" }));
     await user.type(
@@ -1070,6 +2038,7 @@ describe("CommandCanvasRoom", () => {
     const store = createCanvasStore("room-local", dependencies());
     seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
     render(<CommandCanvasRoom store={store} />);
+    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
 
     await user.click(screen.getByRole("button", { name: "Select Launch note" }));
     await user.type(
@@ -1106,6 +2075,7 @@ describe("CommandCanvasRoom", () => {
     const store = createCanvasStore("room-local", dependencies());
     seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
     render(<CommandCanvasRoom store={store} />);
+    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
 
     await user.click(screen.getByRole("button", { name: "Select Launch note" }));
     await user.type(
@@ -1165,6 +2135,7 @@ describe("CommandCanvasRoom", () => {
       clientX: 100,
       clientY: 100,
     });
+    expect(object.closest("article")).toHaveClass("is-held");
     fireEvent.pointerMove(object, {
       pointerId: 11,
       clientX: 130,
@@ -1175,6 +2146,7 @@ describe("CommandCanvasRoom", () => {
       clientX: 130,
       clientY: 150,
     });
+    expect(object.closest("article")).not.toHaveClass("is-held");
 
     const resize = screen.getByRole("button", { name: "Resize Seed note" });
     fireEvent.pointerDown(resize, {

@@ -148,7 +148,7 @@ describe("hand intent validation", () => {
     });
   });
 
-  it("treats an open palm as neutral instead of index-finger drawing", () => {
+  it("recognizes an open palm without turning it into index-finger drawing", () => {
     const transition = interpretHandFrame(
       createInitialHandIntentState(),
       openPalmFrame(),
@@ -156,10 +156,9 @@ describe("hand intent validation", () => {
     );
 
     expect(transition.output).toMatchObject({
-      accepted: false,
-      mode: "idle",
-      pointer: null,
-      reason: "no_deliberate_gesture",
+      accepted: true,
+      mode: "open_palm",
+      pointer: { x: 0.59, y: 0.718 },
     });
   });
 });
@@ -212,6 +211,23 @@ describe("pinch hysteresis", () => {
     pinchEngageDistance: 0.04,
     pinchReleaseDistance: 0.08,
   } as const;
+
+  it("engages the default pinch before fingertip-perfect contact", () => {
+    const transition = interpretHandFrame(
+      createInitialHandIntentState(),
+      frame({
+        thumb: { x: 0.445, y: 0.5 },
+        index: { x: 0.5, y: 0.5 },
+        timestamp: 1_000,
+      }),
+      1_000,
+    );
+
+    expect(transition.output).toMatchObject({
+      accepted: true,
+      mode: "pinch",
+    });
+  });
 
   it("engages below the close threshold, stays latched in the gap, and releases above the far threshold", () => {
     const unlatchedGap = interpretHandFrame(

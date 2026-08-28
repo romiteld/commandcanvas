@@ -1,9 +1,12 @@
 "use client";
 
 import {
+  useEffect,
   useRef,
   useState,
   type ReactNode,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { StoreApi } from "zustand";
@@ -16,6 +19,10 @@ import {
   type HumanCommandResult,
   type HumanCommandSource,
 } from "@/components/command-canvas/human-command-control";
+import {
+  RealtimeVoiceControl,
+  type RealtimeVoiceControlProps,
+} from "@/components/command-canvas/realtime-voice-control";
 import { SketchComposer } from "@/components/command-canvas/sketch-composer";
 import { SketchPreview } from "@/components/command-canvas/sketch-preview";
 import { SpatialCameraControl } from "@/components/command-canvas/spatial-camera-control";
@@ -48,6 +55,14 @@ import {
 } from "@/lib/gesture/spatial-gesture";
 import type { CanvasSketchTransformer } from "@/lib/vision/canvas-transform";
 
+const configuredSourceRevision =
+  process.env.NEXT_PUBLIC_COMMANDCANVAS_SOURCE_REVISION ?? "main";
+const sourceRevision = /^[0-9a-f]{40}$/.test(configuredSourceRevision)
+  ? configuredSourceRevision
+  : "main";
+const correspondingSourceUrl =
+  `https://github.com/romiteld/commandcanvas/tree/${sourceRevision}`;
+
 export interface CommandCanvasRoomProps {
   store: StoreApi<CanvasStoreState>;
   serviceStatus?: CommandCanvasServiceStatus;
@@ -59,6 +74,9 @@ export interface CommandCanvasRoomProps {
   onTransformSketch?: CommandCanvasSketchTransformHandler;
   onCanvasPointerWorldMove?: (point: CanvasPoint) => void;
   createHandTrackingController?: () => HandTrackingController;
+  realtimeVoice?: Omit<RealtimeVoiceControlProps, "onIntent">;
+  meetingMediaPanel?: ReactNode;
+  commandDrawerRequestKey?: string;
   meetingPacketPanel?: ReactNode;
 }
 
@@ -92,6 +110,7 @@ export type CommandCanvasSketchTransformHandler =
 const UI_SKETCH_TRANSFORM_SOURCE: CanvasCommandSource = "typed";
 const UI_SKETCH_TRANSFORM_INSTRUCTION =
   "Make this sketch usable as a clean architecture diagram.";
+const SELECTED_OBJECT_RENDER_Z_INDEX = 1_000_000;
 
 type ServiceTone = "idle" | "working" | "ready";
 
@@ -112,6 +131,9 @@ export function CommandCanvasRoom({
   onTransformSketch,
   onCanvasPointerWorldMove,
   createHandTrackingController,
+  realtimeVoice,
+  meetingMediaPanel,
+  commandDrawerRequestKey,
   meetingPacketPanel,
 }: CommandCanvasRoomProps) {
   const [objectPreviews, setObjectPreviews] = useState<
@@ -121,11 +143,30 @@ export function CommandCanvasRoom({
   const [resize, setResize] = useState<ObjectResizeState | null>(null);
   const [pan, setPan] = useState<CanvasPanState | null>(null);
   const [sketchComposerOpen, setSketchComposerOpen] = useState(false);
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [gestureStrokePreview, setGestureStrokePreview] = useState<
     readonly CanvasPoint[]
   >([]);
+  const [gestureSketchStrokes, setGestureSketchStrokes] = useState<
+    readonly (readonly CanvasPoint[])[]
+  >([]);
+  const [handInteractionMode, setHandInteractionMode] =
+    useState<HandInteractionMode>("manipulate");
+  const [handDrawingTool, setHandDrawingTool] =
+    useState<HandDrawingTool>("draw");
   const [handTrackingStatus, setHandTrackingStatus] =
     useState<HandTrackingStatus>({ state: "off" });
+  const [handFeedback, setHandFeedback] = useState<HandCanvasFeedback | null>(
+    null,
+  );
+  const [handTargetObjectId, setHandTargetObjectId] = useState<string | null>(
+    null,
+  );
+  const [gestureExitAnimations, setGestureExitAnimations] = useState<
+    Record<string, "discard-left" | "discard-right">
+  >({});
+  const [openDrawer, setOpenDrawer] = useState<WorkspaceDrawer>(null);
+  const [typedFallbackOpen, setTypedFallbackOpen] = useState(false);
   const [commandExecution, setCommandExecution] =
     useState<CommandExecutionState>({ status: "idle" });
   const [sketchTransformExecution, setSketchTransformExecution] =
@@ -133,19 +174,53 @@ export function CommandCanvasRoom({
   const canvasViewportRef = useRef<HTMLDivElement>(null);
   const spatialGestureState = useRef(createInitialSpatialGestureState());
   const gesturePreviewObjectId = useRef<string | null>(null);
+  const handEraseLatchedRef = useRef(false);
+  const initialCompactCompositionFitRef = useRef(false);
+  const gestureExitTimeoutsRef = useRef(new Map<string, number>());
   const canvas = useStore(store, (state) => state.canvas);
   const selectedObjectId = useStore(store, (state) => state.selectedObjectId);
+  const selectedObjectIds = useStore(store, (state) => state.selectedObjectIds);
   const viewport = useStore(store, (state) => state.viewport);
   const lastError = useStore(store, (state) => state.lastError);
   const dispatch = useStore(store, (state) => state.dispatch);
   const selectObject = useStore(store, (state) => state.selectObject);
+  const selectObjects = useStore(store, (state) => state.selectObjects);
+  const toggleObjectSelection = useStore(
+    store,
+    (state) => state.toggleObjectSelection,
+  );
   const setViewport = useStore(store, (state) => state.setViewport);
   const objects = Object.values(canvas.objects).filter(
     (object) => !object.deletedAt,
   );
+  const transformationPairs = objects.flatMap((object) => {
+    if (object.type !== "diagram") return [];
+    const source = canvas.objects[object.payload.sourceSketchId];
+    return source && !source.deletedAt && source.type === "sketch"
+      ? [{ source, diagram: object }]
+      : [];
+  });
+  const latestReceipt = canvas.receipts.at(-1);
   const selectedObject = selectedObjectId
     ? canvas.objects[selectedObjectId]
     : undefined;
+  const selectedObjects = selectedObjectIds.flatMap((objectId) => {
+    const object = canvas.objects[objectId];
+    return object && !object.deletedAt ? [object] : [];
+  });
+  const canGroup =
+    selectedObjects.length >= 2 &&
+    selectedObjects.every((object) => !object.pinned && !object.parentId);
+  const selectedFrame =
+    selectedObject?.type === "frame"
+      ? selectedObject
+      : selectedObject?.parentId
+        ? canvas.objects[selectedObject.parentId]
+        : undefined;
+  const canUngroup = Boolean(
+    selectedFrame && !selectedFrame.deletedAt && selectedFrame.type === "frame",
+  );
+  const canRedo = (canvas.redoReceiptIds?.length ?? 0) > 0;
   const commandPending = commandExecution.status === "pending";
   const sketchTransformPending = sketchTransformExecution.status === "pending";
   const interactionPending = commandPending || sketchTransformPending;
@@ -153,6 +228,71 @@ export function CommandCanvasRoom({
     handTrackingStatus,
     serviceStatus?.spatialInput,
   );
+
+  useEffect(() => {
+    if (!commandDrawerRequestKey) return;
+    const timeoutId = window.setTimeout(() => setOpenDrawer("command"), 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [commandDrawerRequestKey]);
+
+  useEffect(
+    () => () => {
+      for (const timeoutId of gestureExitTimeoutsRef.current.values())
+        window.clearTimeout(timeoutId);
+      gestureExitTimeoutsRef.current.clear();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (initialCompactCompositionFitRef.current || objects.length < 2) return;
+    let cancelled = false;
+    let attempts = 0;
+    let timeoutId = 0;
+
+    const fitSeededComposition = () => {
+      if (cancelled || initialCompactCompositionFitRef.current) return;
+      const viewportElement = canvasViewportRef.current;
+      const measured = viewportElement?.getBoundingClientRect();
+      if (!measured || measured.width <= 0 || measured.height <= 0) {
+        attempts += 1;
+        if (attempts < 20)
+          timeoutId = window.setTimeout(fitSeededComposition, 16);
+        return;
+      }
+
+      initialCompactCompositionFitRef.current = true;
+      if (measured.width > 640) return;
+      const state = store.getState();
+      const worldBounds = Object.values(state.canvas.objects).flatMap((object) =>
+        object.deletedAt
+          ? []
+          : [
+              {
+                x: object.x,
+                y: object.y,
+                width: object.width,
+                height: object.minimized ? 62 : object.height,
+              },
+            ],
+      );
+      if (worldBounds.length < 2) return;
+      const fitted = fitViewportToWorldBounds(
+        state.viewport,
+        worldBounds,
+        { x: 0, y: 0, width: measured.width, height: measured.height },
+        20,
+        0.2,
+      );
+      if (fitted) setViewport(fitted);
+    };
+
+    timeoutId = window.setTimeout(fitSeededComposition, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [objects.length, setViewport, store]);
 
   function runCommand(
     command: CanvasCommand,
@@ -390,19 +530,56 @@ export function CommandCanvasRoom({
     onApplied?.();
   }
 
+  function creationAnchor(baseX: number, baseY: number) {
+    const slot = objects.length;
+    return screenToWorld(
+      {
+        x: baseX + (slot % 2) * 620,
+        y: baseY + Math.floor(slot / 2) * 380,
+      },
+      viewport,
+    );
+  }
+
+  function revealCreatedObjectOnCompactCanvas(objectId: string) {
+    const viewportElement = canvasViewportRef.current;
+    if (!viewportElement) return;
+    const measured = viewportElement.getBoundingClientRect();
+    if (measured.width <= 0 || measured.width > 640) return;
+    const state = store.getState();
+    const object = state.canvas.objects[objectId];
+    if (!object || object.deletedAt) return;
+    const bounds = {
+      x: object.x,
+      y: object.y,
+      width: object.width,
+      height: object.height,
+    };
+    const fitted = fitViewportToWorldBounds(
+      state.viewport,
+      [bounds, bounds],
+      { x: 0, y: 0, width: measured.width, height: measured.height },
+      24,
+      0.35,
+    );
+    if (fitted) setViewport(fitted);
+  }
+
   function createNote(
     source: CanvasCommandSource = "pointer",
     text?: string,
   ) {
+    const objectId = createClientId("note");
+    const anchor = creationAnchor(160, 130);
     runCommand(
       {
         type: "object.create",
         object: {
-          id: createClientId("note"),
+          id: objectId,
           type: "note",
           title: "New thought",
-          x: (160 - viewport.x) / viewport.scale,
-          y: (130 - viewport.y) / viewport.scale,
+          x: anchor.x,
+          y: anchor.y,
           width: 280,
           height: 190,
           zIndex: canvas.revision + 1,
@@ -415,19 +592,22 @@ export function CommandCanvasRoom({
         },
       },
       source,
+      () => revealCreatedObjectOnCompactCanvas(objectId),
     );
   }
 
   function createTaskBoard(source: CanvasCommandSource = "pointer") {
+    const objectId = createClientId("board");
+    const anchor = creationAnchor(140, 110);
     runCommand(
       {
         type: "object.create",
         object: {
-          id: createClientId("board"),
+          id: objectId,
           type: "task_board",
           title: "Launch board",
-          x: (140 - viewport.x) / viewport.scale,
-          y: (110 - viewport.y) / viewport.scale,
+          x: anchor.x,
+          y: anchor.y,
           width: 560,
           height: 320,
           zIndex: canvas.revision + 1,
@@ -467,19 +647,22 @@ export function CommandCanvasRoom({
         },
       },
       source,
+      () => revealCreatedObjectOnCompactCanvas(objectId),
     );
   }
 
   function createSchedule(source: CanvasCommandSource = "pointer") {
+    const objectId = createClientId("schedule");
+    const anchor = creationAnchor(180, 140);
     runCommand(
       {
         type: "object.create",
         object: {
-          id: createClientId("schedule"),
+          id: objectId,
           type: "schedule",
           title: "Next week",
-          x: (180 - viewport.x) / viewport.scale,
-          y: (140 - viewport.y) / viewport.scale,
+          x: anchor.x,
+          y: anchor.y,
           width: 460,
           height: 310,
           zIndex: canvas.revision + 1,
@@ -512,6 +695,93 @@ export function CommandCanvasRoom({
               },
             ],
           },
+        },
+      },
+      source,
+      () => revealCreatedObjectOnCompactCanvas(objectId),
+    );
+  }
+
+  function handleObjectSelect(
+    event: ReactMouseEvent<HTMLButtonElement>,
+    objectId: string,
+  ) {
+    if (multiSelectMode || event.shiftKey || event.ctrlKey || event.metaKey) {
+      toggleObjectSelection(objectId);
+      return;
+    }
+    selectObject(objectId);
+  }
+
+  function groupSelectedObjects(source: CanvasCommandSource = "pointer") {
+    const current = store.getState();
+    const groupable = current.selectedObjectIds.flatMap((objectId) => {
+      const object = current.canvas.objects[objectId];
+      return object && !object.deletedAt && !object.pinned && !object.parentId
+        ? [object]
+        : [];
+    });
+    if (groupable.length < 2 || groupable.length !== current.selectedObjectIds.length)
+      return;
+
+    const padding = 44;
+    const frameId = createClientId("frame");
+    const left = Math.min(...groupable.map((object) => object.x));
+    const top = Math.min(...groupable.map((object) => object.y));
+    const right = Math.max(
+      ...groupable.map((object) => object.x + object.width),
+    );
+    const bottom = Math.max(
+      ...groupable.map((object) => object.y + object.height),
+    );
+    runCommand(
+      {
+        type: "objects.group",
+        objectIds: groupable.map((object) => object.id),
+        frame: {
+          id: frameId,
+          type: "frame",
+          title: `Frame ${current.canvas.revision + 1}`,
+          x: left - padding,
+          y: top - padding,
+          width: right - left + padding * 2,
+          height: bottom - top + padding * 2,
+          zIndex: Math.max(
+            0,
+            Math.min(...groupable.map((object) => object.zIndex)) - 1,
+          ),
+          payload: { tone: "violet" },
+        },
+      },
+      source,
+      () => {
+        const frame = store.getState().canvas.objects[frameId];
+        if (frame && !frame.deletedAt) selectObjects([frameId]);
+        setMultiSelectMode(false);
+      },
+    );
+  }
+
+  function ungroupSelectedFrame(source: CanvasCommandSource = "pointer") {
+    if (!selectedFrame || selectedFrame.deletedAt || selectedFrame.type !== "frame")
+      return;
+    runCommand(
+      { type: "objects.ungroup", frameId: selectedFrame.id },
+      source,
+    );
+  }
+
+  function rotateSelectedObject(
+    delta: number,
+    source: CanvasCommandSource = "pointer",
+  ) {
+    if (!selectedObject || selectedObject.deletedAt || selectedObject.pinned) return;
+    runCommand(
+      {
+        type: "object.transform",
+        objectId: selectedObject.id,
+        transform: {
+          rotation: wrapRotation((selectedObject.rotation ?? 0) + delta),
         },
       },
       source,
@@ -564,6 +834,42 @@ export function CommandCanvasRoom({
           return { ok: false, message: "There is no canvas change to undo." };
         runCommand({ type: "history.undo" }, source);
         return { ok: true, message: "Undo command submitted." };
+      case "redo":
+        if (!canRedo)
+          return { ok: false, message: "There is no canvas change to redo." };
+        runCommand({ type: "history.redo" }, source);
+        return { ok: true, message: "Redo command submitted." };
+      case "focus_selected":
+        if (!selectedObject || selectedObject.deletedAt)
+          return { ok: false, message: "Select an active object first." };
+        focusCanvasObject(selectedObject.id);
+        return { ok: true, message: "Focus command applied." };
+      case "group_selected":
+        if (!canGroup)
+          return {
+            ok: false,
+            message: "Select at least two unpinned top-level objects first.",
+          };
+        groupSelectedObjects(source);
+        return { ok: true, message: "Group command submitted." };
+      case "ungroup_selected":
+        if (!canUngroup)
+          return { ok: false, message: "Select a frame to ungroup first." };
+        ungroupSelectedFrame(source);
+        return { ok: true, message: "Ungroup command submitted." };
+      case "rotate_selected":
+        if (!selectedObject || selectedObject.deletedAt)
+          return { ok: false, message: "Select an active object first." };
+        if (selectedObject.pinned)
+          return {
+            ok: false,
+            message: `Unpin “${selectedObject.title}” before rotating it.`,
+          };
+        rotateSelectedObject(
+          intent.direction === "clockwise" ? 15 : -15,
+          source,
+        );
+        return { ok: true, message: "Rotate command submitted." };
       case "pin_selected":
         return setSelectedFlagFromHuman(source, "pinned", true, "Pin");
       case "unpin_selected":
@@ -667,6 +973,13 @@ export function CommandCanvasRoom({
     object: CanvasObject,
   ) {
     event.stopPropagation();
+    if (
+      multiSelectMode ||
+      event.shiftKey ||
+      event.ctrlKey ||
+      event.metaKey
+    )
+      return;
     selectObject(object.id);
     if (object.pinned || interactionPending) return;
 
@@ -816,6 +1129,27 @@ export function CommandCanvasRoom({
     if (!canvasViewport || interactionPending) return;
     const bounds = canvasViewport.getBoundingClientRect();
     if (bounds.width <= 0 || bounds.height <= 0) return;
+    if (handInteractionMode === "draw" && handDrawingTool === "erase") {
+      if (observation.mode === "idle") {
+        handEraseLatchedRef.current = false;
+        setHandFeedback(null);
+        return;
+      }
+      const pointer =
+        observation.mode === "bimanual_pinch"
+          ? observation.center
+          : observation.pointer;
+      setHandFeedback({
+        mode: observation.mode,
+        pointer,
+        label: observation.mode === "point" ? "ERASING" : "ERASE · POINT",
+      });
+      if (observation.mode === "point" && !handEraseLatchedRef.current) {
+        handEraseLatchedRef.current = true;
+        eraseNearestGestureStroke(pointer, bounds);
+      }
+      return;
+    }
     const current = store.getState();
     const sceneObjects = Object.values(current.canvas.objects).flatMap(
       (object) =>
@@ -837,15 +1171,81 @@ export function CommandCanvasRoom({
     const transition = reduceSpatialGesture(
       spatialGestureState.current,
       observation.mode === "idle"
-        ? { mode: "idle" }
-        : { mode: observation.mode, pointer: observation.pointer },
+        ? { mode: "idle", timestamp: observation.timestamp }
+        : observation.mode === "bimanual_pinch"
+          ? {
+              mode: "bimanual_pinch",
+              pointers: [
+                observation.hands[0].pointer,
+                observation.hands[1].pointer,
+              ],
+              span: observation.span,
+              timestamp: observation.timestamp,
+            }
+          : {
+              mode: observation.mode,
+              pointer: observation.pointer,
+              timestamp: observation.timestamp,
+            },
       {
         bounds,
         viewport: current.viewport,
+        selectedObjectId: current.selectedObjectId,
         objects: sceneObjects,
+      },
+      {
+        drawingEnabled: handInteractionMode === "draw",
+        manipulationEnabled: handInteractionMode === "manipulate",
       },
     );
     spatialGestureState.current = transition.state;
+    if (observation.mode === "idle") setHandTargetObjectId(null);
+    if (
+      observation.mode === "idle" &&
+      !transition.effects.some((effect) => effect.type === "object.stage_action")
+    )
+      setHandFeedback(null);
+    if (observation.mode !== "idle") {
+      const targetEffect = transition.effects.find(
+        (effect) => effect.type === "object.target",
+      );
+      const releaseEffect = transition.effects.find(
+        (effect) =>
+          effect.type === "object.commit_move" ||
+          effect.type === "object.stage_action",
+      );
+      setHandFeedback({
+        mode: observation.mode,
+        pointer:
+          observation.mode === "bimanual_pinch"
+            ? observation.center
+            : observation.pointer,
+        grabbedObjectId:
+          transition.state.grab?.objectId ??
+          transition.state.resize?.objectId,
+        label:
+          observation.mode !== "bimanual_pinch" &&
+          observation.trackingState === "grace"
+            ? "LOST · HOLDING"
+          : handInteractionMode === "draw"
+            ? observation.mode === "point"
+              ? "DRAWING"
+              : "DRAW · READY"
+          : observation.mode === "bimanual_pinch"
+            ? "RESIZING"
+            : observation.mode === "open_palm"
+              ? "PALM · HOLD"
+            : transition.state.grab?.objectId
+                ? "HELD"
+                : releaseEffect
+                  ? "RELEASING"
+                  : targetEffect?.objectId
+                    ? "TARGET"
+                : observation.mode === "pinch"
+                  ? "PINCH · NO TARGET"
+                  : "POINT",
+      });
+    }
     for (const effect of transition.effects) applySpatialGestureEffect(effect);
   }
 
@@ -855,27 +1255,18 @@ export function CommandCanvasRoom({
         setGestureStrokePreview(effect.points);
         return;
       case "stroke.commit": {
-        const activeObjects = Object.values(store.getState().canvas.objects).filter(
-          (object) => !object.deletedAt,
-        );
-        const highestZ = activeObjects.reduce(
-          (maximum, object) => Math.max(maximum, object.zIndex),
-          0,
-        );
-        runCommand(
-          createGestureSketchCommand(effect.points, {
-            objectId: createClientId("sketch"),
-            strokeId: createClientId("stroke"),
-            zIndex: highestZ + 1,
-          }),
-          "gesture",
-        );
+        setGestureSketchStrokes((current) => [...current, effect.points]);
         return;
       }
       case "object.select":
+        setHandTargetObjectId(null);
         selectObject(effect.objectId);
         return;
+      case "object.target":
+        setHandTargetObjectId(effect.objectId);
+        return;
       case "object.preview_move":
+        setHandTargetObjectId(null);
         gesturePreviewObjectId.current = effect.objectId;
         setObjectPreviews((current) => ({
           ...current,
@@ -892,18 +1283,233 @@ export function CommandCanvasRoom({
           "gesture",
         );
         return;
+      case "object.preview_resize":
+        gesturePreviewObjectId.current = effect.objectId;
+        setObjectPreviews((current) => ({
+          ...current,
+          [effect.objectId]: {
+            ...current[effect.objectId],
+            width: effect.width,
+            height: effect.height,
+          },
+        }));
+        return;
+      case "object.commit_resize":
+        runCommand(
+          {
+            type: "object.transform",
+            objectId: effect.objectId,
+            transform: { width: effect.width, height: effect.height },
+          },
+          "gesture",
+        );
+        return;
+      case "object.stage_action": {
+        const target = store.getState().canvas.objects[effect.objectId];
+        if (!target || target.deletedAt) return;
+        const commitAction = () => {
+          gestureExitTimeoutsRef.current.delete(target.id);
+          setGestureExitAnimations((current) => {
+            const next = { ...current };
+            delete next[target.id];
+            return next;
+          });
+          clearObjectPreview(target.id);
+          if (gesturePreviewObjectId.current === target.id)
+            gesturePreviewObjectId.current = null;
+          runCommand(
+            effect.action === "discard"
+              ? { type: "object.discard", objectId: target.id }
+              : {
+                  type: "object.set_flags",
+                  objectId: target.id,
+                  flags: { minimized: true },
+                },
+            "gesture",
+          );
+        };
+        const reduceMotion =
+          typeof window.matchMedia === "function" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (effect.action === "discard" && !reduceMotion) {
+          const exit = effect.edge === "right" ? "discard-right" : "discard-left";
+          setGestureExitAnimations((current) => ({
+            ...current,
+            [target.id]: exit,
+          }));
+          const timeoutId = window.setTimeout(commitAction, 190);
+          gestureExitTimeoutsRef.current.set(target.id, timeoutId);
+        } else {
+          commitAction();
+        }
+        setHandFeedback((current) =>
+          current
+            ? {
+                ...current,
+                label:
+                  effect.action === "discard"
+                    ? "TRASHED · UNDO AVAILABLE"
+                    : "MINIMIZED · UNDO AVAILABLE",
+              }
+            : current,
+        );
+        return;
+      }
+      case "object.focus":
+        focusCanvasObject(effect.objectId);
+        setHandFeedback((current) =>
+          current ? { ...current, label: "FOCUSED" } : current,
+        );
+        return;
+      case "object.restore":
+        runCommand(
+          {
+            type: "object.set_flags",
+            objectId: effect.objectId,
+            flags: { minimized: false },
+          },
+          "gesture",
+        );
+        setHandFeedback((current) =>
+          current ? { ...current, label: "RESTORED" } : current,
+        );
+        return;
+      case "palm.progress":
+        setHandFeedback((current) =>
+          current
+            ? {
+                ...current,
+                label: `PALM · HOLD ${Math.round(effect.progress * 100)}%`,
+              }
+            : current,
+        );
+        return;
       case "preview.clear": {
         setGestureStrokePreview([]);
         const objectId = gesturePreviewObjectId.current;
+        if (objectId && gestureExitTimeoutsRef.current.has(objectId)) return;
         gesturePreviewObjectId.current = null;
         if (objectId) clearObjectPreview(objectId);
       }
     }
   }
 
+  function beginHandDrawing() {
+    spatialGestureState.current = createInitialSpatialGestureState();
+    setGestureStrokePreview([]);
+    setGestureSketchStrokes([]);
+    setHandTargetObjectId(null);
+    setHandDrawingTool("draw");
+    handEraseLatchedRef.current = false;
+    setHandInteractionMode("draw");
+    setOpenDrawer(null);
+  }
+
+  function cancelHandDrawing() {
+    spatialGestureState.current = createInitialSpatialGestureState();
+    setGestureStrokePreview([]);
+    setGestureSketchStrokes([]);
+    setHandInteractionMode("manipulate");
+    setHandTargetObjectId(null);
+    setHandDrawingTool("draw");
+    handEraseLatchedRef.current = false;
+    setHandFeedback(null);
+  }
+
+  function finishHandDrawing() {
+    const activeStroke =
+      spatialGestureState.current.phase === "drawing" &&
+      spatialGestureState.current.stroke.length >= 2
+        ? spatialGestureState.current.stroke
+        : null;
+    const strokes = activeStroke
+      ? [...gestureSketchStrokes, activeStroke]
+      : gestureSketchStrokes;
+    if (strokes.length === 0) return;
+    const activeObjects = Object.values(store.getState().canvas.objects).filter(
+      (object) => !object.deletedAt,
+    );
+    const highestZ = activeObjects.reduce(
+      (maximum, object) => Math.max(maximum, object.zIndex),
+      0,
+    );
+    const objectId = createClientId("sketch");
+    runCommand(
+      createGestureSketchCommand(strokes, {
+        objectId,
+        strokeIds: strokes.map(() => createClientId("stroke")),
+        zIndex: highestZ + 1,
+      }),
+      "gesture",
+      () => {
+        spatialGestureState.current = createInitialSpatialGestureState();
+        setGestureStrokePreview([]);
+        setGestureSketchStrokes([]);
+        setHandInteractionMode("manipulate");
+        setHandDrawingTool("draw");
+        handEraseLatchedRef.current = false;
+        setHandFeedback(null);
+        selectObject(objectId);
+      },
+    );
+  }
+
+  function eraseNearestGestureStroke(
+    pointer: CanvasPoint,
+    bounds: { width: number; height: number },
+  ) {
+    const currentViewport = store.getState().viewport;
+    const point = {
+      x: (pointer.x * bounds.width - currentViewport.x) / currentViewport.scale,
+      y: (pointer.y * bounds.height - currentViewport.y) / currentViewport.scale,
+    };
+    const radius = 34 / currentViewport.scale;
+    setGestureSketchStrokes((strokes) => {
+      let nearestIndex = -1;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      strokes.forEach((stroke, index) => {
+        const distance = distanceToStroke(point, stroke);
+        if (distance < nearestDistance) {
+          nearestIndex = index;
+          nearestDistance = distance;
+        }
+      });
+      return nearestIndex >= 0 && nearestDistance <= radius
+        ? strokes.filter((_stroke, index) => index !== nearestIndex)
+        : strokes;
+    });
+  }
+
+  function focusCanvasObject(objectId: string) {
+    selectObject(objectId);
+    const viewportElement = canvasViewportRef.current;
+    const state = store.getState();
+    const object = state.canvas.objects[objectId];
+    if (!viewportElement || !object || object.deletedAt) return;
+    const measured = viewportElement.getBoundingClientRect();
+    const height = object.minimized ? 62 : object.height;
+    const fitted = fitViewportToWorldBounds(
+      { ...state.viewport, scale: 2.5 },
+      [
+        { x: object.x, y: object.y, width: object.width, height },
+        { x: object.x, y: object.y, width: object.width, height },
+      ],
+      { x: 0, y: 0, width: measured.width, height: measured.height },
+      Math.min(96, measured.width * 0.16),
+      0.35,
+    );
+    if (fitted) setViewport(fitted);
+  }
+
   function startCanvasPan(event: ReactPointerEvent<HTMLDivElement>) {
     if (interactionPending) return;
-    if ((event.target as HTMLElement).closest(".canvas-object")) return;
+    if (handInteractionMode === "draw") return;
+    if (
+      (event.target as HTMLElement).closest(
+        ".canvas-object, .hand-mode-toolbar, .gesture-edge-targets, .overlay-drawer, .tool-dock, .command-drawer-trigger, .canvas-status-strip, button, input, textarea, select, a",
+      )
+    )
+      return;
     event.preventDefault();
     selectObject(null);
     if (typeof event.currentTarget.setPointerCapture === "function")
@@ -946,102 +1552,137 @@ export function CommandCanvasRoom({
     setPan(null);
   }
 
+  function handleCanvasKeyboard(event: ReactKeyboardEvent<HTMLElement>) {
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable || target.matches("input, textarea, select"))
+    )
+      return;
+
+    if (event.key === "Escape") {
+      selectObject(null);
+      setMultiSelectMode(false);
+      return;
+    }
+    if ((!event.ctrlKey && !event.metaKey) || interactionPending) return;
+    const key = event.key.toLowerCase();
+    if (key === "z") {
+      event.preventDefault();
+      runCommand(
+        { type: event.shiftKey ? "history.redo" : "history.undo" },
+        "typed",
+      );
+      return;
+    }
+    if (key === "y") {
+      event.preventDefault();
+      runCommand({ type: "history.redo" }, "typed");
+      return;
+    }
+    if (key === "g") {
+      if (event.shiftKey) {
+        if (!canUngroup) return;
+        event.preventDefault();
+        ungroupSelectedFrame("typed");
+        return;
+      }
+      if (!canGroup) return;
+      event.preventDefault();
+      groupSelectedObjects("typed");
+    }
+  }
+
   return (
-    <main className="command-canvas-shell" aria-busy={interactionPending}>
+    <main
+      className={`command-canvas-shell${meetingMediaPanel ? " has-meeting-media" : ""}`}
+      aria-label="Spatial command surface"
+      aria-busy={interactionPending}
+      onKeyDown={handleCanvasKeyboard}
+    >
       <header className="room-header">
         <div className="brand-lockup">
-          <span className="brand-mark" aria-hidden="true">
-            CC
-          </span>
+          <span className="brand-mark" aria-hidden="true">CC</span>
           <div>
-            <p className="eyebrow">
-              CommandCanvas / {roomStatus === "local" ? "local checkpoint" : "shared room"}
-            </p>
+            <p className="eyebrow">CommandCanvas</p>
             <h1>Spatial command surface</h1>
           </div>
         </div>
-        <div className="room-badges" aria-label="Room status">
-          <span
-            className={`status-dot status-dot-${roomStatus}`}
-            aria-hidden="true"
-          />
+
+        <div className="room-identity" aria-label="Room status">
+          <span className={`status-dot status-dot-${roomStatus}`} aria-hidden="true" />
           <strong>{roomLabel}</strong>
-          <span>r{canvas.revision}</span>
-          {participants.length > 0 ? (
-            <div
-              className="presence-stack"
-              aria-label={`${participants.length} ${participants.length === 1 ? "participant" : "participants"} present`}
-            >
-              {participants.map((participant) => (
+          <span>{roomStatus.toUpperCase()}</span>
+          <span>R{canvas.revision}</span>
+        </div>
+
+        {participants.length > 0 ? (
+          <div
+            className="presence-stack"
+            aria-label={`${participants.length} ${participants.length === 1 ? "participant" : "participants"} present`}
+          >
+            {participants.map((participant) => (
+              <span
+                key={participant.id}
+                className="presence-person"
+                title={`${participant.displayName} · ${participant.role ?? "participant"}`}
+              >
                 <span
-                  key={participant.id}
                   className="presence-token"
-                  title={`${participant.displayName} · ${participant.role ?? "participant"}`}
-                  style={{
-                    background: participant.color ?? "#74859a",
-                    color: "#081016",
-                  }}
+                  style={{ background: participant.color ?? "#74859a" }}
+                  aria-hidden="true"
                 >
                   {initials(participant.displayName)}
                 </span>
-              ))}
-            </div>
-          ) : null}
+                <span className="presence-name">{participant.displayName}</span>
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="header-actions">
+          <button
+            type="button"
+            className="system-status-trigger"
+            aria-label="Open system status"
+            aria-expanded={openDrawer === "system"}
+            onClick={() => setOpenDrawer(openDrawer === "system" ? null : "system")}
+          >
+            <CompactStatus
+              label={roomStatus === "live" ? "Live" : "Local"}
+              tone={roomStatus === "live" ? "ready" : "idle"}
+            />
+            <CompactStatus
+              label={handTrackingStatus.state === "ready" ? "Hand" : "Hand"}
+              tone={handTrackingStatus.state === "ready" ? "ready" : "idle"}
+            />
+            <CompactStatus
+              label="WebMCP"
+              tone={serviceStatus?.webMcp?.tone ?? "idle"}
+            />
+          </button>
+          <button
+            type="button"
+            className="activity-trigger"
+            aria-label="Open activity drawer"
+            aria-expanded={openDrawer === "activity"}
+            onClick={() => setOpenDrawer(openDrawer === "activity" ? null : "activity")}
+          >
+            <span aria-hidden="true">↗</span>
+            <span>Activity</span>
+            <strong>{canvas.receipts.length}</strong>
+          </button>
         </div>
       </header>
 
-      <section className="workspace-grid" aria-label="CommandCanvas workspace">
-        <aside className="tool-dock" aria-label="Object tools">
-          <button
-            type="button"
-            onClick={() => createNote()}
-            aria-label="Create note"
-            disabled={interactionPending}
-          >
-            <span aria-hidden="true">＋</span>
-            <small>Note</small>
-          </button>
-          <button
-            type="button"
-            onClick={() => createTaskBoard()}
-            aria-label="Create task board"
-            disabled={interactionPending}
-          >
-            <span aria-hidden="true">▦</span>
-            <small>Board</small>
-          </button>
-          <button
-            type="button"
-            onClick={() => createSchedule()}
-            aria-label="Create schedule"
-            disabled={interactionPending}
-          >
-            <span aria-hidden="true">31</span>
-            <small>Schedule</small>
-          </button>
-          <button
-            type="button"
-            onClick={() => setSketchComposerOpen(true)}
-            aria-label="Create sketch"
-            disabled={interactionPending}
-          >
-            <span aria-hidden="true">⌁</span>
-            <small>Sketch</small>
-          </button>
-          <button
-            type="button"
-            aria-label="Undo last change"
-            disabled={interactionPending || canvas.receipts.length === 0}
-            onClick={() => runCommand({ type: "history.undo" }, "typed")}
-          >
-            <span aria-hidden="true">↶</span>
-            <small>Undo</small>
-          </button>
-        </aside>
+      {meetingMediaPanel ? (
+        <div className="meeting-media-slot">{meetingMediaPanel}</div>
+      ) : null}
 
+      <section className="workspace-grid" aria-label="CommandCanvas workspace">
         <section className="canvas-panel" aria-label="Infinite canvas">
-          <div className="canvas-status-strip">
-            <span>Objects {objects.length}</span>
+          <div className="canvas-status-strip" aria-label="Canvas coordinates">
+            <span>{objects.length} objects</span>
             <span>Zoom {Math.round(viewport.scale * 100)}%</span>
             <span>Revision {canvas.revision}</span>
           </div>
@@ -1050,7 +1691,7 @@ export function CommandCanvasRoom({
             className={`canvas-viewport${pan ? " is-panning" : ""}`}
             style={{
               backgroundPosition: `${viewport.x}px ${viewport.y}px, ${viewport.x}px ${viewport.y}px, ${viewport.x}px ${viewport.y}px`,
-              backgroundSize: `${80 * viewport.scale}px ${80 * viewport.scale}px, ${80 * viewport.scale}px ${80 * viewport.scale}px, ${16 * viewport.scale}px ${16 * viewport.scale}px`,
+              backgroundSize: `${96 * viewport.scale}px ${96 * viewport.scale}px, ${96 * viewport.scale}px ${96 * viewport.scale}px, ${16 * viewport.scale}px ${16 * viewport.scale}px`,
             }}
             onPointerDown={startCanvasPan}
             onPointerMove={updateCanvasPan}
@@ -1069,21 +1710,27 @@ export function CommandCanvasRoom({
           >
             <div
               className="canvas-world"
-              style={{
-                transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
-              }}
+              style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})` }}
             >
-              {gestureStrokePreview.length > 0 ? (
-                <svg
-                  className="gesture-stroke-preview"
-                  aria-hidden="true"
-                  viewBox="0 0 1 1"
-                >
-                  <polyline
-                    points={gestureStrokePreview
-                      .map((point) => `${point.x},${point.y}`)
-                      .join(" ")}
-                  />
+              {transformationPairs.map(({ source, diagram }) => (
+                <TransformationBridge
+                  key={`${source.id}-${diagram.id}`}
+                  source={source}
+                  diagram={diagram}
+                />
+              ))}
+              {gestureSketchStrokes.length > 0 || gestureStrokePreview.length > 0 ? (
+                <svg className="gesture-stroke-preview" aria-hidden="true" viewBox="0 0 1 1">
+                  {[...gestureSketchStrokes, gestureStrokePreview]
+                    .filter((points) => points.length > 0)
+                    .map((points, index) => (
+                      <polyline
+                        key={index}
+                        points={points
+                          .map((point) => `${point.x},${point.y}`)
+                          .join(" ")}
+                      />
+                    ))}
                 </svg>
               ) : null}
               {objects.map((object) => (
@@ -1091,22 +1738,71 @@ export function CommandCanvasRoom({
                   key={object.id}
                   object={object}
                   preview={objectPreviews[object.id]}
-                  isSelected={selectedObjectId === object.id}
-                  onSelect={() => selectObject(object.id)}
+                  isSelected={selectedObjectIds.includes(object.id)}
+                  isPrimary={selectedObjectId === object.id}
+                  childCount={objects.filter((child) => child.parentId === object.id).length}
+                  isHeld={
+                    drag?.objectId === object.id ||
+                    handFeedback?.grabbedObjectId === object.id
+                  }
+                  isTargeted={handTargetObjectId === object.id}
+                  gestureExit={gestureExitAnimations[object.id]}
+                  onSelect={(event) => handleObjectSelect(event, object.id)}
                   onPointerDown={(event) => startObjectDrag(event, object)}
                   onPointerMove={updateObjectDrag}
                   onPointerUp={finishObjectDrag}
                   onPointerCancel={cancelObjectDrag}
-                  onResizePointerDown={(event) =>
-                    startObjectResize(event, object)
-                  }
+                  onResizePointerDown={(event) => startObjectResize(event, object)}
                   onResizePointerMove={updateObjectResize}
                   onResizePointerUp={finishObjectResize}
                   onResizePointerCancel={cancelObjectResize}
-                  commandsDisabled={interactionPending}
+                  onTogglePin={() =>
+                    runCommand(
+                      {
+                        type: "object.set_flags",
+                        objectId: object.id,
+                        flags: { pinned: !object.pinned },
+                      },
+                      "pointer",
+                    )
+                  }
+                  onToggleMinimize={() =>
+                    runCommand(
+                      {
+                        type: "object.set_flags",
+                        objectId: object.id,
+                        flags: { minimized: !object.minimized },
+                      },
+                      "pointer",
+                    )
+                  }
+                  onFocus={() => focusCanvasObject(object.id)}
+                  onRotateCounterClockwise={() => rotateSelectedObject(-15)}
+                  onRotateClockwise={() => rotateSelectedObject(15)}
+                  onDiscard={() =>
+                    runCommand(
+                      { type: "object.discard", objectId: object.id },
+                      "pointer",
+                    )
+                  }
+                  onMakeUsable={
+                    object.type === "sketch" && onTransformSketch
+                      ? () => void transformSelectedSketch()
+                      : undefined
+                  }
+                  transformPending={sketchTransformPending}
+                  onLoadPreparedInterpretation={
+                    object.type === "sketch" &&
+                    sketchTransformExecution.status === "refused" &&
+                    sketchTransformExecution.sourceSketchId === object.id
+                      ? loadPreparedDemoInterpretation
+                      : undefined
+                  }
+                  commandsDisabled={interactionPending || handInteractionMode === "draw"}
                 />
               ))}
             </div>
+
             {remoteCursors.map((cursor) => {
               const screenPoint = worldToScreen(cursor, viewport);
               return (
@@ -1116,276 +1812,396 @@ export function CommandCanvasRoom({
                   data-remote-cursor={cursor.participantId}
                   aria-hidden="true"
                   style={{
-                    position: "absolute",
                     left: screenPoint.x,
                     top: screenPoint.y,
-                    zIndex: 100_000,
-                    pointerEvents: "none",
                     color: cursor.color,
-                    transform: "translate(-3px, -3px)",
                   }}
                 >
-                  <span
-                    style={{
-                      display: "block",
-                      width: 0,
-                      height: 0,
-                      borderTop: "13px solid currentColor",
-                      borderRight: "8px solid transparent",
-                    }}
-                  />
-                  <span
-                    style={{
-                      display: "inline-block",
-                      marginLeft: 10,
-                      padding: "2px 7px",
-                      borderRadius: 999,
-                      background: cursor.color,
-                      color: "#081016",
-                      fontSize: 11,
-                      fontWeight: 700,
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {cursor.displayName}
-                  </span>
+                  <span className="remote-cursor-pointer" />
+                  <span className="remote-cursor-name">{cursor.displayName}</span>
                 </div>
               );
             })}
+
+            {handFeedback ? (
+              <div
+                className={`hand-canvas-feedback${handFeedback.grabbedObjectId ? " is-grabbing" : ""}`}
+                data-hand-cursor
+                aria-live="polite"
+                style={{
+                  left: `${handFeedback.pointer.x * 100}%`,
+                  top: `${handFeedback.pointer.y * 100}%`,
+                }}
+              >
+                <span className="hand-cursor-ring" aria-hidden="true" />
+                <strong>{handFeedback.label}</strong>
+              </div>
+            ) : null}
+
+            {handFeedback?.grabbedObjectId ? (
+              <div className="gesture-edge-targets" aria-live="polite">
+                <div
+                  className={`gesture-edge-target gesture-edge-discard gesture-edge-discard-left${handFeedback.pointer.x <= 0.08 ? " is-armed" : ""}`}
+                >
+                  <span>Throw to trash</span>
+                </div>
+                <div
+                  className={`gesture-edge-target gesture-edge-discard gesture-edge-discard-right${handFeedback.pointer.x >= 0.92 ? " is-armed" : ""}`}
+                >
+                  <span>Throw to trash</span>
+                </div>
+                <div
+                  className={`gesture-edge-target gesture-edge-minimize${handFeedback.pointer.y >= 0.92 ? " is-armed" : ""}`}
+                >
+                  <span>Minimize dock</span>
+                </div>
+              </div>
+            ) : null}
+
+            {handTrackingStatus.state === "ready" ? (
+              <section
+                className={`hand-mode-toolbar hand-mode-${handInteractionMode}`}
+                aria-label="Hand interaction controls"
+              >
+                {handInteractionMode === "manipulate" ? (
+                  <>
+                    <strong>MOVE OBJECTS</strong>
+                    <span>Point to target · pinch to hold</span>
+                    <button
+                      type="button"
+                      aria-label="Draw with index finger"
+                      onClick={beginHandDrawing}
+                    >
+                      Start draw
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <strong>DRAW MODE</strong>
+                    <span>{gestureSketchStrokes.length} {gestureSketchStrokes.length === 1 ? "stroke" : "strokes"} ready</span>
+                    <button
+                      type="button"
+                      aria-label={handDrawingTool === "draw" ? "Use hand eraser" : "Use hand draw"}
+                      aria-pressed={handDrawingTool === "erase"}
+                      onClick={() => {
+                        spatialGestureState.current = createInitialSpatialGestureState();
+                        setGestureStrokePreview([]);
+                        handEraseLatchedRef.current = false;
+                        setHandDrawingTool((current) => current === "draw" ? "erase" : "draw");
+                      }}
+                    >
+                      {handDrawingTool === "draw" ? "Erase" : "Draw"}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Finish hand sketch"
+                      disabled={gestureSketchStrokes.length === 0 && gestureStrokePreview.length < 2}
+                      onClick={finishHandDrawing}
+                    >
+                      Finish
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Cancel hand sketch"
+                      onClick={cancelHandDrawing}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                )}
+              </section>
+            ) : null}
+
             {objects.length === 0 ? (
               <div className="canvas-empty-state">
                 <span className="empty-crosshair" aria-hidden="true" />
                 <p>No objects yet</p>
-                <span>Create an object to start the shared command history.</span>
+                <span>Speak to ChatGPT, draw, or choose an object below.</span>
               </div>
             ) : null}
           </div>
 
-          {selectedObject && !selectedObject.deletedAt ? (
-            <div className="selection-toolbar" aria-label="Selected object actions">
-              <span className="selection-name">{selectedObject.title}</span>
-              {selectedObject.type === "sketch" && onTransformSketch ? (
-                <>
-                  <button
-                    type="button"
-                    aria-label={
-                      sketchTransformPending
-                        ? "Interpreting sketch…"
-                        : "Make usable"
-                    }
-                    disabled={interactionPending}
-                    onClick={() => void transformSelectedSketch()}
-                  >
-                    {sketchTransformPending
-                      ? "Interpreting sketch…"
-                      : "Make usable"}
-                  </button>
-                  {sketchTransformExecution.status === "refused" &&
-                  sketchTransformExecution.sourceSketchId === selectedObject.id ? (
-                    <button
-                      type="button"
-                      aria-label="Load prepared demo interpretation"
-                      disabled={interactionPending}
-                      onClick={loadPreparedDemoInterpretation}
-                    >
-                      Load prepared demo interpretation
-                    </button>
-                  ) : null}
-                </>
-              ) : null}
-              <button
-                type="button"
-                aria-label={selectedObject.pinned ? "Unpin object" : "Pin object"}
-                disabled={interactionPending}
-                onClick={() =>
-                  runCommand(
-                    {
-                      type: "object.set_flags",
-                      objectId: selectedObject.id,
-                      flags: { pinned: !selectedObject.pinned },
-                    },
-                    "pointer",
-                  )
-                }
-              >
-                {selectedObject.pinned ? "Unpin" : "Pin"}
-              </button>
-              <button
-                type="button"
-                aria-label={
-                  selectedObject.minimized ? "Restore object" : "Minimize object"
-                }
-                disabled={interactionPending}
-                onClick={() =>
-                  runCommand(
-                    {
-                      type: "object.set_flags",
-                      objectId: selectedObject.id,
-                      flags: { minimized: !selectedObject.minimized },
-                    },
-                    "pointer",
-                  )
-                }
-              >
-                {selectedObject.minimized ? "Restore" : "Minimize"}
-              </button>
-              <button
-                type="button"
-                className="danger-action"
-                aria-label="Move object to trash"
-                disabled={interactionPending}
-                onClick={() =>
-                  runCommand(
-                    { type: "object.discard", objectId: selectedObject.id },
-                    "pointer",
-                  )
-                }
-              >
-                Trash
-              </button>
-            </div>
+          {sketchComposerOpen ? (
+            <section
+              className="canvas-sketch-layer"
+              aria-label="Draw directly on the canvas"
+            >
+              <div className="canvas-sketch-heading">
+                <div>
+                  <p className="eyebrow">Original artifact stays here</p>
+                  <h2>Draw a rough architecture</h2>
+                </div>
+                <span>Mouse · touch · stylus · finger</span>
+              </div>
+              <SketchComposer
+                width={440}
+                height={280}
+                onDone={createSketch}
+                onCancel={() => {
+                  if (!interactionPending) setSketchComposerOpen(false);
+                }}
+              />
+            </section>
           ) : null}
         </section>
 
-        <aside className="command-rail" aria-label="Command and activity rail">
-          <div className="rail-heading">
-            <div>
-              <p className="eyebrow">Shared provenance</p>
-              <h2>Command rail</h2>
-            </div>
-            <span className="live-pill">{roomStatus.toUpperCase()}</span>
-          </div>
-
-          <section className="service-stack" aria-label="Service status">
-            <ServiceState
-              label="WebMCP"
-              value={serviceStatus?.webMcp?.value ?? "WebMCP not exercised"}
-              tone={serviceStatus?.webMcp?.tone ?? "idle"}
-            />
-            <ServiceState
-              label="Collaboration"
-              value={
-                serviceStatus?.collaboration?.value ?? "Realtime not connected"
-              }
-              tone={serviceStatus?.collaboration?.tone ?? "idle"}
-              announce
-            />
-            <ServiceState
-              label="Spatial input"
-              value={spatialServiceState.value}
-              tone={spatialServiceState.tone}
-            />
-          </section>
-
-          <SpatialCameraControl
-            createController={createHandTrackingController}
-            onObservation={handleHandObservation}
-            onStatusChange={setHandTrackingStatus}
-          />
-
-          <HumanCommandControl
-            disabled={interactionPending}
-            onIntent={handleDirectIntent}
-            selectedObject={
-              selectedObject && !selectedObject.deletedAt
-                ? {
-                    objectId: selectedObject.id,
-                    title: selectedObject.title,
-                    version: selectedObject.version,
-                  }
-                : null
+        <aside className="tool-dock" aria-label="Object tools">
+          <span className="dock-label">Canvas</span>
+          <button type="button" onClick={() => createNote()} aria-label="Create note" disabled={interactionPending}>
+            <span aria-hidden="true">＋</span><small>Note</small>
+          </button>
+          <button type="button" onClick={() => createTaskBoard()} aria-label="Create task board" disabled={interactionPending}>
+            <span aria-hidden="true">▦</span><small>Board</small>
+          </button>
+          <button type="button" onClick={() => createSchedule()} aria-label="Create schedule" disabled={interactionPending}>
+            <span aria-hidden="true">31</span><small>Schedule</small>
+          </button>
+          <button type="button" onClick={() => setSketchComposerOpen(true)} aria-label="Create sketch" disabled={interactionPending}>
+            <span aria-hidden="true">⌁</span><small>Draw</small>
+          </button>
+          <button
+            type="button"
+            aria-label={
+              multiSelectMode
+                ? "Disable multiple selection"
+                : "Enable multiple selection"
             }
-          />
-
-          {meetingPacketPanel}
-
-          {commandExecution.status === "pending" ? (
-            <div className="command-error" role="status" aria-live="polite">
-              <strong>Applying command…</strong>
-              <span>Waiting for the shared canvas to confirm the change.</span>
-            </div>
-          ) : null}
-
-          {commandExecution.status === "refused" ? (
-            <div className="command-error" role="status" aria-live="polite">
-              <strong>Command refused</strong>
-              <span>{commandExecution.message}</span>
-            </div>
-          ) : null}
-
-          {sketchTransformExecution.status === "refused" ? (
-            <div className="command-error" role="status" aria-live="polite">
-              <strong>Sketch interpretation failed</strong>
-              <span>{sketchTransformExecution.message}</span>
-            </div>
-          ) : null}
-
-          {lastError ? (
-            <div className="command-error" role="status">
-              <strong>{lastError.code}</strong>
-              <span>{lastError.message}</span>
-            </div>
-          ) : null}
-
-          <section className="activity-section" aria-labelledby="activity-heading">
-            <div className="activity-header">
-              <h3 id="activity-heading">Activity</h3>
-              <span>{canvas.receipts.length}</span>
-            </div>
-            {canvas.receipts.length === 0 ? (
-              <p className="activity-empty">
-                Human, collaborator, and agent actions will resolve to the same
-                receipt stream.
-              </p>
-            ) : (
-              <ol className="receipt-list">
-                {[...canvas.receipts].reverse().map((receipt) => (
-                  <li key={receipt.id}>
-                    <span className={`actor-token actor-${receipt.actor.type}`}>
-                      {receipt.actor.type === "agent"
-                        ? "AI"
-                        : initials(receipt.actor.displayName)}
-                    </span>
-                    <div>
-                      <p>{receipt.description}</p>
-                      <span>
-                        R{receipt.revision} · {receipt.source}
-                      </span>
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </section>
-        </aside>
-      </section>
-
-      {sketchComposerOpen ? (
-        <div className="sketch-dialog-backdrop">
-          <section
-            className="sketch-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="sketch-dialog-title"
+            aria-pressed={multiSelectMode}
+            className={multiSelectMode ? "is-active" : undefined}
+            disabled={interactionPending}
+            onClick={() => setMultiSelectMode((current) => !current)}
           >
-            <div className="sketch-dialog-heading">
-              <div>
-                <p className="eyebrow">Original artifact preserved</p>
-                <h2 id="sketch-dialog-title">Draw a rough sketch</h2>
-              </div>
-              <span>Mouse · touch · stylus · finger</span>
-            </div>
-            <SketchComposer
-              width={440}
-              height={280}
-              onDone={createSketch}
-              onCancel={() => {
-                if (!interactionPending) setSketchComposerOpen(false);
+            <span aria-hidden="true">◇</span><small>Select</small>
+          </button>
+          <button
+            type="button"
+            aria-label="Group selected objects"
+            disabled={interactionPending || !canGroup}
+            onClick={() => groupSelectedObjects()}
+          >
+            <span aria-hidden="true">▣</span><small>Group</small>
+          </button>
+          <button
+            type="button"
+            aria-label="Ungroup selected frame"
+            disabled={interactionPending || !canUngroup}
+            onClick={() => ungroupSelectedFrame()}
+          >
+            <span aria-hidden="true">▢</span><small>Ungroup</small>
+          </button>
+          <button
+            type="button"
+            aria-label="Undo last change"
+            disabled={interactionPending || canvas.receipts.length === 0}
+            onClick={() => runCommand({ type: "history.undo" }, "typed")}
+          >
+            <span aria-hidden="true">↶</span><small>Undo</small>
+          </button>
+          <button
+            type="button"
+            aria-label="Redo last undone change"
+            disabled={interactionPending || !canRedo}
+            onClick={() => runCommand({ type: "history.redo" }, "typed")}
+          >
+            <span aria-hidden="true">↷</span><small>Redo</small>
+          </button>
+        </aside>
+
+        <button
+          type="button"
+          className="command-drawer-trigger"
+          aria-label="Open command drawer"
+          aria-expanded={openDrawer === "command"}
+          onClick={() => setOpenDrawer(openDrawer === "command" ? null : "command")}
+        >
+          <span className="agent-pulse" aria-hidden="true" />
+          <span>Command ChatGPT</span>
+          <span aria-hidden="true">↗</span>
+        </button>
+
+        {latestReceipt && openDrawer !== "activity" ? (
+          <button
+            type="button"
+            className="latest-activity-toast"
+            aria-label={`Open activity drawer: ${latestReceipt.description}`}
+            onClick={() => setOpenDrawer("activity")}
+          >
+            <span className={`actor-token actor-${latestReceipt.actor.type}`}>
+              {latestReceipt.actor.type === "agent"
+                ? "AI"
+                : initials(latestReceipt.actor.displayName)}
+            </span>
+            <span>
+              <strong>{latestReceipt.description}</strong>
+              <small>R{latestReceipt.revision} · {latestReceipt.source}</small>
+            </span>
+          </button>
+        ) : null}
+
+        {commandExecution.status !== "idle" ||
+        sketchTransformExecution.status === "refused" ||
+        lastError ? (
+          <div className="operation-toast" role="status" aria-live="polite">
+            {commandExecution.status === "pending" ? (
+              <><strong>Applying command…</strong><span>Waiting for the shared canvas to confirm the change.</span></>
+            ) : commandExecution.status === "refused" ? (
+              <><strong>Command refused</strong><span>{commandExecution.message}</span></>
+            ) : sketchTransformExecution.status === "refused" ? (
+              <><strong>Sketch interpretation failed</strong><span>{sketchTransformExecution.message}</span></>
+            ) : lastError ? (
+              <><strong>{lastError.code}</strong><span>{lastError.message}</span></>
+            ) : null}
+          </div>
+        ) : null}
+
+        <aside
+          className={`command-rail overlay-drawer persistent-command-drawer${
+            openDrawer === "command" ? " is-open" : ""
+          }`}
+          aria-label="Command drawer"
+          aria-hidden={openDrawer === "command" ? undefined : true}
+          inert={openDrawer !== "command"}
+        >
+            <DrawerHeading
+              eyebrow="Shared command surface"
+              title="Command"
+              closeLabel="Close command drawer"
+              onClose={() => setOpenDrawer(null)}
+            />
+            {realtimeVoice ? (
+              <section className="voice-control-slot" data-command-drawer-lead>
+                <p className="eyebrow">Live conversation</p>
+                <RealtimeVoiceControl
+                  {...realtimeVoice}
+                  onIntent={handleDirectIntent}
+                />
+              </section>
+            ) : null}
+            {realtimeVoice ? (
+              <details
+                className="typed-command-fallback has-realtime-voice"
+                open={typedFallbackOpen}
+                onToggle={(event) =>
+                  setTypedFallbackOpen(event.currentTarget.open)
+                }
+              >
+                <summary>Type a command instead</summary>
+                {typedFallbackOpen ? (
+                  <HumanCommandControl
+                    disabled={interactionPending}
+                    onIntent={handleDirectIntent}
+                    selectedObject={
+                      selectedObject && !selectedObject.deletedAt
+                        ? {
+                            objectId: selectedObject.id,
+                            title: selectedObject.title,
+                            version: selectedObject.version,
+                          }
+                        : null
+                    }
+                  />
+                ) : null}
+              </details>
+            ) : (
+              <HumanCommandControl
+                disabled={interactionPending}
+                onIntent={handleDirectIntent}
+                selectedObject={
+                  selectedObject && !selectedObject.deletedAt
+                    ? {
+                        objectId: selectedObject.id,
+                        title: selectedObject.title,
+                        version: selectedObject.version,
+                      }
+                    : null
+                }
+              />
+            )}
+            {meetingPacketPanel}
+        </aside>
+
+        <aside
+          className={`command-rail overlay-drawer persistent-system-drawer${
+            openDrawer === "system" ? " is-open" : ""
+          }`}
+          aria-label="System status drawer"
+          aria-hidden={openDrawer === "system" ? undefined : true}
+          inert={openDrawer !== "system"}
+        >
+            <DrawerHeading
+              eyebrow="Quiet until needed"
+              title="Inputs & services"
+              closeLabel="Close system status drawer"
+              onClose={() => setOpenDrawer(null)}
+            />
+            <section className="service-stack" aria-label="Service status">
+              <ServiceState
+                label="WebMCP"
+                value={serviceStatus?.webMcp?.value ?? "WebMCP not exercised"}
+                tone={serviceStatus?.webMcp?.tone ?? "idle"}
+              />
+              <ServiceState
+                label="Collaboration"
+                value={serviceStatus?.collaboration?.value ?? "Realtime not connected"}
+                tone={serviceStatus?.collaboration?.tone ?? "idle"}
+                announce
+              />
+              <ServiceState label="Spatial input" value={spatialServiceState.value} tone={spatialServiceState.tone} />
+            </section>
+            <SpatialCameraControl
+              createController={createHandTrackingController}
+              onObservation={handleHandObservation}
+              onSpatialModeStarted={() => setOpenDrawer(null)}
+              onStatusChange={(status) => {
+                setHandTrackingStatus(status);
+                if (status.state !== "ready") setHandFeedback(null);
               }}
             />
-          </section>
-        </div>
-      ) : null}
+            <a
+              className="source-offer"
+              href={correspondingSourceUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <span>Source · AGPL-3.0</span>
+              <span aria-hidden="true">↗</span>
+            </a>
+        </aside>
+
+        {openDrawer === "activity" ? (
+          <aside className="command-rail overlay-drawer" aria-label="Activity drawer">
+            <DrawerHeading
+              eyebrow="Visible, reversible, attributable"
+              title="Activity"
+              closeLabel="Close activity drawer"
+              onClose={() => setOpenDrawer(null)}
+            />
+            <section className="activity-section" aria-labelledby="activity-heading">
+              <div className="activity-header">
+                <h3 id="activity-heading">Room receipts</h3>
+                <span>{canvas.receipts.length}</span>
+              </div>
+              {canvas.receipts.length === 0 ? (
+                <p className="activity-empty">Human, collaborator, and agent actions land in one receipt stream.</p>
+              ) : (
+                <ol className="receipt-list">
+                  {[...canvas.receipts].reverse().map((receipt) => (
+                    <li key={receipt.id}>
+                      <span className={`actor-token actor-${receipt.actor.type}`}>
+                        {receipt.actor.type === "agent" ? "AI" : initials(receipt.actor.displayName)}
+                      </span>
+                      <div>
+                        <p>{receipt.description}</p>
+                        <span>R{receipt.revision} · {receipt.source}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </section>
+          </aside>
+        ) : null}
+      </section>
     </main>
   );
 }
@@ -1394,7 +2210,12 @@ interface CanvasObjectCardProps {
   object: CanvasObject;
   preview?: ObjectTransformPreview;
   isSelected: boolean;
-  onSelect: () => void;
+  isPrimary: boolean;
+  isHeld: boolean;
+  isTargeted: boolean;
+  gestureExit?: "discard-left" | "discard-right";
+  childCount: number;
+  onSelect: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => void;
@@ -1403,6 +2224,15 @@ interface CanvasObjectCardProps {
   onResizePointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onResizePointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onResizePointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  onTogglePin: () => void;
+  onToggleMinimize: () => void;
+  onFocus: () => void;
+  onRotateCounterClockwise: () => void;
+  onRotateClockwise: () => void;
+  onDiscard: () => void;
+  onMakeUsable?: () => void;
+  transformPending: boolean;
+  onLoadPreparedInterpretation?: () => void;
   commandsDisabled: boolean;
 }
 
@@ -1410,6 +2240,11 @@ function CanvasObjectCard({
   object,
   preview,
   isSelected,
+  isPrimary,
+  isHeld,
+  isTargeted,
+  gestureExit,
+  childCount,
   onSelect,
   onPointerDown,
   onPointerMove,
@@ -1419,25 +2254,123 @@ function CanvasObjectCard({
   onResizePointerMove,
   onResizePointerUp,
   onResizePointerCancel,
+  onTogglePin,
+  onToggleMinimize,
+  onFocus,
+  onRotateCounterClockwise,
+  onRotateClockwise,
+  onDiscard,
+  onMakeUsable,
+  transformPending,
+  onLoadPreparedInterpretation,
   commandsDisabled,
 }: CanvasObjectCardProps) {
   const typeClass = objectTypeClass(object);
 
   return (
     <article
-      className={`canvas-object ${typeClass}${isSelected ? " is-selected" : ""}${object.minimized ? " is-minimized" : ""}`}
+      className={`canvas-object ${typeClass}${isSelected ? " is-selected" : ""}${isTargeted ? " is-hand-target" : ""}${isHeld ? " is-held" : ""}${object.minimized ? " is-minimized" : ""}`}
+      data-gesture-exit={gestureExit}
+      data-object-state={object.minimized ? "minimized" : isHeld ? "held" : isTargeted ? "target" : "open"}
       style={{
         left: preview?.x ?? object.x,
         top: preview?.y ?? object.y,
         width: preview?.width ?? object.width,
         height: object.minimized ? 62 : (preview?.height ?? object.height),
-        zIndex: object.zIndex,
+        zIndex: isPrimary ? SELECTED_OBJECT_RENDER_Z_INDEX : object.zIndex,
+        transform: `${isHeld ? "scale(1.018) " : ""}rotate(${object.rotation ?? 0}deg)`,
       }}
     >
+      {isPrimary ? (
+        <div
+          className="object-spatial-chrome"
+          role="toolbar"
+          aria-label={`${object.title} spatial controls`}
+        >
+          {onMakeUsable ? (
+            <button
+              type="button"
+              className="object-transform-action"
+              aria-label={transformPending ? "Interpreting sketch…" : "Make usable"}
+              disabled={commandsDisabled}
+              onClick={onMakeUsable}
+            >
+              {transformPending ? "Interpreting…" : "Make usable"}
+            </button>
+          ) : null}
+          {onLoadPreparedInterpretation ? (
+            <button
+              type="button"
+              className="object-transform-action"
+              aria-label="Load prepared demo interpretation"
+              disabled={commandsDisabled}
+              onClick={onLoadPreparedInterpretation}
+            >
+              Prepared fallback
+            </button>
+          ) : null}
+          <button
+            type="button"
+            aria-label="Rotate counterclockwise"
+            disabled={commandsDisabled || object.pinned}
+            onClick={onRotateCounterClockwise}
+            title="Rotate counterclockwise 15 degrees"
+          >
+            <span aria-hidden="true">↶</span>
+          </button>
+          <button
+            type="button"
+            aria-label="Rotate clockwise"
+            disabled={commandsDisabled || object.pinned}
+            onClick={onRotateClockwise}
+            title="Rotate clockwise 15 degrees"
+          >
+            <span aria-hidden="true">↷</span>
+          </button>
+          <button
+            type="button"
+            aria-label="Focus object"
+            disabled={commandsDisabled}
+            onClick={onFocus}
+            title="Focus or maximize"
+          >
+            <span aria-hidden="true">⛶</span>
+          </button>
+          <button
+            type="button"
+            aria-label={object.pinned ? "Unpin object" : "Pin object"}
+            disabled={commandsDisabled}
+            onClick={onTogglePin}
+            title={object.pinned ? "Unpin" : "Pin"}
+          >
+            <span aria-hidden="true">⌖</span>
+          </button>
+          <button
+            type="button"
+            aria-label={object.minimized ? "Restore object" : "Minimize object"}
+            disabled={commandsDisabled}
+            onClick={onToggleMinimize}
+            title={object.minimized ? "Restore" : "Minimize"}
+          >
+            <span aria-hidden="true">{object.minimized ? "□" : "−"}</span>
+          </button>
+          <button
+            type="button"
+            className="danger-action"
+            aria-label="Move object to trash"
+            disabled={commandsDisabled}
+            onClick={onDiscard}
+            title="Move to recoverable trash"
+          >
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
+      ) : null}
       <button
         type="button"
         className="object-select-hitbox"
         aria-label={`Select ${object.title}`}
+        aria-pressed={isSelected}
         disabled={commandsDisabled}
         onClick={onSelect}
         onPointerDown={onPointerDown}
@@ -1449,10 +2382,20 @@ function CanvasObjectCard({
           {objectTypeLabel(object)} · V{object.version}
           {object.pinned ? " · PINNED" : ""}
         </span>
-        <strong>{object.title}</strong>
-        {!object.minimized ? <CanvasObjectContent object={object} /> : null}
+        <span className="object-title-line">
+          <strong>{object.title}</strong>
+          {object.type === "diagram" &&
+          !object.payload.interpretationSummary.startsWith("Prepared demo fallback") ? (
+            <span className="object-provenance object-provenance-agent">
+              <span aria-hidden="true">✦</span> Agent structured
+            </span>
+          ) : null}
+        </span>
+        {!object.minimized ? (
+          <CanvasObjectContent object={object} childCount={childCount} />
+        ) : null}
       </button>
-      {isSelected && !object.minimized && !object.pinned ? (
+      {isPrimary && !object.minimized && !object.pinned ? (
         <button
           type="button"
           className="resize-handle"
@@ -1464,12 +2407,25 @@ function CanvasObjectCard({
           onPointerCancel={onResizePointerCancel}
         />
       ) : null}
+      {isPrimary && !object.minimized && !object.pinned ? (
+        <>
+          <span className="resize-corner resize-corner-nw" aria-hidden="true" />
+          <span className="resize-corner resize-corner-ne" aria-hidden="true" />
+          <span className="resize-corner resize-corner-sw" aria-hidden="true" />
+        </>
+      ) : null}
       {object.pinned ? <span className="pin-state">Pinned to canvas</span> : null}
     </article>
   );
 }
 
-function CanvasObjectContent({ object }: { object: CanvasObject }) {
+function CanvasObjectContent({
+  object,
+  childCount,
+}: {
+  object: CanvasObject;
+  childCount: number;
+}) {
   switch (object.type) {
     case "note":
       return <p>{object.payload.text}</p>;
@@ -1532,6 +2488,13 @@ function CanvasObjectContent({ object }: { object: CanvasObject }) {
           <DiagramPreview payload={object.payload} />
         </div>
       );
+    case "frame":
+      return (
+        <div className="frame-preview">
+          <span>{childCount} {childCount === 1 ? "object" : "objects"}</span>
+          <small>Move or rotate this frame to carry its contents.</small>
+        </div>
+      );
   }
 }
 
@@ -1547,6 +2510,8 @@ function objectTypeClass(object: CanvasObject) {
       return "sketch-object";
     case "diagram":
       return "diagram-object";
+    case "frame":
+      return `frame-object tone-${object.payload.tone}`;
   }
 }
 
@@ -1564,14 +2529,144 @@ function objectTypeLabel(object: CanvasObject) {
       return object.payload.kind === "architecture"
         ? "ARCHITECTURE DIAGRAM"
         : "FLOWCHART";
+    case "frame":
+      return "FRAME";
   }
 }
+
+function TransformationBridge({
+  source,
+  diagram,
+}: {
+  source: Extract<CanvasObject, { type: "sketch" }>;
+  diagram: Extract<CanvasObject, { type: "diagram" }>;
+}) {
+  const start = {
+    x: source.x + source.width,
+    y: source.y + (source.minimized ? 62 : source.height) / 2,
+  };
+  const end = {
+    x: diagram.x,
+    y: diagram.y + (diagram.minimized ? 62 : diagram.height) / 2,
+  };
+  const distance = Math.hypot(end.x - start.x, end.y - start.y);
+  const angle = Math.atan2(end.y - start.y, end.x - start.x);
+
+  return (
+    <div
+      className="transformation-bridge"
+      role="img"
+      aria-label={`Transformation from ${source.title} to ${diagram.title}`}
+      style={{
+        left: start.x,
+        top: start.y,
+        width: distance,
+        transform: `rotate(${angle}rad)`,
+      }}
+    >
+      <span aria-hidden="true">ROUGH → STRUCTURED</span>
+    </div>
+  );
+}
+
+function CompactStatus({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: ServiceTone;
+}) {
+  return (
+    <span className={`compact-status compact-status-${tone}`}>
+      <span aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
+
+function DrawerHeading({
+  eyebrow,
+  title,
+  closeLabel,
+  onClose,
+}: {
+  eyebrow: string;
+  title: string;
+  closeLabel: string;
+  onClose: () => void;
+}) {
+  return (
+    <div className="rail-heading">
+      <div>
+        <p className="eyebrow">{eyebrow}</p>
+        <h2>{title}</h2>
+      </div>
+      <button type="button" aria-label={closeLabel} onClick={onClose}>
+        <span aria-hidden="true">×</span>
+      </button>
+    </div>
+  );
+}
+
+type WorkspaceDrawer = "command" | "activity" | "system" | null;
+type HandInteractionMode = "manipulate" | "draw";
+type HandDrawingTool = "draw" | "erase";
+
+interface HandCanvasFeedback {
+  mode: "point" | "pinch" | "open_palm" | "bimanual_pinch";
+  pointer: CanvasPoint;
+  grabbedObjectId?: string;
+  label: string;
+}
+
 
 interface ObjectTransformPreview {
   x?: number;
   y?: number;
   width?: number;
   height?: number;
+}
+
+function wrapRotation(rotation: number) {
+  if (rotation > 180) return rotation - 360;
+  if (rotation < -180) return rotation + 360;
+  return rotation;
+}
+
+function distanceToStroke(
+  point: CanvasPoint,
+  stroke: readonly CanvasPoint[],
+) {
+  if (stroke.length === 0) return Number.POSITIVE_INFINITY;
+  if (stroke.length === 1)
+    return Math.hypot(point.x - stroke[0].x, point.y - stroke[0].y);
+  let minimum = Number.POSITIVE_INFINITY;
+  for (let index = 1; index < stroke.length; index += 1) {
+    const start = stroke[index - 1];
+    const end = stroke[index];
+    const deltaX = end.x - start.x;
+    const deltaY = end.y - start.y;
+    const lengthSquared = deltaX * deltaX + deltaY * deltaY;
+    const projection =
+      lengthSquared === 0
+        ? 0
+        : Math.max(
+            0,
+            Math.min(
+              1,
+              ((point.x - start.x) * deltaX + (point.y - start.y) * deltaY) /
+                lengthSquared,
+            ),
+          );
+    minimum = Math.min(
+      minimum,
+      Math.hypot(
+        point.x - (start.x + projection * deltaX),
+        point.y - (start.y + projection * deltaY),
+      ),
+    );
+  }
+  return minimum;
 }
 
 type CommandExecutionState =

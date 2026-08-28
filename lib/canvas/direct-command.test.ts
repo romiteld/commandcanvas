@@ -16,6 +16,13 @@ describe("parseDirectCanvasCommand", () => {
     ["restore that", { type: "restore_selected" }],
     ["get rid of that", { type: "discard_selected" }],
     ["undo that", { type: "undo" }],
+    ["redo that", { type: "redo" }],
+    ["maximize this", { type: "focus_selected" }],
+    ["focus on that object", { type: "focus_selected" }],
+    ["group these objects", { type: "group_selected" }],
+    ["ungroup this frame", { type: "ungroup_selected" }],
+    ["rotate this clockwise", { type: "rotate_selected", direction: "clockwise" }],
+    ["rotate that counterclockwise", { type: "rotate_selected", direction: "counterclockwise" }],
   ] as const)("parses %s into one bounded intent", (transcript, expected) => {
     expect(parseDirectCanvasCommand(transcript)).toEqual({
       ok: true,

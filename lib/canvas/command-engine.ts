@@ -51,7 +51,10 @@ export type ReceiptAction =
   | "minimize"
   | "restore"
   | "discard"
-  | "undo";
+  | "group"
+  | "ungroup"
+  | "undo"
+  | "redo";
 
 export interface ActivityReceipt {
   id: string;
@@ -75,6 +78,7 @@ export interface CanvasState {
   objects: Record<string, CanvasObject>;
   receipts: ActivityReceipt[];
   undoneReceiptIds: string[];
+  redoReceiptIds?: string[];
 }
 
 export interface CommandRuntime {
@@ -88,7 +92,10 @@ export type CommandErrorCode =
   | "OBJECT_EXISTS"
   | "OBJECT_NOT_FOUND"
   | "OBJECT_PINNED"
-  | "NOTHING_TO_UNDO";
+  | "INVALID_HIERARCHY"
+  | "FRAME_NOT_EMPTY"
+  | "NOTHING_TO_UNDO"
+  | "NOTHING_TO_REDO";
 
 export interface CommandError {
   code: CommandErrorCode;
@@ -114,6 +121,7 @@ export function createEmptyCanvasState(_roomId: string): CanvasState {
     objects: {},
     receipts: [],
     undoneReceiptIds: [],
+    redoReceiptIds: [],
   };
 }
 
@@ -150,8 +158,14 @@ export function applyCanvasCommand(
       return setObjectFlags(state, envelope, command, runtime);
     case "object.discard":
       return discardObject(state, envelope, command, runtime);
+    case "objects.group":
+      return groupObjects(state, envelope, command, runtime);
+    case "objects.ungroup":
+      return ungroupObjects(state, envelope, command, runtime);
     case "history.undo":
       return undoLatest(state, envelope, runtime);
+    case "history.redo":
+      return redoLatest(state, envelope, runtime);
   }
 }
 
@@ -180,6 +194,8 @@ function createObject(
     deletedAt: null,
     version: 1,
     metadata: {},
+    rotation: input.rotation ?? 0,
+    parentId: null,
   };
 
   return commitMutation({
@@ -215,6 +231,15 @@ function transformObject(
     updatedAt: envelope.issuedAt,
     version: current.version + 1,
   };
+
+  if (current.type === "frame" && movesFrameContents(command.transform))
+    return transformFrameWithDescendants(
+      state,
+      envelope,
+      current,
+      object,
+      runtime,
+    );
 
   return commitMutation({
     state,
@@ -265,6 +290,17 @@ function discardObject(
   const current = activeObject(state, command.objectId);
   if (!current)
     return reject(state, "OBJECT_NOT_FOUND", "That object is no longer available.");
+  if (
+    current.type === "frame" &&
+    Object.values(state.objects).some(
+      (object) => !object.deletedAt && object.parentId === current.id,
+    )
+  )
+    return reject(
+      state,
+      "FRAME_NOT_EMPTY",
+      `Ungroup “${current.title}” before moving it to trash.`,
+    );
 
   const object: CanvasObject = {
     ...current,
@@ -281,6 +317,142 @@ function discardObject(
     before: { [current.id]: current },
     after: { [object.id]: object },
     description: `${envelope.actor.displayName} moved “${object.title}” to recoverable trash.`,
+  });
+}
+
+function groupObjects(
+  state: CanvasState,
+  envelope: CanvasCommandEnvelope,
+  command: Extract<CanvasCommand, { type: "objects.group" }>,
+  runtime: CommandRuntime,
+): CommandResult {
+  if (state.objects[command.frame.id])
+    return reject(
+      state,
+      "OBJECT_EXISTS",
+      `An object with ID “${command.frame.id}” already exists.`,
+    );
+  const selected: CanvasObject[] = [];
+  for (const objectId of command.objectIds) {
+    const object = activeObject(state, objectId);
+    if (!object)
+      return reject(
+        state,
+        "OBJECT_NOT_FOUND",
+        "One of those objects is no longer available.",
+      );
+    if (object.pinned)
+      return reject(
+        state,
+        "OBJECT_PINNED",
+        `Unpin “${object.title}” before grouping it.`,
+      );
+    if (object.parentId)
+      return reject(
+        state,
+        "INVALID_HIERARCHY",
+        `Ungroup “${object.title}” before placing it in another frame.`,
+      );
+    selected.push(object);
+  }
+  if ((command.frame.rotation ?? 0) !== 0)
+    return reject(
+      state,
+      "INVALID_HIERARCHY",
+      "Create the frame before rotating the grouped result.",
+    );
+  if (selected.some((object) => !frameContains(command.frame, object)))
+    return reject(
+      state,
+      "INVALID_HIERARCHY",
+      "The frame must contain every selected object.",
+    );
+
+  const frame: CanvasObject = {
+    ...command.frame,
+    roomId: state.roomId,
+    minimized: false,
+    pinned: false,
+    createdBy: envelope.actor.id,
+    createdAt: envelope.issuedAt,
+    updatedAt: envelope.issuedAt,
+    deletedAt: null,
+    version: 1,
+    metadata: {},
+    rotation: 0,
+    parentId: null,
+  };
+  const before: Record<string, CanvasObject | null> = { [frame.id]: null };
+  const after: Record<string, CanvasObject | null> = { [frame.id]: frame };
+  for (const current of selected) {
+    before[current.id] = current;
+    after[current.id] = {
+      ...current,
+      parentId: frame.id,
+      zIndex: Math.max(current.zIndex, frame.zIndex + 1),
+      updatedAt: envelope.issuedAt,
+      version: current.version + 1,
+    };
+  }
+
+  return commitMutation({
+    state,
+    envelope,
+    runtime,
+    action: "group",
+    before,
+    after,
+    description: `${envelope.actor.displayName} grouped ${selected.length} ${selected.length === 1 ? "object" : "objects"} in “${frame.title}”.`,
+  });
+}
+
+function ungroupObjects(
+  state: CanvasState,
+  envelope: CanvasCommandEnvelope,
+  command: Extract<CanvasCommand, { type: "objects.ungroup" }>,
+  runtime: CommandRuntime,
+): CommandResult {
+  const frame = activeObject(state, command.frameId);
+  if (!frame)
+    return reject(state, "OBJECT_NOT_FOUND", "That frame is no longer available.");
+  if (frame.type !== "frame")
+    return reject(
+      state,
+      "INVALID_HIERARCHY",
+      `“${frame.title}” is not a frame.`,
+    );
+
+  const directChildren = Object.values(state.objects).filter(
+    (object) => !object.deletedAt && object.parentId === frame.id,
+  );
+  const before: Record<string, CanvasObject | null> = { [frame.id]: frame };
+  const discardedFrame: CanvasObject = {
+    ...frame,
+    deletedAt: envelope.issuedAt,
+    updatedAt: envelope.issuedAt,
+    version: frame.version + 1,
+  };
+  const after: Record<string, CanvasObject | null> = {
+    [frame.id]: discardedFrame,
+  };
+  for (const current of directChildren) {
+    before[current.id] = current;
+    after[current.id] = {
+      ...current,
+      parentId: frame.parentId,
+      updatedAt: envelope.issuedAt,
+      version: current.version + 1,
+    };
+  }
+
+  return commitMutation({
+    state,
+    envelope,
+    runtime,
+    action: "ungroup",
+    before,
+    after,
+    description: `${envelope.actor.displayName} ungrouped “${frame.title}”.`,
   });
 }
 
@@ -326,10 +498,96 @@ function undoLatest(
       revision: receipt.revision,
       objects,
       receipts: [...state.receipts, receipt],
-      undoneReceiptIds: [...state.undoneReceiptIds, target.id],
+      undoneReceiptIds: [
+        ...new Set([
+          ...state.undoneReceiptIds,
+          ...historyEffectReceiptIds(state, target),
+        ]),
+      ],
+      redoReceiptIds: [...(state.redoReceiptIds ?? []), receipt.id],
     },
     receipt,
   };
+}
+
+function redoLatest(
+  state: CanvasState,
+  envelope: CanvasCommandEnvelope,
+  runtime: CommandRuntime,
+): CommandResult {
+  const redoReceiptIds = state.redoReceiptIds ?? [];
+  const undoReceiptId = redoReceiptIds.at(-1);
+  const target = undoReceiptId
+    ? state.receipts.find(
+        (receipt) => receipt.id === undoReceiptId && receipt.action === "undo",
+      )
+    : undefined;
+  if (!target?.undoOfReceiptId)
+    return reject(state, "NOTHING_TO_REDO", "There is nothing left to redo.");
+
+  const objects = { ...state.objects };
+  for (const objectId of target.affectedObjectIds) {
+    const restored = target.before.objects[objectId];
+    if (restored) objects[objectId] = restored;
+    else delete objects[objectId];
+  }
+  const original = state.receipts.find(
+    (receipt) => receipt.id === target.undoOfReceiptId,
+  );
+  const restoredEffectIds = original
+    ? new Set(historyEffectReceiptIds(state, original))
+    : new Set<string>();
+  const receipt: ActivityReceipt = {
+    id: runtime.createId("receipt"),
+    roomId: state.roomId,
+    commandId: envelope.id,
+    revision: state.revision + 1,
+    occurredAt: envelope.issuedAt,
+    actor: envelope.actor,
+    source: envelope.source,
+    action: "redo",
+    affectedObjectIds: [...target.affectedObjectIds],
+    before: target.after,
+    after: target.before,
+    description: `${envelope.actor.displayName} redid: ${original?.description ?? target.description}`,
+    undoOfReceiptId: target.id,
+  };
+
+  return {
+    ok: true,
+    state: {
+      ...state,
+      revision: receipt.revision,
+      objects,
+      receipts: [...state.receipts, receipt],
+      undoneReceiptIds: state.undoneReceiptIds.filter(
+        (receiptId) => !restoredEffectIds.has(receiptId),
+      ),
+      redoReceiptIds: redoReceiptIds.slice(0, -1),
+    },
+    receipt,
+  };
+}
+
+function historyEffectReceiptIds(
+  state: CanvasState,
+  receipt: ActivityReceipt,
+  visited = new Set<string>(),
+): string[] {
+  if (visited.has(receipt.id)) return [];
+  visited.add(receipt.id);
+  if (receipt.action !== "redo" || !receipt.undoOfReceiptId)
+    return [receipt.id];
+  const targetUndo = state.receipts.find(
+    (candidate) =>
+      candidate.id === receipt.undoOfReceiptId && candidate.action === "undo",
+  );
+  const restored = targetUndo?.undoOfReceiptId
+    ? state.receipts.find((candidate) => candidate.id === targetUndo.undoOfReceiptId)
+    : undefined;
+  return restored
+    ? [receipt.id, ...historyEffectReceiptIds(state, restored, visited)]
+    : [receipt.id];
 }
 
 interface MutationCommitInput {
@@ -373,9 +631,125 @@ function commitMutation(input: MutationCommitInput): CommandResult {
       revision: receipt.revision,
       objects,
       receipts: [...input.state.receipts, receipt],
+      redoReceiptIds: [],
     },
     receipt,
   };
+}
+
+function transformFrameWithDescendants(
+  state: CanvasState,
+  envelope: CanvasCommandEnvelope,
+  current: Extract<CanvasObject, { type: "frame" }>,
+  frame: CanvasObject,
+  runtime: CommandRuntime,
+): CommandResult {
+  const descendants = frameDescendants(state, current.id);
+  const pinned = descendants.find((object) => object.pinned);
+  if (pinned)
+    return reject(
+      state,
+      "OBJECT_PINNED",
+      `Unpin “${pinned.title}” before moving its frame.`,
+    );
+
+  const before: Record<string, CanvasObject | null> = { [current.id]: current };
+  const after: Record<string, CanvasObject | null> = { [frame.id]: frame };
+  const deltaX = frame.x - current.x;
+  const deltaY = frame.y - current.y;
+  const deltaRotation = (frame.rotation ?? 0) - (current.rotation ?? 0);
+  const center = {
+    x: current.x + current.width / 2,
+    y: current.y + current.height / 2,
+  };
+  for (const child of descendants) {
+    before[child.id] = child;
+    const childCenter = {
+      x: child.x + child.width / 2,
+      y: child.y + child.height / 2,
+    };
+    const rotatedCenter = rotatePoint(childCenter, center, deltaRotation);
+    after[child.id] = {
+      ...child,
+      x: rotatedCenter.x - child.width / 2 + deltaX,
+      y: rotatedCenter.y - child.height / 2 + deltaY,
+      rotation: normalizeRotation((child.rotation ?? 0) + deltaRotation),
+      updatedAt: envelope.issuedAt,
+      version: child.version + 1,
+    };
+  }
+
+  return commitMutation({
+    state,
+    envelope,
+    runtime,
+    action: "transform",
+    before,
+    after,
+    description: `${envelope.actor.displayName} transformed “${frame.title}” and its contents spatially.`,
+  });
+}
+
+function frameDescendants(state: CanvasState, frameId: string) {
+  const descendants: CanvasObject[] = [];
+  const pending = [frameId];
+  while (pending.length > 0) {
+    const parentId = pending.shift();
+    for (const object of Object.values(state.objects)) {
+      if (object.deletedAt || object.parentId !== parentId) continue;
+      descendants.push(object);
+      if (object.type === "frame") pending.push(object.id);
+    }
+  }
+  return descendants;
+}
+
+function movesFrameContents(transform: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  rotation?: number;
+}) {
+  return (
+    transform.x !== undefined ||
+    transform.y !== undefined ||
+    transform.rotation !== undefined
+  );
+}
+
+function frameContains(
+  frame: { x: number; y: number; width: number; height: number },
+  object: CanvasObject,
+) {
+  return (
+    object.x >= frame.x &&
+    object.y >= frame.y &&
+    object.x + object.width <= frame.x + frame.width &&
+    object.y + object.height <= frame.y + frame.height
+  );
+}
+
+function rotatePoint(
+  point: { x: number; y: number },
+  center: { x: number; y: number },
+  degrees: number,
+) {
+  if (degrees === 0) return point;
+  const radians = (degrees * Math.PI) / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  const x = point.x - center.x;
+  const y = point.y - center.y;
+  return {
+    x: center.x + x * cosine - y * sine,
+    y: center.y + x * sine + y * cosine,
+  };
+}
+
+function normalizeRotation(rotation: number) {
+  const normalized = ((rotation + 180) % 360 + 360) % 360 - 180;
+  return normalized === -180 ? 180 : normalized;
 }
 
 function activeObject(state: CanvasState, objectId: string) {

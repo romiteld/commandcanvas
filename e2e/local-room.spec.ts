@@ -10,10 +10,14 @@ test("creates, pins, and undoes one semantic object with visible receipts", asyn
 
   await expect(page).toHaveTitle(/CommandCanvas/);
   await expect(
-    page.getByRole("heading", { name: "Spatial command surface" }),
+    page.getByRole("main", { name: "Spatial command surface" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Open system status" }).click();
   await expect(page.getByText("Site Tools unavailable")).toBeVisible();
   await expect(page.getByText("Realtime not connected")).toBeVisible();
+  await page
+    .getByRole("button", { name: "Close system status drawer" })
+    .click();
 
   await page.getByRole("button", { name: "Create note" }).click();
   await page.getByRole("button", { name: "Select New thought" }).click();
@@ -67,7 +71,11 @@ test("bridges a document.modelContext invocation into the live canvas", async ({
   });
 
   await page.goto("/");
-  await expect(page.getByText("8 Site Tools registered")).toBeVisible();
+  await page.getByRole("button", { name: "Open system status" }).click();
+  await expect(page.getByText("10 Site Tools registered")).toBeVisible();
+  await page
+    .getByRole("button", { name: "Close system status drawer" })
+    .click();
 
   const result = await page.evaluate(async () => {
     const registrations = (
@@ -121,16 +129,107 @@ test("keeps the canvas and primary action usable at a mobile viewport", async ({
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-mobile");
 
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await expect(page.getByRole("region", { name: "Infinite canvas" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Create note" })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => ({
+        documentOverflow:
+          document.documentElement.scrollHeight - window.innerHeight,
+        shellDelta: Math.round(
+          (document.querySelector("main")?.getBoundingClientRect().height ?? 0) -
+            window.innerHeight,
+        ),
+      })),
+    )
+    .toEqual({ documentOverflow: 0, shellDelta: 0 });
 
-  await page.getByRole("button", { name: "Create note" }).click();
+  // The Next.js development indicator occupies the dock's lower-left corner;
+  // exercise an unobscured primary dock action while preserving a real click.
+  await page.getByRole("button", { name: "Create task board" }).click();
 
   await expect(
-    page.getByRole("button", { name: "Select New thought" }),
+    page.getByRole("button", { name: "Select Launch board" }),
   ).toBeVisible();
-  await expect(page.getByText("Danny created “New thought”.")).toBeVisible();
+  const boardBox = await page
+    .getByRole("button", { name: "Select Launch board" })
+    .boundingBox();
+  const canvasBox = await page
+    .getByRole("region", { name: "Infinite canvas" })
+    .boundingBox();
+  if (!boardBox || !canvasBox) throw new Error("mobile canvas geometry unavailable");
+  expect(boardBox.x).toBeGreaterThanOrEqual(canvasBox.x);
+  expect(boardBox.x + boardBox.width).toBeLessThanOrEqual(
+    canvasBox.x + canvasBox.width + 1,
+  );
+  await expect(page.getByText("Danny created “Launch board”.")).toBeVisible();
+});
+
+test("opens command and system controls over the workspace without resizing the canvas", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !["chromium-desktop", "chromium-mobile"].includes(testInfo.project.name),
+  );
+
+  await page.goto("/");
+  const canvas = page.getByRole("region", { name: "Infinite canvas" });
+  await expect
+    .poll(() =>
+      page.evaluate(() => ({
+        documentOverflow:
+          document.documentElement.scrollHeight - window.innerHeight,
+        shellDelta: Math.round(
+          (document.querySelector("main")?.getBoundingClientRect().height ?? 0) -
+            window.innerHeight,
+        ),
+      })),
+    )
+    .toEqual({ documentOverflow: 0, shellDelta: 0 });
+  const before = await canvas.boundingBox();
+  if (!before) throw new Error("canvas geometry is unavailable");
+
+  await expect(
+    page.getByRole("complementary", { name: "Command drawer" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Open command drawer" }).click();
+  await expect(
+    page.getByRole("complementary", { name: "Command drawer" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("textbox", { name: "Direct canvas command" }),
+  ).toBeVisible();
+  expect(await canvas.boundingBox()).toEqual(before);
+
+  await page.getByRole("button", { name: "Close command drawer" }).click();
+  await page.getByRole("button", { name: "Open system status" }).click();
+  await expect(
+    page.getByRole("complementary", { name: "System status drawer" }),
+  ).toBeVisible();
+  expect(await canvas.boundingBox()).toEqual(before);
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const workspace = document.querySelector<HTMLElement>(".workspace-grid");
+        const canvasElement = document.querySelector<HTMLElement>(
+          '[aria-label="Infinite canvas"]',
+        );
+        return {
+          scrollLeft: workspace?.scrollLeft,
+          scrollWidth: workspace?.scrollWidth,
+          clientWidth: workspace?.clientWidth,
+          canvasX: canvasElement?.getBoundingClientRect().x,
+        };
+      }),
+    )
+    .toEqual({
+      scrollLeft: 0,
+      scrollWidth: before.width,
+      clientWidth: before.width,
+      canvasX: 0,
+    });
 });
 
 test("creates semantic project-board and schedule objects from the toolbar", async ({
@@ -155,7 +254,18 @@ test("creates semantic project-board and schedule objects from the toolbar", asy
   await expect(page.getByText("Review WebMCP flow")).toBeVisible();
   await expect(page.getByText("America/New_York")).toBeVisible();
   await expect(page.getByText("Revision 2")).toBeVisible();
-  await expect(page.getByRole("listitem")).toHaveCount(2);
+  const board = await page
+    .getByRole("button", { name: "Select Launch board" })
+    .boundingBox();
+  const schedule = await page
+    .getByRole("button", { name: "Select Next week" })
+    .boundingBox();
+  if (!board || !schedule) throw new Error("semantic object geometry unavailable");
+  expect(schedule.x).toBeGreaterThanOrEqual(board.x + board.width + 80);
+  await page
+    .getByRole("button", { name: "Open activity drawer", exact: true })
+    .click();
+  await expect(page.locator(".receipt-list > li")).toHaveCount(2);
 
   expect(browserErrors).toEqual([]);
 });
@@ -209,6 +319,7 @@ test("reviews a deterministic browser speech transcript before a canonical voice
   });
 
   await page.goto("/");
+  await page.getByRole("button", { name: "Open command drawer" }).click();
   expect(
     await page.evaluate(
       () =>
@@ -262,14 +373,24 @@ test("commits exactly one canonical transform when a pointer drag ends", async (
 
   await expect(page.getByText("Danny transformed “New thought” spatially.")).toBeVisible();
   await expect(page.getByText("Revision 2")).toBeVisible();
-  const after = await object.boundingBox();
-  expect(after?.x).toBeCloseTo(before.x + 140, 0);
-  expect(after?.y).toBeCloseTo(before.y + 80, 0);
+  await expect.poll(async () => (await object.boundingBox())?.x).toBeCloseTo(
+    before.x + 140,
+    0,
+  );
+  await expect.poll(async () => (await object.boundingBox())?.y).toBeCloseTo(
+    before.y + 80,
+    0,
+  );
 
   await page.getByRole("button", { name: "Undo last change" }).click();
-  const restored = await object.boundingBox();
-  expect(restored?.x).toBeCloseTo(before.x, 0);
-  expect(restored?.y).toBeCloseTo(before.y, 0);
+  await expect.poll(async () => (await object.boundingBox())?.x).toBeCloseTo(
+    before.x,
+    0,
+  );
+  await expect.poll(async () => (await object.boundingBox())?.y).toBeCloseTo(
+    before.y,
+    0,
+  );
 });
 
 test("resizes a selected object with a canonical pointer-up mutation", async ({
@@ -333,7 +454,10 @@ test("pans and zooms the viewport without creating object receipts", async ({
   const zoomed = await object.boundingBox();
   expect(zoomed?.width).toBeGreaterThan(before.width);
   await expect(page.getByText("Revision 1")).toBeVisible();
-  await expect(page.getByRole("listitem")).toHaveCount(1);
+  await page
+    .getByRole("button", { name: "Open activity drawer", exact: true })
+    .click();
+  await expect(page.locator(".receipt-list > li")).toHaveCount(1);
 });
 
 test("minimizes, restores, safely discards, and recovers the selected object", async ({

@@ -12,6 +12,7 @@ import {
 import type { SupabaseUserVerifier } from "@/lib/supabase/server-auth";
 import {
   createServerServiceClient,
+  createServerUserVerifierClient,
   readServerSupabaseConfig,
 } from "@/lib/supabase/server-client";
 import {
@@ -147,10 +148,16 @@ export function createServerSketchTransformDependencies(
   if (!supabaseConfig.ok) return { ok: false };
 
   let client: VisionServiceClient;
+  let verifier: SupabaseUserVerifier;
   try {
     client = options.createClient
       ? options.createClient(supabaseConfig.config)
       : createServerServiceClient<VisionServiceClient>(supabaseConfig.config);
+    verifier = options.createClient
+      ? client
+      : createServerUserVerifierClient<SupabaseUserVerifier>(
+          supabaseConfig.config,
+        );
   } catch {
     return { ok: false };
   }
@@ -166,7 +173,7 @@ export function createServerSketchTransformDependencies(
   return {
     ok: true,
     dependencies: {
-      verifier: client,
+      verifier,
       async verifyMembership(roomId, actorUserId) {
         try {
           const response = await client

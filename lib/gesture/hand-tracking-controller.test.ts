@@ -5,6 +5,7 @@ import {
   type HandTrackingWorkerLike,
 } from "@/lib/gesture/hand-tracking-controller";
 import type { HandLandmarks } from "@/lib/gesture/hand-intent";
+import { YOLO_HAND_POSE_MODEL_URL } from "@/lib/gesture/yolo-hand-pose-detector";
 
 function hand(index = { x: 0.3, y: 0.4 }, thumb = { x: 0.1, y: 0.4 }) {
   const points = Array.from({ length: 21 }, () => ({ x: 0.1, y: 0.2, z: 0 }));
@@ -106,9 +107,8 @@ describe("hand tracking controller lifecycle", () => {
     });
     expect(worker.postMessage).toHaveBeenCalledWith({
       type: "initialize",
-      wasmBaseUrl: "/mediapipe/wasm",
-      modelAssetUrl:
-        "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      wasmBaseUrl: "/onnxruntime/",
+      modelAssetUrl: YOLO_HAND_POSE_MODEL_URL,
     });
 
     worker.emit({ type: "ready" });
@@ -131,8 +131,7 @@ describe("hand tracking controller lifecycle", () => {
     worker.emit({
       type: "result",
       timestamp: 1_000,
-      confidence: null,
-      landmarks: null,
+      hands: [],
     });
     const thirdTick = [...frames.values()].at(-1);
     thirdTick?.(1_032);
@@ -147,6 +146,213 @@ describe("hand tracking controller lifecycle", () => {
     expect(statuses).toContainEqual({ state: "ready" });
   });
 
+  it("uses the in-page local detector endpoint when a worker canvas is unavailable", async () => {
+    const browserWorker = new FakeWorker();
+    const track = { stop: vi.fn() };
+    const detector = {
+      detectForVideo: vi.fn(() => ({ landmarks: [], handedness: [] })),
+      close: vi.fn(),
+    };
+    const loadDetector = vi.fn(async () => detector);
+    const video = {
+      srcObject: null,
+      readyState: 4,
+      play: vi.fn(async () => undefined),
+    } as unknown as HTMLVideoElement;
+    const dependencies = {
+      getUserMedia: vi.fn(async () => ({
+        getTracks: () => [track],
+      }) as unknown as MediaStream),
+      createWorker: vi.fn(() => {
+        queueMicrotask(() => browserWorker.emit({ type: "ready" }));
+        return browserWorker;
+      }),
+      loadDetector,
+      supportsWorkerCanvas: false,
+      createImageBitmap: vi.fn(
+        async () => ({ close: vi.fn() }) as unknown as ImageBitmap,
+      ),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      now: () => 1_000,
+    };
+    const controller = createHandTrackingController(dependencies);
+
+    await controller.start(video);
+
+    expect(loadDetector).toHaveBeenCalledWith({
+      wasmBaseUrl: "/onnxruntime/",
+      modelAssetUrl: YOLO_HAND_POSE_MODEL_URL,
+      runningMode: "VIDEO",
+      numHands: 2,
+    });
+    expect(browserWorker.postMessage).not.toHaveBeenCalled();
+    expect(controller.getStatus()).toEqual({ state: "ready" });
+    controller.stop();
+    expect(track.stop).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(detector.close).toHaveBeenCalledOnce());
+  });
+
+  it("falls back from the mandatory YOLO primary worker to the labeled landmark engine", async () => {
+    const primaryWorker = new FakeWorker();
+    const fallbackWorker = new FakeWorker();
+    const track = { stop: vi.fn() };
+    const video = {
+      srcObject: null,
+      readyState: 4,
+      play: vi.fn(async () => undefined),
+    } as unknown as HTMLVideoElement;
+    const createWorkerForEngine = vi.fn((engine: { id: string }) =>
+      engine.id.startsWith("yolo26") ? primaryWorker : fallbackWorker,
+    );
+    const controller = createHandTrackingController({
+      getUserMedia: vi.fn(async () => ({
+        getTracks: () => [track],
+      }) as unknown as MediaStream),
+      createWorkerForEngine,
+      createImageBitmap: vi.fn(
+        async () => ({ close: vi.fn() }) as unknown as ImageBitmap,
+      ),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      now: () => 1_000,
+    });
+    const engines: unknown[] = [];
+    controller.subscribeEngineStatus?.((engine) => engines.push(engine));
+
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(primaryWorker.postMessage).toHaveBeenCalled());
+    primaryWorker.emit({ type: "error", message: "YOLO initialization failed" });
+    await vi.waitFor(() => expect(fallbackWorker.postMessage).toHaveBeenCalledWith({
+      type: "initialize",
+      wasmBaseUrl: "/mediapipe/wasm",
+      modelAssetUrl:
+        "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+    }));
+    fallbackWorker.emit({ type: "ready" });
+    await starting;
+
+    expect(controller.getEngineStatus?.()).toMatchObject({
+      id: "mediapipe-hand-landmarker-v1",
+      displayName: "MediaPipe Hand Landmarker",
+      fallback: true,
+    });
+    expect(engines).toContainEqual(
+      expect.objectContaining({ id: "yolo26-hand-pose-2abb91", fallback: false }),
+    );
+    expect(engines).toContainEqual(
+      expect.objectContaining({ id: "mediapipe-hand-landmarker-v1", fallback: true }),
+    );
+    expect(track.stop).not.toHaveBeenCalled();
+    controller.stop();
+  });
+
+  it("reports a post-ready YOLO inference failure before starting the labeled fallback", async () => {
+    const primaryWorker = new FakeWorker();
+    const fallbackWorker = new FakeWorker();
+    const video = {
+      srcObject: null,
+      readyState: 4,
+      play: vi.fn(async () => undefined),
+    } as unknown as HTMLVideoElement;
+    const controller = createHandTrackingController({
+      getUserMedia: vi.fn(async () => ({
+        getTracks: () => [{ stop: vi.fn() }],
+      }) as unknown as MediaStream),
+      createWorkerForEngine: vi.fn((engine: { id: string }) =>
+        engine.id.startsWith("yolo26") ? primaryWorker : fallbackWorker,
+      ),
+      createImageBitmap: vi.fn(
+        async () => ({ close: vi.fn() }) as unknown as ImageBitmap,
+      ),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      now: () => 1_000,
+    });
+    const engines: unknown[] = [];
+    controller.subscribeEngineStatus?.((engine) => engines.push(engine));
+
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(primaryWorker.postMessage).toHaveBeenCalled());
+    primaryWorker.emit({ type: "ready" });
+    await starting;
+    expect(controller.getEngineStatus?.()).toMatchObject({
+      id: "yolo26-hand-pose-2abb91",
+      fallback: false,
+    });
+
+    primaryWorker.emit({
+      type: "error",
+      message: "YOLO inference failed after startup",
+    });
+    await vi.waitFor(() =>
+      expect(fallbackWorker.postMessage).toHaveBeenCalledWith({
+        type: "initialize",
+        wasmBaseUrl: "/mediapipe/wasm",
+        modelAssetUrl:
+          "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      }),
+    );
+    expect(primaryWorker.terminate).toHaveBeenCalledOnce();
+    expect(controller.getStatus()).toEqual({ state: "starting" });
+    expect(controller.getEngineStatus?.()).toMatchObject({
+      id: "mediapipe-hand-landmarker-v1",
+      fallback: true,
+    });
+
+    fallbackWorker.emit({ type: "ready" });
+    expect(controller.getStatus()).toEqual({ state: "ready" });
+    expect(engines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "yolo26-hand-pose-2abb91",
+          fallback: false,
+        }),
+        expect.objectContaining({
+          id: "mediapipe-hand-landmarker-v1",
+          fallback: true,
+        }),
+      ]),
+    );
+    controller.stop();
+  });
+
+  it("reuses an explicitly shared local camera stream without opening or stopping a second capture", async () => {
+    const worker = new FakeWorker();
+    const sharedTrack = { stop: vi.fn() };
+    const sharedStream = {
+      getTracks: () => [sharedTrack],
+    } as unknown as MediaStream;
+    const getUserMedia = vi.fn();
+    const getSharedMediaStream = vi.fn(async () => sharedStream);
+    const video = {
+      srcObject: null,
+      readyState: 4,
+      play: vi.fn(async () => undefined),
+    } as unknown as HTMLVideoElement;
+    const controller = createHandTrackingController({
+      getUserMedia,
+      getSharedMediaStream,
+      createWorker: () => worker,
+      createImageBitmap: vi.fn(async () => ({ close: vi.fn() }) as unknown as ImageBitmap),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      now: () => 1_000,
+    });
+
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    expect(getSharedMediaStream).toHaveBeenCalledOnce();
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(video.srcObject).toBe(sharedStream);
+    controller.stop();
+    expect(sharedTrack.stop).not.toHaveBeenCalled();
+    expect(video.srcObject).toBeNull();
+  });
+
   it("emits an actual point observation only after a verified landmark result", async () => {
     const { controller, worker, video } = harness();
     const observations: unknown[] = [];
@@ -159,17 +365,108 @@ describe("hand tracking controller lifecycle", () => {
     worker.emit({
       type: "result",
       timestamp: 1_000,
-      confidence: 0.96,
-      landmarks: hand(),
+      hands: [
+        {
+          handedness: "left",
+          confidence: 0.96,
+          landmarks: hand(),
+        },
+      ],
     });
 
     expect(observations).toEqual([
-      {
+      expect.objectContaining({
         mode: "point",
         pointer: { x: 0.7, y: 0.4 },
         confidence: 0.96,
+        handedness: "left",
+        landmarks: expect.any(Array),
+        pinchDistance: 0.2,
+        trackingState: "tracked",
         timestamp: 1_000,
-      },
+      }),
+    ]);
+  });
+
+  it("emits a semantic bimanual pinch with two tagged pointers and span", async () => {
+    const { controller, worker, video } = harness();
+    const observations: unknown[] = [];
+    controller.subscribeObservations((observation) => observations.push(observation));
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    worker.emit({
+      type: "result",
+      timestamp: 1_000,
+      hands: [
+        {
+          handedness: "left",
+          confidence: 0.96,
+          landmarks: hand({ x: 0.3, y: 0.4 }, { x: 0.32, y: 0.4 }),
+        },
+        {
+          handedness: "right",
+          confidence: 0.94,
+          landmarks: hand({ x: 0.7, y: 0.4 }, { x: 0.72, y: 0.4 }),
+        },
+      ],
+    });
+
+    expect(observations).toEqual([
+      expect.objectContaining({
+        mode: "bimanual_pinch",
+        hands: [
+          expect.objectContaining({
+            handedness: "left",
+            pointer: { x: 0.7, y: 0.4 },
+            confidence: 0.96,
+            landmarks: expect.any(Array),
+            pinchDistance: 0.02,
+          }),
+          expect.objectContaining({
+            handedness: "right",
+            pointer: { x: 0.3, y: 0.4 },
+            confidence: 0.94,
+            landmarks: expect.any(Array),
+            pinchDistance: 0.02,
+          }),
+        ],
+        center: { x: 0.5, y: 0.4 },
+        span: 0.4,
+        timestamp: 1_000,
+      }),
+    ]);
+  });
+
+  it("bridges one brief missing frame while pinched, then reports lost tracking", async () => {
+    const { controller, worker, video } = harness();
+    const observations: unknown[] = [];
+    controller.subscribeObservations((observation) => observations.push(observation));
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    worker.emit({
+      type: "result",
+      timestamp: 1_000,
+      hands: [
+        {
+          handedness: "left",
+          confidence: 0.96,
+          landmarks: hand({ x: 0.3, y: 0.4 }, { x: 0.33, y: 0.4 }),
+        },
+      ],
+    });
+    worker.emit({ type: "result", timestamp: 1_080, hands: [] });
+    worker.emit({ type: "result", timestamp: 1_260, hands: [] });
+
+    expect(observations).toEqual([
+      expect.objectContaining({ mode: "pinch", trackingState: "tracked" }),
+      expect.objectContaining({ mode: "pinch", trackingState: "grace" }),
+      { mode: "idle", timestamp: 1_260, trackingState: "lost" },
     ]);
   });
 
@@ -280,7 +577,7 @@ describe("hand tracking controller lifecycle", () => {
     await vi.waitFor(() => expect(restartedWorker.postMessage).toHaveBeenCalled());
     resolveFirst({ getTracks: () => [firstTrack] } as unknown as MediaStream);
     await staleStart;
-    expect(firstTrack.stop).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(firstTrack.stop).toHaveBeenCalledOnce());
     expect(secondTrack.stop).not.toHaveBeenCalled();
     expect(video.srcObject).not.toBeNull();
 
@@ -340,12 +637,12 @@ describe("hand tracking controller lifecycle", () => {
     expire();
 
     await expect(starting).rejects.toThrow(
-      "Local hand tracking did not become ready in time.",
+      "YOLO26 Hand Pose did not become ready in time.",
     );
     expect(track.stop).toHaveBeenCalledOnce();
     expect(controller.getStatus()).toEqual({
       state: "unavailable",
-      message: "Local hand tracking did not become ready in time.",
+      message: "YOLO26 Hand Pose did not become ready in time.",
     });
   });
 });

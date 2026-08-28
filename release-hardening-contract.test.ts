@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -39,19 +40,29 @@ describe("server-only dependency boundaries", () => {
     "lib/packets/resend.ts",
     "lib/vision/server-dependencies.ts",
     "lib/vision/openai-diagram.ts",
+    "lib/realtime-voice/server-dependencies.ts",
   ])("fences %s from client bundles", (relativePath) => {
     expect(read(relativePath)).toMatch(/^import ["']server-only["'];/);
   });
 });
 
 describe("hand detector distribution boundary", () => {
-  it("retrieves the official sample model at runtime and keeps WASM local", () => {
-    const controller = read("lib/gesture/hand-tracking-controller.ts");
-    const officialModelUrl =
+  it("ships the pinned 320px YOLO primary and keeps the landmark fallback remote while both WASM runtimes stay local", () => {
+    const enginePlan = read("lib/gesture/spatial-vision-engine.ts");
+    const yoloDetector = read("lib/gesture/yolo-hand-pose-detector.ts");
+    const fallbackModelUrl =
       "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+    const yoloModelPath = path.join(
+      root,
+      "public/models/yolo26_hand_pose_320_fp16.onnx",
+    );
 
-    expect(controller).toContain(officialModelUrl);
-    expect(controller).not.toContain(
+    expect(enginePlan).toContain("YOLO_HAND_POSE_MODEL_URL");
+    expect(yoloDetector).toContain(
+      '"/models/yolo26_hand_pose_320_fp16.onnx"',
+    );
+    expect(enginePlan).toContain(fallbackModelUrl);
+    expect(enginePlan).not.toContain(
       'modelAssetUrl: "/mediapipe/hand_landmarker.task"',
     );
     expect(
@@ -60,9 +71,17 @@ describe("hand detector distribution boundary", () => {
     expect(
       existsSync(path.join(root, "public/mediapipe/wasm/vision_wasm_internal.wasm")),
     ).toBe(true);
+    expect(existsSync(yoloModelPath)).toBe(true);
+    expect(readFileSync(yoloModelPath).byteLength).toBe(21_447_188);
+    expect(
+      createHash("sha256").update(readFileSync(yoloModelPath)).digest("hex"),
+    ).toBe("07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc");
+    expect(read("scripts/build-hand-worker.mjs")).toContain(
+      "ort-wasm-simd-threaded.wasm",
+    );
   });
 
-  it("records runtime provenance without asserting model redistribution terms", () => {
+  it("records runtime provenance and the selected AGPL release path", () => {
     const notices = read("THIRD_PARTY_NOTICES.md");
 
     expect(notices.replace(/\s+/g, " ")).toContain(
@@ -77,6 +96,15 @@ describe("hand detector distribution boundary", () => {
     expect(notices).not.toContain(
       "Local file: `public/mediapipe/hand_landmarker.task`",
     );
+    expect(notices).toContain("## YOLO26 Hand Pose runtime model");
+    expect(notices).toContain(
+      "2abb91a7030e1aa5231ec900ccb2c07ab3f03460",
+    );
+    expect(notices).toContain("License: AGPL-3.0-only");
+    expect(notices).toContain(
+      "https://github.com/romiteld/commandcanvas",
+    );
+    expect(notices).not.toContain("agpl-3.0-review-required");
   });
 });
 

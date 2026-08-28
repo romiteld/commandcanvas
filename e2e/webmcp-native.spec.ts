@@ -8,7 +8,8 @@ test("registers the stable catalog on Chrome's native WebMCP surface", async ({
   page.on("pageerror", (error) => browserErrors.push(error.message));
 
   await page.goto("/");
-  await expect(page.getByText("8 Site Tools registered")).toBeVisible();
+  await page.getByRole("button", { name: "Open system status" }).click();
+  await expect(page.getByText("10 Site Tools registered")).toBeVisible();
 
   const toolNames = await page.evaluate(async () => {
     const modelContext = (
@@ -25,6 +26,8 @@ test("registers the stable catalog on Chrome's native WebMCP surface", async ({
     "create_object",
     "discard_object",
     "get_canvas_state",
+    "history_action",
+    "organize_objects",
     "prepare_meeting_packet",
     "request_packet_send",
     "set_object_state",

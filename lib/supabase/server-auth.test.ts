@@ -8,6 +8,7 @@ import {
   parseBearerJwtHeader,
 } from "@/lib/supabase/server-auth";
 import {
+  createServerUserVerifierClient,
   createServerServiceClient,
   readServerSupabaseConfig,
 } from "@/lib/supabase/server-client";
@@ -160,6 +161,36 @@ describe("server Supabase configuration", () => {
     expect(createClient).not.toHaveBeenCalledWith(
       expect.anything(),
       config.publishableKey,
+      expect.anything(),
+    );
+  });
+
+  it("creates the JWT verifier with the publishable key instead of a Supabase secret key", () => {
+    const verifier = { marker: "user-verifier" };
+    const createClient = vi.fn().mockReturnValue(verifier);
+    const config = {
+      supabaseUrl: "https://project.supabase.co",
+      publishableKey: "sb_publishable_value",
+      secretKey: "sb_secret_value",
+    };
+
+    const result = createServerUserVerifierClient(config, createClient);
+
+    expect(result).toBe(verifier);
+    expect(createClient).toHaveBeenCalledExactlyOnceWith(
+      config.supabaseUrl,
+      config.publishableKey,
+      {
+        auth: {
+          autoRefreshToken: false,
+          detectSessionInUrl: false,
+          persistSession: false,
+        },
+      },
+    );
+    expect(createClient).not.toHaveBeenCalledWith(
+      expect.anything(),
+      config.secretKey,
       expect.anything(),
     );
   });

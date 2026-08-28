@@ -34,7 +34,7 @@ begin
     from information_schema.columns
     where table_schema = 'public'
       and table_name = 'canvas_objects'
-      and column_name in ('rotation', 'group_id', 'frame_id')
+      and column_name in ('group_id', 'frame_id')
   ) then
     raise exception 'catalog_cut_canvas_column_present';
   end if;

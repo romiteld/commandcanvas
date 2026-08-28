@@ -63,10 +63,13 @@ export type RoomServiceErrorCode =
   | "host_required"
   | "stale_revision"
   | "object_pinned"
+  | "invalid_hierarchy"
+  | "frame_not_empty"
   | "command_conflict"
   | "permission_denied"
   | "invalid_command"
   | "nothing_to_undo"
+  | "nothing_to_redo"
   | "mutation_unavailable";
 
 export interface RoomServiceError {
@@ -165,7 +168,10 @@ const mutationRpcSchema = z
       "minimize",
       "restore",
       "discard",
+      "group",
+      "ungroup",
       "undo",
+      "redo",
     ]),
     affectedObjectIds: z.array(
       z.string().min(2).max(96).regex(/^[a-z][a-z0-9-]*$/),
@@ -625,7 +631,10 @@ function mapPlanError(
     | "OBJECT_EXISTS"
     | "OBJECT_NOT_FOUND"
     | "OBJECT_PINNED"
+    | "INVALID_HIERARCHY"
+    | "FRAME_NOT_EMPTY"
     | "NOTHING_TO_UNDO"
+    | "NOTHING_TO_REDO"
     | "INVALID_STATE",
 ): RoomServiceResult<never> {
   switch (code) {
@@ -644,6 +653,18 @@ function mapPlanError(
       );
     case "NOTHING_TO_UNDO":
       return failure("nothing_to_undo", "There is nothing left to undo.");
+    case "NOTHING_TO_REDO":
+      return failure("nothing_to_redo", "There is nothing left to redo.");
+    case "INVALID_HIERARCHY":
+      return failure(
+        "invalid_hierarchy",
+        "That frame or group hierarchy is no longer valid.",
+      );
+    case "FRAME_NOT_EMPTY":
+      return failure(
+        "frame_not_empty",
+        "Ungroup the frame before moving it to trash.",
+      );
     case "INVALID_STATE":
       return failure(
         "invalid_persisted_state",
@@ -674,6 +695,11 @@ function mapMutationError(error: unknown): RoomServiceResult<never> {
       "canvas_undo_state_conflict",
       "canvas_undo_target_not_latest",
       "canvas_undo_target_already_undone",
+      "canvas_redo_state_conflict",
+      "canvas_redo_target_already_redone",
+      "canvas_redo_target_not_found",
+      "canvas_redo_target_not_latest",
+      "canvas_redo_target_not_undo",
     ])
   )
     return failure(
@@ -684,6 +710,16 @@ function mapMutationError(error: unknown): RoomServiceResult<never> {
     return failure(
       "object_pinned",
       "Unpin the object before moving or resizing it.",
+    );
+  if (
+    includesAny(message, [
+      "canvas_invalid_parent_id",
+      "canvas_parent_not_active_frame",
+    ])
+  )
+    return failure(
+      "invalid_hierarchy",
+      "That frame or group hierarchy is no longer valid.",
     );
   if (message.includes("canvas_actor_not_member"))
     return failure(

@@ -38,6 +38,8 @@ const expectedInitialTools =
         "create_object",
         "discard_object",
         "get_canvas_state",
+        "history_action",
+        "organize_objects",
         "prepare_meeting_packet",
         "set_object_state",
         "transform_object",
@@ -46,6 +48,8 @@ const expectedInitialTools =
         "create_object",
         "discard_object",
         "get_canvas_state",
+        "history_action",
+        "organize_objects",
         "prepare_meeting_packet",
         "request_packet_send",
         "set_object_state",
@@ -53,7 +57,7 @@ const expectedInitialTools =
         "transform_sketch",
       ];
 
-test("exercises CommandCanvas through Chrome 153's native WebMCP lifecycle", async ({
+test("exercises Chrome 153's native WebMCP lifecycle and client-side cancellation", async ({
   browser,
   page,
 }) => {
@@ -174,7 +178,7 @@ test("exercises CommandCanvas through Chrome 153's native WebMCP lifecycle", asy
     });
 
     await verifyRegistrationLifecycle(page, expectedMode);
-    await verifyNetworkCancellation(page);
+    await verifyClientSideCancellation(page);
 
     const finalState = await invokeNativeTool(page, "get_canvas_state", {
       scope: "all",
@@ -184,9 +188,6 @@ test("exercises CommandCanvas through Chrome 153's native WebMCP lifecycle", asy
       ok: true,
       data: { revision: 5 },
     });
-    expect(
-      (finalState as { data: { objects: Array<{ id: string }> } }).data.objects,
-    ).not.toContainEqual(expect.objectContaining({ id: "chrome-cancelled-note" }));
 
     expect(pageErrors).toEqual([]);
     expect(
@@ -195,8 +196,11 @@ test("exercises CommandCanvas through Chrome 153's native WebMCP lifecycle", asy
       ),
     ).toEqual([]);
   } finally {
-    roomCapture.stop();
-    roomId ??= await roomCapture.resolveRoomId();
+    try {
+      roomId ??= await roomCapture.resolveRoomId();
+    } finally {
+      roomCapture.stop();
+    }
     if (roomId) await deleteHostedRoom(page, roomId);
   }
 });
@@ -260,7 +264,7 @@ async function verifyRegistrationLifecycle(page: Page, mode: string) {
   await page.unroute("**/api/rooms/*/transform-sketch", routeHandler);
 }
 
-async function verifyNetworkCancellation(page: Page) {
+async function verifyClientSideCancellation(page: Page) {
   let releaseRequest: (() => void) | undefined;
   let requestObserved: (() => void) | undefined;
   const requestGate = new Promise<void>((resolve) => {
@@ -272,10 +276,13 @@ async function verifyNetworkCancellation(page: Page) {
 
   const routeHandler = async (route: Route) => {
     const body = route.request().postData() ?? "";
-    if (!body.includes("chrome-cancelled-note")) {
+    if (!body.includes("chrome-client-aborted-note")) {
       await route.continue();
       return;
     }
+    // The matching mutation is deliberately intercepted before the server
+    // boundary. This proves AbortSignal propagation from executeTool to the
+    // browser fetch, not cancellation of work already received by the server.
     requestObserved?.();
     await requestGate;
     await route.fulfill({
@@ -285,7 +292,7 @@ async function verifyNetworkCancellation(page: Page) {
         ok: false,
         error: {
           code: "probe_should_not_complete",
-          message: "Cancellation probe response must not commit.",
+          message: "Client-side cancellation probe response must not complete.",
         },
       }),
     });
@@ -297,15 +304,15 @@ async function verifyNetworkCancellation(page: Page) {
     "create_object",
     {
       object: {
-        id: "chrome-cancelled-note",
+        id: "chrome-client-aborted-note",
         type: "note",
-        title: "Must not be created",
+        title: "Client abort probe",
         x: 900,
         y: 650,
         width: 260,
         height: 120,
         zIndex: 12,
-        payload: { text: "Cancellation probe", tone: "coral" },
+        payload: { text: "Client-side cancellation probe", tone: "coral" },
       },
     },
     true,

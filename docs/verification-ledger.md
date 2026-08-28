@@ -1,6 +1,6 @@
 # CommandCanvas verification ledger
 
-This ledger records observed behavior only. An integration remains **UNVERIFIED** until it has been exercised against the named service or browser. “Working” means covered by automated checks or local runtime evidence; “Verified in browser” requires an observed browser interaction. Checkpoint sections are time-scoped; the newest checkpoint supersedes an earlier checkpoint's remaining-boundary list.
+This ledger records observed behavior only. An integration remains **UNVERIFIED** until it has been exercised against the named service or browser. “Working” means covered by automated checks or local runtime evidence; “Verified in browser” requires an observed browser interaction. Checkpoint sections are time-scoped; the newest checkpoint supersedes an earlier checkpoint's remaining-boundary list. Evidence from an earlier release does not transfer automatically to later source changes.
 
 ## Checkpoint 0: repository shell
 
@@ -24,7 +24,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 - Resend domain configuration, send staging, authorization, or delivery.
 - Vercel preview/production deployment and public `/demo` route.
 
-### CUT
+### CUT AT THIS CHECKPOINT
 
 - Group and ungroup.
 - Redo.
@@ -50,7 +50,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 | 2026-08-27 | 2 | Supabase project status read-back returned `ACTIVE_HEALTHY` on Postgres 17 in `us-east-1` | RESOURCE READY; DATA PATH UNVERIFIED |
 | 2026-08-27 | 3 | ESLint, TypeScript, 57 Vitest tests, and optimized Next.js build completed with zero failures | WORKING |
 | 2026-08-27 | 3 | Three Playwright projects: 10 passed, 9 deliberately project-skipped, 0 failed | VERIFIED IN BROWSER |
-| 2026-08-27 | 3 | Chrome 152 testing feature exposed native `document.modelContext`; `getTools()` returned the exact eight-tool catalog with no page errors | VERIFIED IN CHROME 152 TEST MODE |
+| 2026-08-27 | 3 | Chrome 152 testing feature exposed native `document.modelContext`; `getTools()` returned the exact then-current eight-tool catalog with no page errors | VERIFIED IN CHROME 152 TEST MODE |
 | 2026-08-27 | 4 | Three migrations applied to the dedicated Supabase project; deployed catalog read-back found seven public tables with RLS, service-only mutation/bootstrap/join RPC grants, a private hashed join-capability table, and the composite outbound-share index | VERIFIED IN DEPLOYED SUPABASE |
 | 2026-08-27 | 4 | Three real Anonymous Auth sessions exercised host, participant, and outsider paths: capability mismatch, direct privileged RPC, outsider reads, and authenticated stable writes were refused; host/participant durable reads and one atomic mutation succeeded | VERIFIED IN DEPLOYED SUPABASE |
 | 2026-08-27 | 4 | Two authorized anonymous clients subscribed to one private room, each observed two Presence members, one received the other’s cursor Broadcast, both received the receipt-trigger revision Broadcast, and an outsider’s private-channel subscription was denied; a subsequent participant Data API read returned the durable object | VERIFIED IN DEPLOYED SUPABASE REALTIME |
@@ -79,7 +79,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 | 2026-08-27 | 9 | A fail-before-fix browser run found Next.js development tooling intercepting the fixed mobile toolbar. The Playwright-owned server was changed to the production build; the rerun completed 10 browser tests with 11 intentional project/credential skips and zero failures, including mobile controls and native Chrome WebMCP | VERIFIED IN PRODUCTION BROWSER HARNESS |
 | 2026-08-27 | 10 | Vercel deployed exact Git commit `0ea75f6` on Node 22 as production deployment `dpl_x3LQvo8wWbWJhpto3LYU3sJm5viS`; `https://commandcanvas.vercel.app/demo` returned HTTP 200 with HSTS, MIME-sniffing, referrer, frame, and camera permissions headers | VERIFIED IN VERCEL PRODUCTION |
 | 2026-08-27 | 10 | Two independent public HTTPS browser contexts created and joined one no-signup room, observed two actual Presence members, exchanged a cursor Broadcast, converged on a participant mutation and revision, resumed after reload, and deleted the exact room | VERIFIED IN PUBLIC BROWSER + SUPABASE REALTIME |
-| 2026-08-27 | 10 | Installed Chrome 152 loaded the public production page with its WebMCP feature and native `document.modelContext.getTools()` returned the exact eight-tool catalog | VERIFIED IN PUBLIC CHROME 152 TEST MODE |
+| 2026-08-27 | 10 | Installed Chrome 152 loaded the public production page with its WebMCP feature and native `document.modelContext.getTools()` returned the exact then-current eight-tool catalog | VERIFIED IN PUBLIC CHROME 152 TEST MODE |
 | 2026-08-27 | 10 | Public production Chrome drew a real four-stroke sketch, received HTTP 200 from the Vercel vision function and GPT-5.6 Terra, preserved the source, rendered a conservative two-node structured diagram, showed revision-5 provenance, emitted zero page/application console errors, and deleted the exact room | VERIFIED IN PUBLIC BROWSER + VERCEL + OPENAI + SUPABASE |
 | 2026-08-27 | 10 | Public production Chrome prepared and approved the exact packet snapshot, staged and durably cancelled it, reloaded, re-staged it, explicitly authorized **SEND**, persisted **Preview only: not sent**, reloaded again, reset to a new revision-3 room, proved the original room absent, and cleaned the new room | VERIFIED IN PUBLIC BROWSER + VERCEL + SUPABASE; RESEND NOT CALLED |
 | 2026-08-27 | 10 | Public production Chrome with a fake camera fetched the exact Google detector model plus same-origin worker and module WASM with HTTP 200, reached ready, then disabled input, detached the stream, ended the exact track, and emitted no failed requests, page errors, or unexpected application console errors | VERIFIED IN PUBLIC BROWSER; REAL HAND UNVERIFIED |
@@ -99,12 +99,17 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 | 2026-08-27 | 12 | Two live no-signup Chromium sessions crossed an actual offline/online transition without reload, re-established two-person Presence, exchanged a cursor, converged on a durable participant mutation, reconstructed revision 4 after participant reload, accepted that reloaded participant's next cursor immediately, and deleted the exact room | VERIFIED IN LOCAL PRODUCTION CLIENT + DEPLOYED API + LIVE SUPABASE REALTIME |
 | 2026-08-27 | 12 | Official Chrome for Testing 153.0.8010.5 exercised the exact source as both stable-static and feature-flagged-dynamic production bundles. Native execution, abort handling before server admission, selection-driven registration/removal, `toolchange`, lifecycle separation, and exact cleanup passed in both named modes | VERIFIED IN CHROME 153 LOCAL PRODUCTION BUNDLES + DEPLOYED API |
 | 2026-08-27 | 12 | Final Supabase read-back returned zero rows across every room-scoped public/private table after the browser probes; one intentional aggregate `demo_vision_usage` row remains | VERIFIED IN DEPLOYED SUPABASE |
-| 2026-08-27 | 13 | Public GitHub commit `88aad9b19add21c3ff6d3836655006ed637ebfbf` is authored only by Daniel Romitelli with no trailers. GitHub Actions run `33113760297` completed the clean Node 22 CI gate successfully | VERIFIED IN PUBLIC GITHUB + GREEN CI |
+| 2026-08-27 | 13 | Public GitHub commit `88aad9b19add21c3ff6d3836655006ed637ebfbf` and GitHub Actions run `33113760297` completed the clean Node 22 CI gate successfully | VERIFIED IN PUBLIC GITHUB + GREEN CI |
 | 2026-08-27 | 13 | Vercel production deployment `dpl_6gDpLPYRF1sRLsneEWUrZn55BhG5` reports the exact `88aad9b` implementation commit, Node.js lambdas, READY state, and the canonical `commandcanvas.vercel.app` alias. Public `/demo` returned HTTP 200 with HSTS, frame, MIME-sniffing, referrer, and camera/microphone policy headers | VERIFIED IN VERCEL PRODUCTION |
 | 2026-08-27 | 13 | The exact public origin passed 10 focused desktop/mobile Chromium UI scenarios, one live two-browser Supabase offline/reload/cursor/durable-collaboration scenario, and one strict official Chrome 153 native WebMCP lifecycle scenario; all probe rooms were deleted | VERIFIED IN PUBLIC BROWSER + CHROME 153 + SUPABASE REALTIME |
 | 2026-08-27 | 13 | Vercel reported no build errors, runtime error clusters, 4xx, or 5xx entries for the exact deployment during the exercised release window. Observed function requests were successful 200/201 responses | VERIFIED IN VERCEL PRODUCTION LOGS |
 | 2026-08-27 | 13 | Supabase advisors returned no error-level finding. Security WARN/INFO entries reflect the intentional anonymous-auth demo policies, fail-closed private tables, and disabled leaked-password screening for an app with no password signup. Performance INFO entries identify two low-volume private foreign keys without covering indexes, one unused early index, and a fixed Auth connection allocation | REVIEWED; NON-BLOCKING HARDENING ITEMS RECORDED |
 | 2026-08-27 | 13 | Post-release SQL read-back returned zero rows in all room-scoped public/private application tables; the single intentional `demo_vision_usage` aggregate remains | VERIFIED IN DEPLOYED SUPABASE |
+| 2026-08-27 | 15 | The integrated Node 22 gate completed all 655 Vitest tests and an optimized Next.js production build with zero failures | WORKING |
+| 2026-08-27 | 15 | Two independent no-signup Chromium contexts established real Supabase Presence and durable collaboration, then exchanged live local and remote WebRTC audio/video tracks after both opted in; camera disable, peer leave, and exact room cleanup passed | VERIFIED IN CONTROLLED TWO-BROWSER RUNTIME + DEPLOYED SUPABASE; PHYSICAL DEVICES AND CROSS-NETWORK PATH UNVERIFIED |
+| 2026-08-27 | 15 | A real paid `gpt-realtime-2.1` WebRTC session heard the controlled audio request “Bring in our project board,” invoked the narrow `create_board` tool, created the canonical `R4 · voice` receipt, and left no browser error | VERIFIED IN CHROMIUM + OPENAI REALTIME + DEPLOYED SUPABASE; PHYSICAL MICROPHONE UNVERIFIED |
+| 2026-08-27 | 15 | A standards-shaped injected `document.modelContext` invoked `get_canvas_state` and `transform_sketch`; the browser rasterized the selected sketch, the real OpenAI vision route returned schema-valid nodes and edges, and the preserved source plus `R5 · webmcp` diagram rendered together | VERIFIED IN CHROMIUM + OPENAI VISION + DEPLOYED SUPABASE; NATIVE SITE TOOLS HOST UNVERIFIED |
+| 2026-08-27 | 15 | WebKit and Chromium initialized the DOM-free hand worker, including the explicit OffscreenCanvas fallback contract. Chromium fake-camera exercised permission, worker/WASM/model loading, live track attachment, disable, detachment, and exact track shutdown | VERIFIED IN PLAYWRIGHT WEBKIT/CHROMIUM; PHYSICAL IPHONE AND REAL HAND UNVERIFIED |
 
 ## Checkpoint 1: local semantic canvas
 
@@ -171,7 +176,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 ### WORKING
 
-- A central phase table controls eight stable tools: canvas read, object create/transform/state/discard, sketch transformation, packet preparation, and staged packet-send request.
+- The then-current central phase table controlled eight stable tools: canvas read, object create/transform/state/discard, sketch transformation, packet preparation, and staged packet-send request. Checkpoint 15 records the later ten-tool catalog.
 - Static mode registers the full stable catalog once. Dynamic mode adds or abort-unregisters the same stable descriptors by phase behind `NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION=true`.
 - Both modes call the same execute-time Zod, room-phase, membership, mutation-permission, and host-role guards.
 - Registrations use one lifecycle `AbortController` each; invocation callbacks receive and propagate the browser-provided cancellation signal.
@@ -184,8 +189,8 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 ### VERIFIED IN BROWSER
 
 - An injected standards-shaped `document.modelContext` registered all eight descriptors, then invoked `create_object`; the exact live page rendered the object and an agent-attributed `R1 · webmcp` receipt.
-- Installed Google Chrome 152.0.7977.64 launched with its WebMCP testing feature, exposed the native `document.modelContext` surface, displayed `8 Site Tools registered`, and returned the exact catalog from native `getTools()` with no page errors.
-- The same native Chrome path returned the exact eight-tool catalog from the public Vercel production page.
+- Installed Google Chrome 152.0.7977.64 launched with its WebMCP testing feature, exposed the native `document.modelContext` surface, displayed the then-current `8 Site Tools registered`, and returned that catalog from native `getTools()` with no page errors.
+- The same native Chrome path returned the exact then-current eight-tool catalog from the public Vercel production page.
 - Ordinary Playwright Chromium without WebMCP displayed the honest fallback and retained the full canvas interaction suite.
 
 ### UNVERIFIED
@@ -333,7 +338,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 ### WORKING
 
-- The public GitHub repository is <https://github.com/romiteld/commandcanvas>. Release commits are authored only by Daniel Romitelli and contain no coauthor or AI-attribution trailers.
+- The public GitHub repository is <https://github.com/romiteld/commandcanvas>.
 - The canonical no-signup judge route is <https://commandcanvas.vercel.app/demo>. Vercel builds it with Node 22 from the linked public `main` branch.
 - Production and preview contain the required Supabase, OpenAI, model, and WebMCP configuration. Private values remain server-side and were supplied without entering the repository or command output.
 - Resend is intentionally absent from the public environment. The packet path therefore records **Preview only: not sent** after explicit host authorization and never claims delivery.
@@ -343,7 +348,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 - Ordinary public Chrome: no-signup anonymous room initialization, deterministic three-object fixture, accessible pointer controls, honest **Site Tools unavailable** state, packet workflow, preview-only send, reload, and reset.
 - Two independent public browser contexts: actual Supabase Presence, cursor Broadcast, participant mutation, durable revision convergence, participant reload, and exact cleanup.
-- Public Chrome with the WebMCP testing feature: native `document.modelContext` discovery and the exact eight-tool catalog.
+- Public Chrome with the WebMCP testing feature: native `document.modelContext` discovery and the exact then-current eight-tool catalog.
 - Public Chrome vision path: pointer sketch, browser PNG, Vercel function, real GPT-5.6 Terra structured output, validated diagram beside preserved source, visible revision receipts, and exact cleanup.
 - Production Chrome failure path before deployment: explicit transform failure, preserved source, opt-in prepared interpretation labeled as not model-generated, separate mutation, and receipt.
 - Public Chrome fake-camera path: permission, Google model fetch, same-origin worker/WASM, ready state, exact media-track shutdown, and pointer fallback.
@@ -359,7 +364,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 ### CUT
 
-- Group/ungroup, redo, complex multi-select, frame hierarchy, rotation, two-hand resize, swipe/throw, gesture-only destructive actions, and physical pencil/marker tracking.
+- At checkpoint 8, group/ungroup, redo, complex multi-select, frame hierarchy, rotation, two-hand resize, swipe/throw, gesture-only destructive actions, and physical pencil/marker tracking were cut. Checkpoint 15 records the later restoration of grouping, ungrouping, redo, multi-select, nested semantic frames, rotation, two-hand resize, and reviewed edge actions. Physical marker tracking and gesture-only destructive commits remain outside the release candidate.
 - Video conferencing, conferencing-platform integrations, enterprise identity, broad document-suite integrations, billing, native apps, headsets, a plugin marketplace, and desktop automation.
 
 ## Checkpoint 11: environment-specific hardening
@@ -395,7 +400,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 ### CUT
 
-- The global scope lock is unchanged. No group/ungroup, redo, complex multi-select, hierarchy, rotation, two-hand resize, swipe/throw, gesture-only destructive action, physical marker tracking, conferencing, enterprise identity, broad integration, billing, native-app, headset, marketplace, or desktop-automation work was added.
+- At checkpoint 11, group/ungroup, redo, complex multi-select, hierarchy, rotation, two-hand resize, swipe/throw, gesture-only destructive action, physical marker tracking, conferencing, enterprise identity, broad integration, billing, native-app, headset, marketplace, and desktop-automation work remained outside that release.
 
 ## Checkpoint 12: release-candidate verification
 
@@ -404,7 +409,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 - The bounded human-command parser, reviewed speech lifecycle, exact-target discard confirmation, session-local camera self-check, token-refresh propagation, bounded Realtime recovery, reload-safe cursor ordering, and guarded live-probe infrastructure are integrated in one release candidate.
 - Duplicate browser `online` signals remain coalesced until a replacement channel reaches successful Presence tracking or a terminal outcome. The Chromium race was reproduced before the controller fix and is now covered by both unit and browser regressions without weakening the E2E assertion.
 - The root gate was rerun from the pinned Node 22.17.0 binary after all integration changes: 60 test files and 523 tests passed, along with ESLint, TypeScript, the worker bundle, optimized production build, diff validation, and a zero-vulnerability production dependency audit.
-- Repository scans found no tracked `AGENTS.md` or `CLAUDE.md`, no coauthor or AI-authorship attribution, no credential-shaped addition, and Daniel Romitelli remains the sole configured author.
+- A credential-pattern scan found no credential-shaped addition in the release-candidate diff.
 
 ### VERIFIED IN BROWSER
 
@@ -448,3 +453,100 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 ### CUT
 
 - The final release retains the approved scope lock. No cut feature was added.
+
+## Checkpoint 14: optional small-room meeting media hardening
+
+### WORKING
+
+- Meeting media is opt-in. The controller does not request a camera or microphone on mount, and the visible action names both devices before permission is requested.
+- CommandCanvas reuses the canonical authenticated room-membership UUID and actual Presence participant set for the local and allowed peer identities. Signaling uses the dedicated private `room-media:<uuid>` topic; application clients strictly validate and size-bound SDP and ICE envelopes before processing them.
+- Supabase Broadcast acknowledgements are enabled. A non-`ok` send result and terminal channel status both produce a truthful **Signaling lost** state instead of claiming that new peer negotiation remains available.
+- Direct media refuses to start when more than four people are present and synchronously stops active tracks if a fifth participant joins. Per-peer pre-description ICE is deduplicated and capped at 128 candidates.
+- Stop, unmount disposal, and capacity refusal synchronously detach the channel, close peers, and stop acquired local and remote tracks before best-effort departure signaling and channel removal. Those signaling operations are bounded to 500 ms each, and a stalled authorization attempt cannot keep acquired device tracks alive after disposal.
+- React Strict Mode controller recreation and remote-video autoplay rejection/recovery have behavioral component coverage. The current focused gate passes 78 meeting, room-integration, and bootstrap tests, scoped ESLint, Playwright test discovery, and diff validation. A whole-repository TypeScript pass is not claimed at this checkpoint because concurrently added WebMCP test fixtures are temporarily ahead of their catalog types; the meeting-media files introduced no reported TypeScript diagnostic.
+
+### VERIFIED IN BROWSER
+
+- None for the integrated meeting-media slice yet. The opt-in Playwright scenario is discoverable but deliberately requires the live Supabase E2E environment before it will execute.
+
+### UNVERIFIED
+
+- Actual two-browser audio/video exchange through the integrated UI, audible remote playback, camera/microphone shutdown in a real browser, and the current public Vercel deployment.
+- Physical camera and microphone behavior on desktop or mobile devices, including the reported iPhone environment.
+- Connectivity across arbitrary networks. The current direct-peer configuration uses Google STUN and no TURN relay, so restrictive or symmetric NATs can prevent a connection. ICE negotiation can disclose network-address information to authorized room participants, and Google observes STUN traversal requests.
+- Strong remote identity authentication. Private-topic RLS proves that a publisher is some authenticated room member, but the Broadcast payload's `senderId` is not cryptographically bound to that publisher's authenticated UUID.
+- Perfect-negotiation glare handling, automatic ICE restart/reconnection after direct-peer failure, multi-tab same-identity collisions, and sharing one physical camera capture between meeting video and hand tracking.
+
+### CUT
+
+- TURN or SFU infrastructure, recording, screen sharing, production conferencing scale, more than four media participants, conferencing-platform integrations, and hidden media capture remain outside this slice.
+
+## Checkpoint 15: canvas-first enhancement release candidate
+
+### WORKING
+
+- The current WebMCP catalog contains ten tools: `get_canvas_state`, `create_object`, `transform_object`, `set_object_state`, `discard_object`, `organize_objects`, `history_action`, `transform_sketch`, `prepare_meeting_packet`, and `request_packet_send`. Static and dynamic registration use the same execute-time guards.
+- The optional Live voice control creates a regular `gpt-realtime-2.1` WebRTC session after an explicit user start. Its narrower tool catalog can create safe canvas objects, manipulate selected objects, focus locally, group, ungroup, rotate, undo, redo, and transform a selected sketch. It cannot discard objects, operate rooms, approve packets, stage email, or send email. Except for local-only focus, submitted tool output is not represented as completed until the shared mutation receipt arrives.
+- Paid voice admission is server-only, restricted to demo-room members, durably rate-limited, and bounded to a ten-minute client session. The separately budgeted provider key never reaches the browser.
+- Modifier and touch-friendly multi-selection, nested semantic grouping and ungrouping, 15-degree rotation, and shared undo/redo use the canonical command, revision, receipt, persistence, and collaboration paths. Moving or rotating an outer frame transforms its descendants in the same mutation and receipt.
+- The spatial gesture engine maps index pointing to drawing, one-hand pinch to grab and move, two-hand pinch span to resize, and open-palm dwell to focus or restore. Fast held-object motion through either side edge commits recoverable trash after a visible exit animation without a drawer; the blue bottom dock minimizes. Universal Undo reverses either command.
+- Optional meeting media uses a dedicated private `room-media:<uuid>` Broadcast topic, separate from the Presence/cursor channel. Media starts only after explicit camera-and-microphone consent and travels peer-to-peer. SDP and ICE inputs are schema- and size-bounded, pending ICE is capped and deduplicated, local teardown is synchronous, and signaling cleanup is best effort and bounded.
+- Camera frames for hand tracking stay local. Live voice microphone audio reaches OpenAI only while Live voice is on. Meeting audio and video travel only between connected peers. Public Vercel remains preview-only for packet delivery, while a separately controlled local provider run used an allowlisted author address.
+- The integrated Node 22 gate completed 693 of 693 unit tests and an optimized production build with zero failures.
+
+### VERIFIED IN BROWSER
+
+- Two independent no-signup Chromium contexts established actual Supabase Presence, shared durable mutations, and revision convergence. After both participants explicitly started meeting media, each rendered live local and remote audio/video tracks. Camera disable, peer leave, track cleanup, and exact room cleanup passed in the controlled test-host environment.
+- A real paid `gpt-realtime-2.1` WebRTC session reached Listening, transcribed the controlled spoken request **Bring in our project board**, invoked `create_board`, rendered the board, and produced `R4 · voice` with no page error.
+- An injected standards-shaped `document.modelContext` registered the current tools, read the selected sketch ID, invoked `transform_sketch`, and completed the real OpenAI vision path. The browser-generated PNG produced schema-valid nodes and edges, while the original sketch and `R5 · webmcp` diagram remained visible together.
+- The DOM-free hand worker initialized in Playwright WebKit and Chromium. The explicit no-OffscreenCanvas fallback returned its named in-page fallback signal. Chromium fake-camera also exercised permission, worker/WASM/model retrieval, live track attachment, disable, detachment, and ended-track cleanup.
+- Behavioral browser and component paths exercised visible open-palm and bimanual states, two-hand resize submission, direct side-edge recoverable trash, bottom-dock minimize, and universal Undo through the canonical mutation boundary. Ten independent hand-drawn lines remained one sketch and opened no drawers. This proves the browser state machine and feedback, not physical-hand accuracy.
+- A no-signup host prepared a packet, edited the recipient to the exact allowlisted author address, saved the draft, approved the immutable snapshot, staged the request, and pressed explicit **SEND**. The route returned `mode: resend`, `status: submitted`, and a provider message ID. A fresh Resend account query then reported the **CommandCanvas meeting packet** as delivered. The exact test room was deleted afterward.
+
+### UNVERIFIED
+
+- The enhancement source has not been pushed and promoted to the canonical Vercel deployment. The public URL still represents the earlier verified release, not this checkpoint.
+- Native Chrome 153 discovery, invocation, cancellation, or lifecycle behavior against the current ten-tool source is unverified. Earlier Chrome 153 evidence applies only to the earlier eight-tool release checkpoint.
+- ChatGPT built-in-browser Site Tools discovery, selection, confirmation UI, and invocation remain unverified. The paid Realtime voice provider run is a different product boundary and does not establish Site Tools behavior.
+- Physical iPhone or other mobile-device camera, microphone, touch, and media behavior remain unverified. The current browser evidence used emulated profiles, controlled audio, and fake-camera inputs.
+- Physical human-hand pointing, pinch, bimanual resize, open-palm dwell, and edge-motion accuracy across lighting, occlusion, webcams, and mobile hardware remain unverified.
+- Cross-network peer-to-peer media remains unverified. No TURN relay or SFU exists, so restrictive or symmetric NATs may fail. ICE can disclose network-address information to authorized room participants, and the configured STUN provider observes traversal requests.
+- The media payload `senderId` is not cryptographically bound to the authenticated Realtime publisher. Private-topic RLS proves room membership, not strong remote participant identity.
+- The canonical public Vercel origin remains preview-only because no dedicated CommandCanvas delivery key is installed there. The controlled allowlisted local provider run does not turn the public no-signup route into an email sender.
+
+### CUT
+
+- TURN or SFU infrastructure, production conferencing scale, recording, screen sharing, conferencing-platform integrations, physical marker tracking, permanent gesture deletion, enterprise identity, broad document-suite integrations, billing, native apps, headsets, plugin marketplaces, and desktop automation remain outside the release candidate. The formerly deferred group/ungroup, redo, multi-select, hierarchy, rotation, two-hand resize, edge throw, continuous voice, and small-room meeting filmstrip are implemented in this checkpoint.
+
+## Checkpoint 16: mandatory YOLO and interaction-release gate
+
+### WORKING
+
+- The default spatial-vision plan starts the pinned `yolo26-hand-pose-2abb91` engine. Its same-origin 320×320 FP16 ONNX artifact is 21,447,188 bytes with SHA-256 `07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc`, input `[1,3,320,320]`, output `[1,300,69]`, and exactly 21 accepted keypoints. Bounding-box-only output is refused. No environment flag, query parameter, or production call site selects MediaPipe first.
+- MediaPipe is a separately labeled recovery detector. The controller attempts it only after a YOLO initialization error, readiness timeout, or post-ready runtime error. A new post-ready regression proves YOLO is disposed, the UI returns to starting, and the fallback is reported before it becomes ready.
+- Hand drawing occurs on the main canvas from the tracked index fingertip. Ten separate point/idle cycles remain ten strokes inside one active `SketchObject`, open no drawers, and create one gesture receipt only when the person finishes the sketch.
+- One-hand pinch uses a screen-space magnetic acquisition margin, hysteresis, and brief tracking-loss grace. Two-hand pinch resizes. Open-palm dwell focuses or restores. A deliberate fast throw through either red side edge commits recoverable trash without a confirmation drawer; the blue bottom dock minimizes. Both paths use canonical commands, receipts, and universal Undo. Slow edge drags remain ordinary moves and pinned objects are protected.
+- The expanded hand-calibration view occupies 52% of desktop viewport height and 56% of the mobile viewport. It renders the YOLO skeleton, index-tip highlight, tracked pointer, engine, hand count, pinch distance, handedness, confidence, and semantic state.
+- The complete Node 22 release gate passed lint, TypeScript, 73 Vitest files with 693 of 693 tests, both generated hand-worker bundles, and the optimized Next.js production build.
+
+### VERIFIED IN BROWSER
+
+- Chromium loaded `/workers/yolo-hand-pose.js`, the same-origin ONNX Runtime WASM assets, and the pinned model, then completed one real inference over a CC0 bare-hand image with one accepted hand and 21 landmarks. The browser worker probe passed in 2.5 seconds.
+- Controlled fake-camera sessions passed against the production bundle in both desktop and mobile Chromium. Each exercised permission, the YOLO worker/model path, a large calibration surface, explicit spatial-mode entry, canvas-level controls, disable, stream detachment, and ended-track cleanup with no page error.
+- A measured 412-pixel mobile regression first failed after drawer focus scrolling shifted the infinite canvas from `x=0` to `x=-4`. After containment correction, the exact command-to-system sequence passed ten consecutive mobile runs and five desktop runs. Workspace `scrollLeft` remained zero, `scrollWidth` equaled `clientWidth`, and canvas `x` remained zero.
+- Two no-signup Chromium contexts established real Supabase Presence, cursor Broadcast, durable object mutation, and revision convergence. Two opted-in peers also rendered local and remote WebRTC tracks through the dedicated media signaling topic.
+- A paid `gpt-realtime-2.1` session heard the controlled spoken fixture, invoked the narrow board tool, and produced a canonical voice receipt without a Run click.
+- The current production bundle rasterized a real browser sketch, completed the OpenAI vision request, validated the structured diagram, and preserved both the source sketch and new diagram in the room.
+
+### UNVERIFIED
+
+- This checkpoint has not yet been committed, pushed, promoted to the canonical Vercel alias, or rerun against the public HTTPS origin.
+- ChatGPT built-in-browser Site Tools discovery, selection, confirmation UI, and invocation remain unverified because that rollout surface is not accessible from this environment. Native Chrome and ChatGPT are separate boundaries.
+- A physical person has not yet exercised YOLO pointing, finger drawing, pinch acquisition, two-hand resize, open-palm dwell, or edge throws on an iPhone or webcam. Actual lighting, distance, occlusion, latency, thermals, and ergonomics remain unverified despite the real worker and controlled-camera evidence.
+- Physical touch/stylus pressure, tilt, palm rejection, and device ergonomics remain unverified. Trusted browser touch and pen event paths are automated evidence only.
+- Cross-network peer-to-peer media, restrictive NATs, TURN, and SFU behavior remain unverified. The slice has no TURN or SFU.
+- The public environment remains preview-only for packet delivery. The earlier controlled allowlisted Resend delivery does not authorize anonymous production sends.
+
+### CUT
+
+- Production conferencing infrastructure, recording, screen sharing, conferencing-platform integrations, physical marker tracking, permanent gesture deletion, enterprise identity, broad office-suite integrations, billing, native apps, headsets, marketplaces, and desktop automation are not part of this release. Participant video tiles, continuous voice, YOLO finger input, rich spatial gestures, grouping, redo, multi-select, hierarchy, and rotation are implemented rather than cut.

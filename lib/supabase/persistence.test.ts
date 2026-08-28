@@ -4,6 +4,7 @@ import type {
   CanvasCommandEnvelope,
   CanvasState,
 } from "@/lib/canvas/command-engine";
+import { applyCanvasCommand } from "@/lib/canvas/command-engine";
 import {
   buildCanvasMutationPlan,
   parseCanvasPersistenceRows,
@@ -15,6 +16,9 @@ const HOST_ID = "22222222-2222-4222-8222-222222222222";
 const PARTICIPANT_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const RECEIPT_CREATE_ID = "33333333-3333-4333-8333-333333333333";
 const RECEIPT_MOVE_ID = "44444444-4444-4444-8444-444444444444";
+const RECEIPT_UNDO_ID = "55555555-5555-4555-8555-555555555555";
+const RECEIPT_REDO_ID = "66666666-6666-4666-8666-666666666666";
+const RECEIPT_UNDO_REDO_ID = "77777777-7777-4777-8777-777777777777";
 const CREATED_AT = "2026-08-27T16:00:00.000Z";
 const MOVED_AT = "2026-08-27T16:01:00.000Z";
 const COMMAND_AT = "2026-08-27T16:02:00.000Z";
@@ -255,6 +259,171 @@ describe("parseCanvasPersistenceRows", () => {
           },
         ],
         undoneReceiptIds: [],
+        redoReceiptIds: [],
+      },
+    });
+  });
+
+  it("reconstructs the persisted redo stack and clears it after the redo receipt", () => {
+    const undoAt = "2026-08-27T16:02:00.000Z";
+    const redoAt = "2026-08-27T16:03:00.000Z";
+    const undoRedoAt = "2026-08-27T16:04:00.000Z";
+    const undoneSnapshot = {
+      ...createSnapshot,
+      updatedAt: undoAt,
+      version: 3,
+      revision: 3,
+    };
+    const redoneSnapshot = {
+      ...moveSnapshot,
+      updatedAt: redoAt,
+      version: 4,
+      revision: 4,
+    };
+    const undoReceipt = {
+      ...moveReceiptRow,
+      id: RECEIPT_UNDO_ID,
+      revision: 3,
+      occurred_at: undoAt,
+      actor_user_id: HOST_ID,
+      actor_type: "human",
+      source: "typed",
+      actor_display_name: "Danny",
+      action: "undo",
+      previous_state: [{ objectId: "note-launch", state: moveSnapshot }],
+      resulting_state: [{ objectId: "note-launch", state: undoneSnapshot }],
+      inverse_command: { schemaVersion: 1, changes: [] },
+      reversible: false,
+      undoes_receipt_id: RECEIPT_MOVE_ID,
+      description: "Danny undid Sarah's move.",
+    };
+    const redoReceipt = {
+      ...undoReceipt,
+      id: RECEIPT_REDO_ID,
+      revision: 4,
+      occurred_at: redoAt,
+      action: "redo",
+      previous_state: [{ objectId: "note-launch", state: undoneSnapshot }],
+      resulting_state: [{ objectId: "note-launch", state: redoneSnapshot }],
+      inverse_command: { schemaVersion: 1, changes: [] },
+      reversible: true,
+      undoes_receipt_id: RECEIPT_UNDO_ID,
+      description: "Danny redid Sarah's move.",
+    };
+    const undoRedoSnapshot = {
+      ...undoneSnapshot,
+      updatedAt: undoRedoAt,
+      version: 5,
+      revision: 5,
+    };
+    const undoRedoReceipt = {
+      ...undoReceipt,
+      id: RECEIPT_UNDO_REDO_ID,
+      revision: 5,
+      occurred_at: undoRedoAt,
+      previous_state: [{ objectId: "note-launch", state: redoneSnapshot }],
+      resulting_state: [{ objectId: "note-launch", state: undoRedoSnapshot }],
+      undoes_receipt_id: RECEIPT_REDO_ID,
+      description: "Danny undid the redo.",
+    };
+    const undoOnly = parseCanvasPersistenceRows(
+      persistenceInput({
+        room: { ...roomRow, revision: 3, updated_at: undoAt },
+        objects: [
+          {
+            ...objectRow,
+            x: undoneSnapshot.x,
+            updated_at: undoAt,
+            version: 3,
+            revision: 3,
+          },
+        ],
+        receipts: [createReceiptRow, moveReceiptRow, undoReceipt],
+      }),
+    );
+    const legacyUndoOnly = parseCanvasPersistenceRows(
+      persistenceInput({
+        room: { ...roomRow, revision: 3, updated_at: undoAt },
+        objects: [
+          {
+            ...objectRow,
+            x: undoneSnapshot.x,
+            updated_at: undoAt,
+            version: 3,
+            revision: 3,
+          },
+        ],
+        receipts: [
+          createReceiptRow,
+          moveReceiptRow,
+          { ...undoReceipt, inverse_command: null },
+        ],
+      }),
+    );
+    const redone = parseCanvasPersistenceRows(
+      persistenceInput({
+        room: { ...roomRow, revision: 4, updated_at: redoAt },
+        objects: [
+          {
+            ...objectRow,
+            updated_at: redoAt,
+            version: 4,
+            revision: 4,
+          },
+        ],
+        receipts: [
+          createReceiptRow,
+          moveReceiptRow,
+          undoReceipt,
+          redoReceipt,
+        ],
+      }),
+    );
+    const undoRedone = parseCanvasPersistenceRows(
+      persistenceInput({
+        room: { ...roomRow, revision: 5, updated_at: undoRedoAt },
+        objects: [
+          {
+            ...objectRow,
+            x: undoRedoSnapshot.x,
+            updated_at: undoRedoAt,
+            version: 5,
+            revision: 5,
+          },
+        ],
+        receipts: [
+          createReceiptRow,
+          moveReceiptRow,
+          undoReceipt,
+          redoReceipt,
+          undoRedoReceipt,
+        ],
+      }),
+    );
+
+    expect(undoOnly).toMatchObject({
+      ok: true,
+      state: {
+        undoneReceiptIds: [RECEIPT_MOVE_ID],
+        redoReceiptIds: [RECEIPT_UNDO_ID],
+      },
+    });
+    expect(legacyUndoOnly).toMatchObject({
+      ok: true,
+      state: {
+        undoneReceiptIds: [RECEIPT_MOVE_ID],
+        redoReceiptIds: [],
+      },
+    });
+    expect(redone).toMatchObject({
+      ok: true,
+      state: { undoneReceiptIds: [], redoReceiptIds: [] },
+    });
+    expect(undoRedone).toMatchObject({
+      ok: true,
+      state: {
+        undoneReceiptIds: [RECEIPT_REDO_ID, RECEIPT_MOVE_ID],
+        redoReceiptIds: [RECEIPT_UNDO_REDO_ID],
       },
     });
   });
@@ -508,6 +677,8 @@ describe("buildCanvasMutationPlan", () => {
               width: 280,
               height: 190,
               zIndex: 3,
+              rotation: 0,
+              parentId: null,
               minimized: false,
               pinned: false,
               deletedAt: null,
@@ -595,6 +766,130 @@ describe("buildCanvasMutationPlan", () => {
         undoesReceiptId: RECEIPT_MOVE_ID,
       },
     });
+  });
+
+  it("builds one atomic group plan for a frame and its selected object", () => {
+    const state = parseFixture();
+
+    const result = buildCanvasMutationPlan(
+      state,
+      envelope(state, {
+        type: "objects.group",
+        objectIds: ["note-launch"],
+        frame: {
+          id: "frame-planning",
+          type: "frame",
+          title: "Planning cluster",
+          x: 80,
+          y: 40,
+          width: 700,
+          height: 310,
+          zIndex: 0,
+          payload: { tone: "sky" },
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error.message);
+    expect(result.plan).toMatchObject({
+      action: "group",
+      reversible: true,
+      undoesReceiptId: null,
+      changes: [
+        {
+          objectId: "frame-planning",
+          expectedVersion: null,
+          after: {
+            type: "frame",
+            rotation: 0,
+            parentId: null,
+            payload: { tone: "sky" },
+          },
+        },
+        {
+          objectId: "note-launch",
+          expectedVersion: 2,
+          after: { parentId: "frame-planning" },
+        },
+      ],
+    });
+  });
+
+  it("maps redo to the targeted undo receipt without client-authored changes", () => {
+    const state = parseFixture();
+    const undone = applyCanvasCommand(
+      state,
+      envelope(state, { type: "history.undo" }),
+      { createId: () => RECEIPT_UNDO_ID },
+    );
+    if (!undone.ok) throw new Error("fixture undo failed");
+
+    const result = buildCanvasMutationPlan(
+      undone.state,
+      envelope(undone.state, { type: "history.redo" }),
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      plan: {
+        action: "redo",
+        description:
+          "Danny redid: Sarah transformed “Launch decision” spatially.",
+        changes: [],
+        reversible: true,
+        undoesReceiptId: RECEIPT_UNDO_ID,
+      },
+    });
+  });
+
+  it("keeps recoverable deleted children valid after their frame is ungrouped", () => {
+    let state = parseFixture();
+    for (const command of [
+      {
+        type: "objects.group" as const,
+        objectIds: ["note-launch"],
+        frame: {
+          id: "frame-planning",
+          type: "frame" as const,
+          title: "Planning frame",
+          x: 380,
+          y: 40,
+          width: 360,
+          height: 280,
+          zIndex: 0,
+          payload: { tone: "violet" as const },
+        },
+      },
+      { type: "object.discard" as const, objectId: "note-launch" },
+      { type: "objects.ungroup" as const, frameId: "frame-planning" },
+    ]) {
+      const result = applyCanvasCommand(state, envelope(state, command), {
+        createId: () => `receipt-${state.revision + 1}`,
+      });
+      if (!result.ok) throw new Error(result.error.message);
+      state = result.state;
+    }
+
+    const next = buildCanvasMutationPlan(
+      state,
+      envelope(state, {
+        type: "object.create",
+        object: {
+          id: "note-next",
+          type: "note",
+          title: "Next note",
+          x: 800,
+          y: 80,
+          width: 280,
+          height: 190,
+          zIndex: 5,
+          payload: { text: "Continue after ungrouping.", tone: "sand" },
+        },
+      }),
+    );
+
+    expect(next.ok).toBe(true);
   });
 
   it("refuses a typed-looking current state whose object payload is malformed", () => {

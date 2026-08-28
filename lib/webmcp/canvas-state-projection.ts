@@ -172,10 +172,12 @@ function summarizeObject(object: CanvasObject) {
       width: object.width,
       height: object.height,
       zIndex: object.zIndex,
+      rotation: object.rotation ?? 0,
     },
     state: {
       minimized: object.minimized,
       pinned: object.pinned,
+      parentId: object.parentId ?? null,
     },
     createdBy: object.createdBy,
     updatedAt: object.updatedAt,
@@ -300,6 +302,11 @@ function summarizePayload(object: CanvasObject) {
         edges,
       };
     }
+    case "frame":
+      return {
+        tone: object.payload.tone,
+        container: true as const,
+      };
   }
 }
 

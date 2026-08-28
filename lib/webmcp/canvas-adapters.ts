@@ -87,6 +87,46 @@ export function createCanvasWebMcpAdapters(
             },
             request.signal,
           );
+        case "organize_objects":
+          return request.input.action === "group"
+            ? executeMutation(
+                options,
+                {
+                  type: "objects.group",
+                  objectIds: request.input.objectIds,
+                  frame: {
+                    id: request.input.frame.id,
+                    type: "frame",
+                    title: request.input.frame.title,
+                    x: request.input.frame.x,
+                    y: request.input.frame.y,
+                    width: request.input.frame.width,
+                    height: request.input.frame.height,
+                    zIndex: request.input.frame.zIndex,
+                    payload: { tone: request.input.frame.tone },
+                  },
+                },
+                request.signal,
+              )
+            : executeMutation(
+                options,
+                {
+                  type: "objects.ungroup",
+                  frameId: request.input.frameId,
+                },
+                request.signal,
+              );
+        case "history_action":
+          return executeMutation(
+            options,
+            {
+              type:
+                request.input.action === "undo"
+                  ? "history.undo"
+                  : "history.redo",
+            },
+            request.signal,
+          );
         case "transform_sketch":
           return transformSelectedSketch(options, request);
         case "prepare_meeting_packet":
@@ -211,7 +251,9 @@ function dispatchLocalMutation(
 
 function commandFailure(error: CommandError): WebMcpToolFailure {
   const code =
-    error.code === "INVALID_COMMAND"
+    error.code === "NOTHING_TO_UNDO" || error.code === "NOTHING_TO_REDO"
+      ? "not_available"
+      : error.code === "INVALID_COMMAND"
       ? "invalid_input"
       : error.code === "OBJECT_PINNED"
         ? "forbidden"
