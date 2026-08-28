@@ -865,6 +865,177 @@ describe("CommandCanvas room service", () => {
     expect(harness.rawClient.rpc).not.toHaveBeenCalled();
   });
 
+  it("returns the actionable stale thought-card refusal before RPC", async () => {
+    const harness = createClient({
+      tableResults: {
+        room_members: [{ data: memberRow("host"), error: null }],
+        rooms: [
+          { data: { ...emptyRoomRow, revision: 1 }, error: null },
+          { data: { ...emptyRoomRow, revision: 1 }, error: null },
+        ],
+        canvas_objects: [{ data: [createdObjectRow(HOST_ID)], error: null }],
+        receipts: [
+          {
+            data: [
+              createdReceiptRow({
+                actorUserId: HOST_ID,
+                actorType: "human",
+                actorDisplayName: "Danny",
+              }),
+            ],
+            error: null,
+          },
+        ],
+      },
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).commitCommand(HOST_ID, {
+      commandId: COMMAND_ID,
+      roomId: ROOM_ID,
+      baseRevision: 1,
+      source: "voice",
+      command: {
+        type: "object.append_note_text",
+        objectId: "note-launch",
+        expectedVersion: 2,
+        text: "This must not overwrite newer collaborator text.",
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "command_conflict",
+        message: "That thought card changed. Continue from its latest text.",
+      },
+    });
+    expect(harness.rawClient.rpc).not.toHaveBeenCalled();
+  });
+
+  it("round-trips a successful dictated thought append returned as an update", async () => {
+    const initialReceipt = {
+      ...createdReceiptRow({
+        actorUserId: HOST_ID,
+        actorType: "human",
+        actorDisplayName: "Danny",
+      }),
+      id: "66666666-6666-4666-8666-666666666666",
+    };
+    const updatedText =
+      "Prove the shared spatial workflow.\nSupplier lead time is the launch risk.";
+    const updatedObjectRow = {
+      ...createdObjectRow(HOST_ID),
+      version: 2,
+      revision: 2,
+      payload: { text: updatedText, tone: "sky" },
+    };
+    const updatedSnapshot = {
+      ...createdSnapshot(HOST_ID),
+      version: 2,
+      revision: 2,
+      payload: { text: updatedText, tone: "sky" },
+    };
+    const updateReceipt = {
+      id: COMMAND_ID,
+      room_id: ROOM_ID,
+      revision: 2,
+      occurred_at: CREATED_AT,
+      actor_user_id: HOST_ID,
+      actor_type: "human",
+      source: "voice",
+      actor_display_name: "Danny",
+      action: "update",
+      affected_object_ids: ["note-launch"],
+      previous_state: [
+        { objectId: "note-launch", state: createdSnapshot(HOST_ID) },
+      ],
+      resulting_state: [{ objectId: "note-launch", state: updatedSnapshot }],
+      inverse_command: { schemaVersion: 1, changes: [] },
+      reversible: true,
+      undoes_receipt_id: null,
+      description: "Danny added dictated text to “Launch decision”.",
+    };
+    const harness = createClient({
+      tableResults: {
+        room_members: [{ data: memberRow("host"), error: null }],
+        rooms: [
+          { data: { ...emptyRoomRow, revision: 1 }, error: null },
+          { data: { ...emptyRoomRow, revision: 1 }, error: null },
+          { data: { ...emptyRoomRow, revision: 2 }, error: null },
+          { data: { ...emptyRoomRow, revision: 2 }, error: null },
+        ],
+        canvas_objects: [
+          { data: [createdObjectRow(HOST_ID)], error: null },
+          { data: [updatedObjectRow], error: null },
+        ],
+        receipts: [
+          { data: [initialReceipt], error: null },
+          { data: [initialReceipt, updateReceipt], error: null },
+        ],
+      },
+      rpcResults: [
+        {
+          data: {
+            receiptId: COMMAND_ID,
+            revision: 2,
+            action: "update",
+            affectedObjectIds: ["note-launch"],
+          },
+          error: null,
+        },
+      ],
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).commitCommand(HOST_ID, {
+      commandId: COMMAND_ID,
+      roomId: ROOM_ID,
+      baseRevision: 1,
+      source: "voice",
+      command: {
+        type: "object.append_note_text",
+        objectId: "note-launch",
+        expectedVersion: 1,
+        text: "Supplier lead time is the launch risk.",
+      },
+    });
+
+    if (!result.ok) throw new Error(JSON.stringify(result.error));
+    expect(result.ok).toBe(true);
+    expect(result.value.state.objects["note-launch"]).toMatchObject({
+      version: 2,
+      payload: { text: updatedText, tone: "sky" },
+    });
+    expect(result.value.state.receipts.at(-1)).toMatchObject({
+      id: COMMAND_ID,
+      action: "update",
+      source: "voice",
+    });
+    expect(harness.rawClient.rpc).toHaveBeenCalledWith(
+      "commit_canvas_mutation_at_revision",
+      expect.objectContaining({
+        p_room_id: ROOM_ID,
+        p_expected_room_revision: 1,
+        p_actor_user_id: HOST_ID,
+        p_actor_type: "human",
+        p_source: "voice",
+        p_action: "update",
+        p_description: "Danny added dictated text to “Launch decision”.",
+        p_changes: [
+          expect.objectContaining({
+            objectId: "note-launch",
+            expectedVersion: 1,
+          }),
+        ],
+      }),
+    );
+  });
+
   it("returns the canonical nothing-to-redo refusal before the mutation RPC", async () => {
     const harness = createClient({
       tableResults: {

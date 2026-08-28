@@ -4,6 +4,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -27,7 +28,10 @@ import { SketchComposer } from "@/components/command-canvas/sketch-composer";
 import { SketchPreview } from "@/components/command-canvas/sketch-preview";
 import { SpatialCameraControl } from "@/components/command-canvas/spatial-camera-control";
 import type { CanvasStoreState } from "@/lib/canvas/canvas-store";
-import type { SketchPayload } from "@/lib/canvas/object-model";
+import {
+  NOTE_APPEND_TEXT_MAX_LENGTH,
+  type SketchPayload,
+} from "@/lib/canvas/object-model";
 import type {
   CanvasCommand,
   CanvasCommandSource,
@@ -47,9 +51,12 @@ import type {
   HandTrackingObservation,
   HandTrackingStatus,
 } from "@/lib/gesture/hand-tracking-controller";
+import type { RealtimeVoiceIntentResult } from "@/lib/realtime-voice/tools";
 import {
+  DEFAULT_HAND_ACTIVE_ZONE,
   createGestureSketchCommand,
   createInitialSpatialGestureState,
+  mapHandPointerToActiveZone,
   reduceSpatialGesture,
   type SpatialGestureEffect,
 } from "@/lib/gesture/spatial-gesture";
@@ -109,8 +116,12 @@ export type CommandCanvasSketchTransformHandler =
 
 const UI_SKETCH_TRANSFORM_SOURCE: CanvasCommandSource = "typed";
 const UI_SKETCH_TRANSFORM_INSTRUCTION =
-  "Make this sketch usable as a clean architecture diagram.";
+  "Make this usable as a professional visual.";
 const SELECTED_OBJECT_RENDER_Z_INDEX = 1_000_000;
+const POINTER_SKETCH_WIDTH = 720;
+const POINTER_SKETCH_HEIGHT = 420;
+const COMPACT_POINTER_SKETCH_WIDTH = 420;
+const COMPACT_POINTER_SKETCH_HEIGHT = 720;
 
 type ServiceTone = "idle" | "working" | "ready";
 
@@ -171,11 +182,25 @@ export function CommandCanvasRoom({
     useState<CommandExecutionState>({ status: "idle" });
   const [sketchTransformExecution, setSketchTransformExecution] =
     useState<SketchTransformExecutionState>({ status: "idle" });
+  const [pointerSketchDimensions, setPointerSketchDimensions] = useState({
+    width: POINTER_SKETCH_WIDTH,
+    height: POINTER_SKETCH_HEIGHT,
+  });
+  const [latestReceiptVisible, setLatestReceiptVisible] = useState(false);
   const canvasViewportRef = useRef<HTMLDivElement>(null);
   const spatialGestureState = useRef(createInitialSpatialGestureState());
   const gesturePreviewObjectId = useRef<string | null>(null);
   const handEraseLatchedRef = useRef(false);
   const initialCompactCompositionFitRef = useRef(false);
+  const seededCompositionAtMountRef = useRef(
+    Object.values(store.getState().canvas.objects).filter(
+      (object) => !object.deletedAt,
+    ).length >= 2,
+  );
+  const lastToastReceiptIdRef = useRef(
+    store.getState().canvas.receipts.at(-1)?.id,
+  );
+  const activeVoiceThoughtIdRef = useRef<string | null>(null);
   const gestureExitTimeoutsRef = useRef(new Map<string, number>());
   const canvas = useStore(store, (state) => state.canvas);
   const selectedObjectId = useStore(store, (state) => state.selectedObjectId);
@@ -224,6 +249,8 @@ export function CommandCanvasRoom({
   const commandPending = commandExecution.status === "pending";
   const sketchTransformPending = sketchTransformExecution.status === "pending";
   const interactionPending = commandPending || sketchTransformPending;
+  const drawingActive =
+    sketchComposerOpen || handInteractionMode === "draw";
   const spatialServiceState = serviceStateForHandTracking(
     handTrackingStatus,
     serviceStatus?.spatialInput,
@@ -245,7 +272,12 @@ export function CommandCanvasRoom({
   );
 
   useEffect(() => {
-    if (initialCompactCompositionFitRef.current || objects.length < 2) return;
+    if (
+      initialCompactCompositionFitRef.current ||
+      !seededCompositionAtMountRef.current ||
+      objects.length < 2
+    )
+      return;
     let cancelled = false;
     let attempts = 0;
     let timeoutId = 0;
@@ -282,9 +314,20 @@ export function CommandCanvasRoom({
         worldBounds,
         { x: 0, y: 0, width: measured.width, height: measured.height },
         20,
-        0.2,
+        0.5,
       );
-      if (fitted) setViewport(fitted);
+      if (fitted) {
+        const left = Math.min(...worldBounds.map((bounds) => bounds.x));
+        const right = Math.max(
+          ...worldBounds.map((bounds) => bounds.x + bounds.width),
+        );
+        const fittedWidth = (right - left) * fitted.scale;
+        setViewport(
+          fittedWidth > measured.width - 40
+            ? { ...fitted, x: 20 - left * fitted.scale }
+            : fitted,
+        );
+      }
     };
 
     timeoutId = window.setTimeout(fitSeededComposition, 0);
@@ -293,6 +336,18 @@ export function CommandCanvasRoom({
       window.clearTimeout(timeoutId);
     };
   }, [objects.length, setViewport, store]);
+
+  useEffect(() => {
+    if (!latestReceipt || latestReceipt.id === lastToastReceiptIdRef.current)
+      return;
+    lastToastReceiptIdRef.current = latestReceipt.id;
+    setLatestReceiptVisible(true);
+    const timeoutId = window.setTimeout(
+      () => setLatestReceiptVisible(false),
+      4_200,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [latestReceipt]);
 
   function runCommand(
     command: CanvasCommand,
@@ -328,8 +383,48 @@ export function CommandCanvasRoom({
     );
   }
 
+  async function submitConfirmedRealtimeCommand(
+    command: CanvasCommand,
+  ): Promise<HumanCommandResult> {
+    if (interactionPending)
+      return {
+        ok: false,
+        message: "Wait for the current canvas action to finish.",
+      };
+    if (!onCommand) {
+      const result = dispatch(command, "voice");
+      return result.ok
+        ? { ok: true, message: "Canvas action confirmed." }
+        : { ok: false, message: result.error.message };
+    }
+
+    setCommandExecution({ status: "pending" });
+    try {
+      const result = await onCommand(command, "voice");
+      if (result && !result.ok) {
+        setCommandExecution({
+          status: "refused",
+          message: result.error.message,
+        });
+        return { ok: false, message: result.error.message };
+      }
+      if (result?.ok && !store.getState().hydrateCanvas(result.state)) {
+        const message = "The shared canvas did not confirm that voice action.";
+        setCommandExecution({ status: "refused", message });
+        return { ok: false, message };
+      }
+      setCommandExecution({ status: "idle" });
+      return { ok: true, message: "Canvas action confirmed." };
+    } catch (error) {
+      const refusal = commandRefusal(error);
+      setCommandExecution(refusal);
+      return { ok: false, message: refusal.message };
+    }
+  }
+
   async function transformSelectedSketch(
     source: CanvasCommandSource = UI_SKETCH_TRANSFORM_SOURCE,
+    narration?: string,
   ) {
     if (
       !onTransformSketch ||
@@ -345,7 +440,8 @@ export function CommandCanvasRoom({
       const result = await onTransformSketch({
         sketchObjectId: selectedObject.id,
         instruction: UI_SKETCH_TRANSFORM_INSTRUCTION,
-        outputKind: "architecture",
+        ...(narration ? { narration } : {}),
+        outputKind: "auto",
         source,
       });
       if (!result.ok) {
@@ -541,7 +637,22 @@ export function CommandCanvasRoom({
     );
   }
 
-  function revealCreatedObjectOnCompactCanvas(objectId: string) {
+  function openPointerSketch() {
+    const measured = canvasViewportRef.current?.getBoundingClientRect();
+    const compact = Boolean(measured && measured.width > 0 && measured.width <= 640);
+    setPointerSketchDimensions(
+      compact
+        ? {
+            width: COMPACT_POINTER_SKETCH_WIDTH,
+            height: COMPACT_POINTER_SKETCH_HEIGHT,
+          }
+        : { width: POINTER_SKETCH_WIDTH, height: POINTER_SKETCH_HEIGHT },
+    );
+    setSketchComposerOpen(true);
+    setOpenDrawer(null);
+  }
+
+  function revealObjectOnCompactCanvas(objectId: string) {
     const viewportElement = canvasViewportRef.current;
     if (!viewportElement) return;
     const measured = viewportElement.getBoundingClientRect();
@@ -560,7 +671,7 @@ export function CommandCanvasRoom({
       [bounds, bounds],
       { x: 0, y: 0, width: measured.width, height: measured.height },
       24,
-      0.35,
+      0.5,
     );
     if (fitted) setViewport(fitted);
   }
@@ -592,7 +703,7 @@ export function CommandCanvasRoom({
         },
       },
       source,
-      () => revealCreatedObjectOnCompactCanvas(objectId),
+      () => revealObjectOnCompactCanvas(objectId),
     );
   }
 
@@ -647,7 +758,7 @@ export function CommandCanvasRoom({
         },
       },
       source,
-      () => revealCreatedObjectOnCompactCanvas(objectId),
+      () => revealObjectOnCompactCanvas(objectId),
     );
   }
 
@@ -698,7 +809,7 @@ export function CommandCanvasRoom({
         },
       },
       source,
-      () => revealCreatedObjectOnCompactCanvas(objectId),
+      () => revealObjectOnCompactCanvas(objectId),
     );
   }
 
@@ -711,6 +822,7 @@ export function CommandCanvasRoom({
       return;
     }
     selectObject(objectId);
+    revealObjectOnCompactCanvas(objectId);
   }
 
   function groupSelectedObjects(source: CanvasCommandSource = "pointer") {
@@ -788,6 +900,122 @@ export function CommandCanvasRoom({
     );
   }
 
+  async function handleRealtimeIntent(
+    intent: DirectCanvasIntent,
+    source: "voice",
+  ): Promise<RealtimeVoiceIntentResult> {
+    switch (intent.type) {
+      case "start_thought":
+        return startVoiceThoughtCapture();
+      case "append_thought":
+        return appendVoiceThoughtTranscript(intent.text);
+      case "finish_thought":
+        return finishVoiceThoughtCapture();
+      default:
+        return handleDirectIntent(intent, source);
+    }
+  }
+
+  async function startVoiceThoughtCapture(): Promise<HumanCommandResult> {
+    const objectId = createClientId("note");
+    const anchor = creationAnchor(160, 130);
+    activeVoiceThoughtIdRef.current = null;
+    const result = await submitConfirmedRealtimeCommand({
+      type: "object.create",
+      object: {
+        id: objectId,
+        type: "note",
+        title: "New thought",
+        x: anchor.x,
+        y: anchor.y,
+        width: 280,
+        height: 190,
+        zIndex: store.getState().canvas.revision + 1,
+        payload: { text: "", tone: "coral" },
+      },
+    });
+    if (!result.ok) return result;
+
+    const object = store.getState().canvas.objects[objectId];
+    if (!object || object.deletedAt || object.type !== "note")
+      return realtimeConfirmationFailure(
+        "The shared canvas did not confirm the new thought card.",
+      );
+    activeVoiceThoughtIdRef.current = objectId;
+    selectObject(objectId);
+    revealObjectOnCompactCanvas(objectId);
+    return { ok: true, message: "Thought capture started." };
+  }
+
+  async function appendVoiceThoughtTranscript(
+    rawText: string,
+  ): Promise<RealtimeVoiceIntentResult> {
+    const text = rawText.replace(/\s+/g, " ").trim();
+    if (!text)
+      return { ok: false, message: "No completed speech was available to add." };
+    if (text.length > NOTE_APPEND_TEXT_MAX_LENGTH)
+      return {
+        ok: false,
+        message: "Keep each dictated thought turn to 1,000 characters or fewer.",
+      };
+
+    const objectId = activeVoiceThoughtIdRef.current;
+    if (!objectId)
+      return { ok: false, message: "Start a new thought before dictating into it." };
+    const current = store.getState().canvas.objects[objectId];
+    if (!current || current.deletedAt || current.type !== "note") {
+      return abortVoiceThoughtCapture(
+        "The active thought card is no longer available.",
+      );
+    }
+    const expectedText = current.payload.text
+      ? `${current.payload.text}\n${text}`
+      : text;
+    const result = await submitConfirmedRealtimeCommand({
+      type: "object.append_note_text",
+      objectId,
+      expectedVersion: current.version,
+      text,
+    });
+    if (!result.ok) return abortVoiceThoughtCapture(result.message);
+
+    const updated = store.getState().canvas.objects[objectId];
+    if (
+      !updated ||
+      updated.deletedAt ||
+      updated.type !== "note" ||
+      updated.version !== current.version + 1 ||
+      updated.payload.text !== expectedText
+    ) {
+      const message = "The shared canvas did not confirm that thought transcript.";
+      realtimeConfirmationFailure(message);
+      return abortVoiceThoughtCapture(message);
+    }
+    return { ok: true, message: "Thought transcript added." };
+  }
+
+  function finishVoiceThoughtCapture(): RealtimeVoiceIntentResult {
+    const objectId = activeVoiceThoughtIdRef.current;
+    if (!objectId)
+      return {
+        ok: false,
+        message: "There is no active thought to finish.",
+        thoughtCapture: "aborted",
+      };
+    activeVoiceThoughtIdRef.current = null;
+    return { ok: true, message: "Thought capture finished." };
+  }
+
+  function abortVoiceThoughtCapture(message: string): RealtimeVoiceIntentResult {
+    activeVoiceThoughtIdRef.current = null;
+    return { ok: false, message, thoughtCapture: "aborted" };
+  }
+
+  function realtimeConfirmationFailure(message: string): HumanCommandResult {
+    setCommandExecution({ status: "refused", message });
+    return { ok: false, message };
+  }
+
   function handleDirectIntent(
     intent: DirectCanvasIntent,
     source: HumanCommandSource,
@@ -800,6 +1028,13 @@ export function CommandCanvasRoom({
       };
 
     switch (intent.type) {
+      case "start_thought":
+      case "append_thought":
+      case "finish_thought":
+        return {
+          ok: false,
+          message: "Thought dictation is available through Live voice.",
+        };
       case "create_note":
         createNote(source, intent.text);
         return { ok: true, message: "Note command submitted." };
@@ -810,8 +1045,33 @@ export function CommandCanvasRoom({
         createSchedule(source);
         return { ok: true, message: "Schedule command submitted." };
       case "open_sketch":
-        setSketchComposerOpen(true);
-        return { ok: true, message: "Sketch surface opened." };
+        if (handTrackingStatus.state === "ready") {
+          beginHandDrawing();
+          return { ok: true, message: "Tracked-hand drawing started." };
+        }
+        openPointerSketch();
+        return { ok: true, message: "Touch and stylus sketch surface opened." };
+      case "finish_sketch": {
+        if (handInteractionMode !== "draw")
+          return { ok: false, message: "Start a tracked-hand drawing first." };
+        const activeStrokeReady =
+          spatialGestureState.current.phase === "drawing" &&
+          spatialGestureState.current.stroke.length >= 2;
+        if (gestureSketchStrokes.length === 0 && !activeStrokeReady)
+          return { ok: false, message: "Draw at least one line first." };
+        finishHandDrawing();
+        return { ok: true, message: "Finger sketch command submitted." };
+      }
+      case "cancel_sketch":
+        if (handInteractionMode === "draw") {
+          cancelHandDrawing();
+          return { ok: true, message: "Finger drawing cancelled." };
+        }
+        if (sketchComposerOpen) {
+          setSketchComposerOpen(false);
+          return { ok: true, message: "Drawing cancelled." };
+        }
+        return { ok: false, message: "There is no active drawing to cancel." };
       case "transform_selected_sketch":
         if (
           !selectedObject ||
@@ -827,7 +1087,7 @@ export function CommandCanvasRoom({
             ok: false,
             message: "Sketch interpretation is unavailable in this room.",
           };
-        void transformSelectedSketch(source);
+        void transformSelectedSketch(source, intent.narration);
         return { ok: true, message: "Sketch interpretation submitted." };
       case "undo":
         if (canvas.receipts.length === 0)
@@ -888,31 +1148,41 @@ export function CommandCanvasRoom({
           false,
           "Restore",
         );
-      case "discard_selected":
-        if (!target)
+      case "discard_selected": {
+        const discardTarget =
+          target ??
+          (source === "voice" && selectedObject && !selectedObject.deletedAt
+            ? {
+                objectId: selectedObject.id,
+                title: selectedObject.title,
+                version: selectedObject.version,
+              }
+            : null);
+        if (!discardTarget)
           return { ok: false, message: "Select an active object first." };
-        const targetObject = canvas.objects[target.objectId];
+        const targetObject = canvas.objects[discardTarget.objectId];
         if (!targetObject || targetObject.deletedAt)
           return {
             ok: false,
-            message: `Discard cancelled because “${target.title}” is no longer active.`,
+            message: `Discard cancelled because “${discardTarget.title}” is no longer active.`,
           };
         if (
-          targetObject.version !== target.version ||
-          targetObject.title !== target.title
+          targetObject.version !== discardTarget.version ||
+          targetObject.title !== discardTarget.title
         )
           return {
             ok: false,
-            message: `Discard cancelled because “${target.title}” changed. Review it and try again.`,
+            message: `Discard cancelled because “${discardTarget.title}” changed. Review it and try again.`,
           };
         runCommand(
-          { type: "object.discard", objectId: target.objectId },
+          { type: "object.discard", objectId: discardTarget.objectId },
           source,
         );
         return {
           ok: true,
           message: "Recoverable discard command submitted.",
         };
+      }
     }
   }
 
@@ -954,11 +1224,11 @@ export function CommandCanvasRoom({
         object: {
           id: createClientId("sketch"),
           type: "sketch",
-          title: "Rough architecture",
+          title: "Rough sketch",
           x: (180 - viewport.x) / viewport.scale,
           y: (130 - viewport.y) / viewport.scale,
-          width: 440,
-          height: 280,
+          width: pointerSketchDimensions.width,
+          height: pointerSketchDimensions.height,
           zIndex: highestZ + 1,
           payload,
         },
@@ -1129,28 +1399,41 @@ export function CommandCanvasRoom({
     if (!canvasViewport || interactionPending) return;
     const bounds = canvasViewport.getBoundingClientRect();
     if (bounds.width <= 0 || bounds.height <= 0) return;
+    const displayPointer =
+      observation.mode === "idle"
+        ? null
+        : mapHandPointerToActiveZone(
+            observation.mode === "bimanual_pinch"
+              ? observation.center
+              : observation.pointer,
+            DEFAULT_HAND_ACTIVE_ZONE,
+          );
     if (handInteractionMode === "draw" && handDrawingTool === "erase") {
       if (observation.mode === "idle") {
         handEraseLatchedRef.current = false;
         setHandFeedback(null);
         return;
       }
-      const pointer =
-        observation.mode === "bimanual_pinch"
-          ? observation.center
-          : observation.pointer;
+      const pointer = displayPointer!;
       setHandFeedback({
         mode: observation.mode,
         pointer,
-        label: observation.mode === "point" ? "ERASING" : "ERASE · POINT",
+        label:
+          observation.mode === "point" || observation.mode === "open_palm"
+            ? "ERASING"
+            : "ERASE · POINT",
       });
-      if (observation.mode === "point" && !handEraseLatchedRef.current) {
+      if (
+        (observation.mode === "point" || observation.mode === "open_palm") &&
+        !handEraseLatchedRef.current
+      ) {
         handEraseLatchedRef.current = true;
         eraseNearestGestureStroke(pointer, bounds);
       }
       return;
     }
     const current = store.getState();
+    const primaryObjectId = current.selectedObjectId;
     const sceneObjects = Object.values(current.canvas.objects).flatMap(
       (object) =>
         object.deletedAt
@@ -1162,7 +1445,11 @@ export function CommandCanvasRoom({
                 y: object.y,
                 width: object.width,
                 height: object.height,
-                zIndex: object.zIndex,
+                zIndex: effectiveObjectZIndex(
+                  object.zIndex,
+                  object.id === primaryObjectId,
+                ),
+                rotation: object.rotation,
                 pinned: object.pinned,
                 minimized: object.minimized,
               },
@@ -1172,6 +1459,12 @@ export function CommandCanvasRoom({
       spatialGestureState.current,
       observation.mode === "idle"
         ? { mode: "idle", timestamp: observation.timestamp }
+        : handInteractionMode === "draw" && observation.mode === "open_palm"
+          ? {
+              mode: "point",
+              pointer: observation.pointer,
+              timestamp: observation.timestamp,
+            }
         : observation.mode === "bimanual_pinch"
           ? {
               mode: "bimanual_pinch",
@@ -1190,6 +1483,7 @@ export function CommandCanvasRoom({
       {
         bounds,
         viewport: current.viewport,
+        handActiveZone: DEFAULT_HAND_ACTIVE_ZONE,
         selectedObjectId: current.selectedObjectId,
         objects: sceneObjects,
       },
@@ -1217,24 +1511,27 @@ export function CommandCanvasRoom({
       setHandFeedback({
         mode: observation.mode,
         pointer:
-          observation.mode === "bimanual_pinch"
-            ? observation.center
-            : observation.pointer,
-        grabbedObjectId:
-          transition.state.grab?.objectId ??
-          transition.state.resize?.objectId,
+          displayPointer!,
+        grabbedObjectId: transition.state.grab?.objectId,
+        interactionPhase: transition.state.phase,
+        stagedExitAction:
+          transition.state.grab?.stagedExitAction ?? undefined,
         label:
           observation.mode !== "bimanual_pinch" &&
           observation.trackingState === "grace"
             ? "LOST · HOLDING"
           : handInteractionMode === "draw"
-            ? observation.mode === "point"
+            ? observation.mode === "point" || observation.mode === "open_palm"
               ? "DRAWING"
               : "DRAW · READY"
-          : observation.mode === "bimanual_pinch"
-            ? "RESIZING"
-            : observation.mode === "open_palm"
-              ? "PALM · HOLD"
+          : transition.state.phase === "zooming"
+            ? "CANVAS ZOOM"
+            : transition.state.phase === "panning"
+              ? "PAN"
+              : observation.mode === "bimanual_pinch"
+                ? "RESIZING"
+                : observation.mode === "open_palm"
+                  ? "PALM · HOLD"
             : transition.state.grab?.objectId
                 ? "HELD"
                 : releaseEffect
@@ -1304,6 +1601,20 @@ export function CommandCanvasRoom({
           "gesture",
         );
         return;
+      case "viewport.pan_by": {
+        const current = store.getState().viewport;
+        setViewport({
+          ...current,
+          x: current.x + effect.deltaX,
+          y: current.y + effect.deltaY,
+        });
+        return;
+      }
+      case "viewport.zoom_at": {
+        const current = store.getState().viewport;
+        setViewport(zoomViewportAt(current, effect.screenPoint, effect.scale));
+        return;
+      }
       case "object.stage_action": {
         const target = store.getState().canvas.objects[effect.objectId];
         if (!target || target.deletedAt) return;
@@ -1401,6 +1712,7 @@ export function CommandCanvasRoom({
     setHandTargetObjectId(null);
     setHandDrawingTool("draw");
     handEraseLatchedRef.current = false;
+    selectObject(null);
     setHandInteractionMode("draw");
     setOpenDrawer(null);
   }
@@ -1595,7 +1907,7 @@ export function CommandCanvasRoom({
 
   return (
     <main
-      className={`command-canvas-shell${meetingMediaPanel ? " has-meeting-media" : ""}`}
+      className={`command-canvas-shell${meetingMediaPanel ? " has-meeting-media" : ""}${drawingActive ? " is-drawing" : ""}`}
       aria-label="Spatial command surface"
       aria-busy={interactionPending}
       onKeyDown={handleCanvasKeyboard}
@@ -1710,7 +2022,12 @@ export function CommandCanvasRoom({
           >
             <div
               className="canvas-world"
-              style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})` }}
+              style={
+                {
+                  transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
+                  "--canvas-ui-scale": `${1 / viewport.scale}`,
+                } as CSSProperties
+              }
             >
               {transformationPairs.map(({ source, diagram }) => (
                 <TransformationBridge
@@ -1798,7 +2115,7 @@ export function CommandCanvasRoom({
                       ? loadPreparedDemoInterpretation
                       : undefined
                   }
-                  commandsDisabled={interactionPending || handInteractionMode === "draw"}
+                  commandsDisabled={interactionPending || drawingActive}
                 />
               ))}
             </div>
@@ -1841,24 +2158,25 @@ export function CommandCanvasRoom({
             {handFeedback?.grabbedObjectId ? (
               <div className="gesture-edge-targets" aria-live="polite">
                 <div
-                  className={`gesture-edge-target gesture-edge-discard gesture-edge-discard-left${handFeedback.pointer.x <= 0.08 ? " is-armed" : ""}`}
+                  className={`gesture-edge-target gesture-edge-discard gesture-edge-discard-left${handFeedback.stagedExitAction?.edge === "left" ? " is-armed" : ""}`}
                 >
                   <span>Throw to trash</span>
                 </div>
                 <div
-                  className={`gesture-edge-target gesture-edge-discard gesture-edge-discard-right${handFeedback.pointer.x >= 0.92 ? " is-armed" : ""}`}
+                  className={`gesture-edge-target gesture-edge-discard gesture-edge-discard-right${handFeedback.stagedExitAction?.edge === "right" ? " is-armed" : ""}`}
                 >
                   <span>Throw to trash</span>
                 </div>
                 <div
-                  className={`gesture-edge-target gesture-edge-minimize${handFeedback.pointer.y >= 0.92 ? " is-armed" : ""}`}
+                  className={`gesture-edge-target gesture-edge-minimize${handFeedback.stagedExitAction?.edge === "bottom" ? " is-armed" : ""}`}
                 >
                   <span>Minimize dock</span>
                 </div>
               </div>
             ) : null}
 
-            {handTrackingStatus.state === "ready" ? (
+            {handTrackingStatus.state === "ready" ||
+            handInteractionMode === "draw" ? (
               <section
                 className={`hand-mode-toolbar hand-mode-${handInteractionMode}`}
                 aria-label="Hand interaction controls"
@@ -1866,7 +2184,7 @@ export function CommandCanvasRoom({
                 {handInteractionMode === "manipulate" ? (
                   <>
                     <strong>MOVE OBJECTS</strong>
-                    <span>Point to target · pinch to hold</span>
+                    <span>Reach toward an object · pinch to hold</span>
                     <button
                       type="button"
                       aria-label="Draw with index finger"
@@ -1877,8 +2195,14 @@ export function CommandCanvasRoom({
                   </>
                 ) : (
                   <>
-                    <strong>DRAW MODE</strong>
-                    <span>{gestureSketchStrokes.length} {gestureSketchStrokes.length === 1 ? "stroke" : "strokes"} ready</span>
+                    <strong>
+                      {handTrackingStatus.state === "ready"
+                        ? "DRAW MODE"
+                        : "TRACKING LOST · SKETCH PRESERVED"}
+                    </strong>
+                    <span>
+                      {gestureSketchStrokes.length} {gestureSketchStrokes.length === 1 ? "stroke" : "strokes"} ready
+                    </span>
                     <button
                       type="button"
                       aria-label={handDrawingTool === "draw" ? "Use hand eraser" : "Use hand draw"}
@@ -1929,13 +2253,13 @@ export function CommandCanvasRoom({
               <div className="canvas-sketch-heading">
                 <div>
                   <p className="eyebrow">Original artifact stays here</p>
-                  <h2>Draw a rough architecture</h2>
+                  <h2>Draw what you mean</h2>
                 </div>
                 <span>Mouse · touch · stylus · finger</span>
               </div>
               <SketchComposer
-                width={440}
-                height={280}
+                width={pointerSketchDimensions.width}
+                height={pointerSketchDimensions.height}
                 onDone={createSketch}
                 onCancel={() => {
                   if (!interactionPending) setSketchComposerOpen(false);
@@ -1947,17 +2271,46 @@ export function CommandCanvasRoom({
 
         <aside className="tool-dock" aria-label="Object tools">
           <span className="dock-label">Canvas</span>
-          <button type="button" onClick={() => createNote()} aria-label="Create note" disabled={interactionPending}>
+          <button type="button" onClick={() => createNote()} aria-label="Create note" disabled={interactionPending || drawingActive}>
             <span aria-hidden="true">＋</span><small>Note</small>
           </button>
-          <button type="button" onClick={() => createTaskBoard()} aria-label="Create task board" disabled={interactionPending}>
+          <button type="button" onClick={() => createTaskBoard()} aria-label="Create task board" disabled={interactionPending || drawingActive}>
             <span aria-hidden="true">▦</span><small>Board</small>
           </button>
-          <button type="button" onClick={() => createSchedule()} aria-label="Create schedule" disabled={interactionPending}>
+          <button type="button" onClick={() => createSchedule()} aria-label="Create schedule" disabled={interactionPending || drawingActive}>
             <span aria-hidden="true">31</span><small>Schedule</small>
           </button>
-          <button type="button" onClick={() => setSketchComposerOpen(true)} aria-label="Create sketch" disabled={interactionPending}>
-            <span aria-hidden="true">⌁</span><small>Draw</small>
+          <button
+            type="button"
+            onClick={() => {
+              if (handTrackingStatus.state === "ready") beginHandDrawing();
+              else openPointerSketch();
+            }}
+            aria-label={
+              handTrackingStatus.state === "ready"
+                ? "Draw with tracked hand"
+                : "Create sketch"
+            }
+            aria-pressed={handInteractionMode === "draw" || sketchComposerOpen}
+            className={
+              handInteractionMode === "draw" || sketchComposerOpen
+                ? "is-active"
+                : undefined
+            }
+            disabled={interactionPending || drawingActive}
+          >
+            <span aria-hidden="true">⌁</span>
+            <small>
+              {handTrackingStatus.state === "ready" ? "Hand draw" : "Draw"}
+            </small>
+          </button>
+          <button
+            type="button"
+            aria-label="Undo last change"
+            disabled={drawingActive || interactionPending || canvas.receipts.length === 0}
+            onClick={() => runCommand({ type: "history.undo" }, "typed")}
+          >
+            <span aria-hidden="true">↶</span><small>Undo</small>
           </button>
           <button
             type="button"
@@ -1968,7 +2321,7 @@ export function CommandCanvasRoom({
             }
             aria-pressed={multiSelectMode}
             className={multiSelectMode ? "is-active" : undefined}
-            disabled={interactionPending}
+            disabled={interactionPending || drawingActive}
             onClick={() => setMultiSelectMode((current) => !current)}
           >
             <span aria-hidden="true">◇</span><small>Select</small>
@@ -1976,7 +2329,7 @@ export function CommandCanvasRoom({
           <button
             type="button"
             aria-label="Group selected objects"
-            disabled={interactionPending || !canGroup}
+            disabled={interactionPending || drawingActive || !canGroup}
             onClick={() => groupSelectedObjects()}
           >
             <span aria-hidden="true">▣</span><small>Group</small>
@@ -1984,23 +2337,15 @@ export function CommandCanvasRoom({
           <button
             type="button"
             aria-label="Ungroup selected frame"
-            disabled={interactionPending || !canUngroup}
+            disabled={interactionPending || drawingActive || !canUngroup}
             onClick={() => ungroupSelectedFrame()}
           >
             <span aria-hidden="true">▢</span><small>Ungroup</small>
           </button>
           <button
             type="button"
-            aria-label="Undo last change"
-            disabled={interactionPending || canvas.receipts.length === 0}
-            onClick={() => runCommand({ type: "history.undo" }, "typed")}
-          >
-            <span aria-hidden="true">↶</span><small>Undo</small>
-          </button>
-          <button
-            type="button"
             aria-label="Redo last undone change"
-            disabled={interactionPending || !canRedo}
+            disabled={interactionPending || drawingActive || !canRedo}
             onClick={() => runCommand({ type: "history.redo" }, "typed")}
           >
             <span aria-hidden="true">↷</span><small>Redo</small>
@@ -2012,6 +2357,7 @@ export function CommandCanvasRoom({
           className="command-drawer-trigger"
           aria-label="Open command drawer"
           aria-expanded={openDrawer === "command"}
+          disabled={drawingActive}
           onClick={() => setOpenDrawer(openDrawer === "command" ? null : "command")}
         >
           <span className="agent-pulse" aria-hidden="true" />
@@ -2019,7 +2365,7 @@ export function CommandCanvasRoom({
           <span aria-hidden="true">↗</span>
         </button>
 
-        {latestReceipt && openDrawer !== "activity" ? (
+        {latestReceipt && latestReceiptVisible && !drawingActive && openDrawer !== "activity" ? (
           <button
             type="button"
             className="latest-activity-toast"
@@ -2073,7 +2419,7 @@ export function CommandCanvasRoom({
                 <p className="eyebrow">Live conversation</p>
                 <RealtimeVoiceControl
                   {...realtimeVoice}
-                  onIntent={handleDirectIntent}
+                  onIntent={handleRealtimeIntent}
                 />
               </section>
             ) : null}
@@ -2277,7 +2623,7 @@ function CanvasObjectCard({
         top: preview?.y ?? object.y,
         width: preview?.width ?? object.width,
         height: object.minimized ? 62 : (preview?.height ?? object.height),
-        zIndex: isPrimary ? SELECTED_OBJECT_RENDER_Z_INDEX : object.zIndex,
+        zIndex: effectiveObjectZIndex(object.zIndex, isPrimary),
         transform: `${isHeld ? "scale(1.018) " : ""}rotate(${object.rotation ?? 0}deg)`,
       }}
     >
@@ -2311,39 +2657,12 @@ function CanvasObjectCard({
           ) : null}
           <button
             type="button"
-            aria-label="Rotate counterclockwise"
-            disabled={commandsDisabled || object.pinned}
-            onClick={onRotateCounterClockwise}
-            title="Rotate counterclockwise 15 degrees"
-          >
-            <span aria-hidden="true">↶</span>
-          </button>
-          <button
-            type="button"
-            aria-label="Rotate clockwise"
-            disabled={commandsDisabled || object.pinned}
-            onClick={onRotateClockwise}
-            title="Rotate clockwise 15 degrees"
-          >
-            <span aria-hidden="true">↷</span>
-          </button>
-          <button
-            type="button"
             aria-label="Focus object"
             disabled={commandsDisabled}
             onClick={onFocus}
             title="Focus or maximize"
           >
             <span aria-hidden="true">⛶</span>
-          </button>
-          <button
-            type="button"
-            aria-label={object.pinned ? "Unpin object" : "Pin object"}
-            disabled={commandsDisabled}
-            onClick={onTogglePin}
-            title={object.pinned ? "Unpin" : "Pin"}
-          >
-            <span aria-hidden="true">⌖</span>
           </button>
           <button
             type="button"
@@ -2363,6 +2682,33 @@ function CanvasObjectCard({
             title="Move to recoverable trash"
           >
             <span aria-hidden="true">×</span>
+          </button>
+          <button
+            type="button"
+            aria-label={object.pinned ? "Unpin object" : "Pin object"}
+            disabled={commandsDisabled}
+            onClick={onTogglePin}
+            title={object.pinned ? "Unpin" : "Pin"}
+          >
+            <span aria-hidden="true">⌖</span>
+          </button>
+          <button
+            type="button"
+            aria-label="Rotate counterclockwise"
+            disabled={commandsDisabled || object.pinned}
+            onClick={onRotateCounterClockwise}
+            title="Rotate counterclockwise 15 degrees"
+          >
+            <span aria-hidden="true">↶</span>
+          </button>
+          <button
+            type="button"
+            aria-label="Rotate clockwise"
+            disabled={commandsDisabled || object.pinned}
+            onClick={onRotateClockwise}
+            title="Rotate clockwise 15 degrees"
+          >
+            <span aria-hidden="true">↷</span>
           </button>
         </div>
       ) : null}
@@ -2526,9 +2872,20 @@ function objectTypeLabel(object: CanvasObject) {
     case "sketch":
       return "ROUGH SKETCH";
     case "diagram":
-      return object.payload.kind === "architecture"
-        ? "ARCHITECTURE DIAGRAM"
-        : "FLOWCHART";
+      switch (object.payload.kind) {
+        case "architecture":
+          return "ARCHITECTURE DIAGRAM";
+        case "flowchart":
+          return "FLOWCHART";
+        case "diagram":
+          return "STRUCTURED DIAGRAM";
+        case "pie_chart":
+          return "PIE CHART";
+        case "bar_chart":
+          return "BAR CHART";
+        case "line_chart":
+          return "LINE CHART";
+      }
     case "frame":
       return "FRAME";
   }
@@ -2616,6 +2973,13 @@ interface HandCanvasFeedback {
   mode: "point" | "pinch" | "open_palm" | "bimanual_pinch";
   pointer: CanvasPoint;
   grabbedObjectId?: string;
+  interactionPhase?: ReturnType<
+    typeof createInitialSpatialGestureState
+  >["phase"];
+  stagedExitAction?: {
+    action: "discard" | "minimize";
+    edge: "left" | "right" | "bottom";
+  };
   label: string;
 }
 
@@ -2631,6 +2995,10 @@ function wrapRotation(rotation: number) {
   if (rotation > 180) return rotation - 360;
   if (rotation < -180) return rotation + 360;
   return rotation;
+}
+
+function effectiveObjectZIndex(zIndex: number, isPrimary: boolean) {
+  return isPrimary ? SELECTED_OBJECT_RENDER_Z_INDEX : zIndex;
 }
 
 function distanceToStroke(
@@ -2690,7 +3058,9 @@ function isPromiseLike(
   );
 }
 
-function commandRefusal(error: unknown): CommandExecutionState {
+function commandRefusal(
+  error: unknown,
+): Extract<CommandExecutionState, { status: "refused" }> {
   return {
     status: "refused",
     message:

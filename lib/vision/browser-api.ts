@@ -148,7 +148,8 @@ export function createBrowserSketchTransformApi(
       if (
         !parsed.success ||
         parsed.data.transform.sourceSketchId !== input.data.sketchObjectId ||
-        parsed.data.transform.payload.kind !== input.data.outputKind
+        (input.data.outputKind !== "auto" &&
+          parsed.data.transform.payload.kind !== input.data.outputKind)
       )
         return invalidResponse();
       return { ok: true, value: parsed.data.transform };

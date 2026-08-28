@@ -38,6 +38,7 @@ const sourceSchema = z.enum([
 ]);
 const receiptActionSchema = z.enum([
   "create",
+  "update",
   "transform",
   "pin",
   "unpin",

@@ -43,7 +43,10 @@ export interface MeetingMediaPeer {
     | ((event: { track: MediaStreamTrack; streams: MediaStream[] }) => void)
     | null;
   onconnectionstatechange: (() => void) | null;
-  addTrack: (track: MediaStreamTrack, stream: MediaStream) => unknown;
+  addTrack: (
+    track: MediaStreamTrack,
+    stream: MediaStream,
+  ) => MeetingMediaSender;
   createOffer: () => Promise<RTCSessionDescriptionInit>;
   createAnswer: () => Promise<RTCSessionDescriptionInit>;
   setLocalDescription: (
@@ -54,6 +57,10 @@ export interface MeetingMediaPeer {
   ) => Promise<unknown>;
   addIceCandidate: (candidate: RTCIceCandidateInit) => Promise<unknown>;
   close: () => void;
+}
+
+export interface MeetingMediaSender {
+  replaceTrack: (track: MediaStreamTrack | null) => Promise<unknown>;
 }
 
 export interface MeetingMediaChannel {
@@ -107,6 +114,7 @@ export interface MeetingMediaControllerOptions {
 
 interface PeerRecord {
   peer: MeetingMediaPeer;
+  videoSender: MeetingMediaSender | null;
   pendingIce: RTCIceCandidateInit[];
   pendingIceKeys: Set<string>;
 }
@@ -142,6 +150,7 @@ export function createMeetingMediaController(
   let snapshot = initialSnapshot();
   let channel: MeetingMediaChannel | null = null;
   let localStream: MediaStream | null = null;
+  let publicationVideoTrack: MediaStreamTrack | null = null;
   let disposed = false;
   let lifecycleVersion = 0;
   let starting: Promise<boolean> | null = null;
@@ -215,12 +224,29 @@ export function createMeetingMediaController(
       stopTracks(acquiredStream);
       return false;
     }
+    const sourceVideoTrack = acquiredStream.getVideoTracks()[0] ?? null;
+    try {
+      publicationVideoTrack = sourceVideoTrack?.clone() ?? null;
+    } catch {
+      stopTracks(acquiredStream);
+      if (disposed || version !== lifecycleVersion) return false;
+      emit({
+        state: "error",
+        localStream: null,
+        cameraEnabled: false,
+        microphoneEnabled: false,
+        message: "Camera video could not be prepared for the meeting.",
+      });
+      return false;
+    }
+    if (publicationVideoTrack && sourceVideoTrack)
+      publicationVideoTrack.enabled = sourceVideoTrack.enabled;
     localStream = acquiredStream;
 
     emit({
       state: "connecting",
       localStream,
-      cameraEnabled: localStream.getVideoTracks().some((track) => track.enabled),
+      cameraEnabled: publicationVideoTrack?.enabled ?? false,
       microphoneEnabled: localStream
         .getAudioTracks()
         .some((track) => track.enabled),
@@ -304,7 +330,7 @@ export function createMeetingMediaController(
       return;
     }
     if (signal.kind === "ready") {
-      const record = ensurePeer(signal.senderId);
+      const record = await ensurePeer(signal.senderId);
       if (record && localParticipantId.localeCompare(signal.senderId) < 0)
         await sendOffer(signal.senderId, record);
       else if (record && !readyAcknowledged.has(signal.senderId)) {
@@ -319,7 +345,7 @@ export function createMeetingMediaController(
       return;
     }
     if (signal.kind === "description") {
-      const record = ensurePeer(signal.senderId);
+      const record = await ensurePeer(signal.senderId);
       if (!record) return;
       await record.peer.setRemoteDescription(signal.description);
       const pendingIce = record.pendingIce.splice(0);
@@ -339,7 +365,7 @@ export function createMeetingMediaController(
       }
       return;
     }
-    const record = ensurePeer(signal.senderId);
+    const record = await ensurePeer(signal.senderId);
     if (!record) return;
     if (!record.peer.remoteDescription) {
       const key = iceCandidateKey(signal.candidate);
@@ -353,7 +379,7 @@ export function createMeetingMediaController(
     } else await record.peer.addIceCandidate(signal.candidate);
   }
 
-  function ensurePeer(remoteParticipantId: string) {
+  async function ensurePeer(remoteParticipantId: string) {
     const existing = peers.get(remoteParticipantId);
     if (existing) return existing;
     if (peers.size >= MAX_REMOTE_PEERS || !localStream) return null;
@@ -361,11 +387,23 @@ export function createMeetingMediaController(
     const peer = createPeer();
     const record: PeerRecord = {
       peer,
+      videoSender: null,
       pendingIce: [],
       pendingIceKeys: new Set(),
     };
+    try {
+      for (const track of localStream.getAudioTracks())
+        peer.addTrack(track, localStream);
+      if (publicationVideoTrack) {
+        record.videoSender = peer.addTrack(publicationVideoTrack, localStream);
+        if (!snapshot.cameraEnabled)
+          await record.videoSender.replaceTrack(null);
+      }
+    } catch (error) {
+      peer.close();
+      throw error;
+    }
     peers.set(remoteParticipantId, record);
-    for (const track of localStream.getTracks()) peer.addTrack(track, localStream);
     peer.onicecandidate = (event: { candidate: RTCIceCandidate | null }) => {
       if (!event.candidate) return;
       const candidate = event.candidate;
@@ -471,9 +509,21 @@ export function createMeetingMediaController(
   }
 
   function setCameraEnabled(enabled: boolean) {
-    if (!localStream) return;
-    for (const track of localStream.getVideoTracks()) track.enabled = enabled;
+    const track = publicationVideoTrack;
+    if (!localStream || !track) return;
+    track.enabled = enabled;
     emit({ cameraEnabled: enabled });
+    signalWork = signalWork.then(async () => {
+      if (disposed || publicationVideoTrack !== track) return;
+      for (const [participantId, record] of [...peers.entries()]) {
+        if (!record.videoSender) continue;
+        try {
+          await record.videoSender.replaceTrack(enabled ? track : null);
+        } catch {
+          closePeer(participantId, "failed");
+        }
+      }
+    });
   }
 
   function setMicrophoneEnabled(enabled: boolean) {
@@ -531,6 +581,8 @@ export function createMeetingMediaController(
     const activeChannel = channel;
     channel = null;
     for (const participantId of [...peers.keys()]) closePeer(participantId);
+    publicationVideoTrack?.stop();
+    publicationVideoTrack = null;
     stopTracks(localStream);
     localStream = null;
     if (!activeChannel) return;

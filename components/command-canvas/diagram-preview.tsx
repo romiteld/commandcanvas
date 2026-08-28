@@ -1,14 +1,29 @@
 import { useId } from "react";
 
+import { ChartPreview } from "@/components/command-canvas/chart-preview";
 import type { DiagramPayload } from "@/lib/canvas/object-model";
 
 const VIEWBOX_PADDING = 28;
 
 export function DiagramPreview({ payload }: { payload: DiagramPayload }) {
+  if ("chart" in payload) return <ChartPreview payload={payload} />;
+  return <NodeDiagramPreview payload={payload} />;
+}
+
+function NodeDiagramPreview({
+  payload,
+}: {
+  payload: Exclude<DiagramPayload, { chart: unknown }>;
+}) {
   const markerId = `diagram-arrow-${useId().replaceAll(":", "")}`;
   const nodes = new Map(payload.nodes.map((node) => [node.id, node]));
   const bounds = diagramBounds(payload);
-  const kindLabel = payload.kind === "architecture" ? "Architecture" : "Flowchart";
+  const kindLabel =
+    payload.kind === "architecture"
+      ? "Architecture"
+      : payload.kind === "flowchart"
+        ? "Flowchart"
+        : "Structured";
 
   return (
     <svg
@@ -97,7 +112,9 @@ export function DiagramPreview({ payload }: { payload: DiagramPayload }) {
   );
 }
 
-function diagramBounds(payload: DiagramPayload) {
+type NodeDiagramPayload = Exclude<DiagramPayload, { chart: unknown }>;
+
+function diagramBounds(payload: NodeDiagramPayload) {
   const minX = Math.min(...payload.nodes.map((node) => node.x));
   const minY = Math.min(...payload.nodes.map((node) => node.y));
   const maxX = Math.max(...payload.nodes.map((node) => node.x + node.width));
@@ -110,7 +127,7 @@ function diagramBounds(payload: DiagramPayload) {
   };
 }
 
-type DiagramNode = DiagramPayload["nodes"][number];
+type DiagramNode = NodeDiagramPayload["nodes"][number];
 
 function edgeEndpoints(from: DiagramNode, to: DiagramNode) {
   const fromCenter = {

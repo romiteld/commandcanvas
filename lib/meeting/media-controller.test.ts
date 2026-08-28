@@ -15,11 +15,15 @@ const strangerId = "33333333-3333-4333-8333-333333333333";
 const lowerId = "00000000-0000-4000-8000-000000000000";
 const fourthId = "44444444-4444-4444-8444-444444444444";
 
-function track(kind: "audio" | "video") {
+function track(
+  kind: "audio" | "video",
+  clone?: () => MediaStreamTrack,
+) {
   return {
     kind,
     enabled: true,
     stop: vi.fn(),
+    ...(clone ? { clone: vi.fn(clone) } : {}),
   } as unknown as MediaStreamTrack;
 }
 
@@ -56,7 +60,8 @@ function harness(options: { allowedParticipantIds?: ReadonlySet<string> } = {}) 
     removeChannel: vi.fn(async () => undefined),
   };
   const audio = track("audio");
-  const video = track("video");
+  const publishedVideo = track("video");
+  const video = track("video", () => publishedVideo);
   const localStream = stream(audio, video);
   const getUserMedia = vi.fn(async () => localStream);
   const peers: FakePeer[] = [];
@@ -88,6 +93,7 @@ function harness(options: { allowedParticipantIds?: ReadonlySet<string> } = {}) 
     getUserMedia,
     audio,
     video,
+    publishedVideo,
     emitChannelStatus(status: string) {
       subscriptionHandler?.(status);
     },
@@ -135,6 +141,7 @@ describe("meeting media controller", () => {
 
     expect(setup.audio.stop).toHaveBeenCalledOnce();
     expect(setup.video.stop).toHaveBeenCalledOnce();
+    expect(setup.publishedVideo.stop).toHaveBeenCalledOnce();
     expect(setup.snapshots.at(-1)).toMatchObject({
       state: "error",
       localStream: null,
@@ -366,6 +373,7 @@ describe("meeting media controller", () => {
 
     expect(setup.audio.stop).toHaveBeenCalledOnce();
     expect(setup.video.stop).toHaveBeenCalledOnce();
+    expect(setup.publishedVideo.stop).toHaveBeenCalledOnce();
     expect(setup.peers[0]?.close).toHaveBeenCalledOnce();
     expect(setup.client.removeChannel).toHaveBeenCalledWith(setup.channel);
     expect(setup.snapshots.at(-1)).toMatchObject({
@@ -431,8 +439,10 @@ describe("meeting media controller", () => {
 
     setup.controller.setCameraEnabled(false);
     setup.controller.setMicrophoneEnabled(false);
+    await setup.controller.whenIdle();
 
-    expect(setup.video.enabled).toBe(false);
+    expect(setup.video.enabled).toBe(true);
+    expect(setup.publishedVideo.enabled).toBe(false);
     expect(setup.audio.enabled).toBe(false);
     expect(setup.getUserMedia).toHaveBeenCalledOnce();
     expect(setup.snapshots.at(-1)).toMatchObject({
@@ -440,7 +450,76 @@ describe("meeting media controller", () => {
       microphoneEnabled: false,
     });
   });
+
+  it("detaches meeting video without disabling the capture track shared with hand inference", async () => {
+    const setup = harness();
+    await setup.controller.start();
+    setup.handlers.get("broadcast:meeting-media")?.({
+      payload: { version: 1, kind: "ready", senderId: remoteId },
+    });
+    await setup.controller.whenIdle();
+    const videoSender = setup.peers[0]?.senders.find(
+      (sender) => sender.track?.kind === "video",
+    );
+    expect(videoSender).toBeDefined();
+
+    setup.controller.setCameraEnabled(false);
+    await setup.controller.whenIdle();
+
+    expect(setup.video.enabled).toBe(true);
+    expect(setup.video.stop).not.toHaveBeenCalled();
+    expect(setup.publishedVideo.enabled).toBe(false);
+    expect(videoSender?.replaceTrack).toHaveBeenLastCalledWith(null);
+    expect(setup.snapshots.at(-1)).toMatchObject({ cameraEnabled: false });
+
+    setup.controller.setCameraEnabled(true);
+    await setup.controller.whenIdle();
+
+    expect(setup.video.enabled).toBe(true);
+    expect(setup.publishedVideo.enabled).toBe(true);
+    expect(videoSender?.replaceTrack).toHaveBeenLastCalledWith(
+      setup.publishedVideo,
+    );
+    expect(setup.getUserMedia).toHaveBeenCalledOnce();
+    expect(setup.snapshots.at(-1)).toMatchObject({ cameraEnabled: true });
+  });
+
+  it("keeps a late peer's video sender detached when meeting video is already off", async () => {
+    const setup = harness();
+    await setup.controller.start();
+    setup.controller.setCameraEnabled(false);
+    await setup.controller.whenIdle();
+
+    setup.handlers.get("broadcast:meeting-media")?.({
+      payload: { version: 1, kind: "ready", senderId: remoteId },
+    });
+    await setup.controller.whenIdle();
+
+    const videoSender = setup.peers[0]?.senders.find((sender) =>
+      sender.replaceTrack.mock.calls.some(([nextTrack]) => nextTrack === null),
+    );
+    expect(videoSender?.replaceTrack).toHaveBeenCalledWith(null);
+    expect(videoSender?.track).toBeNull();
+    expect(setup.video.enabled).toBe(true);
+    expect(setup.publishedVideo.enabled).toBe(false);
+    expect(setup.sent).toContainEqual({
+      type: "broadcast",
+      event: "meeting-media",
+      payload: expect.objectContaining({
+        kind: "description",
+        targetId: remoteId,
+      }),
+    });
+  });
 });
+
+class FakeSender {
+  constructor(public track: MediaStreamTrack | null) {}
+
+  replaceTrack = vi.fn(async (nextTrack: MediaStreamTrack | null) => {
+    this.track = nextTrack;
+  });
+}
 
 class FakePeer implements MeetingMediaPeer {
   localDescription: RTCSessionDescriptionInit | null = null;
@@ -450,11 +529,15 @@ class FakePeer implements MeetingMediaPeer {
   ontrack: ((event: { track: MediaStreamTrack; streams: MediaStream[] }) => void) | null = null;
   onconnectionstatechange: (() => void) | null = null;
   addedTracks: MediaStreamTrack[] = [];
+  senders: FakeSender[] = [];
   addedIceCandidates: RTCIceCandidateInit[] = [];
   close = vi.fn();
 
   addTrack(track: MediaStreamTrack) {
     this.addedTracks.push(track);
+    const sender = new FakeSender(track);
+    this.senders.push(sender);
+    return sender;
   }
 
   async createOffer() {

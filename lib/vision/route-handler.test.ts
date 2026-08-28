@@ -45,6 +45,26 @@ const diagramPayload = {
   ],
   edges: [{ id: "edge-browser-api", from: "node-browser", to: "node-api" }],
 };
+const barChartPayload = {
+  kind: "bar_chart" as const,
+  sourceSketchId: "sketch-source",
+  interpretationSummary: "Two values transcribed from the sketch.",
+  chart: {
+    title: "Participants",
+    xAxisLabel: "Team",
+    yAxisLabel: "People",
+    series: [
+      {
+        id: "series-people",
+        label: "People",
+        points: [
+          { label: "Design", value: 3 },
+          { label: "Engineering", value: 8 },
+        ],
+      },
+    ],
+  },
+};
 
 function canvasWithSketch(): CanvasState {
   const initial = createEmptyCanvasState(ROOM_ID);
@@ -190,6 +210,7 @@ describe("sketch transform route", () => {
       outputKind: "architecture",
       normalizedInstructionSha256:
         "626aae5cc9ce79b1328a0a7f662fcca20e1ced0175814d9711171152588bc764",
+      normalizedNarrationSha256: null,
       pngSha256:
         "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
       requestKey: REQUEST_KEY,
@@ -223,6 +244,74 @@ describe("sketch transform route", () => {
       },
     });
     expect(canvasWithSketch().objects["sketch-source"]?.deletedAt).toBeNull();
+  });
+
+  it("admits spoken sketch context with its own normalized durable identity", async () => {
+    const deps = dependencies({
+      admitTransform: vi.fn(async (input) => ({
+        ok: true as const,
+        outcome: "admitted" as const,
+        requestKey: input.requestKey,
+        leaseToken: LEASE_TOKEN,
+        leaseExpiresAt: "2026-08-27T14:02:00.000Z",
+      })),
+    });
+    const response = await handleSketchTransformRequest(
+      request({
+        ...validBody(),
+        narration: "  The API writes\tcommands to PostgreSQL.  ",
+      }),
+      ROOM_ID,
+      deps,
+    );
+
+    expect(response.status).toBe(200);
+    expect(deps.admitTransform).toHaveBeenCalledWith(
+      expect.objectContaining({
+        normalizedNarrationSha256:
+          "380bdd86287e31230de1a2ab214de6ead3665f689a327bbf06105fdd84919775",
+      }),
+    );
+    expect(deps.transform).toHaveBeenCalledWith(
+      expect.objectContaining({
+        narration: "The API writes commands to PostgreSQL.",
+      }),
+    );
+  });
+
+  it("admits auto and returns the concrete chart chosen by vision", async () => {
+    const deps = dependencies({
+      admitTransform: vi.fn(async (input) => ({
+        ok: true as const,
+        outcome: "admitted" as const,
+        requestKey: input.requestKey,
+        leaseToken: LEASE_TOKEN,
+        leaseExpiresAt: "2026-08-27T14:02:00.000Z",
+      })),
+      transform: vi.fn(async () => ({
+        ok: true as const,
+        payload: barChartPayload,
+        responseId: "resp-bar-chart",
+        model: "gpt-5.6-terra" as const,
+      })),
+    });
+    const response = await handleSketchTransformRequest(
+      request({ ...validBody(), outputKind: "auto" }),
+      ROOM_ID,
+      deps,
+    );
+
+    expect(response.status).toBe(200);
+    expect(deps.admitTransform).toHaveBeenCalledWith(
+      expect.objectContaining({ outputKind: "auto" }),
+    );
+    expect(deps.completeTransform).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: barChartPayload }),
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      transform: { payload: barChartPayload },
+    });
   });
 
   it("normalizes Unicode and internal whitespace before deriving admission identity", async () => {

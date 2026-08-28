@@ -129,7 +129,8 @@ select public.admit_sketch_transform(
   :'cc_instruction_hash',
   :'cc_png_hash',
   :'cc_demo_request_key',
-  :'cc_first_lease_token'
+  :'cc_first_lease_token',
+  null
 ) as admission
 \gset cc_first_
 
@@ -161,7 +162,8 @@ select public.admit_sketch_transform(
   :'cc_instruction_hash',
   :'cc_png_hash',
   :'cc_demo_request_key',
-  :'cc_second_lease_token'
+  :'cc_second_lease_token',
+  null
 ) as admission
 \gset cc_duplicate_
 
@@ -205,7 +207,8 @@ select public.admit_sketch_transform(
   :'cc_instruction_hash',
   :'cc_png_hash',
   :'cc_demo_request_key',
-  :'cc_third_lease_token'
+  :'cc_third_lease_token',
+  null
 ) as admission
 \gset cc_cached_
 
@@ -261,7 +264,7 @@ set local role service_role;
 select public.admit_sketch_transform(
   :'cc_demo_room_id', :'host_user_id', :'cc_demo_sketch_id', 1,
   'architecture', :'cc_instruction_hash', :'cc_second_png_hash',
-  :'cc_second_demo_key', :'cc_second_lease_token'
+  :'cc_second_demo_key', :'cc_second_lease_token', null
 ) as admission
 \gset cc_busy_
 
@@ -364,7 +367,7 @@ select
 select public.admit_sketch_transform(
   :'cc_demo_room_id', :'host_user_id', :'cc_demo_sketch_id', 1,
   'architecture', :'cc_instruction_hash', :'cc_demo_limit_png_hash',
-  :'cc_demo_limit_request_key', gen_random_uuid()
+  :'cc_demo_limit_request_key', gen_random_uuid(), null
 ) as admission
 \gset cc_demo_limit_
 select pg_temp.assert_json_text(
@@ -423,7 +426,7 @@ select
 select public.admit_sketch_transform(
   :'cc_standard_room_id', :'host_user_id', :'cc_standard_sketch_id', 1,
   'architecture', :'cc_instruction_hash', :'cc_daily_limit_png_hash',
-  :'cc_daily_limit_request_key', gen_random_uuid()
+  :'cc_daily_limit_request_key', gen_random_uuid(), null
 ) as admission
 \gset cc_daily_limit_
 select pg_temp.assert_json_text(
@@ -487,7 +490,7 @@ select
 select public.admit_sketch_transform(
   :'cc_second_standard_room_id', :'host_user_id', :'cc_second_sketch_id', 1,
   'architecture', :'cc_instruction_hash', :'cc_rate_limit_png_hash',
-  :'cc_rate_limit_request_key', gen_random_uuid()
+  :'cc_rate_limit_request_key', gen_random_uuid(), null
 ) as admission
 \gset cc_rate_limit_
 select pg_temp.assert_json_text(

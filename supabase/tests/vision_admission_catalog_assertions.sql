@@ -6,7 +6,7 @@
 do $$
 declare
   v_admit_oid oid := pg_catalog.to_regprocedure(
-    'public.admit_sketch_transform(uuid,uuid,text,bigint,text,text,text,text,uuid)'
+    'public.admit_sketch_transform(uuid,uuid,text,bigint,text,text,text,text,uuid,text)'
   );
   v_complete_oid oid := pg_catalog.to_regprocedure(
     'public.complete_sketch_transform(text,uuid,text,text,jsonb)'
@@ -19,6 +19,36 @@ declare
   );
   v_function_oid oid;
 begin
+  if pg_catalog.to_regprocedure(
+       'public.admit_sketch_transform(uuid,uuid,text,bigint,text,text,text,text,uuid)'
+     ) is not null
+  then
+    raise exception 'vision_admission_legacy_rpc_still_present';
+  end if;
+
+  if not exists (
+    select 1
+    from pg_catalog.pg_attribute attribute
+    where attribute.attrelid =
+          'private.sketch_transform_admissions'::pg_catalog.regclass
+      and attribute.attname = 'normalized_narration_sha256'
+      and not attribute.attisdropped
+      and attribute.atttypid = 'pg_catalog.text'::pg_catalog.regtype
+  )
+     or not exists (
+       select 1
+       from pg_catalog.pg_constraint constraint_row
+       where constraint_row.conrelid =
+             'private.sketch_transform_admissions'::pg_catalog.regclass
+         and constraint_row.conname =
+             'sketch_transform_admission_narration_hash'
+         and constraint_row.contype = 'c'
+         and constraint_row.convalidated
+     )
+  then
+    raise exception 'vision_admission_narration_contract_missing';
+  end if;
+
   if pg_catalog.to_regclass('private.sketch_transform_admissions') is null
      or pg_catalog.to_regclass('private.sketch_transform_attempts') is null
      or pg_catalog.to_regclass('private.demo_vision_usage') is null

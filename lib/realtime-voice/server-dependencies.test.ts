@@ -183,11 +183,12 @@ describe("OpenAI Realtime unified-interface boundary", () => {
         "undo",
       ]),
     );
-    expect(session.tools.map((tool: { name: string }) => tool.name)).not.toContain(
-      "discard_object",
+    expect(session.tools.map((tool: { name: string }) => tool.name)).toContain(
+      "discard_selected",
     );
     expect(session.instructions).toMatch(/submitted/i);
-    expect(session.instructions).toMatch(/never discard/i);
+    expect(session.instructions).toMatch(/explicitly asks to discard/i);
+    expect(session.instructions).toMatch(/recoverable trash/i);
   });
 
   it("derives a stable privacy-preserving identifier without exposing the actor id", () => {

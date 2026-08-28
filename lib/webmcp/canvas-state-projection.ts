@@ -15,6 +15,8 @@ const SCHEDULE_DAY_LIMIT = 7;
 const SCHEDULE_ENTRIES_PER_DAY_LIMIT = 2;
 const DIAGRAM_NODE_LIMIT = 12;
 const DIAGRAM_EDGE_LIMIT = 16;
+const CHART_SERIES_LIMIT = 3;
+const CHART_POINTS_PER_SERIES_LIMIT = 8;
 const RECEIPT_AFFECTED_OBJECT_LIMIT = 12;
 
 type TruncationReason = "object_limit" | "receipt_limit" | "byte_budget";
@@ -275,6 +277,41 @@ function summarizePayload(object: CanvasObject) {
       };
     }
     case "diagram": {
+      if ("chart" in object.payload) {
+        const pointCount = object.payload.chart.series.reduce(
+          (total, series) => total + series.points.length,
+          0,
+        );
+        const series = object.payload.chart.series
+          .slice(0, CHART_SERIES_LIMIT)
+          .map((item) => ({
+            id: item.id,
+            label: item.label,
+            pointCount: item.points.length,
+            points: item.points.slice(0, CHART_POINTS_PER_SERIES_LIMIT),
+          }));
+        const returnedPointCount = series.reduce(
+          (total, item) => total + item.points.length,
+          0,
+        );
+        return {
+          kind: object.payload.kind,
+          sourceSketchId: object.payload.sourceSketchId,
+          interpretationSummary: object.payload.interpretationSummary,
+          chart: {
+            title: object.payload.chart.title,
+            xAxisLabel: object.payload.chart.xAxisLabel,
+            yAxisLabel: object.payload.chart.yAxisLabel,
+            seriesCount: object.payload.chart.series.length,
+            returnedSeriesCount: series.length,
+            omittedSeriesCount: object.payload.chart.series.length - series.length,
+            pointCount,
+            returnedPointCount,
+            omittedPointCount: pointCount - returnedPointCount,
+            series,
+          },
+        };
+      }
       const nodes = object.payload.nodes.slice(0, DIAGRAM_NODE_LIMIT).map((node) => ({
         id: node.id,
         label: node.label,

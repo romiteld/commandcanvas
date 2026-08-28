@@ -1,5 +1,6 @@
 import type {
   HandDetector,
+  HandDetectorDiagnostics,
   HandDetectorLoadOptions,
   HandDetectorResult,
 } from "@/lib/gesture/hand-tracking-worker-core";
@@ -65,11 +66,13 @@ interface CanvasLike {
 }
 
 export interface YoloHandPoseRuntime {
-  configure(wasmBaseUrl: string): void;
+  configure(wasmBaseUrl: string): void | Promise<void>;
   createSession(
     modelAssetUrl: string,
-    options: { executionProviders: readonly ["webgpu", "wasm"] },
+    options: { executionProviders: readonly ("webgpu" | "wasm")[] },
   ): Promise<YoloHandPoseSession>;
+  getWebGpuAdapterInfo?(): HandDetectorDiagnostics["adapter"];
+  getWebGpuUnavailableReason?(): string | undefined;
   createTensor(data: Float32Array, dims: readonly number[]): unknown;
   createCanvas(width: number, height: number): CanvasLike;
 }
@@ -90,10 +93,23 @@ export async function loadYoloHandPoseDetector(
   providedRuntime?: YoloHandPoseRuntime,
 ): Promise<HandDetector> {
   const runtime = providedRuntime ?? (await createDefaultYoloRuntime());
-  runtime.configure(options.wasmBaseUrl);
-  const session = await runtime.createSession(options.modelAssetUrl, {
-    executionProviders: ["webgpu", "wasm"],
-  });
+  await runtime.configure(options.wasmBaseUrl);
+  let executionProvider: "webgpu" | "wasm" = "webgpu";
+  let fallbackReason: string | undefined;
+  let session: YoloHandPoseSession;
+  try {
+    const webGpuUnavailableReason = runtime.getWebGpuUnavailableReason?.();
+    if (webGpuUnavailableReason) throw new Error(webGpuUnavailableReason);
+    session = await runtime.createSession(options.modelAssetUrl, {
+      executionProviders: ["webgpu"],
+    });
+  } catch (error) {
+    executionProvider = "wasm";
+    fallbackReason = compactError(error);
+    session = await runtime.createSession(options.modelAssetUrl, {
+      executionProviders: ["wasm"],
+    });
+  }
   const inputName = session.inputNames[0];
   const outputName = session.outputNames[0];
   if (!inputName || !outputName) {
@@ -108,6 +124,16 @@ export async function loadYoloHandPoseDetector(
   }
 
   return {
+    getDiagnostics() {
+      return {
+        executionProvider,
+        highPerformanceGpuRequested: true,
+        ...(executionProvider === "webgpu" && runtime.getWebGpuAdapterInfo
+          ? { adapter: runtime.getWebGpuAdapterInfo() }
+          : {}),
+        ...(fallbackReason ? { fallbackReason } : {}),
+      };
+    },
     async detectForVideo(frame) {
       const transform = createLetterboxTransform(
         frame.width,
@@ -224,7 +250,12 @@ export function parseYoloHandPoseOutput(
       const pointOffset = offset + keypointIndex * 3;
       const x = Number(tensor.data[pointOffset]);
       const y = Number(tensor.data[pointOffset + 1]);
-      if (!Number.isFinite(x) || !Number.isFinite(y))
+      const visibility = Number(tensor.data[pointOffset + 2]);
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        !Number.isFinite(visibility)
+      )
         throw new Error("YOLO hand-pose returned a non-finite keypoint.");
       return {
         x: rounded(
@@ -233,6 +264,7 @@ export function parseYoloHandPoseOutput(
         y: rounded(
           clamp((y - transform.offsetY) / transform.scale / transform.sourceHeight),
         ),
+        visibility: rounded(clamp(visibility)),
       };
     });
   });
@@ -245,9 +277,14 @@ export function parseYoloHandPoseOutput(
 }
 
 async function createDefaultYoloRuntime(): Promise<YoloHandPoseRuntime> {
+  // The `all` build uses the JSEP assets copied by build-hand-worker.mjs.
+  // The native `/webgpu` build instead requests asyncify assets that are not
+  // part of this pinned worker bundle.
   const ort = await import("onnxruntime-web/all");
+  let adapterInfo: HandDetectorDiagnostics["adapter"];
+  let webGpuUnavailableReason: string | undefined;
   return {
-    configure(wasmBaseUrl) {
+    async configure(wasmBaseUrl) {
       ort.env.wasm.wasmPaths = ensureTrailingSlash(wasmBaseUrl);
       ort.env.wasm.numThreads = selectYoloWasmThreadCount({
         crossOriginIsolated:
@@ -255,24 +292,28 @@ async function createDefaultYoloRuntime(): Promise<YoloHandPoseRuntime> {
         hardwareConcurrency:
           typeof navigator === "undefined" ? 1 : navigator.hardwareConcurrency,
       });
+      ort.env.webgpu.powerPreference = "high-performance";
+      ort.env.webgpu.forceFallbackAdapter = false;
+      const configured = await configureYoloWebGpuAdapter(
+        readGpuNavigator(),
+        (adapter) => {
+          // Let ONNX Runtime create its own device so it can request every
+          // optional feature and limit its kernels need. Supplying a bare
+          // device can omit shader-f16 and return empty detections.
+          ort.env.webgpu.adapter = adapter as never;
+        },
+      );
+      adapterInfo = configured.adapterInfo;
+      webGpuUnavailableReason = configured.unavailableReason;
     },
     async createSession(modelAssetUrl, options) {
-      try {
-        return (await ort.InferenceSession.create(modelAssetUrl, {
-          executionProviders: [...options.executionProviders],
-          graphOptimizationLevel: "all",
-        })) as unknown as YoloHandPoseSession;
-      } catch (preferredError) {
-        try {
-          return (await ort.InferenceSession.create(modelAssetUrl, {
-            executionProviders: ["wasm"],
-            graphOptimizationLevel: "all",
-          })) as unknown as YoloHandPoseSession;
-        } catch {
-          throw preferredError;
-        }
-      }
+      return (await ort.InferenceSession.create(modelAssetUrl, {
+        executionProviders: [...options.executionProviders],
+        graphOptimizationLevel: "all",
+      })) as unknown as YoloHandPoseSession;
     },
+    getWebGpuAdapterInfo: () => adapterInfo,
+    getWebGpuUnavailableReason: () => webGpuUnavailableReason,
     createTensor(data, dims) {
       return new ort.Tensor("float32", data, [...dims]);
     },
@@ -290,6 +331,78 @@ async function createDefaultYoloRuntime(): Promise<YoloHandPoseRuntime> {
       );
     },
   };
+}
+
+interface BrowserGpuAdapter {
+  readonly info?: unknown;
+  readonly features: { has(feature: string): boolean };
+}
+
+interface BrowserGpuNavigator {
+  requestAdapter(options: {
+    powerPreference: "high-performance";
+    forceFallbackAdapter: false;
+  }): Promise<BrowserGpuAdapter | null>;
+}
+
+export async function configureYoloWebGpuAdapter(
+  gpu: BrowserGpuNavigator | null,
+  setAdapter: (adapter: BrowserGpuAdapter) => void,
+): Promise<{
+  adapterInfo?: HandDetectorDiagnostics["adapter"];
+  unavailableReason?: string;
+}> {
+  if (!gpu)
+    return { unavailableReason: "WebGPU is unavailable in this browser" };
+  try {
+    const adapter = await gpu.requestAdapter({
+      powerPreference: "high-performance",
+      forceFallbackAdapter: false,
+    });
+    if (!adapter)
+      return { unavailableReason: "WebGPU did not return a GPU adapter" };
+    if (!adapter.features.has("shader-f16")) {
+      return {
+        unavailableReason:
+          "The selected WebGPU adapter lacks shader-f16 for this FP16 model",
+      };
+    }
+    setAdapter(adapter);
+    return { adapterInfo: sanitizeAdapterInfo(adapter.info) };
+  } catch (error) {
+    return { unavailableReason: compactError(error) };
+  }
+}
+
+function readGpuNavigator(): BrowserGpuNavigator | null {
+  if (typeof navigator === "undefined") return null;
+  const candidate = (navigator as Navigator & { gpu?: unknown }).gpu;
+  if (!candidate || typeof candidate !== "object") return null;
+  const requestAdapter = Reflect.get(candidate, "requestAdapter");
+  if (typeof requestAdapter !== "function") return null;
+  return {
+    requestAdapter: (options) =>
+      requestAdapter.call(candidate, options) as Promise<BrowserGpuAdapter | null>,
+  };
+}
+
+function sanitizeAdapterInfo(
+  value: unknown,
+): HandDetectorDiagnostics["adapter"] | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const output = Object.fromEntries(
+    ["vendor", "architecture", "device", "description"].flatMap((key) => {
+      const raw = Reflect.get(value, key);
+      if (typeof raw !== "string" || !raw.trim()) return [];
+      return [[key, raw.trim().slice(0, 120)]];
+    }),
+  );
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
+function compactError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.trim().slice(0, 240) || "WebGPU session unavailable";
 }
 
 function ensureTrailingSlash(value: string) {

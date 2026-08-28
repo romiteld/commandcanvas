@@ -4,7 +4,11 @@ import type { DirectCanvasIntent } from "@/lib/canvas/direct-command";
 
 export type RealtimeVoiceIntentResult =
   | { ok: true; message: string }
-  | { ok: false; message: string };
+  | {
+      ok: false;
+      message: string;
+      thoughtCapture?: "aborted";
+    };
 
 export type RealtimeVoiceIntentHandler = (
   intent: DirectCanvasIntent,
@@ -67,6 +71,22 @@ const toolSpecifications = [
     }),
   },
   {
+    name: "start_thought",
+    description:
+      "Create and select one thought card, then start automatic speech-to-text capture inside that card. Use only when the user explicitly asks to start or create a new thought.",
+    schema: emptyArgumentsSchema,
+    parameters: emptyJsonSchema(),
+    intent: (): DirectCanvasIntent => ({ type: "start_thought" }),
+  },
+  {
+    name: "finish_thought",
+    description:
+      "Stop automatic speech-to-text capture for the active thought card. Use only when the user explicitly asks to finish, end, or stop the thought.",
+    schema: emptyArgumentsSchema,
+    parameters: emptyJsonSchema(),
+    intent: (): DirectCanvasIntent => ({ type: "finish_thought" }),
+  },
+  {
     name: "create_board",
     description: "Create the project task board in open canvas space.",
     schema: emptyArgumentsSchema,
@@ -82,14 +102,28 @@ const toolSpecifications = [
   },
   {
     name: "open_sketch",
-    description: "Open the drawing surface so the user can draw a rough sketch.",
+    description: "Start a tracked-hand drawing when hand input is ready, otherwise open the pointer, touch, and stylus drawing surface.",
     schema: emptyArgumentsSchema,
     parameters: emptyJsonSchema(),
     intent: (): DirectCanvasIntent => ({ type: "open_sketch" }),
   },
   {
+    name: "finish_sketch",
+    description: "Finish the current tracked-hand sketch and preserve it as one selectable canvas object.",
+    schema: emptyArgumentsSchema,
+    parameters: emptyJsonSchema(),
+    intent: (): DirectCanvasIntent => ({ type: "finish_sketch" }),
+  },
+  {
+    name: "cancel_sketch",
+    description: "Cancel the current unfinished drawing without creating a canvas object.",
+    schema: emptyArgumentsSchema,
+    parameters: emptyJsonSchema(),
+    intent: (): DirectCanvasIntent => ({ type: "cancel_sketch" }),
+  },
+  {
     name: "transform_selected_sketch",
-    description: "Turn the currently selected sketch into a structured diagram while preserving the original.",
+    description: "Turn the currently selected sketch into the appropriate clean structured visual while preserving the original.",
     schema: emptyArgumentsSchema,
     parameters: emptyJsonSchema(),
     intent: (): DirectCanvasIntent => ({ type: "transform_selected_sketch" }),
@@ -121,6 +155,13 @@ const toolSpecifications = [
     schema: emptyArgumentsSchema,
     parameters: emptyJsonSchema(),
     intent: (): DirectCanvasIntent => ({ type: "restore_selected" }),
+  },
+  {
+    name: "discard_selected",
+    description: "Move the selected object to recoverable trash. The mutation is receipted and can be undone.",
+    schema: emptyArgumentsSchema,
+    parameters: emptyJsonSchema(),
+    intent: (): DirectCanvasIntent => ({ type: "discard_selected" }),
   },
   {
     name: "undo",
@@ -191,7 +232,7 @@ export const REALTIME_VOICE_TOOL_DEFINITIONS: readonly RealtimeVoiceToolDefiniti
   }));
 
 export const REALTIME_VOICE_INSTRUCTIONS =
-  "You are CommandCanvas live voice. Be brief. Use only the provided bounded canvas tools. Never discard objects, operate rooms, approve packets, or send email. Except for local viewport focus, a tool result with outcome submitted means the action entered CommandCanvas's canonical mutation pipeline; it is not proof that the change persisted. Say submitted, not created, saved, persisted, or completed. Ask the user to select a target when a selected-object tool is refused.";
+  "You are CommandCanvas live voice. Be brief. Use only the provided bounded canvas tools. When the user explicitly says start a thought or new thought, call start_thought once. After it is submitted, CommandCanvas automatically places later completed user speech inside that selected thought card; do not call create_note for each sentence. While thought capture is active, treat all user speech as dictated thought content and do not call any other canvas tool. When the user explicitly says finish thought, call finish_thought once; only then resume normal canvas tools. Never operate rooms, approve packets, or send email. Use discard_selected only when the user explicitly asks to discard, delete, trash, throw away, or get rid of the selected object; it goes to recoverable trash and remains undoable. Except for local viewport focus, a tool result with outcome submitted means the action entered CommandCanvas's canonical mutation pipeline; it is not proof that the change persisted. Say submitted, not created, saved, persisted, or completed. Ask the user to select a target when a selected-object tool is refused.";
 
 export function createRealtimeVoiceSessionConfig() {
   return {

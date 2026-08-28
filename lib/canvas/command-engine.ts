@@ -1,5 +1,6 @@
 import {
   canvasCommandSchema,
+  NOTE_TEXT_MAX_LENGTH,
   type CanvasCommand,
   type CanvasObject,
 } from "@/lib/canvas/object-model";
@@ -45,6 +46,7 @@ export interface ReceiptObjectState {
 
 export type ReceiptAction =
   | "create"
+  | "update"
   | "transform"
   | "pin"
   | "unpin"
@@ -94,6 +96,9 @@ export type CommandErrorCode =
   | "OBJECT_PINNED"
   | "INVALID_HIERARCHY"
   | "FRAME_NOT_EMPTY"
+  | "OBJECT_NOT_EDITABLE"
+  | "STALE_OBJECT_VERSION"
+  | "NOTE_TEXT_LIMIT"
   | "NOTHING_TO_UNDO"
   | "NOTHING_TO_REDO";
 
@@ -152,6 +157,8 @@ export function applyCanvasCommand(
   switch (command.type) {
     case "object.create":
       return createObject(state, envelope, command, runtime);
+    case "object.append_note_text":
+      return appendNoteText(state, envelope, command, runtime);
     case "object.transform":
       return transformObject(state, envelope, command, runtime);
     case "object.set_flags":
@@ -167,6 +174,57 @@ export function applyCanvasCommand(
     case "history.redo":
       return redoLatest(state, envelope, runtime);
   }
+}
+
+function appendNoteText(
+  state: CanvasState,
+  envelope: CanvasCommandEnvelope,
+  command: Extract<CanvasCommand, { type: "object.append_note_text" }>,
+  runtime: CommandRuntime,
+): CommandResult {
+  const current = activeObject(state, command.objectId);
+  if (!current)
+    return reject(state, "OBJECT_NOT_FOUND", "That object is no longer available.");
+  if (current.type !== "note")
+    return reject(
+      state,
+      "OBJECT_NOT_EDITABLE",
+      "Only an active note can receive dictated text.",
+    );
+  if (current.version !== command.expectedVersion)
+    return reject(
+      state,
+      "STALE_OBJECT_VERSION",
+      "That thought card changed. Continue from its latest text.",
+    );
+
+  const nextText = current.payload.text
+    ? `${current.payload.text}\n${command.text}`
+    : command.text;
+  if (nextText.length > NOTE_TEXT_MAX_LENGTH)
+    return reject(
+      state,
+      "NOTE_TEXT_LIMIT",
+      "That thought card reached its 4,000-character limit. Finish it and start another thought.",
+    );
+
+  const object: CanvasObject = {
+    ...current,
+    payload: { ...current.payload, text: nextText },
+    updatedAt: envelope.issuedAt,
+    version: current.version + 1,
+  };
+  const verb =
+    envelope.source === "voice" ? "added dictated text to" : "added text to";
+  return commitMutation({
+    state,
+    envelope,
+    runtime,
+    action: "update",
+    before: { [current.id]: current },
+    after: { [object.id]: object },
+    description: `${envelope.actor.displayName} ${verb} “${object.title}”.`,
+  });
 }
 
 function createObject(

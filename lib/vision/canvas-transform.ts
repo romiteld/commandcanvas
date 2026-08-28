@@ -5,7 +5,6 @@ import type { CanvasCommandSource } from "@/lib/canvas/command-engine";
 import {
   diagramPayloadSchema,
   newCanvasObjectSchema,
-  type DiagramPayload,
   type SketchPayload,
 } from "@/lib/canvas/object-model";
 import type { DemoRoomSession } from "@/lib/demo/room-session";
@@ -13,6 +12,7 @@ import {
   rasterizeSketchInBrowser,
   type BrowserRasterizedSketchPng,
 } from "@/lib/sketch/browser-rasterize";
+import type { SketchTransformOutputKind } from "@/lib/vision/diagram-transform";
 
 export interface CanvasSketchTransformerSession {
   transformSketch: DemoRoomSession["transformSketch"];
@@ -29,7 +29,8 @@ export interface CanvasSketchTransformerOptions {
 export interface CanvasSketchTransformInput {
   sketchObjectId: string;
   instruction: string;
-  outputKind: DiagramPayload["kind"];
+  narration?: string;
+  outputKind: SketchTransformOutputKind;
   source: CanvasCommandSource;
   signal?: AbortSignal;
 }
@@ -106,6 +107,7 @@ export function createCanvasSketchTransformer(
             sketchObjectId: source.id,
             sourceVersion,
             instruction: input.instruction,
+            ...(input.narration ? { narration: input.narration } : {}),
             outputKind: input.outputKind,
             imageDataUrl: rasterized.dataUrl,
           },
@@ -130,7 +132,7 @@ export function createCanvasSketchTransformer(
         !payload.success ||
         transformed.value.sourceSketchId !== source.id ||
         payload.data.sourceSketchId !== source.id ||
-        payload.data.kind !== input.outputKind
+        (input.outputKind !== "auto" && payload.data.kind !== input.outputKind)
       )
         return failure(
           "invalid_provider_payload",
@@ -150,10 +152,7 @@ export function createCanvasSketchTransformer(
       const diagram = newCanvasObjectSchema.safeParse({
         id: diagramId,
         type: "diagram",
-        title:
-          input.outputKind === "architecture"
-            ? "Structured architecture"
-            : "Structured flowchart",
+        title: structuredVisualTitle(payload.data.kind),
         x: source.x + source.width + 64,
         y: source.y,
         width: 620,
@@ -245,6 +244,35 @@ function highestActiveZIndex(store: StoreApi<CanvasStoreState>) {
 
 function defaultDiagramId(prefix: string) {
   return `${prefix}-${globalThis.crypto.randomUUID()}`;
+}
+
+function structuredVisualTitle(kind: Parameters<typeof structuredVisualLabel>[0]) {
+  return `Structured ${structuredVisualLabel(kind)}`;
+}
+
+function structuredVisualLabel(
+  kind:
+    | "architecture"
+    | "flowchart"
+    | "diagram"
+    | "pie_chart"
+    | "bar_chart"
+    | "line_chart",
+) {
+  switch (kind) {
+    case "architecture":
+      return "architecture";
+    case "flowchart":
+      return "flowchart";
+    case "diagram":
+      return "diagram";
+    case "pie_chart":
+      return "pie chart";
+    case "bar_chart":
+      return "bar chart";
+    case "line_chart":
+      return "line chart";
+  }
 }
 
 function cancelled(): CanvasSketchTransformResult {

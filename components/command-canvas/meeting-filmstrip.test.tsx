@@ -52,7 +52,7 @@ const crowdedParticipants = [
 ];
 
 describe("MeetingFilmstrip", () => {
-  it("shows self and participants without requesting devices on mount", () => {
+  it("defaults to compact room presence with a clear count and visible roster", () => {
     const setup = harness();
     render(
       <MeetingFilmstrip
@@ -65,9 +65,48 @@ describe("MeetingFilmstrip", () => {
       />,
     );
 
+    expect(
+      screen.getByRole("region", { name: "Meeting presence" }),
+    ).toHaveAttribute("data-view", "compact");
+    expect(
+      screen.getByText("2 present", { selector: ".meeting-participant-count" }),
+    ).toHaveAccessibleName("2 people present");
+    expect(
+      screen.getByRole("list", { name: "People in this room" }),
+    ).toBeVisible();
+    expect(screen.getByRole("listitem", { name: "Daniel, you" })).toBeVisible();
+    expect(screen.getByRole("listitem", { name: "Sarah" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Show participant videos" }),
+    ).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByRole("group", { name: "Participant videos" }),
+    ).not.toBeInTheDocument();
+    expect(setup.controller.start).not.toHaveBeenCalled();
+  });
+
+  it("shows self and participant video-off tiles only after a deliberate reveal", async () => {
+    const user = userEvent.setup();
+    const setup = harness();
+    render(
+      <MeetingFilmstrip
+        roomId={roomId}
+        localParticipantId={localId}
+        participants={participants}
+        getAccessToken={() => "token"}
+        client={{} as MeetingMediaControllerOptions["client"]}
+        createController={setup.createController}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Show participant videos" }),
+    );
     expect(screen.getByText("Daniel (you)")).toBeVisible();
     expect(screen.getByText("Sarah")).toBeVisible();
-    expect(screen.getAllByText("Video off")).toHaveLength(3);
+    expect(screen.getByText("Meeting media off")).toBeVisible();
+    expect(screen.getByText("Video not shared")).toBeVisible();
+    expect(screen.getByText("Video off")).toBeVisible();
     expect(setup.controller.start).not.toHaveBeenCalled();
     expect(screen.queryAllByTestId("remote-meeting-video")).toHaveLength(0);
   });
@@ -111,6 +150,11 @@ describe("MeetingFilmstrip", () => {
       screen.getByRole("button", { name: "Start camera and microphone" }),
     );
     expect(setup.controller.start).toHaveBeenCalledOnce();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Hide participant videos" }),
+      ).toHaveAttribute("aria-expanded", "true"),
+    );
 
     act(() =>
       setup.emit({
@@ -124,9 +168,12 @@ describe("MeetingFilmstrip", () => {
     );
 
     expect(
-      await screen.findByRole("button", { name: "Turn camera off" }),
+      await screen.findByRole("button", { name: "Stop sharing video" }),
     ).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Turn camera off" }));
+    expect(
+      screen.getByRole("group", { name: "Participant videos" }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Stop sharing video" }));
     await user.click(screen.getByRole("button", { name: "Mute microphone" }));
     expect(setup.controller.setCameraEnabled).toHaveBeenCalledWith(false);
     expect(setup.controller.setMicrophoneEnabled).toHaveBeenCalledWith(false);
@@ -182,11 +229,12 @@ describe("MeetingFilmstrip", () => {
     );
 
     expect(
-      await screen.findByRole("button", { name: "Turn camera off" }),
+      await screen.findByRole("button", { name: "Stop sharing video" }),
     ).toBeVisible();
   });
 
-  it("renders remote video only after an actual remote stream arrives", () => {
+  it("renders remote video only after an actual remote stream arrives", async () => {
+    const user = userEvent.setup();
     const setup = harness();
     render(
       <MeetingFilmstrip
@@ -197,6 +245,9 @@ describe("MeetingFilmstrip", () => {
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
       />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Show participant videos" }),
     );
     const remoteStream = {} as MediaStream;
 
@@ -214,6 +265,46 @@ describe("MeetingFilmstrip", () => {
     const video = screen.getByTestId("remote-meeting-video");
     expect(video).toHaveAttribute("aria-label", "Sarah live video");
     expect(screen.getByText("Direct connection")).toBeVisible();
+  });
+
+  it("hides the local meeting preview when camera publication is off", async () => {
+    const user = userEvent.setup();
+    const setup = harness();
+    render(
+      <MeetingFilmstrip
+        roomId={roomId}
+        localParticipantId={localId}
+        participants={participants}
+        getAccessToken={() => "token"}
+        client={{} as MeetingMediaControllerOptions["client"]}
+        createController={setup.createController}
+      />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Show participant videos" }),
+    );
+
+    act(() =>
+      setup.emit({
+        state: "active",
+        localStream: {} as MediaStream,
+        remoteStreams: {},
+        peerStates: {},
+        cameraEnabled: false,
+        microphoneEnabled: true,
+      }),
+    );
+
+    expect(screen.queryByTestId("local-meeting-video")).toBeNull();
+    expect(screen.getByText("Daniel (you)").closest("article")).toHaveTextContent(
+      "Video not shared",
+    );
+    expect(
+      screen.getByRole("button", { name: "Share video" }),
+    ).toHaveTextContent("Video not shared");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Your camera may remain active locally for hand input.",
+    );
   });
 
   it("distinguishes lost signaling from stopped direct media", () => {
@@ -283,7 +374,7 @@ describe("MeetingFilmstrip", () => {
     expect(onLocalStreamChange).toHaveBeenLastCalledWith(null);
   });
 
-  it("collapses to a top-edge meeting control and stops tracks on unmount", async () => {
+  it("returns participant videos to compact presence and stops tracks on unmount", async () => {
     const user = userEvent.setup();
     const setup = harness();
     const view = render(
@@ -297,17 +388,31 @@ describe("MeetingFilmstrip", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Collapse meeting video" }));
-    expect(screen.queryByText("Daniel (you)")).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Show participant videos" }),
+    );
     expect(
-      screen.getByRole("button", { name: "Expand meeting video" }),
+      screen.getByRole("group", { name: "Participant videos" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Hide participant videos" }),
+    );
+    expect(
+      screen.queryByRole("group", { name: "Participant videos" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("list", { name: "People in this room" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Show participant videos" }),
     ).toBeVisible();
 
     view.unmount();
     await waitFor(() => expect(setup.controller.dispose).toHaveBeenCalledOnce());
   });
 
-  it("reports playback failure honestly instead of claiming remote video is audible", () => {
+  it("reports playback failure honestly instead of claiming remote video is audible", async () => {
+    const user = userEvent.setup();
     const setup = harness();
     render(
       <MeetingFilmstrip
@@ -318,6 +423,9 @@ describe("MeetingFilmstrip", () => {
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
       />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Show participant videos" }),
     );
     act(() =>
       setup.emit({
@@ -352,6 +460,9 @@ describe("MeetingFilmstrip", () => {
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
       />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Show participant videos" }),
     );
     act(() =>
       setup.emit({

@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { DiagramPreview } from "@/components/command-canvas/diagram-preview";
+import type { DiagramPayload } from "@/lib/canvas/object-model";
 
 const payload = {
   kind: "architecture" as const,
@@ -69,5 +70,110 @@ describe("DiagramPreview", () => {
     const svg = container.querySelector("svg");
 
     expect(svg?.getAttribute("viewBox")).toBe("-28 -28 686 120");
+  });
+
+  it("renders a semantic pie chart with one visible segment and label per value", () => {
+    const chart = {
+      kind: "pie_chart",
+      sourceSketchId: "sketch-market-share",
+      interpretationSummary: "A three-part share breakdown.",
+      chart: {
+        title: "Market share",
+        xAxisLabel: null,
+        yAxisLabel: null,
+        series: [
+          {
+            id: "series-share",
+            label: "Share",
+            points: [
+              { label: "North", value: 50 },
+              { label: "South", value: 30 },
+              { label: "West", value: 20 },
+            ],
+          },
+        ],
+      },
+    } satisfies DiagramPayload;
+
+    const { container } = render(<DiagramPreview payload={chart} />);
+
+    expect(
+      screen.getByRole("img", {
+        name: "Pie chart: Market share. A three-part share breakdown.",
+      }),
+    ).toBeVisible();
+    expect(container.querySelectorAll("[data-chart-segment]")).toHaveLength(3);
+    expect(screen.getByText("North · 50")).toBeVisible();
+    expect(screen.getByText("South · 30")).toBeVisible();
+    expect(screen.getByText("West · 20")).toBeVisible();
+  });
+
+  it("renders a grouped bar for every validated series point", () => {
+    const chart = {
+      kind: "bar_chart",
+      sourceSketchId: "sketch-tickets",
+      interpretationSummary: "Ticket counts by team.",
+      chart: {
+        title: "Tickets",
+        xAxisLabel: "Team",
+        yAxisLabel: "Count",
+        series: [
+          {
+            id: "series-open",
+            label: "Open",
+            points: [
+              { label: "Design", value: 8 },
+              { label: "Engineering", value: 15 },
+            ],
+          },
+        ],
+      },
+    } satisfies DiagramPayload;
+
+    const { container } = render(<DiagramPreview payload={chart} />);
+
+    expect(
+      screen.getByRole("img", {
+        name: "Bar chart: Tickets. Ticket counts by team.",
+      }),
+    ).toBeVisible();
+    expect(container.querySelectorAll("[data-chart-bar]")).toHaveLength(2);
+    expect(screen.getByText("Team")).toBeVisible();
+    expect(screen.getByText("Count")).toBeVisible();
+  });
+
+  it("renders each line series as a path with visible data points", () => {
+    const chart = {
+      kind: "line_chart",
+      sourceSketchId: "sketch-signups",
+      interpretationSummary: "Signups increase over three weeks.",
+      chart: {
+        title: "Weekly signups",
+        xAxisLabel: "Week",
+        yAxisLabel: "Signups",
+        series: [
+          {
+            id: "series-signups",
+            label: "Signups",
+            points: [
+              { label: "W1", value: 12 },
+              { label: "W2", value: 18 },
+              { label: "W3", value: 27 },
+            ],
+          },
+        ],
+      },
+    } satisfies DiagramPayload;
+
+    const { container } = render(<DiagramPreview payload={chart} />);
+
+    expect(
+      screen.getByRole("img", {
+        name: "Line chart: Weekly signups. Signups increase over three weeks.",
+      }),
+    ).toBeVisible();
+    expect(container.querySelectorAll("[data-chart-line]")).toHaveLength(1);
+    expect(container.querySelectorAll("[data-chart-point]")).toHaveLength(3);
+    expect(screen.getByText("W3")).toBeVisible();
   });
 });

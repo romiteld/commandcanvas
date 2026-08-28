@@ -32,6 +32,42 @@ describe("hand tracking worker runtime", () => {
     expect(postMessage).toHaveBeenCalledWith({ type: "ready" });
   });
 
+  it("reports the actual detector provider no later than engine readiness", async () => {
+    const postMessage = vi.fn();
+    const runtime = createHandTrackingWorkerRuntime({
+      loadDetector: async () => ({
+        detectForVideo: vi.fn(),
+        getDiagnostics: () => ({
+          executionProvider: "webgpu" as const,
+          highPerformanceGpuRequested: true,
+          adapter: { architecture: "ampere", description: "NVIDIA GPU" },
+        }),
+        close: vi.fn(),
+      }),
+      postMessage,
+    });
+
+    await runtime.handleMessage({
+      type: "initialize",
+      wasmBaseUrl: "/onnxruntime/",
+      modelAssetUrl: "/models/hand.onnx",
+    });
+
+    const diagnostics = {
+      executionProvider: "webgpu",
+      highPerformanceGpuRequested: true,
+      adapter: { architecture: "ampere", description: "NVIDIA GPU" },
+    } as const;
+    expect(postMessage).toHaveBeenNthCalledWith(1, {
+      type: "ready",
+      diagnostics,
+    });
+    expect(postMessage).toHaveBeenNthCalledWith(2, {
+      type: "diagnostics",
+      diagnostics,
+    });
+  });
+
   it("closes each frame and transports two tagged landmark sets", async () => {
     const close = vi.fn();
     const frame = { close } as unknown as ImageBitmap;

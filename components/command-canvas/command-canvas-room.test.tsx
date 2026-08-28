@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -17,6 +17,7 @@ import type {
   HandTrackingStatus,
 } from "@/lib/gesture/hand-tracking-controller";
 import type { RealtimeVoiceControllerOptions } from "@/lib/realtime-voice/client";
+import { DEFAULT_HAND_ACTIVE_ZONE } from "@/lib/gesture/spatial-gesture";
 
 function dependencies(): CanvasStoreDependencies {
   let id = 0;
@@ -113,8 +114,47 @@ function fakeHandController() {
       statusListeners.forEach((listener) => listener(next));
     },
     emit(next: HandTrackingObservation) {
-      observationListeners.forEach((listener) => listener(next));
+      // Component tests describe logical canvas positions. The fake camera
+      // converts them into the comfortable physical control region before the
+      // production component maps that region back across the canvas.
+      observationListeners.forEach((listener) =>
+        listener(cameraObservationForCanvasObservation(next)),
+      );
     },
+  };
+}
+
+function cameraObservationForCanvasObservation(
+  observation: HandTrackingObservation,
+): HandTrackingObservation {
+  if (observation.mode === "idle") return observation;
+  if (observation.mode !== "bimanual_pinch")
+    return { ...observation, pointer: cameraPointer(observation.pointer) };
+  const hands = observation.hands.map((hand) => ({
+    ...hand,
+    pointer: cameraPointer(hand.pointer),
+  })) as unknown as typeof observation.hands;
+  return {
+    ...observation,
+    hands,
+    center: cameraPointer(observation.center),
+    span: Math.hypot(
+      hands[0].pointer.x - hands[1].pointer.x,
+      hands[0].pointer.y - hands[1].pointer.y,
+    ),
+  };
+}
+
+function cameraPointer(pointer: { x: number; y: number }) {
+  return {
+    x:
+      DEFAULT_HAND_ACTIVE_ZONE.left +
+      pointer.x *
+        (DEFAULT_HAND_ACTIVE_ZONE.right - DEFAULT_HAND_ACTIVE_ZONE.left),
+    y:
+      DEFAULT_HAND_ACTIVE_ZONE.top +
+      pointer.y *
+        (DEFAULT_HAND_ACTIVE_ZONE.bottom - DEFAULT_HAND_ACTIVE_ZONE.top),
   };
 }
 
@@ -172,11 +212,12 @@ describe("CommandCanvasRoom", () => {
 
     const fitted = store.getState().viewport;
     const left = store.getState().canvas.objects["seed-left"];
-    const right = store.getState().canvas.objects["seed-right"];
+    expect(fitted.scale).toBeGreaterThanOrEqual(0.5);
     expect(left.x * fitted.scale + fitted.x).toBeGreaterThanOrEqual(0);
-    expect(
-      (right.x + right.width) * fitted.scale + fitted.x,
-    ).toBeLessThanOrEqual(390);
+    expect(left.x * fitted.scale + fitted.x).toBeLessThan(390);
+    expect(container.querySelector(".canvas-world")).toHaveStyle({
+      "--canvas-ui-scale": `${1 / fitted.scale}`,
+    });
   });
 
   it("reserves a top-edge media row so meeting video does not cover the canvas", () => {
@@ -483,8 +524,7 @@ describe("CommandCanvasRoom", () => {
 
     await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
-    hand.setStatus({ state: "ready" });
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    act(() => hand.setStatus({ state: "ready" }));
     hand.emit({
       mode: "point",
       pointer: { x: 0.72, y: 0.42 },
@@ -541,8 +581,7 @@ describe("CommandCanvasRoom", () => {
 
     await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
-    hand.setStatus({ state: "ready" });
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    act(() => hand.setStatus({ state: "ready" }));
 
     expect(
       screen.queryByRole("complementary", { name: "System status drawer" }),
@@ -573,8 +612,7 @@ describe("CommandCanvasRoom", () => {
     setCanvasBounds(container);
     await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
-    hand.setStatus({ state: "ready" });
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    act(() => hand.setStatus({ state: "ready" }));
     expect(await screen.findAllByText("Hand input ready · local only")).toHaveLength(2);
     expect(screen.queryByText("Camera off")).toBeNull();
 
@@ -609,8 +647,7 @@ describe("CommandCanvasRoom", () => {
     setCanvasBounds(container);
     await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
-    hand.setStatus({ state: "ready" });
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    act(() => hand.setStatus({ state: "ready" }));
     await user.click(
       screen.getByRole("button", { name: "Draw with index finger" }),
     );
@@ -685,6 +722,499 @@ describe("CommandCanvasRoom", () => {
     expect(store.getState().canvas.receipts.at(-1)?.source).toBe("gesture");
   });
 
+  it("starts and finishes a finger sketch through live voice without another canvas click", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    let options: RealtimeVoiceControllerOptions | undefined;
+    const idleState = { status: "idle" as const };
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+          createController(nextOptions) {
+            options = nextOptions;
+            return {
+              getState: () => idleState,
+              subscribe: () => () => undefined,
+              start: vi.fn(async () => undefined),
+              stop: vi.fn(),
+              resumeAudio: vi.fn(async () => true),
+            };
+          },
+        }}
+      />,
+    );
+    setCanvasBounds(container);
+
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+    await act(async () => {
+      await options?.onIntent({ type: "open_sketch" }, "voice");
+    });
+    act(() => {
+      hand.emit({
+        mode: "point",
+        pointer: { x: 0.2, y: 0.3 },
+        confidence: 0.96,
+        timestamp: 1_000,
+      });
+      hand.emit({
+        mode: "point",
+        pointer: { x: 0.34, y: 0.48 },
+        confidence: 0.96,
+        timestamp: 1_016,
+      });
+      hand.emit({ mode: "idle", timestamp: 1_032 });
+    });
+
+    let result: Awaited<ReturnType<RealtimeVoiceControllerOptions["onIntent"]>> | undefined;
+    await act(async () => {
+      result = await options?.onIntent({ type: "finish_sketch" }, "voice");
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      message: "Finger sketch command submitted.",
+    });
+    expect(
+      Object.values(store.getState().canvas.objects).filter(
+        (object) => object.type === "sketch" && !object.deletedAt,
+      ),
+    ).toHaveLength(1);
+    expect(screen.getByText("MOVE OBJECTS")).toBeVisible();
+  });
+
+  it("creates one selected thought card and receipts later completed speech inside it", async () => {
+    const store = createCanvasStore("room-local", dependencies());
+    let options: RealtimeVoiceControllerOptions | undefined;
+    const idleState = { status: "idle" as const };
+    render(
+      <CommandCanvasRoom
+        store={store}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+          createController(nextOptions) {
+            options = nextOptions;
+            return {
+              getState: () => idleState,
+              subscribe: () => () => undefined,
+              start: vi.fn(async () => undefined),
+              stop: vi.fn(),
+              resumeAudio: vi.fn(async () => true),
+            };
+          },
+        }}
+      />,
+    );
+
+    options?.onTranscript?.("Start a new thought");
+    await act(async () => {
+      await options?.onIntent({ type: "start_thought" }, "voice");
+    });
+
+    const thoughtId = store.getState().selectedObjectId;
+    expect(thoughtId).toBeTruthy();
+    expect(thoughtId && store.getState().canvas.objects[thoughtId]).toMatchObject({
+      type: "note",
+      title: "New thought",
+      payload: { text: "", tone: "coral" },
+    });
+
+    options?.onTranscript?.(
+      "The first customer problem is scattered meeting context.",
+    );
+    options?.onResponseSettled?.("completed");
+    options?.onAssistantTranscript?.(
+      "I will keep that inside the selected thought card.",
+    );
+    options?.onTranscript?.("The final output must stay attributable.");
+    options?.onResponseSettled?.("completed");
+
+    await waitFor(() => {
+      const object = thoughtId
+        ? store.getState().canvas.objects[thoughtId]
+        : undefined;
+      expect(object?.type === "note" ? object.payload.text : undefined).toBe(
+        "The first customer problem is scattered meeting context.\n" +
+          "The final output must stay attributable.",
+      );
+    });
+    expect(store.getState().canvas.receipts.map((receipt) => receipt.action)).toEqual([
+      "create",
+      "update",
+      "update",
+    ]);
+    expect(
+      store.getState().canvas.receipts.every((receipt) => receipt.source === "voice"),
+    ).toBe(true);
+
+    options?.onTranscript?.("Finish this thought");
+    await act(async () => {
+      await options?.onIntent({ type: "finish_thought" }, "voice");
+    });
+    options?.onTranscript?.("This sentence belongs outside the finished card.");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const finished = thoughtId
+      ? store.getState().canvas.objects[thoughtId]
+      : undefined;
+    expect(finished?.type === "note" ? finished.payload.text : undefined).toBe(
+      "The first customer problem is scattered meeting context.\n" +
+        "The final output must stay attributable.",
+    );
+    expect(store.getState().canvas.receipts).toHaveLength(3);
+  });
+
+  it("ends voice thought capture when a collaborator discards the active card", async () => {
+    const store = createCanvasStore("room-local", dependencies());
+    let options: RealtimeVoiceControllerOptions | undefined;
+    const idleState = { status: "idle" as const };
+    render(
+      <CommandCanvasRoom
+        store={store}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+          createController(nextOptions) {
+            options = nextOptions;
+            return {
+              getState: () => idleState,
+              subscribe: () => () => undefined,
+              start: vi.fn(async () => undefined),
+              stop: vi.fn(),
+              resumeAudio: vi.fn(async () => true),
+            };
+          },
+        }}
+      />,
+    );
+
+    await act(async () => {
+      await options?.onIntent({ type: "start_thought" }, "voice");
+    });
+    const thoughtId = store.getState().selectedObjectId;
+    expect(thoughtId).toBeTruthy();
+
+    act(() => {
+      store.getState().dispatch(
+        { type: "object.discard", objectId: thoughtId! },
+        "collaborator",
+      );
+    });
+    options?.onUserSpeechStarted?.("thought-after-discard");
+    options?.onTranscript?.(
+      "This turn arrives after Sarah discarded the card.",
+      "thought-after-discard",
+    );
+    options?.onResponseSettled?.("completed", "thought-after-discard");
+
+    let recovery:
+      | Awaited<ReturnType<RealtimeVoiceControllerOptions["onIntent"]>>
+      | undefined;
+    await act(async () => {
+      recovery = await options?.onIntent(
+        { type: "create_note", text: "Recovered follow-up" },
+        "voice",
+      );
+    });
+
+    expect(recovery).toEqual({
+      ok: true,
+      message: "Note command submitted.",
+    });
+    expect(
+      Object.values(store.getState().canvas.objects).some(
+        (object) =>
+          !object.deletedAt &&
+          object.type === "note" &&
+          object.payload.text === "Recovered follow-up",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not start dictation when thought-card creation is refused", async () => {
+    const store = createCanvasStore("room-local", dependencies());
+    let options: RealtimeVoiceControllerOptions | undefined;
+    const idleState = { status: "idle" as const };
+    render(
+      <CommandCanvasRoom
+        store={store}
+        onCommand={async () => {
+          throw new Error("The shared room refused the thought card.");
+        }}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+          createController(nextOptions) {
+            options = nextOptions;
+            return {
+              getState: () => idleState,
+              subscribe: () => () => undefined,
+              start: vi.fn(async () => undefined),
+              stop: vi.fn(),
+              resumeAudio: vi.fn(async () => true),
+            };
+          },
+        }}
+      />,
+    );
+
+    let result:
+      | Awaited<ReturnType<RealtimeVoiceControllerOptions["onIntent"]>>
+      | undefined;
+    await act(async () => {
+      result = await options?.onIntent({ type: "start_thought" }, "voice");
+    });
+    options?.onTranscript?.("This must not mutate a missing card.");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(result).toEqual({
+      ok: false,
+      message: "The shared room refused the thought card.",
+    });
+    expect(Object.values(store.getState().canvas.objects)).toHaveLength(0);
+    expect(store.getState().canvas.receipts).toHaveLength(0);
+  });
+
+  it("reports a refused thought transcript without bypassing the canonical command", async () => {
+    const store = createCanvasStore("room-local", dependencies());
+    let options: RealtimeVoiceControllerOptions | undefined;
+    const idleState = { status: "idle" as const };
+    render(
+      <CommandCanvasRoom
+        store={store}
+        onCommand={(command, source) => {
+          if (command.type === "object.create")
+            return store.getState().dispatch(command, source);
+          return {
+            ok: false as const,
+            state: store.getState().canvas,
+            error: {
+              code: "STALE_OBJECT_VERSION" as const,
+              message: "That thought card changed. Continue from its latest text.",
+            },
+          };
+        }}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+          createController(nextOptions) {
+            options = nextOptions;
+            return {
+              getState: () => idleState,
+              subscribe: () => () => undefined,
+              start: vi.fn(async () => undefined),
+              stop: vi.fn(),
+              resumeAudio: vi.fn(async () => true),
+            };
+          },
+        }}
+      />,
+    );
+
+    await act(async () => {
+      await options?.onIntent({ type: "start_thought" }, "voice");
+    });
+    options?.onTranscript?.("Start a new thought");
+    options?.onTranscript?.("This update must be refused truthfully.");
+    options?.onResponseSettled?.("completed");
+
+    expect(
+      await screen.findAllByText(
+        "That thought card changed. Continue from its latest text.",
+      ),
+    ).toHaveLength(2);
+    const thought = Object.values(store.getState().canvas.objects)[0];
+    expect(thought?.type === "note" ? thought.payload.text : undefined).toBe("");
+    expect(store.getState().canvas.receipts.map((receipt) => receipt.action)).toEqual([
+      "create",
+    ]);
+  });
+
+  it("honors an explicit live-voice discard as recoverable trash", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "voice-trash", title: "Draft chart", x: 40 });
+    let options: RealtimeVoiceControllerOptions | undefined;
+    const idleState = { status: "idle" as const };
+    render(
+      <CommandCanvasRoom
+        store={store}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+          createController(nextOptions) {
+            options = nextOptions;
+            return {
+              getState: () => idleState,
+              subscribe: () => () => undefined,
+              start: vi.fn(async () => undefined),
+              stop: vi.fn(),
+              resumeAudio: vi.fn(async () => true),
+            };
+          },
+        }}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Select Draft chart" }));
+
+    let result: Awaited<ReturnType<RealtimeVoiceControllerOptions["onIntent"]>> | undefined;
+    await act(async () => {
+      result = await options?.onIntent({ type: "discard_selected" }, "voice");
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      message: "Recoverable discard command submitted.",
+    });
+    expect(store.getState().canvas.objects["voice-trash"]?.deletedAt).not.toBeNull();
+    expect(store.getState().canvas.receipts.at(-1)?.source).toBe("voice");
+  });
+
+  it("routes the persistent Draw action into tracked-hand drawing when hand input is ready", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+
+    await user.click(
+      screen.getByRole("button", { name: "Draw with tracked hand" }),
+    );
+
+    expect(screen.getByText("DRAW MODE")).toBeVisible();
+    expect(
+      screen.queryByRole("region", { name: "Draw directly on the canvas" }),
+    ).toBeNull();
+  });
+
+  it("keeps Undo among the first persistent canvas actions", () => {
+    const store = createCanvasStore("room-local", dependencies());
+    render(<CommandCanvasRoom store={store} />);
+
+    const dock = screen.getByRole("complementary", { name: "Object tools" });
+    expect(
+      within(dock)
+        .getAllByRole("button")
+        .slice(0, 6)
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual([
+      "Create note",
+      "Create task board",
+      "Create schedule",
+      "Create sketch",
+      "Undo last change",
+      "Enable multiple selection",
+    ]);
+  });
+
+  it("locks background canvas actions while the pointer sketch surface is active", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    render(<CommandCanvasRoom store={store} />);
+
+    await user.click(screen.getByRole("button", { name: "Create sketch" }));
+
+    const dock = screen.getByRole("complementary", { name: "Object tools" });
+    expect(
+      within(dock)
+        .getAllByRole("button")
+        .every((button) => button.hasAttribute("disabled")),
+    ).toBe(true);
+    expect(screen.getByRole("button", { name: "Open command drawer" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Create task board" }));
+    expect(Object.values(store.getState().canvas.objects)).toHaveLength(0);
+  });
+
+  it("uses a portrait sketch surface on compact canvases", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(<CommandCanvasRoom store={store} />);
+    setCanvasBounds(container, { width: 390, height: 706 });
+
+    await user.click(screen.getByRole("button", { name: "Create sketch" }));
+
+    expect(
+      screen.getByRole("img", { name: "Sketch draft surface" }),
+    ).toHaveAttribute("viewBox", "0 0 420 720");
+  });
+
+  it("brings a partially visible selected object into the compact viewport", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "edge-note", title: "Edge note", x: 40 });
+    store.getState().setViewport({ x: -260, y: 0, scale: 1 });
+    const { container } = render(<CommandCanvasRoom store={store} />);
+    setCanvasBounds(container, { width: 390, height: 620 });
+
+    await user.click(screen.getByRole("button", { name: "Select Edge note" }));
+
+    await waitFor(() => {
+      const object = store.getState().canvas.objects["edge-note"];
+      const nextViewport = store.getState().viewport;
+      const screenLeft = object.x * nextViewport.scale + nextViewport.x;
+      const screenRight =
+        (object.x + object.width) * nextViewport.scale + nextViewport.x;
+      expect(screenLeft).toBeGreaterThanOrEqual(0);
+      expect(screenRight).toBeLessThanOrEqual(390);
+    });
+  });
+
+  it("keeps drawing from a tracked index fingertip when the rest of the hand reads open", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+
+    act(() => {
+      hand.emit({
+        mode: "open_palm",
+        pointer: { x: 0.22, y: 0.3 },
+        confidence: 0.94,
+        timestamp: 1_000,
+      });
+      hand.emit({
+        mode: "open_palm",
+        pointer: { x: 0.31, y: 0.39 },
+        confidence: 0.94,
+        timestamp: 1_084,
+      });
+      hand.emit({
+        mode: "pinch",
+        pointer: { x: 0.31, y: 0.39 },
+        confidence: 0.94,
+        timestamp: 1_168,
+      });
+    });
+
+    expect(screen.getByText("1 stroke ready")).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: /drawer/i })).toBeNull();
+  });
+
   it("keeps ten independent hand-drawn lines in one sketch without opening drawers", async () => {
     const user = userEvent.setup();
     const hand = fakeHandController();
@@ -698,8 +1228,7 @@ describe("CommandCanvasRoom", () => {
     setCanvasBounds(container);
     await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
-    hand.setStatus({ state: "ready" });
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    act(() => hand.setStatus({ state: "ready" }));
     await user.click(
       screen.getByRole("button", { name: "Draw with index finger" }),
     );
@@ -754,8 +1283,7 @@ describe("CommandCanvasRoom", () => {
     setCanvasBounds(container);
     await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
-    hand.setStatus({ state: "ready" });
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    act(() => hand.setStatus({ state: "ready" }));
     await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
 
     act(() => {
@@ -830,8 +1358,7 @@ describe("CommandCanvasRoom", () => {
     setCanvasBounds(container);
     await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
-    hand.setStatus({ state: "ready" });
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    act(() => hand.setStatus({ state: "ready" }));
 
     hand.emit({
       mode: "pinch",
@@ -873,8 +1400,7 @@ describe("CommandCanvasRoom", () => {
     setCanvasBounds(container);
     await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
-    hand.setStatus({ state: "ready" });
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    act(() => hand.setStatus({ state: "ready" }));
 
     hand.emit({
       mode: "pinch",
@@ -935,8 +1461,7 @@ describe("CommandCanvasRoom", () => {
     setCanvasBounds(container);
     await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
-    hand.setStatus({ state: "ready" });
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    act(() => hand.setStatus({ state: "ready" }));
 
     hand.emit({
       mode: "pinch",
@@ -969,8 +1494,7 @@ describe("CommandCanvasRoom", () => {
     setCanvasBounds(container);
     await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
-    hand.setStatus({ state: "ready" });
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    act(() => hand.setStatus({ state: "ready" }));
 
     hand.emit({
       mode: "pinch",
@@ -1014,8 +1538,7 @@ describe("CommandCanvasRoom", () => {
     setCanvasBounds(container);
     await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
-    hand.setStatus({ state: "ready" });
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    act(() => hand.setStatus({ state: "ready" }));
 
     hand.emit({
       mode: "open_palm",
@@ -1054,8 +1577,7 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Select Spatial note" }));
     await user.click(screen.getByRole("button", { name: "Open system status" }));
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
-    hand.setStatus({ state: "ready" });
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
+    act(() => hand.setStatus({ state: "ready" }));
     const bimanual = (span: number, leftX: number, rightX: number, timestamp: number) =>
       hand.emit({
         mode: "bimanual_pinch",
@@ -1079,7 +1601,14 @@ describe("CommandCanvasRoom", () => {
     bimanual(0.3, 0.35, 0.65, 1_000);
     expect(await screen.findByText("RESIZING")).toBeVisible();
     bimanual(0.45, 0.275, 0.725, 1_100);
-    hand.emit({ mode: "idle", timestamp: 1_116 });
+    // Real two-hand release is staggered: one hand usually remains pinched for
+    // one detector frame. That frame must commit the resize, not start a grab.
+    hand.emit({
+      mode: "pinch",
+      pointer: { x: 0.275, y: 0.3 },
+      confidence: 0.96,
+      timestamp: 1_116,
+    });
 
     expect(store.getState().canvas.objects["note-spatial"]).toMatchObject({
       width: 420,
@@ -1382,14 +1911,72 @@ describe("CommandCanvasRoom", () => {
 
     expect(transformSketch).toHaveBeenCalledExactlyOnceWith({
       sketchObjectId: "sketch-source",
-      instruction: "Make this sketch usable as a clean architecture diagram.",
-      outputKind: "architecture",
+      instruction: "Make this usable as a professional visual.",
+      outputKind: "auto",
       source: "typed",
     });
     await waitFor(() => {
       expect(store.getState().selectedObjectId).toBe("diagram-result");
     });
     expect(store.getState().canvas.objects["sketch-source"]?.deletedAt).toBeNull();
+  });
+
+  it("forwards spoken sketch narration through the existing vision transformation path", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-live", dependencies());
+    seedSketch(store);
+    const transformSketch = vi.fn().mockResolvedValue({
+      ok: true,
+      diagramObjectId: "diagram-result",
+      receiptId: "receipt-transform",
+      revision: 2,
+      provider: "openai",
+      model: "gpt-5.6-terra",
+    });
+    let options: RealtimeVoiceControllerOptions | undefined;
+    const idleState = { status: "idle" as const };
+    render(
+      <CommandCanvasRoom
+        store={store}
+        onTransformSketch={transformSketch}
+        realtimeVoice={{
+          roomId: "room-live",
+          getAccessToken: () => "header.payload.signature",
+          createController(nextOptions) {
+            options = nextOptions;
+            return {
+              getState: () => idleState,
+              subscribe: () => () => undefined,
+              start: vi.fn(async () => undefined),
+              stop: vi.fn(),
+              resumeAudio: vi.fn(async () => true),
+            };
+          },
+        }}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Select Rough architecture" }),
+    );
+    await act(async () => {
+      await options?.onIntent(
+        {
+          type: "transform_selected_sketch",
+          narration:
+            "The larger circle is revenue and the smaller slice is support cost.",
+        },
+        "voice",
+      );
+    });
+
+    expect(transformSketch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        narration:
+          "The larger circle is revenue and the smaller slice is support cost.",
+        source: "voice",
+      }),
+    );
   });
 
   it.each([360, 420, 480])(
@@ -1678,7 +2265,9 @@ describe("CommandCanvasRoom", () => {
         type: "object.create",
         object: {
           type: "sketch",
-          title: "Rough architecture",
+          title: "Rough sketch",
+          width: 720,
+          height: 420,
           payload: { strokes: [{ points: expect.any(Array) }] },
         },
       },
@@ -1813,6 +2402,14 @@ describe("CommandCanvasRoom", () => {
       .closest("article");
     expect(selectedCard).toHaveStyle({ zIndex: 1_000_000 });
     expect(screen.getByRole("button", { name: "Focus object" })).toBeVisible();
+    expect(
+      within(
+        screen.getByRole("toolbar", { name: "First note spatial controls" }),
+      )
+        .getAllByRole("button")
+        .slice(0, 3)
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Focus object", "Minimize object", "Move object to trash"]);
     expect(store.getState().canvas.objects["note-first"]?.zIndex).toBe(40);
     expect(store.getState().canvas.objects["note-second"]?.zIndex).toBe(400);
   });

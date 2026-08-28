@@ -96,6 +96,7 @@ export function createOpenAiDiagramTransformer(
         sketchObjectId: rawInput.sketchObjectId,
         sourceVersion: rawInput.sourceVersion,
         instruction: rawInput.instruction,
+        ...(rawInput.narration ? { narration: rawInput.narration } : {}),
         outputKind: rawInput.outputKind,
         imageDataUrl: rawInput.imageDataUrl,
       });

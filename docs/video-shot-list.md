@@ -1,6 +1,6 @@
 # CommandCanvas 90-second video shot list
 
-Record this sequence only after the exact public commit passes its release checks. Rehearse with a real second browser. Use a simple three-box, two-arrow sketch so the visual transition reads immediately.
+Record this sequence only after the exact public commit passes its release checks. Rehearse with a real second browser. Use a simple three-bar sketch with large Q1, Q2, and Q3 labels so the visual transition reads immediately. The same validated surface supports generic diagrams, architecture diagrams, flowcharts, pie charts, bar charts, and line charts; the video uses one bar chart as a concise example.
 
 ## 0:00–0:07: camera and opening
 
@@ -24,19 +24,21 @@ Record this sequence only after the exact public commit passes its release check
 
 **Line:** “Live voice stays open for natural canvas commands. Its tools are intentionally narrower than ChatGPT Site Tools.”
 
+**Optional alternate proof:** Replace the board command with **Start a new thought**, dictate **Launch risk is supplier lead time**, then say **Finish thought**. Keep the selected card and its receipt visible. Do not imply that assistant speech or the boundary commands are written into the card.
+
 ## 0:24–0:46: primary wow moment
 
-**Do:** If the physical-hand rehearsal passed, show the large YOLO calibration surface briefly, switch the on-canvas hand mode to **Draw**, and trace three boxes and two arrows directly on the main canvas with the tracked index fingertip. Otherwise use pointer or touch. Finish and select the single multi-stroke sketch.
+**Do:** If the physical-hand rehearsal passed, show the large YOLO calibration surface briefly, switch the on-canvas hand mode to **Draw**, and trace three rough bars labeled Q1, Q2, and Q3 directly on the main canvas with the tracked index fingertip. Otherwise use pointer or touch. While drawing, say **These bars are quarterly signups: Q1 is 12, Q2 is 19, and Q3 is 31.** Pause so that completed explanation becomes bounded sketch context. Finish and select the single multi-stroke sketch.
 
-**Say:** “Make that usable as an architecture diagram.”
+**Say as a separate command:** “Make this sketch professional.”
 
-**Visible reaction:** The voice session submits the selected-sketch transform. The browser renders the strokes to PNG, real vision returns schema-validated nodes and edges, and a structured diagram appears beside the preserved sketch.
+**Visible reaction:** The voice session submits the selected-sketch transform with the bounded prior explanation. The browser renders the strokes to PNG, image interpretation returns a schema-validated bar-chart payload, and a clean chart appears beside the preserved sketch.
 
 **Line:** “The rough source stays visible. The result is a separate semantic object with its own revision and receipt.”
 
 ## 0:46–0:59: shared spatial state
 
-**Do:** Pinch-grab and move the diagram, then use two hands to resize it if the physical-camera rehearsal passed. Otherwise use the exact pointer controls. Turn on **Select many**, group two objects, move the frame, then undo and redo. In browser B, add a note.
+**Do:** Pinch-grab and move the structured chart, then use two hands to resize it if the physical-camera rehearsal passed. Otherwise use the exact pointer controls. Turn on **Select many**, group two objects, move the frame, then undo and redo. In browser B, add a note.
 
 **Visible reaction:** Both browsers converge. The receipt rail identifies Daniel, Sarah, and agent actions by revision and source.
 
@@ -72,7 +74,7 @@ Record this sequence only after the exact public commit passes its release check
 
 ## 1:27–1:30: close
 
-**Picture:** Return to the polished diagram, preserved sketch, second cursor, filmstrip, and receipt rail.
+**Picture:** Return to the polished chart, preserved sketch, second cursor, filmstrip, and receipt rail.
 
 **Line:** “CommandCanvas turns the meeting into the handoff: shared, structured, visible, and reversible.”
 
@@ -86,6 +88,6 @@ Record this sequence only after the exact public commit passes its release check
 - Do not show ChatGPT Site Tools invocation until the exact deployed build passes that host. Native Chrome 153 and ChatGPT are separate verification boundaries.
 - The controlled backend path has a delivered Resend record, but the public no-signup judge route remains preview-only. Show and describe the result visible in the exact environment being recorded.
 - Do not claim physical-hand or physical-iPhone accuracy unless the exact hardware rehearsal passes immediately before recording.
-- If the physical-hand rehearsal passes, keep the YOLO skeleton, tracked fingertip, and semantic state overlay in frame so POINT, PINCH, HELD, and RESIZING are legible. Throw through either red side edge for recoverable trash and into the blue bottom dock for minimize. Show Undo immediately after the trash gesture. Do not describe recoverable trash as permanent deletion.
+- If the physical-hand rehearsal passes, keep the YOLO skeleton, tracked fingertip, and semantic state overlay in frame so OPEN, PINCH, HELD, RESIZING, PAN, and CANVAS ZOOM are legible. Show blank-canvas pan or zoom only if it passed that exact rehearsal. Throw through either red side edge for recoverable trash and into the blue bottom dock for minimize. Show Undo immediately after the trash gesture. Do not describe recoverable trash as permanent deletion.
 - Keep pointer and typed fallbacks ready for every gesture and voice action.
 - Reset the demo before the final take and verify the expected fixtures and starting revision.

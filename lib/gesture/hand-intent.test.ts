@@ -4,18 +4,29 @@ import {
   createInitialHandIntentState,
   interpretHandFrame,
   type HandFrame,
+  type HandLandmark,
   type HandLandmarks,
 } from "@/lib/gesture/hand-intent";
 
 function frame(input?: {
   index?: { x: number; y: number };
   thumb?: { x: number; y: number };
+  indexVisibility?: number;
+  thumbVisibility?: number;
   confidence?: number;
   timestamp?: number;
 }): HandFrame {
   const landmarks = pointingHand();
-  landmarks[4] = { ...(input?.thumb ?? { x: 0.2, y: 0.5 }), z: 0 };
-  landmarks[8] = { ...(input?.index ?? { x: 0.5, y: 0.5 }), z: 0 };
+  landmarks[4] = {
+    ...(input?.thumb ?? { x: 0.2, y: 0.5 }),
+    z: 0,
+    visibility: input?.thumbVisibility ?? 0.95,
+  };
+  landmarks[8] = {
+    ...(input?.index ?? { x: 0.5, y: 0.5 }),
+    z: 0,
+    visibility: input?.indexVisibility ?? 0.95,
+  };
   landmarks[6] = {
     x: (landmarks[0].x + landmarks[8].x) / 2,
     y: (landmarks[0].y + landmarks[8].y) / 2,
@@ -28,7 +39,7 @@ function frame(input?: {
   };
 }
 
-function pointingHand() {
+function pointingHand(): HandLandmark[] {
   const landmarks = Array.from({ length: 21 }, () => ({
     x: 0.5,
     y: 0.7,
@@ -72,6 +83,18 @@ function openPalmFrame(timestamp = 1_000): HandFrame {
   };
 }
 
+function scaleFrameAroundWrist(input: HandFrame, scale: number): HandFrame {
+  const wrist = input.landmarks[0];
+  return {
+    ...input,
+    landmarks: input.landmarks.map((point) => ({
+      x: wrist.x + (point.x - wrist.x) * scale,
+      y: wrist.y + (point.y - wrist.y) * scale,
+      z: point.z,
+    })) as unknown as HandLandmarks,
+  };
+}
+
 describe("hand intent validation", () => {
   it("maps a verified 21-landmark frame to a normalized index-tip pointer", () => {
     const transition = interpretHandFrame(
@@ -87,6 +110,7 @@ describe("hand intent validation", () => {
       confidence: 0.96,
       timestamp: 1_000,
       pinchDistance: 0.474131,
+      pinchRatio: 2.154029,
     });
   });
 
@@ -203,13 +227,57 @@ describe("pointer smoothing", () => {
 
     expect(transition.output.pointer).toEqual({ x: 0.8, y: 0.7 });
   });
+
+  it("reduces stationary jitter without making deliberate fast movement trail behind", () => {
+    const first = interpretHandFrame(
+      createInitialHandIntentState(),
+      frame({ index: { x: 0.3, y: 0.4 }, timestamp: 1_000 }),
+      1_000,
+    );
+    const jitter = interpretHandFrame(
+      first.state,
+      frame({ index: { x: 0.304, y: 0.396 }, timestamp: 1_016 }),
+      1_016,
+    );
+    const fast = interpretHandFrame(
+      jitter.state,
+      frame({ index: { x: 0.65, y: 0.4 }, timestamp: 1_032 }),
+      1_032,
+    );
+
+    expect(jitter.output).toMatchObject({
+      accepted: true,
+      pointer: { x: expect.closeTo(0.3014, 3), y: expect.closeTo(0.3986, 3) },
+    });
+    expect(fast.output.accepted && fast.output.pointer.x).toBeGreaterThan(0.58);
+  });
+
+  it("does not contaminate the next index pointer with an open-palm center", () => {
+    const palm = interpretHandFrame(
+      createInitialHandIntentState(),
+      openPalmFrame(1_000),
+      1_000,
+    );
+    const point = interpretHandFrame(
+      palm.state,
+      frame({ index: { x: 0.2, y: 0.25 }, timestamp: 1_016 }),
+      1_016,
+      { smoothingAlpha: 1 },
+    );
+
+    expect(point.output).toMatchObject({
+      accepted: true,
+      mode: "point",
+      pointer: { x: 0.2, y: 0.25 },
+    });
+  });
 });
 
 describe("pinch hysteresis", () => {
   const exact = {
     smoothingAlpha: 1,
-    pinchEngageDistance: 0.04,
-    pinchReleaseDistance: 0.08,
+    pinchEngageRatio: 0.2,
+    pinchReleaseRatio: 0.4,
   } as const;
 
   it("engages the default pinch before fingertip-perfect contact", () => {
@@ -226,6 +294,89 @@ describe("pinch hysteresis", () => {
     expect(transition.output).toMatchObject({
       accepted: true,
       mode: "pinch",
+    });
+  });
+
+  it("recognizes the same pinch ratio near and far from the camera", () => {
+    const near = frame({
+      thumb: { x: 0.455, y: 0.5 },
+      index: { x: 0.5, y: 0.5 },
+      timestamp: 1_000,
+    });
+    const far = scaleFrameAroundWrist(
+      { ...near, timestamp: 1_016 },
+      0.55,
+    );
+
+    const nearResult = interpretHandFrame(
+      createInitialHandIntentState(),
+      near,
+      1_000,
+    );
+    const farResult = interpretHandFrame(
+      createInitialHandIntentState(),
+      far,
+      1_016,
+    );
+
+    expect(nearResult.output).toMatchObject({ accepted: true, mode: "pinch" });
+    expect(farResult.output).toMatchObject({ accepted: true, mode: "pinch" });
+    expect(
+      nearResult.output.accepted ? nearResult.output.pinchRatio : null,
+    ).toBeCloseTo(farResult.output.accepted ? farResult.output.pinchRatio : 0, 5);
+  });
+
+  it("engages a new pinch from the current geometry without waiting for pointer smoothing", () => {
+    const open = interpretHandFrame(
+      createInitialHandIntentState(),
+      frame({
+        thumb: { x: 0.2, y: 0.5 },
+        index: { x: 0.5, y: 0.5 },
+        timestamp: 1_000,
+      }),
+      1_000,
+    );
+    const pinched = interpretHandFrame(
+      open.state,
+      frame({
+        thumb: { x: 0.47, y: 0.5 },
+        index: { x: 0.5, y: 0.5 },
+        timestamp: 1_016,
+      }),
+      1_016,
+    );
+
+    expect(pinched.output).toMatchObject({ accepted: true, mode: "pinch" });
+  });
+
+  it("does not engage a new pinch from an unreliable thumb or index tip", () => {
+    const unreliableThumb = interpretHandFrame(
+      createInitialHandIntentState(),
+      frame({
+        thumb: { x: 0.48, y: 0.5 },
+        index: { x: 0.5, y: 0.5 },
+        thumbVisibility: 0.2,
+      }),
+      1_000,
+    );
+    const unreliableIndex = interpretHandFrame(
+      createInitialHandIntentState(),
+      frame({
+        thumb: { x: 0.48, y: 0.5 },
+        index: { x: 0.5, y: 0.5 },
+        indexVisibility: 0.2,
+      }),
+      1_000,
+    );
+
+    expect(unreliableThumb.output).toMatchObject({
+      accepted: true,
+      mode: "point",
+    });
+    expect(unreliableIndex.output).toMatchObject({
+      accepted: false,
+      mode: "idle",
+      reason: "low_keypoint_confidence",
     });
   });
 

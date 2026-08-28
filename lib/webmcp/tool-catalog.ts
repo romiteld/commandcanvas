@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { newCanvasObjectSchema } from "@/lib/canvas/object-model";
+import { sketchTransformOutputKindSchema } from "@/lib/vision/diagram-transform";
 import type { WebMcpToolName } from "@/lib/webmcp/phase-guards";
 
 export type JsonPrimitive = string | number | boolean | null;
@@ -129,7 +130,7 @@ export const WEBMCP_TOOL_INPUT_SCHEMAS = {
     .object({
       sketchId: objectIdSchema,
       instruction: z.string().trim().min(1).max(500),
-      outputKind: z.enum(["architecture", "flowchart"]).optional(),
+      outputKind: sketchTransformOutputKindSchema.optional(),
     })
     .strict(),
   prepare_meeting_packet: z
@@ -217,7 +218,7 @@ export const WEBMCP_TOOL_CATALOG = {
   },
   transform_sketch: {
     description:
-      "Interpret a selected sketch into a new structured diagram beside it while preserving the source sketch.",
+      "Interpret a selected sketch into a new structured diagram or chart beside it while preserving the source sketch. Omit outputKind or use auto when the image, narration, and instruction should determine the concrete visual family.",
     inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.transform_sketch,
     annotations: { readOnlyHint: false, untrustedContentHint: true },
     humanApproval: "not_required",

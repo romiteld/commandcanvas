@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
   createMeetingMediaController,
@@ -46,9 +46,10 @@ export function MeetingFilmstrip({
   onLocalStreamChange,
   createController = createMeetingMediaController,
 }: MeetingFilmstripProps) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [media, setMedia] = useState<MeetingMediaSnapshot>(EMPTY_MEDIA);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const videoPanelId = useId();
   const controllerRef = useRef<MeetingMediaController | null>(null);
   const participantIds = useMemo(() => {
     const ids = new Set(participants.map(({ id }) => id));
@@ -103,7 +104,8 @@ export function MeetingFilmstrip({
   return (
     <section
       className={`meeting-filmstrip${expanded ? " is-expanded" : " is-collapsed"}`}
-      aria-label="Meeting video"
+      aria-label="Meeting presence"
+      data-view={expanded ? "videos" : "compact"}
     >
       <div className="meeting-filmstrip-bar">
         <div className="meeting-filmstrip-title">
@@ -120,34 +122,78 @@ export function MeetingFilmstrip({
                     ? "Signaling lost"
                     : media.state === "error"
                       ? "Media unavailable"
-                      : "Video off"}
+                      : "Meeting media off"}
           </span>
         </div>
+
+        {!expanded ? (
+          <ul
+            className="meeting-presence-roster"
+            aria-label="People in this room"
+          >
+            {visibleParticipants.map((participant) => {
+              const local = participant.id === localParticipantId;
+              return (
+                <li
+                  key={participant.id}
+                  className={`meeting-presence-person${local ? " is-local" : ""}`}
+                  aria-label={`${participant.displayName}${local ? ", you" : ""}`}
+                  title={`${participant.displayName}${local ? " (you)" : ""}`}
+                >
+                  <span
+                    className="meeting-presence-avatar"
+                    style={{ background: participant.color ?? "#74859a" }}
+                    aria-hidden="true"
+                  >
+                    {initials(participant.displayName)}
+                  </span>
+                  <span className="meeting-presence-name" aria-hidden="true">
+                    {participant.displayName}
+                    {local ? <small>You</small> : null}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
+
+        <span
+          className="meeting-participant-count"
+          aria-label={`${visibleParticipants.length} ${
+            visibleParticipants.length === 1 ? "person" : "people"
+          } present`}
+        >
+          {visibleParticipants.length} present
+        </span>
 
         <div className="meeting-filmstrip-actions">
           {!media.localStream ? (
             <button
               type="button"
               disabled={mediaCapacityExceeded}
-              onClick={() => void controllerRef.current?.start()}
+              onClick={() => {
+                void controllerRef.current?.start().then((started) => {
+                  if (started) setExpanded(true);
+                });
+              }}
               aria-label="Start camera and microphone"
             >
-              Start camera + mic
+              Start & show camera
             </button>
           ) : null}
           {media.localStream ? (
             <>
               <button
                 type="button"
-                aria-pressed={!media.cameraEnabled}
+                aria-pressed={media.cameraEnabled}
                 aria-label={
-                  media.cameraEnabled ? "Turn camera off" : "Turn camera on"
+                  media.cameraEnabled ? "Stop sharing video" : "Share video"
                 }
                 onClick={() =>
                   controllerRef.current?.setCameraEnabled(!media.cameraEnabled)
                 }
               >
-                {media.cameraEnabled ? "Camera on" : "Camera off"}
+                {media.cameraEnabled ? "Video shared" : "Video not shared"}
               </button>
               <button
                 type="button"
@@ -178,23 +224,32 @@ export function MeetingFilmstrip({
           <button
             type="button"
             className="meeting-collapse-action"
+            aria-controls={videoPanelId}
             aria-expanded={expanded}
             aria-label={
-              expanded ? "Collapse meeting video" : "Expand meeting video"
+              expanded ? "Hide participant videos" : "Show participant videos"
             }
             onClick={() => setExpanded((current) => !current)}
           >
-            {expanded ? "⌃" : "⌄"}
+            <span aria-hidden="true">{expanded ? "▴" : "▣"}</span>
+            <span>{expanded ? "Hide" : "Videos"}</span>
           </button>
         </div>
       </div>
 
-      {expanded ? (
-        <div className="meeting-video-row" aria-label="Meeting participants">
+      <div
+        id={videoPanelId}
+        className="meeting-video-row"
+        role="group"
+        aria-label="Participant videos"
+        hidden={!expanded}
+      >
           {visibleParticipants.slice(0, 4).map((participant) => {
             const local = participant.id === localParticipantId;
             const remoteStream = local
-              ? media.localStream
+              ? media.cameraEnabled
+                ? media.localStream
+                : undefined
               : media.remoteStreams[participant.id];
             const peerState = media.peerStates[participant.id];
             return (
@@ -233,7 +288,7 @@ export function MeetingFilmstrip({
                     </span>
                     <small>
                       {local
-                        ? "Video off"
+                        ? "Video not shared"
                         : media.state === "active" && peerState === "connecting"
                           ? "Connecting video"
                           : peerState === "failed"
@@ -265,7 +320,13 @@ export function MeetingFilmstrip({
               ? `${visibleParticipants.length} people are present. Meeting media starts at four or fewer.`
               : "Small-room direct video · up to 4 people"}
           </p>
-        </div>
+      </div>
+
+      {media.localStream && !media.cameraEnabled ? (
+        <p className="meeting-media-message" role="status">
+          Video is not shared. Your camera may remain active locally for hand
+          input.
+        </p>
       ) : null}
 
       {mediaCapacityExceeded ? (

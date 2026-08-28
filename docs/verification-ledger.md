@@ -586,3 +586,37 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 ### CUT
 
 - Physical pencil or marker tracking, permanent gesture-only destruction, TURN/SFU infrastructure, production conferencing scale, recording, screen sharing, conferencing-platform integrations, enterprise identity, broad office-suite integrations, billing, native apps, headset support, plugin marketplaces, and desktop automation remain outside this release. Formerly deferred participant video, continuous Realtime voice, YOLO finger input, two-hand resize, side throws, grouping, ungrouping, redo, multi-select, nested frames, and rotation are implemented.
+
+## Checkpoint 18: thought dictation and hand-navigation candidate
+
+This checkpoint is a draft for the current source candidate. It does not replace Checkpoint 17's public-release evidence until the exact candidate has passed the full gate and has been promoted and exercised at the named boundaries below.
+
+### WORKING
+
+- Saying **Start a new thought** submits one canonical note creation and begins capture only after that command succeeds. Each later completed user turn is serialized into the same selected card through `object.append_note_text` with an exact expected object version. **Start a new thought**, **Finish thought**, assistant speech, interrupted speech, and cancelled responses are excluded. Other voice tools are refused while capture is active. Accepted appends produce immutable receipts and use the shared Undo path.
+- Focused unit and component coverage exercises successful capture, refused creation, stale-version refusal, ordered multi-turn appends, interrupted-turn exclusion, both Realtime tool/transcript event orderings, and the boundary between dictated prose and an actual canvas command.
+- The local spatial reducer supports blank-canvas open-palm pan and two-hand zoom without creating shared receipts. Object-targeted pinch remains grab/move, object-targeted bimanual input remains resize, and rotated or visually raised objects use their effective hit geometry and stacking order.
+- The room surface shows distinct open-hand, pinch, held-object, resizing, panning, and canvas-zoom feedback. Starting hand drawing clears object chrome; temporary hand loss preserves the unfinished sketch and keeps Finish and Cancel available.
+- The exact source candidate passed ESLint, TypeScript, 80 Vitest files with 843 of 843 tests, both generated hand-worker bundles, and `git diff --check`. The local optimized build remains an environment-specific boundary: Turbopack's PostCSS helper cannot bind an internal loopback port in this sandbox, so the exact Vercel build must pass before release promotion is claimed.
+- The hosted `general_visual_transform_kinds` migration is applied. Catalog assertions passed; the legacy nine-argument admission overload is absent; the narration-aware ten-argument overload and column are present; `anon` and `authenticated` execution are absent; `service_role` execution is present. A transactional probe passed narration-aware `auto` admission, concrete pie-chart completion, the legacy no-narration key identity, malformed-input/key refusals, and explicit-kind mismatch refusal before rolling back.
+- Thought capture now aborts both its room and Realtime state when a collaborator removes the active card or a canonical append/confirmation fails. A later voice command is no longer deadlocked behind a nonexistent thought.
+- If a meeting-owned camera track ends while Hand input is active, the controller releases held state, stops its RAF/worker, detaches the preview without stopping externally owned media, and reports a visible retryable state. Meeting controls now say **Stop sharing video** / **Video not shared** and disclose when the camera may remain active locally for hand input.
+
+### VERIFIED IN BROWSER
+
+- Local Chromium exercised the current full-screen canvas on desktop (9 passing scenarios, 1 device-specific skip) and mobile (3 passing scenarios, 7 desktop-only skips). The checks cover object creation, overlay drawers without document scroll, pointer move/resize, canvas pan/zoom, minimize/restore, recoverable discard, Undo, visible receipts, and a standards-shaped live-page WebMCP invocation.
+- Component and controller tests exercise the exact thought-card sequence, including creation, ordered multi-turn append, response/transcription event reordering, boundary-command exclusion, visible canonical receipts, Undo, collaborator deletion recovery, and durable room-service round-trip. A physical microphone and production-browser thought rehearsal remain unverified below.
+- Hand-navigation reducers and components exercise open-palm pan, blank-canvas two-hand zoom, object pinch/move, bimanual resize, interrupted-sketch preservation, effective-z/rotated targeting, exact staged edge feedback, shared-camera shutdown, and truthful local-video publication state. This is browser state-machine evidence, not physical-hand ergonomics.
+- **TODO: after deployment, rerun the public no-signup, Supabase collaboration, vision, packet, WebMCP, meeting-media, camera lifecycle, and cleanup probes against the exact promoted commit.**
+
+### UNVERIFIED
+
+- The Checkpoint 18 candidate has completed its integrated source gate and hosted general-visual migration, but has not yet completed commit, push, Vercel promotion, or exact public-origin rerun. Checkpoint 17 remains the latest public evidence; its results do not automatically verify this changed source.
+- A physical microphone has not exercised the new thought-card flow. Component and controlled Realtime event coverage do not establish speech recognition accuracy, interruption behavior, latency, or ergonomics for a person speaking into a specific device.
+- A physical person has not exercised the current hand-navigation candidate on an iPhone or webcam. Browser state-machine coverage does not establish pointing, pinch, open-palm, bimanual, edge, occlusion, lighting, distance, thermal, or mirrored-camera accuracy.
+- ChatGPT built-in-browser Site Tools remains a separate unverified host boundary. In-page GPT Realtime behavior and native Chrome WebMCP behavior are not evidence of ChatGPT-host invocation.
+- Public dynamic WebMCP registration, cross-network restrictive-NAT meeting media, physical touch/stylus ergonomics, and real public Resend delivery retain the honest boundaries recorded at Checkpoint 17.
+
+### CUT
+
+- No previously cut capability is reintroduced by this checkpoint. Physical pencil or marker tracking, permanent gesture-only destruction, TURN/SFU infrastructure, production conferencing scale, recording, screen sharing, conferencing-platform integrations, enterprise identity, broad office-suite integrations, billing, native apps, headset support, plugin marketplaces, and desktop automation remain outside this release.

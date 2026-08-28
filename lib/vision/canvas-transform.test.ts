@@ -54,6 +54,27 @@ const diagramPayload = {
     { id: "edge-client-api", from: "node-client", to: "node-api", label: "request" },
   ],
 };
+const pieChartPayload = {
+  kind: "pie_chart" as const,
+  sourceSketchId: "sketch-source",
+  interpretationSummary: "A budget split with three categories.",
+  chart: {
+    title: "Budget split",
+    xAxisLabel: null,
+    yAxisLabel: null,
+    series: [
+      {
+        id: "series-budget",
+        label: "Budget",
+        points: [
+          { label: "Product", value: 55 },
+          { label: "Sales", value: 30 },
+          { label: "Operations", value: 15 },
+        ],
+      },
+    ],
+  },
+};
 
 function createHarness(options: {
   transform?: () => Promise<BrowserSketchTransformResult>;
@@ -155,6 +176,7 @@ describe("canvas sketch transformer", () => {
     const result = await transformer.transform({
       sketchObjectId: "sketch-source",
       instruction: "Turn this into the service architecture.",
+      narration: "The client publishes jobs and the API consumes them.",
       outputKind: "architecture",
       source: "typed",
       signal: controller.signal,
@@ -175,6 +197,7 @@ describe("canvas sketch transformer", () => {
           sketchObjectId: "sketch-source",
           sourceVersion: 1,
           instruction: "Turn this into the service architecture.",
+          narration: "The client publishes jobs and the API consumes them.",
           outputKind: "architecture",
           imageDataUrl: PNG_DATA_URL,
         },
@@ -206,6 +229,47 @@ describe("canvas sketch transformer", () => {
       deletedAt: null,
       version: 1,
       payload: sketchPayload,
+    });
+  });
+
+  it("lets auto interpretation create a concrete chart beside the preserved sketch", async () => {
+    const harness = createHarness({
+      transform: async () => ({
+        ok: true,
+        value: {
+          provider: "openai",
+          model: "gpt-5.6-terra",
+          responseId: "resp_chart",
+          sourceSketchId: "sketch-source",
+          payload: pieChartPayload,
+        },
+      }),
+    });
+
+    const result = await harness.transformer.transform({
+      sketchObjectId: "sketch-source",
+      instruction: "Make that professional.",
+      narration: "This is the budget split by department.",
+      outputKind: "auto",
+      source: "voice",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      diagramObjectId: "diagram-generated",
+    });
+    expect(harness.submissions).toHaveLength(1);
+    expect(harness.submissions[0]?.command).toMatchObject({
+      type: "object.create",
+      object: {
+        type: "diagram",
+        title: "Structured pie chart",
+        payload: pieChartPayload,
+      },
+    });
+    expect(harness.store.getState().canvas.objects["sketch-source"]).toMatchObject({
+      type: "sketch",
+      deletedAt: null,
     });
   });
 

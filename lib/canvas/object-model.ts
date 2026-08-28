@@ -12,6 +12,9 @@ const heightSchema = z.number().finite().min(80).max(1_400);
 const zIndexSchema = z.number().int().min(0).max(100_000);
 const rotationSchema = z.number().finite().min(-180).max(180);
 
+export const NOTE_TEXT_MAX_LENGTH = 4_000;
+export const NOTE_APPEND_TEXT_MAX_LENGTH = 1_000;
+
 const spatialFields = {
   id: objectIdSchema,
   title: titleSchema,
@@ -25,7 +28,7 @@ const spatialFields = {
 
 export const notePayloadSchema = z
   .object({
-    text: z.string().max(4_000),
+    text: z.string().max(NOTE_TEXT_MAX_LENGTH),
     tone: z.enum(["coral", "sky", "sand", "violet"]),
   })
   .strict();
@@ -105,7 +108,16 @@ const diagramNodeSchema = z
   .object({
     id: objectIdSchema,
     label: z.string().trim().min(1).max(120),
-    kind: z.enum(["client", "service", "database", "queue", "external"]),
+    kind: z.enum([
+      "client",
+      "service",
+      "database",
+      "queue",
+      "external",
+      "concept",
+      "process",
+      "decision",
+    ]),
     x: coordinateSchema,
     y: coordinateSchema,
     width: z.number().finite().min(80).max(600),
@@ -122,9 +134,25 @@ const diagramEdgeSchema = z
   })
   .strict();
 
-export const diagramPayloadSchema = z
+export const NODE_DIAGRAM_KINDS = [
+  "architecture",
+  "flowchart",
+  "diagram",
+] as const;
+export const CHART_DIAGRAM_KINDS = [
+  "pie_chart",
+  "bar_chart",
+  "line_chart",
+] as const;
+export const DIAGRAM_KINDS = [
+  ...NODE_DIAGRAM_KINDS,
+  ...CHART_DIAGRAM_KINDS,
+] as const;
+export const diagramKindSchema = z.enum(DIAGRAM_KINDS);
+
+const nodeDiagramPayloadSchema = z
   .object({
-    kind: z.enum(["architecture", "flowchart"]),
+    kind: z.enum(NODE_DIAGRAM_KINDS),
     sourceSketchId: objectIdSchema,
     interpretationSummary: z.string().trim().min(1).max(600),
     nodes: z.array(diagramNodeSchema).min(1).max(30),
@@ -148,6 +176,111 @@ export const diagramPayloadSchema = z
         });
     }
   });
+
+const chartPointSchema = z
+  .object({
+    label: z.string().trim().min(1).max(80),
+    value: z.number().finite().min(-1_000_000_000_000).max(1_000_000_000_000),
+  })
+  .strict();
+
+const chartSeriesSchema = z
+  .object({
+    id: objectIdSchema,
+    label: z.string().trim().min(1).max(80),
+    points: z.array(chartPointSchema).min(1).max(24),
+  })
+  .strict()
+  .superRefine((series, context) => {
+    const labels = new Set(series.points.map((point) => point.label));
+    if (labels.size !== series.points.length)
+      context.addIssue({
+        code: "custom",
+        path: ["points"],
+        message: "Chart point labels must be unique within a series.",
+      });
+  });
+
+const chartPayloadSchema = z
+  .object({
+    kind: z.enum(CHART_DIAGRAM_KINDS),
+    sourceSketchId: objectIdSchema,
+    interpretationSummary: z.string().trim().min(1).max(600),
+    chart: z
+      .object({
+        title: z.string().trim().min(1).max(120),
+        xAxisLabel: z.string().trim().min(1).max(80).nullable(),
+        yAxisLabel: z.string().trim().min(1).max(80).nullable(),
+        series: z.array(chartSeriesSchema).min(1).max(6),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((payload, context) => {
+    const seriesIds = new Set(payload.chart.series.map((series) => series.id));
+    if (seriesIds.size !== payload.chart.series.length)
+      context.addIssue({
+        code: "custom",
+        path: ["chart", "series"],
+        message: "Chart series IDs must be unique.",
+      });
+
+    if (payload.kind === "pie_chart") {
+      if (payload.chart.series.length !== 1)
+        context.addIssue({
+          code: "custom",
+          path: ["chart", "series"],
+          message: "Pie charts must contain exactly one series.",
+        });
+      const points = payload.chart.series[0]?.points ?? [];
+      if (points.some((point) => point.value < 0))
+        context.addIssue({
+          code: "custom",
+          path: ["chart", "series", 0, "points"],
+          message: "Pie chart values cannot be negative.",
+        });
+      if (points.every((point) => point.value === 0))
+        context.addIssue({
+          code: "custom",
+          path: ["chart", "series", 0, "points"],
+          message: "Pie charts require at least one positive value.",
+        });
+    }
+
+    if (payload.kind !== "pie_chart" && payload.chart.series.length > 1) {
+      const expectedLabels = payload.chart.series[0]?.points.map(
+        (point) => point.label,
+      );
+      payload.chart.series.slice(1).forEach((series, seriesOffset) => {
+        const labels = series.points.map((point) => point.label);
+        if (
+          labels.length !== expectedLabels?.length ||
+          labels.some((label, index) => label !== expectedLabels[index])
+        )
+          context.addIssue({
+            code: "custom",
+            path: ["chart", "series", seriesOffset + 1, "points"],
+            message:
+              "Bar- and line-chart series must use the same ordered category labels.",
+          });
+      });
+    }
+
+    if (
+      payload.kind === "line_chart" &&
+      payload.chart.series.some((series) => series.points.length < 2)
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["chart", "series"],
+        message: "Line-chart series require at least two points.",
+      });
+  });
+
+export const diagramPayloadSchema = z.union([
+  nodeDiagramPayloadSchema,
+  chartPayloadSchema,
+]);
 
 export const framePayloadSchema = z
   .object({
@@ -235,6 +368,14 @@ export const canvasCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("object.create"), object: newCanvasObjectSchema }).strict(),
   z
     .object({
+      type: z.literal("object.append_note_text"),
+      objectId: objectIdSchema,
+      expectedVersion: z.number().int().min(1).max(1_000_000_000),
+      text: z.string().trim().min(1).max(NOTE_APPEND_TEXT_MAX_LENGTH),
+    })
+    .strict(),
+  z
+    .object({
       type: z.literal("object.transform"),
       objectId: objectIdSchema,
       transform: transformSchema,
@@ -276,6 +417,7 @@ export type TaskBoardPayload = z.infer<typeof taskBoardPayloadSchema>;
 export type SchedulePayload = z.infer<typeof schedulePayloadSchema>;
 export type SketchPayload = z.infer<typeof sketchPayloadSchema>;
 export type DiagramPayload = z.infer<typeof diagramPayloadSchema>;
+export type DiagramKind = z.infer<typeof diagramKindSchema>;
 export type FramePayload = z.infer<typeof framePayloadSchema>;
 export type NewCanvasObject = z.infer<typeof newCanvasObjectSchema>;
 export type NewNoteObject = Extract<NewCanvasObject, { type: "note" }>;

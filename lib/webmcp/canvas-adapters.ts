@@ -167,10 +167,11 @@ async function transformSelectedSketch(
     return unavailable("sketch transformation service is not ready");
 
   try {
+    const outputKind = request.input.outputKind ?? "auto";
     const result = await options.transformSketch({
       sketchObjectId: request.input.sketchId,
       instruction: request.input.instruction,
-      outputKind: request.input.outputKind ?? "architecture",
+      outputKind,
       source: "webmcp",
       signal: request.signal,
     });
@@ -184,7 +185,10 @@ async function transformSelectedSketch(
     return {
       ok: true,
       status: "completed",
-      message: `Sketch interpreted as a structured ${request.input.outputKind ?? "architecture"} diagram.`,
+      message:
+        outputKind === "auto"
+          ? "Sketch interpreted as a structured visual."
+          : `Sketch interpreted as ${structuredVisualArticle(outputKind)}.`,
       receiptId: result.receiptId,
       data: {
         revision: result.revision,
@@ -201,6 +205,31 @@ async function transformSelectedSketch(
         ? "Sketch interpretation was cancelled."
         : "Sketch interpretation is temporarily unavailable.",
     };
+  }
+}
+
+function structuredVisualArticle(
+  kind:
+    | "architecture"
+    | "flowchart"
+    | "diagram"
+    | "pie_chart"
+    | "bar_chart"
+    | "line_chart",
+) {
+  switch (kind) {
+    case "architecture":
+      return "an architecture diagram";
+    case "flowchart":
+      return "a flowchart";
+    case "diagram":
+      return "a structured diagram";
+    case "pie_chart":
+      return "a pie chart";
+    case "bar_chart":
+      return "a bar chart";
+    case "line_chart":
+      return "a line chart";
   }
 }
 

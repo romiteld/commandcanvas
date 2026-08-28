@@ -64,6 +64,42 @@ function fakeController() {
 }
 
 describe("SpatialCameraControl", () => {
+  it("enters spatial control automatically after the one required permission action", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    const onObservation = vi.fn();
+    const onSpatialModeStarted = vi.fn();
+    const { container } = render(
+      <SpatialCameraControl
+        createController={() => fake.controller}
+        onObservation={onObservation}
+        onSpatialModeStarted={onSpatialModeStarted}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => fake.setStatus({ state: "ready" }));
+    act(() =>
+      fake.emit({
+        mode: "point",
+        pointer: { x: 0.25, y: 0.4 },
+        confidence: 0.96,
+        timestamp: 1_000,
+      }),
+    );
+
+    expect(onSpatialModeStarted).toHaveBeenCalledOnce();
+    expect(onObservation).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "point" }),
+    );
+    expect(container.querySelector(".spatial-camera-control")).not.toHaveClass(
+      "is-expanded",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Start spatial mode" }),
+    ).toBeNull();
+  });
+
   it("keeps the camera session alive when canvas observation handlers refresh", async () => {
     const user = userEvent.setup();
     const fake = fakeController();
@@ -77,7 +113,6 @@ describe("SpatialCameraControl", () => {
     );
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => fake.setStatus({ state: "ready" }));
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
 
     rerender(
       <SpatialCameraControl
@@ -119,8 +154,8 @@ describe("SpatialCameraControl", () => {
       expect.objectContaining({ muted: true }),
     );
     expect(
-      screen.getByRole("button", { name: "Start spatial mode" }),
-    ).toBeDisabled();
+      screen.queryByRole("button", { name: "Start spatial mode" }),
+    ).toBeNull();
   });
 
   it("shows ready separately from a real detected hand and disables cleanly", async () => {
@@ -138,7 +173,6 @@ describe("SpatialCameraControl", () => {
     fake.setStatus({ state: "ready" });
     expect(await screen.findByText("Hand input ready · local only")).toBeVisible();
     expect(screen.queryByText(/hand detected/i)).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
 
     fake.emit({
       mode: "pinch",
@@ -165,10 +199,19 @@ describe("SpatialCameraControl", () => {
         displayName: "YOLO26 Hand Pose",
         runtime: "onnx-runtime-web",
         fallback: false,
+        executionProvider: "webgpu",
+        adapter: { architecture: "ampere", description: "NVIDIA GPU" },
+        detectorRoundTripMs: 69.01,
+        resultRateFps: 14.49,
+        runtimeSamples: 12,
       });
       fake.setStatus({ state: "ready" });
     });
     expect(await screen.findByText("Engine YOLO26 Hand Pose")).toBeVisible();
+    expect(screen.getByText("Provider WebGPU · NVIDIA GPU")).toBeVisible();
+    expect(
+      screen.getByText("69 ms detector/worker round trip · 14.5 results/s"),
+    ).toBeVisible();
 
     act(() =>
       fake.setEngine({
@@ -183,7 +226,7 @@ describe("SpatialCameraControl", () => {
     ).toBeVisible();
   });
 
-  it("hands control back to the canvas as soon as spatial mode starts", async () => {
+  it("hands control back to the canvas as soon as the engine is ready", async () => {
     const user = userEvent.setup();
     const fake = fakeController();
     const onSpatialModeStarted = vi.fn();
@@ -196,7 +239,6 @@ describe("SpatialCameraControl", () => {
 
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => fake.setStatus({ state: "ready" }));
-    await user.click(screen.getByRole("button", { name: "Start spatial mode" }));
 
     expect(onSpatialModeStarted).toHaveBeenCalledOnce();
     expect(
@@ -282,7 +324,7 @@ describe("SpatialCameraControl", () => {
     );
     expect(container.querySelectorAll("[data-hand-keypoint]")).toHaveLength(21);
     expect(container.querySelectorAll("[data-hand-connection]")).toHaveLength(21);
-    expect(screen.getByText("Pinch 0.120")).toBeVisible();
+    expect(screen.getByText("Pinch distance 0.120")).toBeVisible();
     expect(screen.getByText("21-point hand landmarks")).toBeVisible();
     expect(screen.getByText("Confidence 91%")).toBeVisible();
     expect(screen.getByText("left hand")).toBeVisible();

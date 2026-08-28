@@ -693,6 +693,58 @@ describe("buildCanvasMutationPlan", () => {
     });
   });
 
+  it("builds a version-checked voice note append as one canonical update plan", () => {
+    const state = parseFixture();
+    const request: CanvasCommandEnvelope = {
+      ...envelope(state, {
+        type: "object.append_note_text",
+        objectId: "note-launch",
+        expectedVersion: 2,
+        text: "Supplier lead time is the launch risk.",
+      }),
+      source: "voice",
+    };
+
+    const result = buildCanvasMutationPlan(state, request);
+
+    expect(result).toEqual({
+      ok: true,
+      plan: {
+        action: "update",
+        description: "Danny added dictated text to “Launch decision”.",
+        changes: [
+          {
+            objectId: "note-launch",
+            expectedVersion: 2,
+            after: {
+              type: "note",
+              title: "Launch decision",
+              x: 420,
+              y: 80,
+              width: 280,
+              height: 190,
+              zIndex: 1,
+              rotation: 0,
+              parentId: null,
+              minimized: false,
+              pinned: false,
+              deletedAt: null,
+              metadata: {},
+              payload: {
+                text:
+                  "Decide which workflow proves the product thesis.\n" +
+                  "Supplier lead time is the launch risk.",
+                tone: "sky",
+              },
+            },
+          },
+        ],
+        reversible: true,
+        undoesReceiptId: null,
+      },
+    });
+  });
+
   it.each([
     {
       label: "transform",

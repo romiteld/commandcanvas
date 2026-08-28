@@ -126,7 +126,8 @@ test("starts the local hand detector from a real browser camera stream and relea
       ),
     ).toBe(true);
 
-    await page.getByRole("button", { name: "Start spatial mode" }).click();
+    // A successful explicit Enable click now enters spatial mode immediately;
+    // there is no second calibration/start click in the product flow.
     await expect(
       page.getByRole("complementary", { name: "System status drawer" }),
     ).toBeHidden();

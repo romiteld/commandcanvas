@@ -8,13 +8,20 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import type { DirectCanvasIntent } from "@/lib/canvas/direct-command";
+import {
+  parseDirectCanvasCommand,
+  type DirectCanvasIntent,
+} from "@/lib/canvas/direct-command";
+import { MAX_DIAGRAM_TRANSFORM_NARRATION_CHARS } from "@/lib/vision/diagram-transform";
 import {
   createRealtimeVoiceController,
   type RealtimeVoiceController,
   type RealtimeVoiceControllerOptions,
+  type RealtimeVoiceResponseOutcome,
+  type RealtimeVoiceTurnContext,
   type RealtimeVoiceToolAction,
 } from "@/lib/realtime-voice/client";
+import type { RealtimeVoiceIntentResult } from "@/lib/realtime-voice/tools";
 
 export type RealtimeVoiceControlController = RealtimeVoiceController;
 
@@ -26,9 +33,8 @@ export interface RealtimeVoiceControlProps {
     intent: DirectCanvasIntent,
     source: "voice",
   ) =>
-    | { ok: true; message: string }
-    | { ok: false; message: string }
-    | Promise<{ ok: true; message: string } | { ok: false; message: string }>;
+    | RealtimeVoiceIntentResult
+    | Promise<RealtimeVoiceIntentResult>;
   createController?: (
     options: RealtimeVoiceControllerOptions,
   ) => RealtimeVoiceControlController;
@@ -50,11 +56,42 @@ const stateLabels = {
   error: "Voice error",
 } as const;
 
+const MAX_RECENT_SPOKEN_CONTEXT_TURNS = 4;
+const MAX_TRACKED_VOICE_TURNS = 16;
+const MAX_IGNORED_LATE_TURNS = 32;
+const LEGACY_TURN_KEY = "legacy";
+
+type VoiceIntentResult = RealtimeVoiceIntentResult;
+
+interface BufferedVoiceTurn {
+  key: string;
+  thoughtCaptureActiveAtStart: boolean;
+  transcriptReceived: boolean;
+  transcriptAvailableForTool: boolean;
+  pendingThoughtTranscripts: string[];
+  pendingNarrationTranscripts: string[];
+  commandTranscriptCount: number;
+  suppressUpcomingTranscriptCount: number;
+  responseOutcome?: RealtimeVoiceResponseOutcome;
+}
+
 class LatestVoiceHandlers {
+  private recentSpokenContext: readonly string[] = [];
+  private thoughtCaptureActive = false;
+  private thoughtAppendQueue: Promise<void> = Promise.resolve();
+  private currentTurnKey = LEGACY_TURN_KEY;
+  private legacyTurn: BufferedVoiceTurn;
+  private turns = new Map<string, BufferedVoiceTurn>();
+  private orderedTurnKeys: string[] = [];
+  private ignoredLateTurnIds = new Set<string>();
+  private ignoredLateTurnOrder: string[] = [];
+
   constructor(
     private readToken: () => string | null,
     private submitIntent: RealtimeVoiceControllerOptions["onIntent"],
-  ) {}
+  ) {
+    this.legacyTurn = this.createTurn(LEGACY_TURN_KEY);
+  }
 
   update(
     readToken: () => string | null,
@@ -68,10 +105,248 @@ class LatestVoiceHandlers {
     return this.readToken();
   }
 
-  onIntent(
-    ...args: Parameters<RealtimeVoiceControllerOptions["onIntent"]>
+  async onIntent(
+    intent: DirectCanvasIntent,
+    source: "voice",
+    turnContext?: RealtimeVoiceTurnContext,
   ) {
-    return this.submitIntent(...args);
+    const turn = this.turnForContext(turnContext);
+    if (intent.type !== "append_thought")
+      this.reserveCurrentTranscriptForTool(turn);
+    if (intent.type === "start_thought") {
+      await this.thoughtAppendQueue;
+      this.resetSpokenContext();
+      const result = await this.submitIntent(intent, source);
+      if (result.ok) this.thoughtCaptureActive = true;
+      return result;
+    }
+    if (intent.type === "finish_thought") {
+      await this.thoughtAppendQueue;
+      const result = await this.submitIntent(intent, source);
+      if (
+        result.ok ||
+        (!result.ok && result.thoughtCapture === "aborted")
+      )
+        this.thoughtCaptureActive = false;
+      return result;
+    }
+    if (this.thoughtCaptureActive && intent.type !== "append_thought") {
+      await this.thoughtAppendQueue;
+      if (this.thoughtCaptureActive)
+        return {
+          ok: false as const,
+          message: "Finish the active thought before using other canvas commands.",
+        };
+    }
+    await this.thoughtAppendQueue;
+    if (intent.type === "open_sketch") {
+      this.resetSpokenContext();
+      return this.submitIntent(intent, source);
+    }
+    if (intent.type !== "transform_selected_sketch")
+      return this.submitIntent(intent, source);
+
+    const narration = spokenNarration(this.recentSpokenContext);
+    this.resetSpokenContext();
+    return this.submitIntent(
+      narration ? { ...intent, narration } : intent,
+      source,
+    );
+  }
+
+  rememberUserTranscript(rawText: string, itemId?: string) {
+    const text = normalizeCompletedTranscript(rawText);
+    if (!text || (itemId && this.ignoredLateTurnIds.has(itemId)))
+      return Promise.resolve<VoiceIntentResult[]>([]);
+    const turn = this.turnForItem(itemId);
+    turn.transcriptReceived = true;
+    if (turn.suppressUpcomingTranscriptCount > 0) {
+      turn.suppressUpcomingTranscriptCount -= 1;
+      return this.drainReadyTurns(turn);
+    }
+    const capturingThought =
+      turn.key === LEGACY_TURN_KEY
+        ? this.thoughtCaptureActive
+        : turn.thoughtCaptureActiveAtStart;
+    turn.transcriptAvailableForTool = true;
+    if (capturingThought) {
+      if (isThoughtBoundaryTranscript(text)) turn.commandTranscriptCount += 1;
+      else turn.pendingThoughtTranscripts.push(text);
+      return this.drainReadyTurns(turn);
+    }
+    if (isCanvasCommandTranscript(text)) {
+      turn.commandTranscriptCount += 1;
+      return this.drainReadyTurns(turn);
+    }
+    turn.pendingNarrationTranscripts.push(text);
+    return this.drainReadyTurns(turn);
+  }
+
+  beginUserTurn(itemId?: string) {
+    if (itemId) {
+      this.currentTurnKey = itemId;
+      this.ensureTurn(itemId);
+      return;
+    }
+    this.currentTurnKey = LEGACY_TURN_KEY;
+    this.legacyTurn = this.createTurn(LEGACY_TURN_KEY);
+  }
+
+  settleResponse(outcome: RealtimeVoiceResponseOutcome, itemId?: string) {
+    if (itemId && this.ignoredLateTurnIds.has(itemId))
+      return Promise.resolve<VoiceIntentResult[]>([]);
+    const turn = this.turnForItem(itemId);
+    turn.responseOutcome = outcome;
+    return this.drainReadyTurns(turn);
+  }
+
+  private reserveCurrentTranscriptForTool(turn: BufferedVoiceTurn) {
+    if (turn.transcriptAvailableForTool) {
+      turn.transcriptAvailableForTool = false;
+      if (turn.pendingThoughtTranscripts.length > 0)
+        turn.pendingThoughtTranscripts.pop();
+      else if (turn.pendingNarrationTranscripts.length > 0)
+        turn.pendingNarrationTranscripts.pop();
+      else if (turn.commandTranscriptCount > 0)
+        turn.commandTranscriptCount -= 1;
+      return;
+    }
+    turn.suppressUpcomingTranscriptCount += 1;
+  }
+
+  private turnForContext(context?: RealtimeVoiceTurnContext) {
+    return this.turnForItem(context?.itemId);
+  }
+
+  private turnForItem(itemId?: string) {
+    if (itemId) return this.ensureTurn(itemId);
+    if (this.currentTurnKey !== LEGACY_TURN_KEY)
+      return this.ensureTurn(this.currentTurnKey);
+    return this.legacyTurn;
+  }
+
+  private ensureTurn(itemId: string) {
+    const existing = this.turns.get(itemId);
+    if (existing) return existing;
+    const turn = this.createTurn(itemId);
+    this.turns.set(itemId, turn);
+    this.orderedTurnKeys.push(itemId);
+    while (this.orderedTurnKeys.length > MAX_TRACKED_VOICE_TURNS) {
+      const expired = this.orderedTurnKeys.shift();
+      if (!expired) break;
+      this.turns.delete(expired);
+      this.rememberIgnoredTurn(expired);
+    }
+    return turn;
+  }
+
+  private createTurn(key: string): BufferedVoiceTurn {
+    return {
+      key,
+      thoughtCaptureActiveAtStart: this.thoughtCaptureActive,
+      transcriptReceived: false,
+      transcriptAvailableForTool: false,
+      pendingThoughtTranscripts: [],
+      pendingNarrationTranscripts: [],
+      commandTranscriptCount: 0,
+      suppressUpcomingTranscriptCount: 0,
+    };
+  }
+
+  private drainReadyTurns(trigger: BufferedVoiceTurn) {
+    if (trigger.key === LEGACY_TURN_KEY) {
+      if (!trigger.responseOutcome) return Promise.resolve<VoiceIntentResult[]>([]);
+      if (
+        trigger.responseOutcome === "completed" &&
+        !trigger.transcriptReceived
+      )
+        return Promise.resolve<VoiceIntentResult[]>([]);
+      const operations = this.commitTurn(trigger);
+      this.legacyTurn = this.createTurn(LEGACY_TURN_KEY);
+      return Promise.all(operations);
+    }
+
+    const operations: Array<Promise<VoiceIntentResult>> = [];
+    while (this.orderedTurnKeys.length > 0) {
+      const key = this.orderedTurnKeys[0]!;
+      const turn = this.turns.get(key);
+      if (!turn) {
+        this.orderedTurnKeys.shift();
+        continue;
+      }
+      if (!turn.responseOutcome) break;
+      if (turn.responseOutcome === "completed" && !turn.transcriptReceived)
+        break;
+      this.orderedTurnKeys.shift();
+      this.turns.delete(key);
+      this.rememberIgnoredTurn(key);
+      operations.push(...this.commitTurn(turn));
+    }
+    return Promise.all(operations);
+  }
+
+  private commitTurn(turn: BufferedVoiceTurn) {
+    if (turn.responseOutcome === "interrupted") return [];
+    turn.pendingNarrationTranscripts.forEach((text) => {
+      this.recentSpokenContext = appendSpokenContext(
+        this.recentSpokenContext,
+        text,
+      );
+    });
+    return turn.pendingThoughtTranscripts.map((text) =>
+      this.queueThoughtAppend(text),
+    );
+  }
+
+  private rememberIgnoredTurn(itemId: string) {
+    if (this.ignoredLateTurnIds.has(itemId)) return;
+    this.ignoredLateTurnIds.add(itemId);
+    this.ignoredLateTurnOrder.push(itemId);
+    while (this.ignoredLateTurnOrder.length > MAX_IGNORED_LATE_TURNS) {
+      const expired = this.ignoredLateTurnOrder.shift();
+      if (expired) this.ignoredLateTurnIds.delete(expired);
+    }
+  }
+
+  private queueThoughtAppend(text: string) {
+    const result = this.thoughtAppendQueue.then(async () => {
+      let outcome: RealtimeVoiceIntentResult;
+      try {
+        outcome = await this.submitIntent(
+          { type: "append_thought", text },
+          "voice",
+        );
+      } catch {
+        outcome = {
+          ok: false as const,
+          message: "That speech could not be added to the thought card.",
+          thoughtCapture: "aborted",
+        };
+      }
+      if (!outcome.ok && outcome.thoughtCapture === "aborted")
+        this.thoughtCaptureActive = false;
+      return outcome;
+    });
+    this.thoughtAppendQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  resetSpokenContext() {
+    this.recentSpokenContext = [];
+  }
+
+  resetSessionContext() {
+    this.resetSpokenContext();
+    this.thoughtCaptureActive = false;
+    this.currentTurnKey = LEGACY_TURN_KEY;
+    this.turns.clear();
+    this.orderedTurnKeys = [];
+    this.ignoredLateTurnIds.clear();
+    this.ignoredLateTurnOrder = [];
+    this.legacyTurn = this.createTurn(LEGACY_TURN_KEY);
   }
 }
 
@@ -108,8 +383,22 @@ export function RealtimeVoiceControl({
   const submitLatestIntent = useCallback<
     RealtimeVoiceControllerOptions["onIntent"]
   >(
-    (intent, source) => latestHandlers.onIntent(intent, source),
+    (intent, source, turn) => latestHandlers.onIntent(intent, source, turn),
     [latestHandlers],
+  );
+
+  const reportThoughtResults = useCallback(
+    (results: readonly VoiceIntentResult[]) => {
+      results.forEach((result) => {
+        if (result.ok) return;
+        appendActivity({
+          speaker: "Action",
+          text: result.message,
+          tone: "error",
+        });
+      });
+    },
+    [appendActivity],
   );
 
   const controller = useMemo(
@@ -118,8 +407,19 @@ export function RealtimeVoiceControl({
         roomId,
         getAccessToken: readLatestAccessToken,
         onIntent: submitLatestIntent,
-        onTranscript(text) {
+        onTranscript(text, itemId) {
           appendActivity({ speaker: "You", text, tone: "neutral" });
+          void latestHandlers
+            .rememberUserTranscript(text, itemId)
+            .then(reportThoughtResults);
+        },
+        onUserSpeechStarted(itemId) {
+          latestHandlers.beginUserTurn(itemId);
+        },
+        onResponseSettled(outcome, itemId) {
+          void latestHandlers
+            .settleResponse(outcome, itemId)
+            .then(reportThoughtResults);
         },
         onAssistantTranscript(text) {
           appendActivity({
@@ -139,7 +439,9 @@ export function RealtimeVoiceControl({
     [
       appendActivity,
       createController,
+      latestHandlers,
       readLatestAccessToken,
+      reportThoughtResults,
       roomId,
       submitLatestIntent,
     ],
@@ -172,8 +474,12 @@ export function RealtimeVoiceControl({
           aria-label={active ? "Stop live voice" : "Start live voice"}
           disabled={!active && disabled}
           onClick={() => {
-            if (active) controller.stop();
+            if (active) {
+              latestHandlers.resetSessionContext();
+              controller.stop();
+            }
             else {
+              latestHandlers.resetSessionContext();
               setPlaybackBlocked(false);
               void controller.start();
             }
@@ -235,6 +541,44 @@ export function RealtimeVoiceControl({
       </p>
     </section>
   );
+}
+
+function appendSpokenContext(
+  current: readonly string[],
+  rawText: string,
+): readonly string[] {
+  const text = rawText.replace(/\s+/g, " ").trim();
+  if (!text) return current;
+  const turns = [...current, text].slice(-MAX_RECENT_SPOKEN_CONTEXT_TURNS);
+  while (
+    turns.length > 1 &&
+    turns.join("\n").length > MAX_DIAGRAM_TRANSFORM_NARRATION_CHARS
+  )
+    turns.shift();
+  return turns;
+}
+
+function normalizeCompletedTranscript(rawText: string) {
+  return rawText.replace(/\s+/g, " ").trim();
+}
+
+function isCanvasCommandTranscript(text: string) {
+  return parseDirectCanvasCommand(text).ok;
+}
+
+function isThoughtBoundaryTranscript(text: string) {
+  const parsed = parseDirectCanvasCommand(text);
+  return (
+    parsed.ok &&
+    (parsed.intent.type === "start_thought" ||
+      parsed.intent.type === "finish_thought")
+  );
+}
+
+function spokenNarration(turns: readonly string[]): string | undefined {
+  const narration = turns.join("\n").trim();
+  if (!narration) return undefined;
+  return narration.slice(0, MAX_DIAGRAM_TRANSFORM_NARRATION_CHARS);
 }
 
 function toolActivity(

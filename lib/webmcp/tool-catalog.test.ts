@@ -91,6 +91,24 @@ describe("WebMCP live canvas state contract", () => {
         .success,
     ).toBe(false);
   });
+
+  it.each([
+    "auto",
+    "architecture",
+    "flowchart",
+    "diagram",
+    "pie_chart",
+    "bar_chart",
+    "line_chart",
+  ] as const)("accepts %s as a bounded sketch transformation kind", (outputKind) => {
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.transform_sketch.safeParse({
+        sketchId: "sketch-rough",
+        instruction: "Make that professional.",
+        outputKind,
+      }).success,
+    ).toBe(true);
+  });
 });
 
 describe("WebMCP packet preparation schema", () => {

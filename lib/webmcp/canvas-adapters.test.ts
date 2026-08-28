@@ -281,6 +281,37 @@ describe("canvas WebMCP adapters", () => {
         })),
       },
     });
+    const chart = persistObject({
+      id: "chart-budget",
+      type: "diagram",
+      title: "Budget chart",
+      x: 2_000,
+      y: 900,
+      width: 900,
+      height: 520,
+      zIndex: 6,
+      payload: {
+        kind: "pie_chart",
+        sourceSketchId: sketch.id,
+        interpretationSummary: "A budget split.",
+        chart: {
+          title: "Budget split",
+          xAxisLabel: null,
+          yAxisLabel: null,
+          series: [
+            {
+              id: "series-budget",
+              label: "Budget",
+              points: [
+                { label: "Product", value: 55 },
+                { label: "Sales", value: 30 },
+                { label: "Operations", value: 15 },
+              ],
+            },
+          ],
+        },
+      },
+    });
     const frame = {
       ...persistObject({
         id: "frame-planning",
@@ -296,7 +327,7 @@ describe("canvas WebMCP adapters", () => {
       }),
       parentId: null,
     };
-    hydrate(store, [note, taskBoard, schedule, sketch, diagram, frame]);
+    hydrate(store, [note, taskBoard, schedule, sketch, diagram, chart, frame]);
 
     const result = await adapters.executeTool({
       toolName: "get_canvas_state",
@@ -341,6 +372,34 @@ describe("canvas WebMCP adapters", () => {
       edgeCount: 60,
       returnedEdgeCount: 16,
       omittedEdgeCount: 44,
+    });
+    expect(summaries["chart-budget"].payload).toEqual({
+      kind: "pie_chart",
+      sourceSketchId: "sketch-max",
+      interpretationSummary: "A budget split.",
+      chart: {
+        title: "Budget split",
+        xAxisLabel: null,
+        yAxisLabel: null,
+        seriesCount: 1,
+        returnedSeriesCount: 1,
+        omittedSeriesCount: 0,
+        pointCount: 3,
+        returnedPointCount: 3,
+        omittedPointCount: 0,
+        series: [
+          {
+            id: "series-budget",
+            label: "Budget",
+            pointCount: 3,
+            points: [
+              { label: "Product", value: 55 },
+              { label: "Sales", value: 30 },
+              { label: "Operations", value: 15 },
+            ],
+          },
+        ],
+      },
     });
     expect(summaries["frame-planning"]).toMatchObject({
       spatial: { rotation: 15 },
@@ -875,14 +934,14 @@ describe("canvas WebMCP adapters", () => {
     expect(transformSketch).toHaveBeenCalledExactlyOnceWith({
       sketchObjectId: "sketch-source",
       instruction: "Separate the browser and API responsibilities.",
-      outputKind: "architecture",
+      outputKind: "auto",
       source: "webmcp",
       signal,
     });
     expect(result).toEqual({
       ok: true,
       status: "completed",
-      message: "Sketch interpreted as a structured architecture diagram.",
+      message: "Sketch interpreted as a structured visual.",
       receiptId: "receipt-transform",
       data: {
         revision: 7,

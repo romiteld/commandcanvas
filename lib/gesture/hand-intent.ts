@@ -2,6 +2,8 @@ export interface HandLandmark {
   readonly x: number;
   readonly y: number;
   readonly z?: number;
+  /** Detector confidence for this keypoint. Missing means the detector has no per-keypoint score. */
+  readonly visibility?: number;
 }
 
 /** MediaPipe-compatible landmark order, fixed to exactly one 21-point hand. */
@@ -49,6 +51,7 @@ export type HandFrameRefusal =
   | "stale_frame"
   | "future_frame"
   | "out_of_order_frame"
+  | "low_keypoint_confidence"
   | "no_deliberate_gesture";
 
 export type HandIntentOutput =
@@ -59,6 +62,8 @@ export type HandIntentOutput =
       readonly confidence: number;
       readonly timestamp: number;
       readonly pinchDistance: number;
+      /** Thumb-to-index distance divided by palm width. */
+      readonly pinchRatio: number;
     }
   | {
       readonly accepted: false;
@@ -73,6 +78,9 @@ export interface HandIntentState {
   readonly filteredIndexTip: NormalizedHandPointer | null;
   readonly filteredThumbTip: NormalizedHandPointer | null;
   readonly filteredPalmCenter: NormalizedHandPointer | null;
+  readonly rawIndexTip: NormalizedHandPointer | null;
+  readonly rawThumbTip: NormalizedHandPointer | null;
+  readonly rawPalmCenter: NormalizedHandPointer | null;
   readonly pinchLatched: boolean;
   readonly lastAcceptedTimestamp: number | null;
 }
@@ -85,10 +93,16 @@ export interface HandIntentTransition {
 export interface HandIntentConfig {
   /** Current-sample weight in the exponential moving average. */
   readonly smoothingAlpha: number;
-  /** A previously open hand engages pinch at or below this distance. */
-  readonly pinchEngageDistance: number;
-  /** A latched pinch releases at or above this larger distance. */
-  readonly pinchReleaseDistance: number;
+  /** Current-sample weight once motion crosses the fast-motion threshold. */
+  readonly fastMotionSmoothingAlpha: number;
+  /** Normalized screen widths per second at which the filter stops adding lag. */
+  readonly fastMotionThresholdPerSecond: number;
+  /** A previously open hand engages pinch at or below this hand-scale ratio. */
+  readonly pinchEngageRatio: number;
+  /** A latched pinch releases at or above this larger hand-scale ratio. */
+  readonly pinchReleaseRatio: number;
+  /** Minimum confidence for a keypoint to initiate a pointer or pinch intent. */
+  readonly minKeypointVisibility: number;
   readonly minConfidence: number;
   readonly maxFrameAgeMs: number;
   readonly maxFutureSkewMs: number;
@@ -97,9 +111,12 @@ export interface HandIntentConfig {
 
 export const DEFAULT_HAND_INTENT_CONFIG: HandIntentConfig = Object.freeze({
   smoothingAlpha: 0.35,
-  pinchEngageDistance: 0.06,
-  pinchReleaseDistance: 0.1,
-  minConfidence: 0.75,
+  fastMotionSmoothingAlpha: 0.9,
+  fastMotionThresholdPerSecond: 4,
+  pinchEngageRatio: 0.28,
+  pinchReleaseRatio: 0.5,
+  minKeypointVisibility: 0.5,
+  minConfidence: 0.5,
   maxFrameAgeMs: 160,
   maxFutureSkewMs: 50,
   mirrorX: false,
@@ -121,6 +138,9 @@ export function createInitialHandIntentState(): HandIntentState {
     filteredIndexTip: null,
     filteredThumbTip: null,
     filteredPalmCenter: null,
+    rawIndexTip: null,
+    rawThumbTip: null,
+    rawPalmCenter: null,
     pinchLatched: false,
     lastAcceptedTimestamp: null,
   };
@@ -173,35 +193,57 @@ export function interpretHandFrame(
     frame.landmarks[THUMB_TIP_INDEX],
     config.mirrorX,
   );
+  const rawPalmCenter = palmCenter(frame.landmarks, config.mirrorX);
+  const elapsedSeconds = state.lastAcceptedTimestamp === null
+    ? null
+    : Math.max(0.001, (frame.timestamp - state.lastAcceptedTimestamp) / 1_000);
   const filteredIndexTip = smoothPoint(
     state.filteredIndexTip,
+    state.rawIndexTip,
     rawIndexTip,
-    config.smoothingAlpha,
+    elapsedSeconds,
+    config,
   );
   const filteredThumbTip = smoothPoint(
     state.filteredThumbTip,
+    state.rawThumbTip,
     rawThumbTip,
-    config.smoothingAlpha,
+    elapsedSeconds,
+    config,
   );
   const filteredPalmCenter = smoothPoint(
     state.filteredPalmCenter,
-    palmCenter(frame.landmarks, config.mirrorX),
-    config.smoothingAlpha,
+    state.rawPalmCenter,
+    rawPalmCenter,
+    elapsedSeconds,
+    config,
   );
   const pinchDistance = rounded(
     Math.hypot(
-      filteredIndexTip.x - filteredThumbTip.x,
-      filteredIndexTip.y - filteredThumbTip.y,
+      rawIndexTip.x - rawThumbTip.x,
+      rawIndexTip.y - rawThumbTip.y,
     ),
   );
-  const pinchLatched = state.pinchLatched
-    ? pinchDistance < config.pinchReleaseDistance
-    : pinchDistance <= config.pinchEngageDistance;
-  const deliberatePoint = isDeliberateIndexPoint(frame.landmarks);
-  const openPalm = isOpenPalm(frame.landmarks);
+  const palmScale = estimatePalmScale(frame.landmarks);
+  const pinchRatio = rounded(pinchDistance / palmScale);
+  const thumbReliable =
+    landmarkVisibility(frame.landmarks[THUMB_TIP_INDEX]) >=
+    config.minKeypointVisibility;
+  const indexReliable =
+    landmarkVisibility(frame.landmarks[INDEX_TIP_INDEX]) >=
+    config.minKeypointVisibility;
+  const pinchKeypointsReliable = thumbReliable && indexReliable;
+  const pinchLatched =
+    pinchKeypointsReliable &&
+    (state.pinchLatched
+      ? pinchRatio < config.pinchReleaseRatio
+      : pinchRatio <= config.pinchEngageRatio);
+  const deliberatePoint =
+    indexReliable && isDeliberateIndexPoint(frame.landmarks);
+  const openPalm = indexReliable && isOpenPalm(frame.landmarks);
   if (!pinchLatched && !deliberatePoint && !openPalm)
     return refuse(
-      "no_deliberate_gesture",
+      !indexReliable ? "low_keypoint_confidence" : "no_deliberate_gesture",
       now,
       frame.timestamp,
       frame.confidence,
@@ -216,7 +258,7 @@ export function interpretHandFrame(
 
   return {
     state: {
-      filteredIndexTip: pointer,
+      filteredIndexTip: roundedPoint(filteredIndexTip),
       filteredThumbTip: {
         x: rounded(filteredThumbTip.x),
         y: rounded(filteredThumbTip.y),
@@ -225,6 +267,9 @@ export function interpretHandFrame(
         x: rounded(filteredPalmCenter.x),
         y: rounded(filteredPalmCenter.y),
       },
+      rawIndexTip: roundedPoint(rawIndexTip),
+      rawThumbTip: roundedPoint(rawThumbTip),
+      rawPalmCenter: roundedPoint(rawPalmCenter),
       pinchLatched,
       lastAcceptedTimestamp: frame.timestamp,
     },
@@ -235,6 +280,7 @@ export function interpretHandFrame(
       confidence: frame.confidence,
       timestamp: frame.timestamp,
       pinchDistance,
+      pinchRatio,
     },
   };
 }
@@ -254,16 +300,15 @@ function isDeliberateIndexPoint(landmarks: HandLandmarks) {
 
 function isOpenPalm(landmarks: HandLandmarks) {
   const wrist = landmarks[WRIST_INDEX];
+  const palmWidth = distance(landmarks[5], landmarks[17]);
+  if (palmWidth < 0.02) return false;
   return [
     { pip: INDEX_PIP_INDEX, tip: INDEX_TIP_INDEX },
     ...OTHER_FINGER_JOINTS,
   ].every(
     ({ pip, tip }) => {
       const pipDistance = distance(wrist, landmarks[pip]);
-      return (
-        pipDistance >= 0.05 &&
-        distance(wrist, landmarks[tip]) >= pipDistance * 1.15
-      );
+      return distance(wrist, landmarks[tip]) >= pipDistance * 1.15;
     },
   );
 }
@@ -286,13 +331,36 @@ function distance(left: HandLandmark, right: HandLandmark) {
   return Math.hypot(left.x - right.x, left.y - right.y);
 }
 
+function estimatePalmScale(landmarks: HandLandmarks) {
+  // Palm width is intuitive but collapses when the hand turns side-on. Blend
+  // it with wrist-to-MCP lengths so pinch remains stable across common camera
+  // angles while still scaling with distance from the lens.
+  const candidates = [
+    distance(landmarks[5], landmarks[17]),
+    distance(landmarks[0], landmarks[9]) * 0.9,
+    distance(landmarks[0], landmarks[5]),
+    distance(landmarks[0], landmarks[17]) * 0.7,
+  ]
+    .filter((value) => Number.isFinite(value) && value > 0.005)
+    .sort((left, right) => left - right);
+  if (candidates.length === 0) return 0.000_001;
+  const midpoint = Math.floor(candidates.length / 2);
+  return candidates.length % 2
+    ? candidates[midpoint]!
+    : (candidates[midpoint - 1]! + candidates[midpoint]!) / 2;
+}
+
 function resolveConfig(overrides: Partial<HandIntentConfig>): HandIntentConfig {
   const config = { ...DEFAULT_HAND_INTENT_CONFIG, ...overrides };
   if (
     !inRange(config.smoothingAlpha, Number.MIN_VALUE, 1) ||
-    !inRange(config.pinchEngageDistance, Number.MIN_VALUE, Math.SQRT2) ||
-    !inRange(config.pinchReleaseDistance, Number.MIN_VALUE, Math.SQRT2) ||
-    config.pinchReleaseDistance <= config.pinchEngageDistance ||
+    !inRange(config.fastMotionSmoothingAlpha, Number.MIN_VALUE, 1) ||
+    !Number.isFinite(config.fastMotionThresholdPerSecond) ||
+    config.fastMotionThresholdPerSecond <= 0 ||
+    !inRange(config.pinchEngageRatio, Number.MIN_VALUE, 2) ||
+    !inRange(config.pinchReleaseRatio, Number.MIN_VALUE, 3) ||
+    config.pinchReleaseRatio <= config.pinchEngageRatio ||
+    !inRange(config.minKeypointVisibility, 0, 1) ||
     !inRange(config.minConfidence, 0, 1) ||
     !Number.isFinite(config.maxFrameAgeMs) ||
     config.maxFrameAgeMs < 0 ||
@@ -361,8 +429,13 @@ function isLandmark(value: unknown): value is HandLandmark {
   return (
     inRange(value.x, 0, 1) &&
     inRange(value.y, 0, 1) &&
-    (value.z === undefined || Number.isFinite(value.z))
+    (value.z === undefined || Number.isFinite(value.z)) &&
+    (value.visibility === undefined || inRange(value.visibility, 0, 1))
   );
+}
+
+function landmarkVisibility(landmark: HandLandmark) {
+  return landmark.visibility ?? 1;
 }
 
 function transformPoint(
@@ -374,14 +447,34 @@ function transformPoint(
 
 function smoothPoint(
   previous: NormalizedHandPointer | null,
+  previousRaw: NormalizedHandPointer | null,
   current: NormalizedHandPointer,
-  alpha: number,
+  elapsedSeconds: number | null,
+  config: HandIntentConfig,
 ): NormalizedHandPointer {
   if (previous === null) return current;
+  const speed =
+    previousRaw && elapsedSeconds
+      ? Math.hypot(current.x - previousRaw.x, current.y - previousRaw.y) /
+        elapsedSeconds
+      : 0;
+  const speedMix = Math.min(
+    1,
+    Math.max(0, speed / config.fastMotionThresholdPerSecond - 1),
+  );
+  const alpha =
+    config.smoothingAlpha +
+    speedMix *
+      (Math.max(config.smoothingAlpha, config.fastMotionSmoothingAlpha) -
+        config.smoothingAlpha);
   return {
     x: previous.x + alpha * (current.x - previous.x),
     y: previous.y + alpha * (current.y - previous.y),
   };
+}
+
+function roundedPoint(point: NormalizedHandPointer): NormalizedHandPointer {
+  return { x: rounded(point.x), y: rounded(point.y) };
 }
 
 function refuse(

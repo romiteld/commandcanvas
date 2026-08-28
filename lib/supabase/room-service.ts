@@ -11,6 +11,7 @@ import {
   buildCanvasMutationPlan,
   parseCanvasPersistenceRows,
   roomDataRowSchema,
+  type CanvasMutationPlanErrorCode,
 } from "@/lib/supabase/persistence";
 import {
   commandRequestSchema,
@@ -162,6 +163,7 @@ const mutationRpcSchema = z
     revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     action: z.enum([
       "create",
+      "update",
       "transform",
       "pin",
       "unpin",
@@ -624,18 +626,7 @@ function deriveActor(
 }
 
 function mapPlanError(
-  code:
-    | "INVALID_COMMAND"
-    | "ROOM_MISMATCH"
-    | "STALE_REVISION"
-    | "OBJECT_EXISTS"
-    | "OBJECT_NOT_FOUND"
-    | "OBJECT_PINNED"
-    | "INVALID_HIERARCHY"
-    | "FRAME_NOT_EMPTY"
-    | "NOTHING_TO_UNDO"
-    | "NOTHING_TO_REDO"
-    | "INVALID_STATE",
+  code: CanvasMutationPlanErrorCode,
 ): RoomServiceResult<never> {
   switch (code) {
     case "OBJECT_PINNED":
@@ -650,6 +641,11 @@ function mapPlanError(
       return failure(
         "command_conflict",
         "Canvas changed before the command could be committed.",
+      );
+    case "STALE_OBJECT_VERSION":
+      return failure(
+        "command_conflict",
+        "That thought card changed. Continue from its latest text.",
       );
     case "NOTHING_TO_UNDO":
       return failure("nothing_to_undo", "There is nothing left to undo.");
@@ -673,6 +669,16 @@ function mapPlanError(
     case "INVALID_COMMAND":
     case "ROOM_MISMATCH":
       return failure("invalid_command", "Canvas command is invalid.");
+    case "OBJECT_NOT_EDITABLE":
+      return failure(
+        "invalid_command",
+        "Only an active note can receive dictated text.",
+      );
+    case "NOTE_TEXT_LIMIT":
+      return failure(
+        "invalid_command",
+        "That thought card reached its 4,000-character limit. Finish it and start another thought.",
+      );
   }
 }
 

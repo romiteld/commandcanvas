@@ -144,6 +144,7 @@ export async function handleSketchTransformRequest(
       sourceVersion: input.sourceVersion,
       outputKind: input.outputKind,
       normalizedInstructionSha256: identity.normalizedInstructionSha256,
+      normalizedNarrationSha256: identity.normalizedNarrationSha256,
       pngSha256: identity.pngSha256,
       requestKey: identity.requestKey,
     });
@@ -160,7 +161,8 @@ export async function handleSketchTransformRequest(
   if (admission.outcome === "cached") {
     if (
       admission.transform.payload.sourceSketchId !== input.sketchObjectId ||
-      admission.transform.payload.kind !== input.outputKind
+      (input.outputKind !== "auto" &&
+        admission.transform.payload.kind !== input.outputKind)
     )
       return jsonError(
         503,
@@ -175,6 +177,9 @@ export async function handleSketchTransformRequest(
     transformed = await dependencies.transform({
       ...input,
       instruction: identity.normalizedInstruction,
+      ...(identity.normalizedNarration
+        ? { narration: identity.normalizedNarration }
+        : {}),
       sketch: source.payload as SketchPayload,
       safetyIdentifier: dependencies.safetyIdentifier(actor.actorUserId),
       signal: request.signal,

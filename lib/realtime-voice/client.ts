@@ -1,7 +1,7 @@
 import type { DirectCanvasIntent } from "@/lib/canvas/direct-command";
 import {
   executeRealtimeVoiceTool,
-  type RealtimeVoiceIntentHandler,
+  type RealtimeVoiceIntentResult,
 } from "@/lib/realtime-voice/tools";
 
 export type RealtimeVoiceStatus =
@@ -21,6 +21,12 @@ export interface RealtimeVoiceToolAction {
   name: string;
   status: "running" | "submitted" | "refused";
   message?: string;
+}
+
+export type RealtimeVoiceResponseOutcome = "completed" | "interrupted";
+
+export interface RealtimeVoiceTurnContext {
+  itemId: string;
 }
 
 export interface RealtimeVoiceMediaTrack {
@@ -82,13 +88,18 @@ export interface RealtimeVoiceControllerOptions {
   onIntent: (
     intent: DirectCanvasIntent,
     source: "voice",
+    turn?: RealtimeVoiceTurnContext,
   ) =>
-    | { ok: true; message: string }
-    | { ok: false; message: string }
-    | Promise<{ ok: true; message: string } | { ok: false; message: string }>;
+    | RealtimeVoiceIntentResult
+    | Promise<RealtimeVoiceIntentResult>;
   onStatusChange?: (status: RealtimeVoiceStatus) => void;
-  onTranscript?: (text: string) => void;
+  onTranscript?: (text: string, itemId?: string) => void;
   onAssistantTranscript?: (text: string) => void;
+  onUserSpeechStarted?: (itemId?: string) => void;
+  onResponseSettled?: (
+    outcome: RealtimeVoiceResponseOutcome,
+    itemId?: string,
+  ) => void;
   onToolAction?: (action: RealtimeVoiceToolAction) => void;
   onPlaybackBlocked?: () => void;
   platform?: RealtimeVoicePlatform;
@@ -106,6 +117,7 @@ const SESSION_ENDPOINT = "/api/realtime/session";
 const MAX_SDP_ANSWER_LENGTH = 1_048_576;
 const MAX_SESSION_MILLISECONDS = 10 * 60 * 1_000;
 const MAX_SETUP_MILLISECONDS = 20 * 1_000;
+const MAX_TRACKED_INPUT_TURNS = 16;
 
 export function createRealtimeVoiceController(
   options: RealtimeVoiceControllerOptions,
@@ -122,9 +134,13 @@ export function createRealtimeVoiceController(
   let sessionLimitTimer: ReturnType<typeof setTimeout> | null = null;
   let setupTimer: ReturnType<typeof setTimeout> | null = null;
   let sessionReady = false;
+  let pendingToolFollowupResponses = 0;
   let toolQueue: Promise<void> = Promise.resolve();
   const handledCallIds = new Set<string>();
   const remoteStreams = new Set<RealtimeVoiceMediaStream>();
+  const pendingInputItemIds: string[] = [];
+  const responseInputItemIds = new Map<string, string | null>();
+  const settledInputItemIds = new Set<string>();
 
   function getState() {
     return state;
@@ -158,7 +174,11 @@ export function createRealtimeVoiceController(
     const activeGeneration = ++generation;
     handledCallIds.clear();
     remoteStreams.clear();
+    pendingInputItemIds.length = 0;
+    responseInputItemIds.clear();
+    settledInputItemIds.clear();
     sessionReady = false;
+    pendingToolFollowupResponses = 0;
     toolQueue = Promise.resolve();
     update({ status: "connecting" });
     setupTimer = setTimeout(() => {
@@ -339,6 +359,10 @@ export function createRealtimeVoiceController(
     });
     microphone = null;
     remoteStreams.clear();
+    pendingInputItemIds.length = 0;
+    responseInputItemIds.clear();
+    settledInputItemIds.clear();
+    pendingToolFollowupResponses = 0;
     try {
       channel?.close();
     } catch {
@@ -383,7 +407,7 @@ export function createRealtimeVoiceController(
     raw: unknown,
     activeChannel: RealtimeVoiceDataChannel,
     activeGeneration: number,
-    onIntent: RealtimeVoiceIntentHandler,
+    onIntent: RealtimeVoiceControllerOptions["onIntent"],
   ) {
     const event = parseServerEvent(raw);
     if (!event) return;
@@ -394,10 +418,22 @@ export function createRealtimeVoiceController(
     if (!sessionReady) return;
     switch (event.type) {
       case "input_audio_buffer.speech_started":
+        rememberPendingInputItem(readEventId(event.item_id));
+        try {
+          options.onUserSpeechStarted?.(readEventId(event.item_id));
+        } catch {
+          // Turn observers cannot interrupt the media lifecycle.
+        }
         update({ status: "listening" });
         return;
       case "input_audio_buffer.speech_stopped":
+        update({ status: "thinking" });
+        return;
       case "response.created":
+        if (pendingToolFollowupResponses > 0) {
+          pendingToolFollowupResponses -= 1;
+          bindResponseToInput(event.response, true);
+        } else bindResponseToInput(event.response);
         update({ status: "thinking" });
         return;
       case "response.output_audio.delta":
@@ -405,7 +441,9 @@ export function createRealtimeVoiceController(
         return;
       case "conversation.item.input_audio_transcription.completed": {
         const transcript = cleanTranscript(event.transcript);
-        if (transcript) options.onTranscript?.(transcript);
+        const itemId = readEventId(event.item_id);
+        rememberPendingInputItem(itemId);
+        if (transcript) options.onTranscript?.(transcript, itemId);
         return;
       }
       case "response.output_audio_transcript.done": {
@@ -414,22 +452,31 @@ export function createRealtimeVoiceController(
         return;
       }
       case "response.output_item.done":
+      {
+        const itemId = bindResponseToInputId(event.response_id);
         await queueFunctionItem(
           event.item,
           activeChannel,
           activeGeneration,
           onIntent,
+          itemId ?? undefined,
         );
+      }
         return;
       case "response.function_call_arguments.done":
+      {
+        const itemId = bindResponseToInputId(event.response_id);
         await queueFunctionItem(
           event,
           activeChannel,
           activeGeneration,
           onIntent,
+          itemId ?? undefined,
         );
+      }
         return;
       case "response.done": {
+        const responseBinding = takeResponseInput(event.response);
         const calls = responseFunctionItems(event.response);
         for (const item of calls)
           await queueFunctionItem(
@@ -437,12 +484,29 @@ export function createRealtimeVoiceController(
             activeChannel,
             activeGeneration,
             onIntent,
+            responseBinding.itemId ?? undefined,
           );
+        if (calls.length > 0) await toolQueue;
+        if (!responseBinding.known || responseBinding.itemId) {
+          try {
+            options.onResponseSettled?.(
+              responseOutcome(event.response),
+              responseBinding.itemId ?? undefined,
+            );
+          } catch {
+            // Turn observers cannot interrupt the media lifecycle.
+          }
+        }
         if (calls.length === 0 && generation === activeGeneration)
           update({ status: "listening" });
         return;
       }
       case "error":
+        try {
+          options.onResponseSettled?.("interrupted");
+        } catch {
+          // Turn observers cannot interrupt the media lifecycle.
+        }
         failConnection(
           activeGeneration,
           "The live voice service reported an error. Start it again to reconnect.",
@@ -454,7 +518,8 @@ export function createRealtimeVoiceController(
     rawItem: unknown,
     activeChannel: RealtimeVoiceDataChannel,
     activeGeneration: number,
-    onIntent: RealtimeVoiceIntentHandler,
+    onIntent: RealtimeVoiceControllerOptions["onIntent"],
+    itemId?: string,
   ) {
     const call = parseFunctionCall(rawItem);
     if (!call || handledCallIds.has(call.callId)) return;
@@ -466,6 +531,7 @@ export function createRealtimeVoiceController(
           activeChannel,
           activeGeneration,
           onIntent,
+          itemId,
         ),
       )
       .catch(() => {
@@ -481,7 +547,8 @@ export function createRealtimeVoiceController(
     call: { callId: string; name: string; arguments: string },
     activeChannel: RealtimeVoiceDataChannel,
     activeGeneration: number,
-    onIntent: RealtimeVoiceIntentHandler,
+    onIntent: RealtimeVoiceControllerOptions["onIntent"],
+    itemId?: string,
   ) {
     if (generation !== activeGeneration) return;
     update({ status: "thinking" });
@@ -492,7 +559,9 @@ export function createRealtimeVoiceController(
     });
     const result = await executeRealtimeVoiceTool(
       { name: call.name, arguments: call.arguments },
-      onIntent,
+      itemId
+        ? (intent, source) => onIntent(intent, source, { itemId })
+        : onIntent,
     );
     if (
       generation !== activeGeneration ||
@@ -524,6 +593,74 @@ export function createRealtimeVoiceController(
         activeGeneration,
         "The live voice connection failed. Start it again to reconnect.",
       );
+    else
+      pendingToolFollowupResponses = Math.min(
+        pendingToolFollowupResponses + 1,
+        MAX_TRACKED_INPUT_TURNS,
+      );
+  }
+
+  function rememberPendingInputItem(itemId: string | undefined) {
+    if (!itemId || pendingInputItemIds.includes(itemId)) return;
+    if (settledInputItemIds.has(itemId)) return;
+    if ([...responseInputItemIds.values()].includes(itemId)) return;
+    pendingInputItemIds.push(itemId);
+    if (pendingInputItemIds.length > MAX_TRACKED_INPUT_TURNS)
+      pendingInputItemIds.shift();
+  }
+
+  function bindResponseToInput(
+    rawResponse: unknown,
+    forceUnassociated = false,
+  ) {
+    if (!rawResponse || typeof rawResponse !== "object") return;
+    bindResponseToInputId(
+      readEventId((rawResponse as Record<string, unknown>).id),
+      forceUnassociated,
+    );
+  }
+
+  function bindResponseToInputId(
+    responseId: unknown,
+    forceUnassociated = false,
+  ) {
+    const id = readEventId(responseId);
+    if (!id) return undefined;
+    if (!responseInputItemIds.has(id)) {
+      const itemId = forceUnassociated
+        ? null
+        : pendingInputItemIds.shift() ?? null;
+      responseInputItemIds.set(id, itemId);
+      if (responseInputItemIds.size > MAX_TRACKED_INPUT_TURNS) {
+        const oldest = responseInputItemIds.keys().next().value;
+        if (oldest) responseInputItemIds.delete(oldest);
+      }
+    }
+    return responseInputItemIds.get(id) ?? null;
+  }
+
+  function takeResponseInput(rawResponse: unknown): {
+    known: boolean;
+    itemId: string | null;
+  } {
+    if (!rawResponse || typeof rawResponse !== "object")
+      return { known: false, itemId: null };
+    const responseId = readEventId(
+      (rawResponse as Record<string, unknown>).id,
+    );
+    if (!responseId) return { known: false, itemId: null };
+    if (!responseInputItemIds.has(responseId))
+      bindResponseToInputId(responseId);
+    const itemId = responseInputItemIds.get(responseId) ?? null;
+    responseInputItemIds.delete(responseId);
+    if (itemId) {
+      settledInputItemIds.add(itemId);
+      if (settledInputItemIds.size > MAX_TRACKED_INPUT_TURNS) {
+        const oldest = settledInputItemIds.values().next().value;
+        if (oldest) settledInputItemIds.delete(oldest);
+      }
+    }
+    return { known: true, itemId };
   }
 
   return { getState, subscribe, start, stop, resumeAudio };
@@ -568,6 +705,12 @@ function parseServerEvent(raw: unknown): Record<string, unknown> | null {
   }
 }
 
+function readEventId(raw: unknown) {
+  return typeof raw === "string" && /^[A-Za-z0-9_-]{1,160}$/.test(raw)
+    ? raw
+    : undefined;
+}
+
 function parseFunctionCall(raw: unknown) {
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
@@ -595,6 +738,14 @@ function responseFunctionItems(raw: unknown): unknown[] {
           (item as Record<string, unknown>).type === "function_call",
       )
     : [];
+}
+
+function responseOutcome(raw: unknown): RealtimeVoiceResponseOutcome {
+  if (!raw || typeof raw !== "object") return "completed";
+  const status = (raw as Record<string, unknown>).status;
+  return status === undefined || status === "completed"
+    ? "completed"
+    : "interrupted";
 }
 
 function cleanTranscript(raw: unknown) {

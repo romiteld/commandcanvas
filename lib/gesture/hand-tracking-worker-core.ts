@@ -1,7 +1,12 @@
 import type { HandLandmarks } from "@/lib/gesture/hand-intent";
 
 export interface HandDetectorResult {
-  landmarks: readonly (readonly { x: number; y: number; z?: number }[])[];
+  landmarks: readonly (readonly {
+    x: number;
+    y: number;
+    z?: number;
+    visibility?: number;
+  }[])[];
   handedness: readonly (readonly {
     score?: number;
     categoryName?: string;
@@ -14,7 +19,20 @@ export interface HandDetector {
     frame: ImageBitmap,
     timestamp: number,
   ): HandDetectorResult | Promise<HandDetectorResult>;
+  getDiagnostics?(): HandDetectorDiagnostics;
   close(): void | Promise<void>;
+}
+
+export interface HandDetectorDiagnostics {
+  readonly executionProvider: "webgpu" | "wasm" | "mediapipe" | "unknown";
+  readonly highPerformanceGpuRequested: boolean;
+  readonly adapter?: {
+    readonly vendor?: string;
+    readonly architecture?: string;
+    readonly device?: string;
+    readonly description?: string;
+  };
+  readonly fallbackReason?: string;
 }
 
 export interface HandDetectorLoadOptions {
@@ -42,7 +60,8 @@ export type HandTrackingWorkerInboundMessage =
   | { type: "dispose" };
 
 export type HandTrackingWorkerOutboundMessage =
-  | { type: "ready" }
+  | { type: "ready"; diagnostics?: HandDetectorDiagnostics }
+  | { type: "diagnostics"; diagnostics: HandDetectorDiagnostics }
   | {
       type: "result";
       timestamp: number;
@@ -69,7 +88,13 @@ export function createHandTrackingWorkerRuntime(dependencies: {
           runningMode: "VIDEO",
           numHands: 2,
         });
-        dependencies.postMessage({ type: "ready" });
+        const diagnostics = detector.getDiagnostics?.();
+        dependencies.postMessage({
+          type: "ready",
+          ...(diagnostics ? { diagnostics } : {}),
+        });
+        if (diagnostics)
+          dependencies.postMessage({ type: "diagnostics", diagnostics });
         return;
       }
       if (message.type === "dispose") {
@@ -119,7 +144,9 @@ export function createHandTrackingWorkerRuntime(dependencies: {
 }
 
 function parseLandmarks(
-  points: readonly { x: number; y: number; z?: number }[] | undefined,
+  points:
+    | readonly { x: number; y: number; z?: number; visibility?: number }[]
+    | undefined,
 ): HandLandmarks | null {
   if (
     !points ||
@@ -132,7 +159,11 @@ function parseLandmarks(
         point.x <= 1 &&
         point.y >= 0 &&
         point.y <= 1 &&
-        (point.z === undefined || Number.isFinite(point.z)),
+        (point.z === undefined || Number.isFinite(point.z)) &&
+        (point.visibility === undefined ||
+          (Number.isFinite(point.visibility) &&
+            point.visibility >= 0 &&
+            point.visibility <= 1)),
     )
   )
     return null;

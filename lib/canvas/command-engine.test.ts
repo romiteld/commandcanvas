@@ -4,6 +4,7 @@ import {
   applyCanvasCommand,
   createEmptyCanvasState,
   type CanvasCommandEnvelope,
+  type CanvasState,
   type CommandRuntime,
 } from "@/lib/canvas/command-engine";
 
@@ -126,6 +127,176 @@ describe("applyCanvasCommand", () => {
       version: 2,
     });
     expect(result.receipt.action).toBe("transform");
+  });
+
+  it("appends dictated text to one note with a voice receipt and universal undo", () => {
+    const created = applyCanvasCommand(
+      createEmptyCanvasState("room-demo"),
+      createNoteCommand(),
+      runtime,
+    );
+    if (!created.ok) throw new Error("fixture creation failed");
+
+    const appended = applyCanvasCommand(
+      created.state,
+      {
+        ...command(1, {
+          type: "object.append_note_text",
+          objectId: "note-1",
+          expectedVersion: 1,
+          text: "  Supplier lead time is the launch risk.  ",
+        }),
+        source: "voice",
+      },
+      runtime,
+    );
+
+    expect(appended).toMatchObject({ ok: true });
+    if (!appended?.ok) throw new Error("expected note append to succeed");
+    expect(appended.state.objects["note-1"]).toMatchObject({
+      version: 2,
+      payload: {
+        text:
+          "Which customer workflow proves the thesis?\nSupplier lead time is the launch risk.",
+        tone: "coral",
+      },
+    });
+    expect(created.state.objects["note-1"]?.payload).toMatchObject({
+      text: "Which customer workflow proves the thesis?",
+    });
+    expect(appended.receipt).toMatchObject({
+      action: "update",
+      source: "voice",
+      affectedObjectIds: ["note-1"],
+      description: "Danny added dictated text to “Launch question”.",
+    });
+    expect(appended.receipt.before.objects["note-1"]?.version).toBe(1);
+    expect(appended.receipt.after.objects["note-1"]?.version).toBe(2);
+
+    const undone = applyCanvasCommand(
+      appended.state,
+      command(2, { type: "history.undo" }),
+      runtime,
+    );
+    expect(undone.ok).toBe(true);
+    if (!undone.ok) throw new Error("expected note append undo to succeed");
+    expect(undone.state.objects["note-1"]?.payload).toMatchObject({
+      text: "Which customer workflow proves the thesis?",
+    });
+  });
+
+  it("rejects note appends when the object version changed or the card is full", () => {
+    const created = applyCanvasCommand(
+      createEmptyCanvasState("room-demo"),
+      createNoteCommand(),
+      runtime,
+    );
+    if (!created.ok) throw new Error("fixture creation failed");
+
+    const stale = applyCanvasCommand(
+      created.state,
+      command(1, {
+        type: "object.append_note_text",
+        objectId: "note-1",
+        expectedVersion: 2,
+        text: "This must not overwrite a collaborator.",
+      }),
+      runtime,
+    );
+    expect(stale).toMatchObject({
+      ok: false,
+      error: {
+        code: "STALE_OBJECT_VERSION",
+        message: "That thought card changed. Continue from its latest text.",
+      },
+    });
+    expect(stale.state).toBe(created.state);
+
+    const note = created.state.objects["note-1"];
+    if (!note || note.type !== "note") throw new Error("note fixture missing");
+    const fullNote: CanvasState = {
+      ...created.state,
+      objects: {
+        ...created.state.objects,
+        "note-1": {
+          ...note,
+          payload: { text: "x".repeat(3_900), tone: "coral" },
+        },
+      },
+    };
+    const overflow = applyCanvasCommand(
+      fullNote,
+      command(1, {
+        type: "object.append_note_text",
+        objectId: "note-1",
+        expectedVersion: 1,
+        text: "y".repeat(101),
+      }),
+      runtime,
+    );
+    expect(overflow).toMatchObject({
+      ok: false,
+      error: {
+        code: "NOTE_TEXT_LIMIT",
+        message:
+          "That thought card reached its 4,000-character limit. Finish it and start another thought.",
+      },
+    });
+    expect(overflow.state).toBe(fullNote);
+  });
+
+  it("refuses a note-text append against a different semantic object type", () => {
+    const sketch = applyCanvasCommand(
+      createEmptyCanvasState("room-demo"),
+      command(0, {
+        type: "object.create",
+        object: {
+          id: "sketch-1",
+          type: "sketch",
+          title: "Rough idea",
+          x: 20,
+          y: 20,
+          width: 300,
+          height: 180,
+          zIndex: 1,
+          payload: {
+            strokes: [
+              {
+                id: "stroke-1",
+                color: "#12233d",
+                width: 4,
+                points: [
+                  { x: 10, y: 10 },
+                  { x: 30, y: 30 },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+      runtime,
+    );
+    if (!sketch.ok) throw new Error("fixture creation failed");
+
+    const result = applyCanvasCommand(
+      sketch.state,
+      command(1, {
+        type: "object.append_note_text",
+        objectId: "sketch-1",
+        expectedVersion: 1,
+        text: "This text belongs only in a thought card.",
+      }),
+      runtime,
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "OBJECT_NOT_EDITABLE",
+        message: "Only an active note can receive dictated text.",
+      },
+    });
+    expect(result.state).toBe(sketch.state);
   });
 
   it("rejects spatial transforms while an object is pinned", () => {

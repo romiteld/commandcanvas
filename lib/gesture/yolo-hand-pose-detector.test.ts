@@ -5,6 +5,7 @@ import {
   YOLO_HAND_POSE_MODEL_SHA256,
   YOLO_HAND_POSE_MODEL_URL,
   createLetterboxTransform,
+  configureYoloWebGpuAdapter,
   loadYoloHandPoseDetector,
   parseYoloHandPoseOutput,
   rgbaToNchwFloat32,
@@ -40,6 +41,94 @@ function outputWithDetections(
 }
 
 describe("YOLO 21-keypoint browser detector", () => {
+  it("reports unavailable WebGPU without trying to select an adapter", async () => {
+    const setAdapter = vi.fn();
+
+    await expect(
+      configureYoloWebGpuAdapter(null, setAdapter),
+    ).resolves.toEqual({
+      unavailableReason: "WebGPU is unavailable in this browser",
+    });
+    expect(setAdapter).not.toHaveBeenCalled();
+  });
+
+  it("requests a high-performance non-fallback adapter and records its identity", async () => {
+    const requestDevice = vi.fn();
+    const adapter = {
+      info: {
+        vendor: "nvidia",
+        architecture: "ampere",
+        description: "NVIDIA GeForce RTX 3090",
+      },
+      features: new Set(["shader-f16"]),
+      requestDevice,
+    };
+    const requestAdapter = vi.fn(async () => adapter);
+    const setAdapter = vi.fn();
+
+    await expect(
+      configureYoloWebGpuAdapter({ requestAdapter }, setAdapter),
+    ).resolves.toEqual({
+      adapterInfo: {
+        vendor: "nvidia",
+        architecture: "ampere",
+        description: "NVIDIA GeForce RTX 3090",
+      },
+    });
+    expect(requestAdapter).toHaveBeenCalledWith({
+      powerPreference: "high-performance",
+      forceFallbackAdapter: false,
+    });
+    expect(setAdapter).toHaveBeenCalledWith(adapter);
+    expect(requestDevice).not.toHaveBeenCalled();
+  });
+
+  it("refuses a featureless software adapter before ONNX can emit invalid FP16 kernels", async () => {
+    const setAdapter = vi.fn();
+    const requestDevice = vi.fn();
+    const adapter = {
+      info: { vendor: "google", architecture: "swiftshader" },
+      features: new Set<string>(),
+      requestDevice,
+    };
+
+    await expect(
+      configureYoloWebGpuAdapter(
+        { requestAdapter: vi.fn(async () => adapter) },
+        setAdapter,
+      ),
+    ).resolves.toEqual({
+      unavailableReason:
+        "The selected WebGPU adapter lacks shader-f16 for this FP16 model",
+    });
+    expect(setAdapter).not.toHaveBeenCalled();
+    expect(requestDevice).not.toHaveBeenCalled();
+  });
+
+  it("turns adapter lookup failures and null adapters into explicit fallback reasons", async () => {
+    const setAdapter = vi.fn();
+
+    await expect(
+      configureYoloWebGpuAdapter(
+        { requestAdapter: vi.fn(async () => null) },
+        setAdapter,
+      ),
+    ).resolves.toEqual({
+      unavailableReason: "WebGPU did not return a GPU adapter",
+    });
+    await expect(
+      configureYoloWebGpuAdapter(
+        {
+          requestAdapter: vi.fn(async () => {
+            throw new Error("GPU process unavailable");
+          }),
+        },
+        setAdapter,
+      ),
+    ).resolves.toEqual({ unavailableReason: "GPU process unavailable" });
+    expect(setAdapter).not.toHaveBeenCalled();
+  });
+
   it("uses bounded parallel WASM inference only in a cross-origin-isolated worker", () => {
     expect(
       selectYoloWasmThreadCount({
@@ -80,7 +169,11 @@ describe("YOLO 21-keypoint browser detector", () => {
       },
       {
         confidence: 0.71,
-        keypoint: (index) => ({ x: 160 + index, y: 230 + index }),
+        keypoint: (index) => ({
+          x: 160 + index,
+          y: 230 + index,
+          visibility: index === 8 ? 0.42 : 0.95,
+        }),
       },
       {
         confidence: 0.2,
@@ -95,7 +188,16 @@ describe("YOLO 21-keypoint browser detector", () => {
 
     expect(result.landmarks).toHaveLength(2);
     expect(result.landmarks[0]).toHaveLength(21);
-    expect(result.landmarks[0]?.[8]).toEqual({ x: 0.5, y: 0.5 });
+    expect(result.landmarks[0]?.[8]).toEqual({
+      x: 0.5,
+      y: 0.5,
+      visibility: 0.95,
+    });
+    expect(result.landmarks[1]?.[8]).toEqual({
+      x: 0.2625,
+      y: 0.272222,
+      visibility: 0.42,
+    });
     expect(result.handedness).toEqual([
       [{ categoryName: "Unknown", score: expect.closeTo(0.92, 5) }],
       [{ categoryName: "Unknown", score: expect.closeTo(0.71, 5) }],
@@ -191,8 +293,12 @@ describe("YOLO 21-keypoint browser detector", () => {
     expect(runtime.configure).toHaveBeenCalledWith("/onnxruntime/");
     expect(runtime.createSession).toHaveBeenCalledWith(
       YOLO_HAND_POSE_MODEL_URL,
-      { executionProviders: ["webgpu", "wasm"] },
+      { executionProviders: ["webgpu"] },
     );
+    expect(detector.getDiagnostics?.()).toMatchObject({
+      executionProvider: "webgpu",
+      highPerformanceGpuRequested: true,
+    });
     expect(runtime.createTensor).toHaveBeenCalledWith(
       expect.any(Float32Array),
       [1, 3, 320, 320],
@@ -201,5 +307,61 @@ describe("YOLO 21-keypoint browser detector", () => {
     expect(result.landmarks[0]).toHaveLength(21);
     await detector.close();
     expect(session.release).toHaveBeenCalledOnce();
+  });
+
+  it("labels threaded WASM only after a WebGPU-only session actually fails", async () => {
+    const session = {
+      inputNames: ["images"],
+      outputNames: ["output0"],
+      run: vi.fn(async () => ({
+        output0: outputWithDetections([]),
+      })),
+      release: vi.fn(),
+    };
+    const runtime = {
+      configure: vi.fn(),
+      createSession: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("WebGPU unavailable"))
+        .mockResolvedValueOnce(session),
+      createTensor: vi.fn(),
+      createCanvas: vi.fn(() => ({
+        width: 320,
+        height: 320,
+        getContext: () => ({
+          fillStyle: "",
+          fillRect: vi.fn(),
+          drawImage: vi.fn(),
+          getImageData: vi.fn(() => ({
+            data: new Uint8ClampedArray(320 * 320 * 4),
+          })),
+        }),
+      })),
+    };
+
+    const detector = await loadYoloHandPoseDetector(
+      {
+        wasmBaseUrl: "/onnxruntime/",
+        modelAssetUrl: YOLO_HAND_POSE_MODEL_URL,
+        runningMode: "VIDEO",
+        numHands: 2,
+      },
+      runtime,
+    );
+
+    expect(runtime.createSession).toHaveBeenNthCalledWith(
+      1,
+      YOLO_HAND_POSE_MODEL_URL,
+      { executionProviders: ["webgpu"] },
+    );
+    expect(runtime.createSession).toHaveBeenNthCalledWith(
+      2,
+      YOLO_HAND_POSE_MODEL_URL,
+      { executionProviders: ["wasm"] },
+    );
+    expect(detector.getDiagnostics?.()).toMatchObject({
+      executionProvider: "wasm",
+      highPerformanceGpuRequested: true,
+    });
   });
 });

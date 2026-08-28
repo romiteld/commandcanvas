@@ -7,8 +7,10 @@ import {
 import type {
   HandDetector,
   HandDetectorLoadOptions,
+  HandDetectorDiagnostics,
   HandTrackingWorkerInboundMessage,
   HandTrackingWorkerOutboundMessage,
+  TrackedHandLandmarks,
   TrackedHandedness,
 } from "@/lib/gesture/hand-tracking-worker-core";
 import { createHandTrackingWorkerRuntime } from "@/lib/gesture/hand-tracking-worker-core";
@@ -31,6 +33,7 @@ export type HandTrackingObservation =
       handedness?: TrackedHandedness;
       landmarks?: HandLandmarks;
       pinchDistance?: number;
+      pinchRatio?: number;
       trackingState?: "tracked" | "grace";
       timestamp: number;
     }
@@ -49,6 +52,7 @@ export interface HandTrackingPointer {
   confidence: number;
   landmarks?: HandLandmarks;
   pinchDistance?: number;
+  pinchRatio?: number;
 }
 
 export interface HandTrackingWorkerLike {
@@ -77,6 +81,14 @@ export interface HandTrackingEngineStatus {
   displayName: string;
   runtime: string;
   fallback: boolean;
+  executionProvider?: HandDetectorDiagnostics["executionProvider"];
+  adapter?: HandDetectorDiagnostics["adapter"];
+  fallbackReason?: string;
+  /** Median detector-worker round trip after a captured bitmap is posted. */
+  detectorRoundTripMs?: number;
+  /** Fresh landmark results per second over the latest local samples. */
+  resultRateFps?: number;
+  runtimeSamples?: number;
 }
 
 export interface HandTrackingControllerDependencies {
@@ -105,7 +117,12 @@ export interface HandTrackingControllerDependencies {
 
 const UNAVAILABLE_MESSAGE =
   "Local hand tracking is unavailable in this browser.";
+const SHARED_CAMERA_STOPPED_MESSAGE =
+  "The shared camera stopped. Enable hand input again to reconnect.";
 const PINCH_TRACKING_GRACE_MS = 180;
+const POINT_TRACKING_GRACE_MS = 220;
+const UNKNOWN_HAND_TRACK_TTL_MS = 360;
+const UNKNOWN_HAND_TRACK_MAX_DISTANCE = 0.35;
 
 export function createHandTrackingController(
   provided: HandTrackingControllerDependencies = {},
@@ -144,7 +161,45 @@ export function createHandTrackingController(
     engineListeners.forEach((listener) => listener(engineStatus));
   }
 
+  function recordRuntimeResult(run: HandTrackingRun, frameTimestamp: number) {
+    if (!engineStatus || !Number.isFinite(frameTimestamp)) return;
+    const completedAt = dependencies.now();
+    if (!Number.isFinite(completedAt) || completedAt < frameTimestamp) return;
+    run.roundTripSamples.push(completedAt - frameTimestamp);
+    run.resultCompletionTimes.push(completedAt);
+    if (run.roundTripSamples.length > 30) run.roundTripSamples.shift();
+    if (run.resultCompletionTimes.length > 30) run.resultCompletionTimes.shift();
+    const sorted = [...run.roundTripSamples].sort((left, right) => left - right);
+    const midpoint = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2
+      ? sorted[midpoint]!
+      : (sorted[midpoint - 1]! + sorted[midpoint]!) / 2;
+    const first = run.resultCompletionTimes[0]!;
+    const last = run.resultCompletionTimes.at(-1)!;
+    const elapsed = last - first;
+    const resultRateFps =
+      run.resultCompletionTimes.length >= 2 && elapsed > 0
+        ? ((run.resultCompletionTimes.length - 1) * 1_000) / elapsed
+        : undefined;
+    engineStatus = {
+      ...engineStatus,
+      detectorRoundTripMs: rounded(median),
+      ...(resultRateFps === undefined
+        ? {}
+        : { resultRateFps: rounded(resultRateFps) }),
+      runtimeSamples: run.roundTripSamples.length,
+    };
+    engineListeners.forEach((listener) => listener(engineStatus));
+  }
+
   function clearRunResources(run: HandTrackingRun) {
+    if (run.sharedVideoTrack && run.sharedVideoTrackEndedListener)
+      run.sharedVideoTrack.removeEventListener(
+        "ended",
+        run.sharedVideoTrackEndedListener,
+      );
+    run.sharedVideoTrack = null;
+    run.sharedVideoTrackEndedListener = null;
     if (run.animationFrame !== null && dependencies.cancelAnimationFrame)
       dependencies.cancelAnimationFrame(run.animationFrame);
     run.animationFrame = null;
@@ -168,7 +223,10 @@ export function createHandTrackingController(
     run.stream = null;
     run.ownsStream = false;
     run.intentStates.clear();
+    run.unknownHandTracks.clear();
     run.lastSingleObservation = null;
+    run.roundTripSamples = [];
+    run.resultCompletionTimes = [];
   }
 
   function failUnavailable(
@@ -249,6 +307,8 @@ export function createHandTrackingController(
     }
     worker.terminate();
     run.worker = null;
+    run.roundTripSamples = [];
+    run.resultCompletionTimes = [];
     run.intentStates.clear();
     run.lastSingleObservation = null;
     emit({ mode: "idle", timestamp: dependencies.now(), trackingState: "lost" });
@@ -269,6 +329,10 @@ export function createHandTrackingController(
     if (!dependencies.requestAnimationFrame) return;
     run.animationFrame = dependencies.requestAnimationFrame(() => {
       if (activeRun !== run || run.cancelled || status.state !== "ready") return;
+      if (run.sharedVideoTrack?.readyState === "ended") {
+        handleSharedCameraStopped(run);
+        return;
+      }
       scheduleFrame(run);
       if (!run.frameInFlight && run.video.readyState >= 2)
         void captureFrame(run);
@@ -315,6 +379,7 @@ export function createHandTrackingController(
   ) {
     if (activeRun !== run || run.cancelled || run.worker !== worker) return;
     if (message.type === "ready") {
+      if (message.diagnostics) applyDetectorDiagnostics(message.diagnostics);
       if (run.readyTimeout !== null) {
         dependencies.clearTimeout(run.readyTimeout);
         run.readyTimeout = null;
@@ -335,15 +400,21 @@ export function createHandTrackingController(
       );
       return;
     }
+    if (message.type === "diagnostics") {
+      applyDetectorDiagnostics(message.diagnostics);
+      return;
+    }
 
     run.frameInFlight = false;
+    recordRuntimeResult(run, message.timestamp);
     if (message.hands.length === 0) {
       emitLossOrGrace(run, message.timestamp);
       return;
     }
+    const stateKeys = assignHandStateKeys(run, message.hands, message.timestamp);
     const activeKeys = new Set<string>();
     const interpreted = message.hands.map((hand, index) => {
-      const key = handStateKey(hand.handedness, index);
+      const key = stateKeys[index]!;
       activeKeys.add(key);
       const transition = interpretHandFrame(
         run.intentStates.get(key) ?? createInitialHandIntentState(),
@@ -360,7 +431,8 @@ export function createHandTrackingController(
       return { hand, transition };
     });
     for (const key of run.intentStates.keys()) {
-      if (!activeKeys.has(key)) run.intentStates.delete(key);
+      if (!activeKeys.has(key) && !run.unknownHandTracks.has(key))
+        run.intentStates.delete(key);
     }
     const accepted = interpreted.filter(
       (entry) => entry.transition.output.accepted,
@@ -378,6 +450,7 @@ export function createHandTrackingController(
         confidence: output.confidence,
         landmarks: hand.landmarks,
         pinchDistance: output.pinchDistance,
+        pinchRatio: output.pinchRatio,
       })) as unknown as [HandTrackingPointer, HandTrackingPointer];
       const [first, second] = hands;
       emit({
@@ -418,6 +491,7 @@ export function createHandTrackingController(
       handedness: primary.hand.handedness,
       landmarks: primary.hand.landmarks,
       pinchDistance: output.pinchDistance,
+      pinchRatio: output.pinchRatio,
       trackingState: "tracked",
       timestamp: output.timestamp,
     };
@@ -425,12 +499,32 @@ export function createHandTrackingController(
     emit(observation);
   }
 
+  function applyDetectorDiagnostics(diagnostics: HandDetectorDiagnostics) {
+    if (!engineStatus) return;
+    engineStatus = {
+      ...engineStatus,
+      executionProvider: diagnostics.executionProvider,
+      ...(diagnostics.adapter ? { adapter: diagnostics.adapter } : {}),
+      ...(diagnostics.fallbackReason
+        ? { fallbackReason: diagnostics.fallbackReason }
+        : {}),
+    };
+    engineListeners.forEach((listener) => listener(engineStatus));
+  }
+
   function emitLossOrGrace(run: HandTrackingRun, timestamp: number) {
     const previous = run.lastSingleObservation;
+    const graceMs =
+      previous?.mode === "pinch"
+        ? PINCH_TRACKING_GRACE_MS
+        : previous?.mode === "point"
+          ? POINT_TRACKING_GRACE_MS
+          : 0;
     if (
-      previous?.mode === "pinch" &&
+      previous &&
+      graceMs > 0 &&
       timestamp >= previous.timestamp &&
-      timestamp - previous.timestamp <= PINCH_TRACKING_GRACE_MS
+      timestamp - previous.timestamp <= graceMs
     ) {
       emit({
         ...previous,
@@ -443,6 +537,32 @@ export function createHandTrackingController(
     run.lastSingleObservation = null;
     run.intentStates.clear();
     emit({ mode: "idle", timestamp, trackingState: "lost" });
+  }
+
+  function watchSharedCamera(run: HandTrackingRun) {
+    if (run.ownsStream || !run.stream) return;
+    const track =
+      run.stream.getVideoTracks?.()[0] ??
+      run.stream.getTracks().find((candidate) => candidate.kind === "video") ??
+      run.stream.getTracks()[0];
+    if (
+      !track ||
+      typeof track.addEventListener !== "function" ||
+      typeof track.removeEventListener !== "function"
+    )
+      return;
+    const onEnded = () => handleSharedCameraStopped(run);
+    run.sharedVideoTrack = track;
+    run.sharedVideoTrackEndedListener = onEnded;
+    track.addEventListener("ended", onEnded, { once: true });
+    if (track.readyState === "ended") handleSharedCameraStopped(run);
+  }
+
+  function handleSharedCameraStopped(run: HandTrackingRun) {
+    if (activeRun !== run || run.cancelled) return;
+    emit({ mode: "idle", timestamp: dependencies.now(), trackingState: "lost" });
+    setEngineStatus(null);
+    failUnavailable(run, SHARED_CAMERA_STOPPED_MESSAGE);
   }
 
   return {
@@ -503,7 +623,8 @@ export function createHandTrackingController(
           run.resolveReady = resolve;
           run.rejectReady = reject;
         });
-        startEngineWorker(run, 0);
+        watchSharedCamera(run);
+        if (activeRun === run && !run.cancelled) startEngineWorker(run, 0);
         const readyResult = await waitForRunOrStop(run, ready);
         if (readyResult.stopped) return;
       } catch (error) {
@@ -555,6 +676,8 @@ interface HandTrackingRun {
   animationFrame: number | null;
   frameInFlight: boolean;
   intentStates: Map<string, HandIntentState>;
+  unknownHandTracks: Map<string, UnknownHandTrack>;
+  nextUnknownHandTrackId: number;
   lastSingleObservation: Extract<
     HandTrackingObservation,
     { mode: "point" | "pinch" | "open_palm" }
@@ -565,6 +688,10 @@ interface HandTrackingRun {
   resolveReady: (() => void) | null;
   rejectReady: ((error: Error) => void) | null;
   readyTimeout: number | null;
+  sharedVideoTrack: MediaStreamTrack | null;
+  sharedVideoTrackEndedListener: EventListener | null;
+  roundTripSamples: number[];
+  resultCompletionTimes: number[];
 }
 
 function createRun(id: number, video: HTMLVideoElement): HandTrackingRun {
@@ -582,6 +709,8 @@ function createRun(id: number, video: HTMLVideoElement): HandTrackingRun {
     animationFrame: null,
     frameInFlight: false,
     intentStates: new Map(),
+    unknownHandTracks: new Map(),
+    nextUnknownHandTrackId: 0,
     lastSingleObservation: null,
     cancelled: false,
     stopped,
@@ -589,11 +718,146 @@ function createRun(id: number, video: HTMLVideoElement): HandTrackingRun {
     resolveReady: null,
     rejectReady: null,
     readyTimeout: null,
+    sharedVideoTrack: null,
+    sharedVideoTrackEndedListener: null,
+    roundTripSamples: [],
+    resultCompletionTimes: [],
   };
 }
 
-function handStateKey(handedness: TrackedHandedness, index: number) {
-  return handedness === "unknown" ? `unknown-${index}` : handedness;
+interface UnknownHandTrack {
+  key: string;
+  center: { x: number; y: number };
+  lastSeenAt: number;
+}
+
+function assignHandStateKeys(
+  run: HandTrackingRun,
+  hands: readonly TrackedHandLandmarks[],
+  timestamp: number,
+) {
+  pruneUnknownHandTracks(run, timestamp);
+  const keys = new Array<string>(hands.length);
+  const unknownHands = hands.flatMap((hand, index) => {
+    if (hand.handedness !== "unknown") {
+      keys[index] = hand.handedness;
+      return [];
+    }
+    return [{ index, center: palmCenter(hand.landmarks) }];
+  });
+  const tracks = [...run.unknownHandTracks.values()];
+  const assignments = matchUnknownHands(unknownHands, tracks);
+  const reservedKeys = new Set(assignments.map(({ track }) => track.key));
+
+  for (const { hand, track } of assignments) {
+    track.center = hand.center;
+    track.lastSeenAt = timestamp;
+    keys[hand.index] = track.key;
+  }
+  for (const hand of unknownHands) {
+    if (keys[hand.index]) continue;
+    while (run.unknownHandTracks.size >= 2) {
+      const evicted = [...run.unknownHandTracks.values()]
+        .filter((track) => !reservedKeys.has(track.key))
+        .sort((left, right) => left.lastSeenAt - right.lastSeenAt)[0];
+      if (!evicted) break;
+      run.unknownHandTracks.delete(evicted.key);
+      run.intentStates.delete(evicted.key);
+    }
+    const key = `unknown-track-${++run.nextUnknownHandTrackId}`;
+    run.unknownHandTracks.set(key, {
+      key,
+      center: hand.center,
+      lastSeenAt: timestamp,
+    });
+    reservedKeys.add(key);
+    keys[hand.index] = key;
+  }
+  return keys;
+}
+
+function matchUnknownHands(
+  hands: readonly { index: number; center: { x: number; y: number } }[],
+  tracks: readonly UnknownHandTrack[],
+) {
+  if (hands.length === 2 && tracks.length === 2) {
+    const straight = [
+      { hand: hands[0]!, track: tracks[0]! },
+      { hand: hands[1]!, track: tracks[1]! },
+    ];
+    const crossed = [
+      { hand: hands[0]!, track: tracks[1]! },
+      { hand: hands[1]!, track: tracks[0]! },
+    ];
+    const candidates = [straight, crossed]
+      .filter((pairs) =>
+        pairs.every(
+          ({ hand, track }) =>
+            pointDistance(hand.center, track.center) <=
+            UNKNOWN_HAND_TRACK_MAX_DISTANCE,
+        ),
+      )
+      .sort(
+        (left, right) =>
+          assignmentDistance(left) - assignmentDistance(right),
+      );
+    if (candidates[0]) return candidates[0];
+  }
+
+  const matchedHands = new Set<number>();
+  const matchedTracks = new Set<string>();
+  return hands
+    .flatMap((hand) =>
+      tracks.map((track) => ({
+        hand,
+        track,
+        distance: pointDistance(hand.center, track.center),
+      })),
+    )
+    .filter(({ distance }) => distance <= UNKNOWN_HAND_TRACK_MAX_DISTANCE)
+    .sort((left, right) => left.distance - right.distance)
+    .flatMap(({ hand, track }) => {
+      if (matchedHands.has(hand.index) || matchedTracks.has(track.key)) return [];
+      matchedHands.add(hand.index);
+      matchedTracks.add(track.key);
+      return [{ hand, track }];
+    });
+}
+
+function pruneUnknownHandTracks(run: HandTrackingRun, timestamp: number) {
+  for (const track of run.unknownHandTracks.values()) {
+    if (timestamp - track.lastSeenAt <= UNKNOWN_HAND_TRACK_TTL_MS) continue;
+    run.unknownHandTracks.delete(track.key);
+    run.intentStates.delete(track.key);
+  }
+}
+
+function palmCenter(landmarks: HandLandmarks) {
+  const indices = [0, 5, 9, 13, 17] as const;
+  const points = indices.map((index) => landmarks[index]);
+  return {
+    x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+    y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+  };
+}
+
+function assignmentDistance(
+  pairs: readonly {
+    hand: { center: { x: number; y: number } };
+    track: UnknownHandTrack;
+  }[],
+) {
+  return pairs.reduce(
+    (sum, { hand, track }) => sum + pointDistance(hand.center, track.center),
+    0,
+  );
+}
+
+function pointDistance(
+  left: { x: number; y: number },
+  right: { x: number; y: number },
+) {
+  return Math.hypot(left.x - right.x, left.y - right.y);
 }
 
 function handModePriority(mode: string) {

@@ -1,6 +1,6 @@
 # CommandCanvas
 
-CommandCanvas is a shared spatial workspace where people, remote collaborators, the optional Live voice agent, and ChatGPT manipulate the same collection of semantic objects. Rough sketches become separate structured diagrams without destroying the source, and every supported canvas mutation remains attributable and reversible whether it was initiated by a human, participant, or agent.
+CommandCanvas is a shared spatial workspace where people, remote collaborators, the optional Live voice agent, and ChatGPT manipulate the same collection of semantic objects. Rough sketches and their spoken explanation become separate schema-validated visuals without destroying the source, and every supported canvas mutation remains attributable and reversible whether it was initiated by a human, participant, or agent.
 
 **Live no-signup demo:** <https://commandcanvas.vercel.app/demo>
 
@@ -8,7 +8,7 @@ No signup, login form, password, third-party account, API key, or configuration 
 
 ## The product thesis
 
-The canvas is not a document and the agent is not a detached chat panel. Notes, boards, schedules, sketches, and diagrams are typed application objects with stable identities, spatial geometry, versions, and payload schemas. WebMCP gives ChatGPT bounded tools over those same live objects and the same selected state that human participants see.
+The canvas is not a document and the agent is not a detached chat panel. Notes, boards, schedules, sketches, diagrams, and charts are typed application objects with stable identities, spatial geometry, versions, and payload schemas. WebMCP gives ChatGPT bounded tools over those same live objects and the same selected state that human participants see.
 
 That makes the core interaction possible:
 
@@ -22,23 +22,26 @@ Finger / mouse / touch / stylus strokes
                   ▼
                 PNG
                   │
-       vision + strict structured output
+ image input + strict structured output
                   ▼
-         validated DiagramPayload
+    validated structured visual payload
                   │
                   ▼
-    new DiagramObject beside preserved source
+ new structured object beside preserved source
                   │
                   ▼
         revision + immutable receipt
 ```
 
+The current validated output kinds are a generic diagram, architecture diagram, flowchart, pie chart, bar chart, and line chart. In auto mode, the transformation selects the best supported kind from the sketch image, the user’s bounded spoken explanation, and the instruction. Architecture is one possible subject, not a product or audience boundary.
+
 ## One-click judge path
 
 1. Open <https://commandcanvas.vercel.app/demo>.
 2. Open the command drawer, press **Start** under **Live voice**, and say **Bring in our project board**. The `gpt-realtime-2.1` session listens for later commands until the user stops it or the bounded session ends. There is no Run button in this path. If live voice is disabled, typed **Human command** plus **Run** remains the fallback.
-3. Click **Sketch** and draw boxes and arrows, or enable Hand input, choose **Draw**, and trace them directly on the main canvas with your index finger. Multiple lines remain one active sketch instead of spawning objects or drawers. Finish the sketch, select it, and say **Make that usable as an architecture diagram**.
-4. Keep the rough sketch visible beside the schema-validated diagram. Move, resize, rotate, pin, minimize, restore, trash, recover, undo, and redo through named controls.
+   To capture a note without reaching for a mouse, say **Start a new thought**. CommandCanvas creates and selects one **New thought** card only after the canonical create command succeeds. Continue speaking normally: each completed user turn is appended as speech-to-text inside that same card. The start and finish phrases and the assistant's speech are excluded. Say **Finish thought** to close the capture.
+3. Click **Sketch** and draw a rough relationship map, flow, or labeled data chart, or enable Hand input, choose **Draw**, and trace it directly on the main canvas with your index finger. While drawing, explain its labels or values in Live voice. Multiple lines remain one active sketch instead of spawning objects or drawers. Finish the sketch, select it, and say **Make this sketch professional**.
+4. Keep the rough sketch visible beside the auto-selected, schema-validated visual. Move, resize, rotate, pin, minimize, restore, trash, recover, undo, and redo through named controls.
 5. Turn on **Select many**, choose two objects, group them into a semantic frame, move the frame, then ungroup it.
 6. Click **Prepare meeting packet**, review the exact content and recipient, then approve it.
 7. Click **Request email send**. The agent or site stages the action; only the host can press **SEND**. Without an allowlisted Resend configuration the result is explicitly **Preview only: not sent**.
@@ -61,7 +64,7 @@ The site registers ten stable tools through `document.modelContext.registerTool(
 | `discard_object` | Move an object to recoverable trash | Reversible; no permanent delete |
 | `organize_objects` | Group explicit objects into a semantic frame, or ungroup a frame | Reversible canonical mutation + receipt |
 | `history_action` | Undo or redo the latest reversible shared mutation | Canonical history mutation + receipt |
-| `transform_sketch` | Interpret the selected sketch into a new structured diagram | Source is preserved |
+| `transform_sketch` | Interpret the selected sketch and optional narration into a new structured visual | Source is preserved |
 | `prepare_meeting_packet` | Create or refresh a reviewable packet draft | Does not approve or send |
 | `request_packet_send` | Stage an approved packet for site confirmation | Explicit host **SEND** still required |
 
@@ -73,7 +76,7 @@ The compact canvas projection has a hard 32,768-byte envelope. It prioritizes se
 
 These are distinct agent surfaces with different authority:
 
-- **Continuous in-page voice** opens a regular `gpt-realtime-2.1` WebRTC session only after the user presses **Start**. It uses a narrower set of canvas tools for note, board, schedule, sketch, selected-object state, local focus, grouping, ungrouping, rotation, undo, redo, and sketch transformation. It cannot discard objects, manage rooms, approve packets, stage email, or send email. Except for local-only focus, a successful voice tool result means the action was submitted to the canonical command path; the shared receipt is the completion record.
+- **Continuous in-page voice** opens a regular `gpt-realtime-2.1` WebRTC session only after the user presses **Start**. It uses a narrower set of canvas tools for note, board, schedule, sketch, selected-object state, local focus, grouping, ungrouping, rotation, undo, redo, recoverable trash, thought capture, and sketch transformation. Saying **Start a new thought** creates and selects one note card, then completed user turns are serialized into that card as speech-to-text until **Finish thought**. Boundary commands and assistant speech are never appended. Each accepted turn is a version-checked canonical mutation with a receipt and the same Undo behavior as other object edits. While thought capture is active, unrelated canvas tools are refused so command speech cannot leak into the note. Completed user speech outside thought capture is bounded and can accompany the next selected-sketch transformation as untrusted explanatory context. A spoken discard request is explicit and recoverable through the same receipt and Undo path; it never permanently deletes data. Live voice cannot manage rooms, approve packets, stage email, or send email. Except for local-only focus, a successful voice tool result means the action was submitted to the canonical command path; the shared receipt is the completion record.
 - **ChatGPT Site Tools** use the ten WebMCP tools registered on the same live page through `document.modelContext`. They can read current canvas state, mutate semantic objects, organize objects, transform a sketch, prepare a packet, and stage an approved send. Normal room, phase, role, revision, and human-confirmation guards remain authoritative.
 
 Live voice is an optional paid provider path with a separate server-only key, durable admission limits, and a ten-minute session ceiling. It is not a substitute for WebMCP, and a verified Realtime provider session is not evidence that ChatGPT or Chrome discovered the Site Tools catalog.
@@ -116,7 +119,9 @@ Pointer previews, hand landmarks, and remote cursors remain ephemeral. A stable 
 
 Hand tracking starts with a pinned YOLO26 Hand Pose checkpoint exported to a same-origin 320×320 FP16 ONNX model. ONNX Runtime Web runs it locally in a module worker and returns exactly 21 hand keypoints; it refuses bounding-box-only model output. WebGPU is preferred and a bounded threaded WASM path is the fallback runtime. MediaPipe is a separately labeled recovery detector and is attempted only after YOLO reports an initialization or runtime failure.
 
-The gesture vocabulary maps the YOLO index fingertip to direct drawing on the main canvas, one-hand pinch to magnetic grab and move, two-hand pinch span to resize, and open-palm dwell to focus or restore. Drawing mode accumulates repeated lines into one `SketchObject`; it never opens a drawer per stroke. A fast held-object throw through either side edge moves it into recoverable trash after a short exit animation, with a receipt and universal Undo. A downward throw into the blue dock minimizes it. No gesture permanently deletes data and neither edge path opens a confirmation panel.
+The gesture vocabulary maps the YOLO index fingertip to direct drawing on the main canvas, one-hand pinch to magnetic grab and move, two-hand pinch span over an object to resize, and open-palm dwell to focus or restore. Over blank canvas, an open-palm drag pans the local viewport and a two-hand spread or pinch zooms it around the tracked midpoint. These viewport changes are local view state, so they do not create shared mutation receipts. Drawing mode accumulates repeated lines into one `SketchObject`; it never opens a drawer per stroke. Deliberately releasing a held object through either side edge moves it into recoverable trash after a short exit animation, with a receipt and universal Undo. Releasing it into the blue bottom dock minimizes it. No gesture permanently deletes data and neither edge path opens a confirmation panel.
+
+The on-canvas feedback names what the tracker currently understands, including open-hand, pinch, held-object, resizing, panning, and canvas-zoom states. This feedback and the local gesture state machine are implemented independently of the camera preview size. They make an accepted gesture visible; they are not a claim that every physical hand, camera, lighting condition, or device has passed calibration.
 
 The camera panel includes a session-local self-check. It records point and pinch separately and reports success only after both observations actually occur in that camera session. This is a calibration aid, not a claim that every webcam, hand, or lighting condition has been validated.
 
@@ -124,7 +129,7 @@ Camera frames remain local to the browser. They are never sent to ChatGPT, OpenA
 
 Continuous voice has a separate and explicit privacy boundary. Microphone audio travels to OpenAI only while the user-visible **Live voice** session is on, and assistant audio returns over that WebRTC connection. The server creates the provider call with a server-only key; no provider credential reaches the browser. Typed commands remain available when continuous voice is disabled or unavailable. The older reviewed browser-transcription control may use the browser vendor's speech service under that browser's policy, but it never executes a transcript until the user presses **Run**.
 
-Meeting audio and video are separate again. They start only after **Start camera + mic** and travel peer-to-peer between authorized room browsers. Supabase transports bounded signaling messages, not media. Meeting video is never sent to OpenAI. If Live voice is also on, microphone audio is separately sent to OpenAI for that voice session. CommandCanvas does not implement call recording.
+Meeting audio and video are separate again. They start only after **Start camera + mic** and travel peer-to-peer between authorized room browsers. Supabase transports bounded signaling messages, not media. **Stop sharing video** detaches the published video track; if Hand input is still consuming the physical source locally, the interface says so rather than claiming that the camera device stopped. Meeting video is never sent to OpenAI. If Live voice is also on, microphone audio is separately sent to OpenAI for that voice session. CommandCanvas does not implement call recording.
 
 The model provenance, runtime package, retrieval boundary, and license references are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
@@ -234,7 +239,7 @@ npm run build
 npm run test:e2e
 ```
 
-The current integrated gate completed 693 of 693 unit tests and an optimized production build. The suite covers object schemas, command mutations, stale-revision refusal, undo and redo, multi-selection, grouping, ungrouping, rotation, persistence projection, RLS/RPC contracts, WebMCP schemas and guards, bounded agent context, GPT Realtime admission and tool truthfulness, PNG validation, durable vision admission, YOLO output and preprocessing contracts, packet approval/cancel/execute transitions, browser media lifecycle, responsive rendering, Realtime adapters, and demo reset.
+The current integrated source gate completed 843 of 843 unit tests, ESLint, TypeScript, both generated hand-worker bundles, and diff validation. The suite covers object schemas, command mutations, stale-revision refusal, undo and redo, multi-selection, grouping, ungrouping, rotation, thought-card speech-to-text lifecycle and conflict recovery, persistence projection, RLS/RPC contracts, WebMCP schemas and guards, bounded agent context, GPT Realtime admission and tool truthfulness, PNG validation, durable vision admission, YOLO output and preprocessing contracts, packet approval/cancel/execute transitions, shared-camera shutdown, responsive rendering, Realtime adapters, and demo reset. Exact deployment-build evidence is recorded separately in the verification ledger because this sandbox prevents Turbopack's internal CSS worker from binding its helper port.
 
 Environment-specific browser probes are separate so their claims stay narrow:
 
@@ -254,7 +259,7 @@ npx playwright test --config=playwright.webmcp153.config.ts
 
 The Chrome 153 test refuses to run against another major version, defaults to loopback, and requires `WEBMCP_LIVE_PROBE=true` before it may target a public origin. Its optional local-to-production API proxy accepts only `https://commandcanvas.vercel.app` and only the exact room endpoints used by the probe. Dynamic mode uses the same probe with `WEBMCP_EXPECTED_MODE=dynamic` against a build created with `NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION=true`.
 
-Current browser evidence is narrower than the complete source surface. Two authenticated browser contexts passed Supabase collaboration and peer-to-peer media with live local and remote tracks. A paid `gpt-realtime-2.1` session heard a controlled audio fixture, invoked the narrow `create_board` tool, and produced the canonical voice receipt. Real OpenAI vision passed through an injected standards-shaped `document.modelContext`, preserving the sketch beside the validated diagram. Chromium loaded the pinned same-origin YOLO model in its real worker and inferred one 21-keypoint hand from a CC0 image; the warm threaded-WASM samples were 109.505 ms and 96.815 ms. Chromium also exercised fake-camera permission, YOLO model loading, and exact track shutdown, while WebKit exercised the worker fallback boundary. A controlled allowlisted packet completed the full approval and explicit-SEND path, received a Resend provider ID, and was reported delivered by Resend. The public no-signup environment remains preview-only to prevent anonymous email abuse. ChatGPT built-in-browser Site Tools, physical iPhone hardware, physical hand accuracy, cross-network WebRTC, and TURN behavior remain unverified.
+Current browser evidence is narrower than the complete source surface. Two authenticated browser contexts passed Supabase collaboration and peer-to-peer media with live local and remote tracks. A paid `gpt-realtime-2.1` session heard a controlled audio fixture, invoked the narrow `create_board` tool, and produced the canonical voice receipt. Real OpenAI image interpretation passed through an injected standards-shaped `document.modelContext`, preserving the sketch beside a validated structured visual. Chromium loaded the pinned same-origin YOLO model in its real worker and inferred one 21-keypoint hand from a CC0 image; the warm threaded-WASM samples were 109.505 ms and 96.815 ms. Chromium also exercised fake-camera permission, YOLO model loading, and exact track shutdown, while WebKit exercised the worker fallback boundary. A controlled allowlisted packet completed the full approval and explicit-SEND path, received a Resend provider ID, and was reported delivered by Resend. The public no-signup environment remains preview-only to prevent anonymous email abuse. ChatGPT built-in-browser Site Tools, physical iPhone hardware, physical hand accuracy, cross-network WebRTC, and TURN behavior remain unverified.
 
 The [verification ledger](docs/verification-ledger.md) distinguishes:
 

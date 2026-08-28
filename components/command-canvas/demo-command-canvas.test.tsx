@@ -1159,15 +1159,14 @@ describe("DemoCommandCanvas", () => {
       expect(transform).toHaveBeenNthCalledWith(1, {
         sketchObjectId: "sketch-source",
         instruction: "Clarify the API boundary.",
-        outputKind: "architecture",
+        outputKind: "auto",
         source: "webmcp",
         signal: webMcpSignal,
       });
       expect(transform).toHaveBeenNthCalledWith(2, {
         sketchObjectId: "sketch-source",
-        instruction:
-          "Make this sketch usable as a clean architecture diagram.",
-        outputKind: "architecture",
+        instruction: "Make this usable as a professional visual.",
+        outputKind: "auto",
         source: "typed",
       });
     } finally {

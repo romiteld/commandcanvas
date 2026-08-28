@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { newCanvasObjectSchema } from "@/lib/canvas/object-model";
+import {
+  canvasCommandSchema,
+  diagramPayloadSchema,
+  newCanvasObjectSchema,
+} from "@/lib/canvas/object-model";
 
 const geometry = {
   x: 120,
@@ -140,6 +144,173 @@ describe("newCanvasObjectSchema", () => {
     });
   });
 
+  it("accepts a generic node-and-edge diagram without treating it as architecture", () => {
+    const result = diagramPayloadSchema.safeParse({
+      kind: "diagram",
+      sourceSketchId: "sketch-concept-map",
+      interpretationSummary: "Three ideas connected by two relationships.",
+      nodes: [
+        {
+          id: "node-question",
+          label: "Question",
+          kind: "concept",
+          x: 40,
+          y: 80,
+          width: 160,
+          height: 72,
+        },
+        {
+          id: "node-evidence",
+          label: "Evidence",
+          kind: "process",
+          x: 280,
+          y: 80,
+          width: 160,
+          height: 72,
+        },
+      ],
+      edges: [
+        {
+          id: "edge-supports",
+          from: "node-evidence",
+          to: "node-question",
+          label: "supports",
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    {
+      kind: "pie_chart" as const,
+      title: "Quarterly revenue mix",
+      xAxisLabel: null,
+      yAxisLabel: null,
+      series: [
+        {
+          id: "series-revenue",
+          label: "Revenue",
+          points: [
+            { label: "Services", value: 60 },
+            { label: "Products", value: 30 },
+            { label: "Other", value: 10 },
+          ],
+        },
+      ],
+    },
+    {
+      kind: "bar_chart" as const,
+      title: "Tickets by team",
+      xAxisLabel: "Team",
+      yAxisLabel: "Tickets",
+      series: [
+        {
+          id: "series-tickets",
+          label: "Tickets",
+          points: [
+            { label: "Design", value: 8 },
+            { label: "Engineering", value: 15 },
+          ],
+        },
+      ],
+    },
+    {
+      kind: "line_chart" as const,
+      title: "Weekly signups",
+      xAxisLabel: "Week",
+      yAxisLabel: "Signups",
+      series: [
+        {
+          id: "series-signups",
+          label: "Signups",
+          points: [
+            { label: "W1", value: 12 },
+            { label: "W2", value: 18 },
+            { label: "W3", value: 27 },
+          ],
+        },
+      ],
+    },
+  ])("accepts a validated $kind semantic chart payload", (chart) => {
+    const result = diagramPayloadSchema.safeParse({
+      kind: chart.kind,
+      sourceSketchId: "sketch-chart",
+      interpretationSummary: "Values transcribed from the preserved drawing.",
+      chart: {
+        title: chart.title,
+        xAxisLabel: chart.xAxisLabel,
+        yAxisLabel: chart.yAxisLabel,
+        series: chart.series,
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects Cartesian chart series with different ordered category labels", () => {
+    const result = diagramPayloadSchema.safeParse({
+      kind: "line_chart",
+      sourceSketchId: "sketch-chart",
+      interpretationSummary:
+        "Two incompatible category axes must not be rendered as one timeline.",
+      chart: {
+        title: "Incompatible categories",
+        xAxisLabel: "Period",
+        yAxisLabel: "Value",
+        series: [
+          {
+            id: "series-a",
+            label: "A",
+            points: [
+              { label: "Jan", value: 2 },
+              { label: "Feb", value: 4 },
+            ],
+          },
+          {
+            id: "series-b",
+            label: "B",
+            points: [
+              { label: "Q1", value: 5 },
+              { label: "Q2", value: 6 },
+              { label: "Q3", value: 7 },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a pie chart with negative slices or multiple series", () => {
+    const result = diagramPayloadSchema.safeParse({
+      kind: "pie_chart",
+      sourceSketchId: "sketch-chart",
+      interpretationSummary: "Invalid pie values.",
+      chart: {
+        title: "Invalid",
+        xAxisLabel: null,
+        yAxisLabel: null,
+        series: [
+          {
+            id: "series-a",
+            label: "A",
+            points: [{ label: "Loss", value: -1 }],
+          },
+          {
+            id: "series-b",
+            label: "B",
+            points: [{ label: "Gain", value: 2 }],
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("rejects unsafe geometry and unknown fields at the external boundary", () => {
     const result = newCanvasObjectSchema.safeParse({
       id: "note-invalid",
@@ -171,5 +342,47 @@ describe("newCanvasObjectSchema", () => {
     expect(
       newCanvasObjectSchema.safeParse({ ...frame, rotation: 181 }).success,
     ).toBe(false);
+  });
+});
+
+describe("canvasCommandSchema note transcription", () => {
+  it("accepts one bounded version-checked note append command", () => {
+    expect(
+      canvasCommandSchema.safeParse({
+        type: "object.append_note_text",
+        objectId: "note-thought",
+        expectedVersion: 3,
+        text: "The launch risk is supplier lead time.",
+      }),
+    ).toMatchObject({ success: true });
+  });
+
+  it.each([
+    {
+      type: "object.append_note_text",
+      objectId: "note-thought",
+      text: "Missing version",
+    },
+    {
+      type: "object.append_note_text",
+      objectId: "note-thought",
+      expectedVersion: 1,
+      text: "   ",
+    },
+    {
+      type: "object.append_note_text",
+      objectId: "note-thought",
+      expectedVersion: 1,
+      text: "x".repeat(1_001),
+    },
+    {
+      type: "object.append_note_text",
+      objectId: "note-thought",
+      expectedVersion: 1,
+      text: "Valid text",
+      untrustedExtra: true,
+    },
+  ])("rejects malformed or oversized note append input", (input) => {
+    expect(canvasCommandSchema.safeParse(input).success).toBe(false);
   });
 });

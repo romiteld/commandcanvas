@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { DiagramPayload } from "@/lib/canvas/object-model";
 import type { SketchTransformRequest } from "@/lib/vision/diagram-transform";
 import type { OpenAiDiagramModel } from "@/lib/vision/openai-diagram";
+import type { SketchTransformOutputKind } from "@/lib/vision/diagram-transform";
 
 const PNG_DATA_URL_PREFIX = "data:image/png;base64,";
 
@@ -22,15 +23,18 @@ export interface VisionAdmissionInput {
   actorUserId: string;
   sketchObjectId: string;
   sourceVersion: number;
-  outputKind: "architecture" | "flowchart";
+  outputKind: SketchTransformOutputKind;
   normalizedInstructionSha256: string;
+  normalizedNarrationSha256: string | null;
   pngSha256: string;
   requestKey: string;
 }
 
 export interface VisionAdmissionIdentity {
   normalizedInstruction: string;
+  normalizedNarration?: string;
   normalizedInstructionSha256: string;
+  normalizedNarrationSha256: string | null;
   pngSha256: string;
   requestKey: string;
 }
@@ -95,7 +99,14 @@ export function createVisionAdmissionIdentity(
     .normalize("NFKC")
     .trim()
     .replace(/\s+/gu, " ");
+  const normalizedNarration = input.narration
+    ?.normalize("NFKC")
+    .trim()
+    .replace(/\s+/gu, " ");
   const normalizedInstructionSha256 = sha256Utf8(normalizedInstruction);
+  const normalizedNarrationSha256 = normalizedNarration
+    ? sha256Utf8(normalizedNarration)
+    : null;
   const encodedPng = input.imageDataUrl.slice(PNG_DATA_URL_PREFIX.length);
   const pngSha256 = createHash("sha256")
     .update(Buffer.from(encodedPng, "base64"))
@@ -107,12 +118,15 @@ export function createVisionAdmissionIdentity(
     String(input.sourceVersion),
     input.outputKind,
     normalizedInstructionSha256,
+    ...(normalizedNarrationSha256 ? [normalizedNarrationSha256] : []),
     pngSha256,
   ].join("\n");
 
   return {
     normalizedInstruction,
+    ...(normalizedNarration ? { normalizedNarration } : {}),
     normalizedInstructionSha256,
+    normalizedNarrationSha256,
     pngSha256,
     requestKey: `vision_${VISION_ADMISSION_KEY_VERSION}_${sha256Utf8(canonicalIdentity)}`,
   };

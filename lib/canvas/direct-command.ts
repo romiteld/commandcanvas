@@ -2,10 +2,18 @@ export const DIRECT_COMMAND_MAX_LENGTH = 280;
 
 export type DirectCanvasIntent =
   | { type: "create_note"; text?: string }
+  | { type: "start_thought" }
+  | { type: "append_thought"; text: string }
+  | { type: "finish_thought" }
   | { type: "create_board" }
   | { type: "create_schedule" }
   | { type: "open_sketch" }
-  | { type: "transform_selected_sketch" }
+  | { type: "finish_sketch" }
+  | { type: "cancel_sketch" }
+  | {
+      type: "transform_selected_sketch";
+      narration?: string;
+    }
   | { type: "pin_selected" }
   | { type: "unpin_selected" }
   | { type: "minimize_selected" }
@@ -65,6 +73,20 @@ export function parseDirectCanvasCommand(
   const candidates: IntentCandidate[] = [
     { intent: note, matches: isNoteCommand(normalized) },
     {
+      intent: { type: "start_thought" },
+      matches:
+        /^(?:start|begin|capture|create)(?: a)?(?: new)? thought(?: capture)?$/.test(
+          normalized,
+        ) || /^(?:a )?new thought$/.test(normalized),
+    },
+    {
+      intent: { type: "finish_thought" },
+      matches:
+        /^(?:finish|end|stop|complete)(?: this| the)? thought(?: capture)?$/.test(
+          normalized,
+        ) || /^(?:finish|end|stop) thought capture$/.test(normalized),
+    },
+    {
       intent: { type: "create_board" },
       matches:
         hasCreationVerb(normalized) &&
@@ -82,6 +104,20 @@ export function parseDirectCanvasCommand(
         /\b(?:start|create|draw|open|make)\b/.test(normalized) &&
         /\b(?:rough\s+)?(?:sketch|drawing)\b/.test(normalized) &&
         !/\b(?:usable|professional|diagram|flowchart)\b/.test(normalized),
+    },
+    {
+      intent: { type: "finish_sketch" },
+      matches:
+        /\b(?:finish|complete|save|end)\b.*\b(?:sketch|drawing)\b/.test(
+          normalized,
+        ) || /\bfinish drawing\b/.test(normalized),
+    },
+    {
+      intent: { type: "cancel_sketch" },
+      matches:
+        /\b(?:cancel|stop|abandon)\b.*\b(?:sketch|drawing)\b/.test(
+          normalized,
+        ),
     },
     {
       intent: { type: "transform_selected_sketch" },

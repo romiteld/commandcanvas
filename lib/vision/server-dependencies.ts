@@ -20,6 +20,7 @@ import {
   readOpenAiDiagramConfig,
   type OpenAiDiagramTransformer,
 } from "@/lib/vision/openai-diagram";
+import { sketchTransformOutputKindSchema } from "@/lib/vision/diagram-transform";
 import {
   type VisionAdmissionResult,
   type VisionCompletionInput,
@@ -53,8 +54,9 @@ const admissionInputSchema = z
     actorUserId: z.uuid(),
     sketchObjectId: objectIdSchema,
     sourceVersion: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    outputKind: z.enum(["architecture", "flowchart"]),
+    outputKind: sketchTransformOutputKindSchema,
     normalizedInstructionSha256: hashSchema,
+    normalizedNarrationSha256: hashSchema.nullable(),
     pngSha256: hashSchema,
     requestKey: requestKeySchema,
   })
@@ -213,6 +215,8 @@ export function createServerSketchTransformDependencies(
             p_output_kind: input.data.outputKind,
             p_normalized_instruction_sha256:
               input.data.normalizedInstructionSha256,
+            p_normalized_narration_sha256:
+              input.data.normalizedNarrationSha256,
             p_png_sha256: input.data.pngSha256,
             p_request_key: input.data.requestKey,
             p_lease_token: leaseToken,
@@ -248,7 +252,8 @@ export function createServerSketchTransformDependencies(
           if (
             parsed.data.transform.payload.sourceSketchId !==
               input.data.sketchObjectId ||
-            parsed.data.transform.payload.kind !== input.data.outputKind
+            (input.data.outputKind !== "auto" &&
+              parsed.data.transform.payload.kind !== input.data.outputKind)
           )
             return { ok: false, code: "admission_unavailable" };
           return { ok: true, ...parsed.data } as VisionAdmissionResult;

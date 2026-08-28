@@ -21,11 +21,11 @@ Meetings generate sketches, decisions, tasks, and commitments, but the useful ou
 
 CommandCanvas is an infinite spatial collaboration canvas built from structured objects rather than untyped pixels or documents. A no-signup room opens with a project board, schedule, decision, live presence, and an activity trail. Participants can create, move, resize, rotate, pin, minimize, recover, group, ungroup, undo, and redo objects through pointer, touch, stylus, typed commands, optional hand landmarks, or continuous in-page voice.
 
-The defining workflow begins with a rough sketch. Mouse, touch, stylus, or local finger tracking produces a durable `SketchObject`. CommandCanvas rasterizes the selected strokes to a PNG in the browser and sends that image with the user’s instruction to a vision-capable model. A strict structured-output schema is validated before a new `DiagramObject` appears beside the preserved original.
+The defining workflow begins with a rough sketch and the person’s explanation of what it means. Mouse, touch, stylus, or local finger tracking produces a durable `SketchObject`. CommandCanvas rasterizes the selected strokes to a PNG in the browser and sends that image with the user’s bounded prior narration and instruction to an image-capable model. A strict structured-output schema is validated before a new semantic visual appears beside the preserved original. Auto selection uses the sketch, narration, and instruction to choose among a generic diagram, flowchart, pie chart, bar chart, or line chart; an architecture diagram is also available as an explicit supported kind. Architecture is one example rather than the product’s audience or subject boundary.
 
 WebMCP lets ChatGPT collaborate on the same page and session. The site exposes ten bounded tools for reading the canvas, creating and transforming objects, changing object state, recoverable discard, grouping and ungrouping, undo and redo, transforming a selected sketch, preparing a meeting packet, and staging an approved packet send. Every mutation uses the same validated command boundary as pointer and collaborator input and produces a visible receipt.
 
-Continuous voice is a separate, narrower surface. After the user presses **Start**, a regular `gpt-realtime-2.1` WebRTC session listens for natural canvas commands without another Run click. Its tools cover safe canvas creation, selected-object operations, local focus, grouping, rotation, history, and sketch transformation. It cannot discard objects, manage rooms, approve packets, or send email. Except for local-only focus, a tool result reports submission; the shared receipt proves completion.
+Continuous voice is a separate, narrower surface. After the user presses **Start**, a regular `gpt-realtime-2.1` WebRTC session listens for natural canvas commands without another Run click. Its tools cover safe canvas creation, selected-object operations, local focus, grouping, rotation, history, recoverable trash, bounded thought capture, and sketch transformation. **Start a new thought** creates and selects one note card; later completed user turns are appended to that same card as speech-to-text until **Finish thought**. Those boundary commands and assistant speech are excluded, and unrelated voice tools are refused during capture. Every accepted transcript append is a version-checked canonical mutation with a receipt and Undo. An explicit spoken discard remains undoable and never permanently deletes data. Live voice cannot manage rooms, approve packets, or send email. Except for local-only focus, a tool result reports submission; the shared receipt proves completion.
 
 Meeting packets preserve human control over consequential actions. The host reviews the exact object snapshot, edits recipients, and approves a version that locks both content and recipient hashes. An agent can stage a send, but the site still requires an explicit host click. When Resend is not configured or a recipient is outside the allowlist, CommandCanvas records and displays an honest preview-only outcome instead of claiming delivery.
 
@@ -89,11 +89,11 @@ The demo connects WebMCP lifecycle-aware tools, a strict TypeScript object and c
 
 ### Potential impact
 
-CommandCanvas targets the expensive gap between discussion and usable follow-through. The same pattern can support planning, architecture reviews, teaching, design critique, and technical interviews without replacing the meeting product a team already uses. Structured objects can become tasks, schedules, diagrams, and packets while their provenance remains visible.
+CommandCanvas targets the expensive gap between discussion and usable follow-through. The same pattern can support planning, teaching, design critique, data review, technical interviews, and any collaborative session where a rough visual needs to become reusable output without replacing the meeting product a team already uses. Structured objects can become tasks, schedules, diagrams, charts, and packets while their provenance remains visible.
 
 ### Creativity
 
-The memorable interaction is not gesture control by itself. A rough spatial artifact becomes a separate structured object on a shared canvas; the person can physically manipulate the result, a collaborator can modify surrounding work, and ChatGPT can continue operating through explicit application capabilities. The preserved source and unified receipt stream keep that cinematic interaction inspectable and reversible.
+The memorable interaction is not gesture control by itself. A person can draw and explain a rough spatial artifact, then receive a separate structured diagram or chart on the shared canvas. The person can physically manipulate the result, a collaborator can modify surrounding work, and ChatGPT can continue operating through explicit application capabilities. The preserved source and unified receipt stream keep that cinematic interaction inspectable and reversible.
 
 ## Technical execution
 
@@ -113,7 +113,7 @@ An additional browser constraint was experimental WebMCP lifecycle behavior. Com
 ## Accomplishments
 
 - One mutation and receipt pipeline across human, collaborator, and agent inputs
-- A real rough-sketch-to-structured-diagram transition that preserves the source
+- A rough-sketch-and-narration transformation into a schema-validated diagram or chart that preserves the source
 - No-signup, two-browser Supabase collaboration with actual Presence and Broadcast
 - No-reload recovery after a browser network outage, with Presence and durable collaboration restored
 - WebMCP tools that operate on the same live React page rather than a detached copy
@@ -121,7 +121,9 @@ An additional browser constraint was experimental WebMCP lifecycle behavior. Com
 - Modifier and touch-friendly multi-selection, semantic grouping and ungrouping, 15-degree rotation, and shared undo/redo
 - Nested semantic frames whose descendants move and rotate through one canonical mutation
 - YOLO index-fingertip drawing, one-hand pinch grab, two-hand pinch resize, open-palm focus or restore, side-edge recoverable trash, and bottom-dock minimize
+- Local open-palm canvas pan, two-hand canvas zoom, and visible open, pinch, held, resizing, panning, and zoom feedback
 - Continuous `gpt-realtime-2.1` voice that submits narrow commands without a Run click
+- No-mouse thought capture that keeps completed user speech inside one selected, receipt-backed note card
 - Opt-in two-browser peer-to-peer meeting media, separate from Supabase Presence and cursor traffic
 - Exact packet and recipient approval snapshots with durable cancellation and honest delivery fallback
 - A deterministic resettable judge route that remains useful without WebMCP, camera permission, model access, Realtime, or Resend
@@ -136,4 +138,4 @@ The immediate next work is measured real-hand calibration across webcams and lig
 
 ## Honest verification boundary
 
-The repository’s `docs/verification-ledger.md` separates automated evidence, named browser evidence, live-service evidence, unverified integrations, and deliberate cuts. The current source has 693 passing unit tests and a green production build. Controlled browser runs verified two-browser Supabase collaboration and peer-to-peer media, a paid `gpt-realtime-2.1` provider session, real vision through an injected standards-shaped `document.modelContext`, real YOLO worker inference, Chromium fake-camera lifecycle, and one allowlisted Resend packet through the full approval and explicit-SEND path. Resend reported that controlled packet delivered. The public no-signup environment remains preview-only. ChatGPT built-in-browser Site Tools, physical iPhone hardware, cross-network media, TURN behavior, and physical-hand accuracy remain unverified.
+The repository’s `docs/verification-ledger.md` separates automated evidence, named browser evidence, live-service evidence, unverified integrations, and deliberate cuts. The current source has 843 passing unit tests plus green lint, TypeScript, generated-worker, and diff gates. Controlled browser runs verified two-browser Supabase collaboration and peer-to-peer media, a paid `gpt-realtime-2.1` provider session, real vision through an injected standards-shaped `document.modelContext`, real YOLO worker inference, Chromium fake-camera lifecycle, and one allowlisted Resend packet through the full approval and explicit-SEND path. Resend reported that controlled packet delivered. The public no-signup environment remains preview-only. ChatGPT built-in-browser Site Tools, physical iPhone hardware, cross-network media, TURN behavior, and physical-hand accuracy remain unverified.

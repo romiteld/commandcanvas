@@ -60,7 +60,8 @@ begin
     p_instruction_hash,
     p_png_hash,
     v_key,
-    gen_random_uuid()
+    gen_random_uuid(),
+    null
   );
   raise exception '%_not_enforced', p_expected_code;
 exception
@@ -161,7 +162,8 @@ select public.admit_sketch_transform(
   :'cc_spend_instruction_hash',
   :'cc_spend_first_png_hash',
   :'cc_spend_first_request_key',
-  gen_random_uuid()
+  gen_random_uuid(),
+  null
 );
 
 select pg_temp.assert_true(

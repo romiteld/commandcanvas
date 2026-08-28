@@ -11,14 +11,19 @@ describe("Realtime voice tools", () => {
       REALTIME_VOICE_TOOL_DEFINITIONS.map((tool) => tool.name),
     ).toEqual([
       "create_note",
+      "start_thought",
+      "finish_thought",
       "create_board",
       "create_schedule",
       "open_sketch",
+      "finish_sketch",
+      "cancel_sketch",
       "transform_selected_sketch",
       "pin_selected",
       "unpin_selected",
       "minimize_selected",
       "restore_selected",
+      "discard_selected",
       "undo",
       "redo",
       "focus_selected",
@@ -28,7 +33,40 @@ describe("Realtime voice tools", () => {
     ]);
     expect(
       JSON.stringify(REALTIME_VOICE_TOOL_DEFINITIONS),
-    ).not.toMatch(/discard|delete|packet|email|room/i);
+    ).not.toMatch(/packet|email|room/i);
+    expect(
+      JSON.stringify(REALTIME_VOICE_TOOL_DEFINITIONS),
+    ).toMatch(/recoverable trash/i);
+  });
+
+  it("maps explicit thought capture boundaries without exposing transcript append as a model tool", async () => {
+    const onIntent = vi.fn(() => ({
+      ok: true as const,
+      message: "Submitted.",
+    }));
+
+    await executeRealtimeVoiceTool(
+      { name: "start_thought", arguments: "{}" },
+      onIntent,
+    );
+    await executeRealtimeVoiceTool(
+      { name: "finish_thought", arguments: "{}" },
+      onIntent,
+    );
+
+    expect(onIntent).toHaveBeenNthCalledWith(
+      1,
+      { type: "start_thought" },
+      "voice",
+    );
+    expect(onIntent).toHaveBeenNthCalledWith(
+      2,
+      { type: "finish_thought" },
+      "voice",
+    );
+    expect(
+      REALTIME_VOICE_TOOL_DEFINITIONS.map((tool) => tool.name),
+    ).not.toContain("append_thought");
   });
 
   it("maps restored spatial commands to bounded canonical intents", async () => {
@@ -43,6 +81,14 @@ describe("Realtime voice tools", () => {
     );
     await executeRealtimeVoiceTool(
       { name: "group_selected", arguments: "{}" },
+      onIntent,
+    );
+    await executeRealtimeVoiceTool(
+      { name: "finish_sketch", arguments: "{}" },
+      onIntent,
+    );
+    await executeRealtimeVoiceTool(
+      { name: "discard_selected", arguments: "{}" },
       onIntent,
     );
     await executeRealtimeVoiceTool(
@@ -70,6 +116,16 @@ describe("Realtime voice tools", () => {
     );
     expect(onIntent).toHaveBeenNthCalledWith(
       3,
+      { type: "finish_sketch" },
+      "voice",
+    );
+    expect(onIntent).toHaveBeenNthCalledWith(
+      4,
+      { type: "discard_selected" },
+      "voice",
+    );
+    expect(onIntent).toHaveBeenNthCalledWith(
+      5,
       { type: "rotate_selected", direction: "counterclockwise" },
       "voice",
     );

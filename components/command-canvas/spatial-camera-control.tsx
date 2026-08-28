@@ -43,21 +43,36 @@ export function SpatialCameraControl({
   const [videoAspectRatio, setVideoAspectRatio] = useState(4 / 3);
   const videoRef = useRef<HTMLVideoElement>(null);
   const spatialModeStartedRef = useRef(false);
+  const spatialModeRequestedRef = useRef(false);
   const observationHandlerRef = useRef(onObservation);
   const statusHandlerRef = useRef(onStatusChange);
+  const spatialModeStartedHandlerRef = useRef(onSpatialModeStarted);
 
   useEffect(() => {
     observationHandlerRef.current = onObservation;
     statusHandlerRef.current = onStatusChange;
-  }, [onObservation, onStatusChange]);
+    spatialModeStartedHandlerRef.current = onSpatialModeStarted;
+  }, [onObservation, onSpatialModeStarted, onStatusChange]);
 
   useEffect(() => {
     const unsubscribeStatus = controller.subscribeStatus((next) => {
       setStatus(next);
       statusHandlerRef.current?.(next);
+      if (
+        next.state === "ready" &&
+        spatialModeRequestedRef.current &&
+        !spatialModeStartedRef.current
+      ) {
+        spatialModeStartedRef.current = true;
+        spatialModeRequestedRef.current = false;
+        setPreviewExpanded(false);
+        spatialModeStartedHandlerRef.current?.();
+      }
       if (next.state !== "ready") {
         setDetectedMode(null);
         setSelfCheck({});
+        if (next.state === "refused" || next.state === "unavailable")
+          spatialModeRequestedRef.current = false;
       }
     });
     const unsubscribeObservations = controller.subscribeObservations(
@@ -126,13 +141,15 @@ export function SpatialCameraControl({
               if (active) {
                 controller.stop();
                 spatialModeStartedRef.current = false;
+                spatialModeRequestedRef.current = false;
                 setPreviewExpanded(false);
                 return;
               }
               const video = videoRef.current;
               if (video) {
                 spatialModeStartedRef.current = false;
-                setPreviewExpanded(true);
+                spatialModeRequestedRef.current = true;
+                setPreviewExpanded(false);
                 void controller.start(video).catch(() => undefined);
               }
             }}
@@ -233,10 +250,28 @@ export function SpatialCameraControl({
           ) : (
             <span>Engine starting</span>
           )}
+          {engineStatus?.executionProvider ? (
+            <span data-execution-provider={engineStatus.executionProvider}>
+              Provider {executionProviderLabel(engineStatus.executionProvider)}
+              {adapterLabel(engineStatus.adapter)
+                ? ` · ${adapterLabel(engineStatus.adapter)}`
+                : ""}
+            </span>
+          ) : null}
+          {engineStatus?.detectorRoundTripMs !== undefined ? (
+            <span data-hand-runtime-metrics>
+              {Math.round(engineStatus.detectorRoundTripMs)} ms detector/worker round trip
+              {engineStatus.resultRateFps !== undefined
+                ? ` · ${engineStatus.resultRateFps.toFixed(1)} results/s`
+                : ""}
+            </span>
+          ) : null}
           <span>{trackedHands.length > 0 ? `${trackedHands.length} hand${trackedHands.length === 1 ? "" : "s"}` : "No hand"}</span>
           <span>
-            {trackedHands[0]?.pinchDistance !== undefined
-              ? `Pinch ${trackedHands[0].pinchDistance.toFixed(3)}`
+            {trackedHands[0]?.pinchRatio !== undefined
+              ? `Pinch ${trackedHands[0].pinchRatio.toFixed(2)}× palm`
+              : trackedHands[0]?.pinchDistance !== undefined
+                ? `Pinch distance ${trackedHands[0].pinchDistance.toFixed(3)}`
               : "Pinch -"}
           </span>
           <span>
@@ -261,6 +296,7 @@ export function SpatialCameraControl({
             onClick={() => {
               controller.stop();
               spatialModeStartedRef.current = false;
+              spatialModeRequestedRef.current = false;
               setPreviewExpanded(false);
             }}
           >
@@ -272,6 +308,7 @@ export function SpatialCameraControl({
             disabled={status.state !== "ready"}
             onClick={() => {
               spatialModeStartedRef.current = true;
+              spatialModeRequestedRef.current = false;
               setPreviewExpanded(false);
               onSpatialModeStarted?.();
             }}
@@ -328,6 +365,31 @@ const HAND_CONNECTIONS = [
 
 function confidencePercent(confidence: number) {
   return Math.round(Math.max(0, Math.min(1, confidence)) * 100);
+}
+
+function executionProviderLabel(
+  provider: NonNullable<HandTrackingEngineStatus["executionProvider"]>,
+) {
+  switch (provider) {
+    case "webgpu":
+      return "WebGPU";
+    case "wasm":
+      return "WASM";
+    case "mediapipe":
+      return "MediaPipe";
+    default:
+      return "Unknown";
+  }
+}
+
+function adapterLabel(adapter: HandTrackingEngineStatus["adapter"]) {
+  return (
+    adapter?.description ??
+    adapter?.device ??
+    adapter?.architecture ??
+    adapter?.vendor ??
+    ""
+  );
 }
 
 function statusLabel(status: HandTrackingStatus) {

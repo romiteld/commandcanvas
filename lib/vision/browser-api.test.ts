@@ -32,6 +32,27 @@ const payload = {
   ],
   edges: [{ id: "edge-browser-api", from: "node-browser", to: "node-api" }],
 };
+const lineChartPayload = {
+  kind: "line_chart" as const,
+  sourceSketchId: "sketch-source",
+  interpretationSummary: "A rising trend over three weeks.",
+  chart: {
+    title: "Weekly signups",
+    xAxisLabel: "Week",
+    yAxisLabel: "Signups",
+    series: [
+      {
+        id: "series-signups",
+        label: "Signups",
+        points: [
+          { label: "W1", value: 8 },
+          { label: "W2", value: 13 },
+          { label: "W3", value: 21 },
+        ],
+      },
+    ],
+  },
+};
 
 const input = {
   roomId: ROOM_ID,
@@ -82,6 +103,32 @@ describe("browser sketch transform API", () => {
         sourceSketchId: "sketch-source",
         payload,
       },
+    });
+  });
+
+  it("accepts a concrete chart response when the browser requested auto", async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          ok: true,
+          transform: {
+            provider: "openai",
+            model: "gpt-5.6-terra",
+            responseId: "resp-line-chart",
+            sourceSketchId: "sketch-source",
+            payload: lineChartPayload,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const api = createBrowserSketchTransformApi({ accessToken: JWT, fetcher });
+
+    await expect(
+      api.transform({ ...input, outputKind: "auto" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { payload: lineChartPayload },
     });
   });
 

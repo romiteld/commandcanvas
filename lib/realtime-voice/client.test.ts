@@ -94,7 +94,12 @@ function harness(options?: {
   );
   const statuses: string[] = [];
   const transcripts: string[] = [];
+  const transcriptEvents: Array<{ text: string; itemId?: string }> = [];
   const assistantTranscripts: string[] = [];
+  const speechStarts: number[] = [];
+  const speechStartItemIds: Array<string | undefined> = [];
+  const responseOutcomes: string[] = [];
+  const responseEvents: Array<{ outcome: string; itemId?: string }> = [];
   const toolActions: unknown[] = [];
   const onIntent =
     options?.onIntent ??
@@ -104,8 +109,19 @@ function harness(options?: {
     getAccessToken: () => AUTHORIZATION,
     onIntent,
     onStatusChange: (status) => statuses.push(status),
-    onTranscript: (text) => transcripts.push(text),
+    onTranscript: (text, itemId) => {
+      transcripts.push(text);
+      transcriptEvents.push({ text, ...(itemId ? { itemId } : {}) });
+    },
     onAssistantTranscript: (text) => assistantTranscripts.push(text),
+    onUserSpeechStarted: (itemId) => {
+      speechStarts.push(speechStarts.length + 1);
+      speechStartItemIds.push(itemId);
+    },
+    onResponseSettled: (outcome, itemId) => {
+      responseOutcomes.push(outcome);
+      responseEvents.push({ outcome, ...(itemId ? { itemId } : {}) });
+    },
     onToolAction: (action) => toolActions.push(action),
     onPlaybackBlocked: options?.onPlaybackBlocked,
     platform: {
@@ -128,7 +144,12 @@ function harness(options?: {
     fetcher,
     statuses,
     transcripts,
+    transcriptEvents,
     assistantTranscripts,
+    speechStarts,
+    speechStartItemIds,
+    responseOutcomes,
+    responseEvents,
     toolActions,
     onIntent,
     emitRemoteTrack: () => peer.ontrack?.({ streams: [remoteStream] }),
@@ -189,6 +210,8 @@ describe("Realtime voice WebRTC controller", () => {
 
     expect(setup.transcripts).toEqual(["Bring in our project board"]);
     expect(setup.assistantTranscripts).toEqual(["I added the project board."]);
+    expect(setup.speechStarts).toEqual([1]);
+    expect(setup.responseOutcomes).toEqual(["completed"]);
     expect(setup.statuses).toEqual([
       "connecting",
       "listening",
@@ -197,6 +220,99 @@ describe("Realtime voice WebRTC controller", () => {
       "speaking",
       "listening",
     ]);
+  });
+
+  it("correlates a completed input item in both legal transcription and response orders", async () => {
+    const setup = harness();
+    await setup.controller.start();
+    setup.channel.open();
+    setup.channel.message({ type: "session.created", session: { type: "realtime" } });
+
+    setup.channel.message({
+      type: "input_audio_buffer.speech_started",
+      item_id: "item-transcript-first",
+    });
+    setup.channel.message({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item-transcript-first",
+      transcript: "Transcript arrived first.",
+    });
+    setup.channel.message({
+      type: "response.created",
+      response: { id: "response-transcript-first" },
+    });
+    setup.channel.message({
+      type: "response.done",
+      response: {
+        id: "response-transcript-first",
+        status: "completed",
+        output: [],
+      },
+    });
+
+    setup.channel.message({
+      type: "input_audio_buffer.speech_started",
+      item_id: "item-response-first",
+    });
+    setup.channel.message({
+      type: "response.created",
+      response: { id: "response-response-first" },
+    });
+    setup.channel.message({
+      type: "response.done",
+      response: {
+        id: "response-response-first",
+        status: "completed",
+        output: [],
+      },
+    });
+    setup.channel.message({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item-response-first",
+      transcript: "Response arrived first.",
+    });
+
+    expect(setup.speechStartItemIds).toEqual([
+      "item-transcript-first",
+      "item-response-first",
+    ]);
+    expect(setup.transcriptEvents).toEqual([
+      { text: "Transcript arrived first.", itemId: "item-transcript-first" },
+      { text: "Response arrived first.", itemId: "item-response-first" },
+    ]);
+    expect(setup.responseEvents).toEqual([
+      { outcome: "completed", itemId: "item-transcript-first" },
+      { outcome: "completed", itemId: "item-response-first" },
+    ]);
+  });
+
+  it("marks cancelled and failed responses interrupted so pending dictation cannot commit", async () => {
+    const setup = harness();
+    await setup.controller.start();
+    setup.channel.open();
+    setup.channel.message({ type: "session.created", session: { type: "realtime" } });
+
+    setup.channel.message({
+      type: "response.done",
+      response: { status: "cancelled", output: [] },
+    });
+    setup.channel.message({
+      type: "response.done",
+      response: { status: "failed", output: [] },
+    });
+    setup.channel.message({ type: "error", error: { message: "provider failed" } });
+
+    await vi.waitFor(() => {
+      expect(setup.responseOutcomes).toEqual([
+        "interrupted",
+        "interrupted",
+        "interrupted",
+      ]);
+      expect(setup.controller.getState()).toEqual({
+        status: "error",
+        message: "The live voice service reported an error. Start it again to reconnect.",
+      });
+    });
   });
 
   it("executes a validated function, returns function_call_output, then asks the model to respond", async () => {
@@ -245,6 +361,147 @@ describe("Realtime voice WebRTC controller", () => {
           "Canvas action submitted; check the canvas receipt for the result.",
       },
     ]);
+  });
+
+  it("passes the originating input item to its canvas tool", async () => {
+    const setup = harness();
+    await setup.controller.start();
+    setup.channel.open();
+    setup.channel.message({ type: "session.created", session: { type: "realtime" } });
+
+    setup.channel.message({
+      type: "input_audio_buffer.speech_started",
+      item_id: "item-tool-turn",
+    });
+    setup.channel.message({
+      type: "response.created",
+      response: { id: "response-tool-turn" },
+    });
+    setup.channel.message({
+      type: "response.output_item.done",
+      response_id: "response-tool-turn",
+      item: {
+        type: "function_call",
+        call_id: "call-tool-turn",
+        name: "discard_selected",
+        arguments: "{}",
+      },
+    });
+
+    await vi.waitFor(() => expect(setup.onIntent).toHaveBeenCalledOnce());
+    expect(setup.onIntent).toHaveBeenCalledWith(
+      { type: "discard_selected" },
+      "voice",
+      { itemId: "item-tool-turn" },
+    );
+  });
+
+  it("does not let a tool followup response claim a newer barged-in input item", async () => {
+    const setup = harness();
+    await setup.controller.start();
+    setup.channel.open();
+    setup.channel.message({ type: "session.created", session: { type: "realtime" } });
+
+    setup.channel.message({
+      type: "input_audio_buffer.speech_started",
+      item_id: "item-tool-origin",
+    });
+    setup.channel.message({
+      type: "response.created",
+      response: { id: "response-tool-origin" },
+    });
+    const functionItem = {
+      type: "function_call",
+      call_id: "call-barge-in",
+      name: "create_board",
+      arguments: "{}",
+    };
+    setup.channel.message({
+      type: "response.output_item.done",
+      response_id: "response-tool-origin",
+      item: functionItem,
+    });
+    setup.channel.message({
+      type: "response.done",
+      response: {
+        id: "response-tool-origin",
+        status: "completed",
+        output: [functionItem],
+      },
+    });
+    await vi.waitFor(() => expect(setup.channel.sent).toHaveLength(2));
+
+    setup.channel.message({
+      type: "input_audio_buffer.speech_started",
+      item_id: "item-barged-in",
+    });
+    setup.channel.message({
+      type: "response.created",
+      response: { id: "response-tool-followup" },
+    });
+    setup.channel.message({
+      type: "response.done",
+      response: {
+        id: "response-tool-followup",
+        status: "completed",
+        output: [],
+      },
+    });
+    expect(setup.responseEvents).toEqual([
+      { outcome: "completed", itemId: "item-tool-origin" },
+    ]);
+    setup.channel.message({
+      type: "response.created",
+      response: { id: "response-barged-in" },
+    });
+    setup.channel.message({
+      type: "response.done",
+      response: {
+        id: "response-barged-in",
+        status: "completed",
+        output: [],
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(setup.responseEvents).toEqual([
+        { outcome: "completed", itemId: "item-tool-origin" },
+        { outcome: "completed", itemId: "item-barged-in" },
+      ]),
+    );
+  });
+
+  it("settles a response only after an already-queued function item finishes", async () => {
+    let resolveIntent: ((value: { ok: true; message: string }) => void) | undefined;
+    const onIntent = vi.fn(
+      () =>
+        new Promise<{ ok: true; message: string }>((resolve) => {
+          resolveIntent = resolve;
+        }),
+    );
+    const setup = harness({ onIntent });
+    await setup.controller.start();
+    setup.channel.open();
+    setup.channel.message({ type: "session.created", session: { type: "realtime" } });
+
+    const functionItem = {
+      type: "function_call",
+      call_id: "call-order-1",
+      name: "create_board",
+      arguments: "{}",
+    };
+    setup.channel.message({ type: "response.output_item.done", item: functionItem });
+    setup.channel.message({
+      type: "response.done",
+      response: { status: "completed", output: [functionItem] },
+    });
+
+    await vi.waitFor(() => expect(onIntent).toHaveBeenCalledOnce());
+    expect(setup.responseOutcomes).toEqual([]);
+    resolveIntent?.({ ok: true, message: "Board submitted." });
+    await vi.waitFor(() =>
+      expect(setup.responseOutcomes).toEqual(["completed"]),
+    );
   });
 
   it("returns an invalid-argument refusal without invoking a canvas intent", async () => {

@@ -27,6 +27,26 @@ const diagramPayload = {
   ],
   edges: [],
 };
+const pieChartPayload = {
+  kind: "pie_chart" as const,
+  sourceSketchId: "sketch-source",
+  interpretationSummary: "A two-part split.",
+  chart: {
+    title: "Split",
+    xAxisLabel: null,
+    yAxisLabel: null,
+    series: [
+      {
+        id: "series-split",
+        label: "Share",
+        points: [
+          { label: "A", value: 70 },
+          { label: "B", value: 30 },
+        ],
+      },
+    ],
+  },
+};
 
 const admissionInput = {
   roomId: ROOM_ID,
@@ -35,6 +55,7 @@ const admissionInput = {
   sourceVersion: 1,
   outputKind: "architecture" as const,
   normalizedInstructionSha256: "b".repeat(64),
+  normalizedNarrationSha256: null,
   pngSha256: "c".repeat(64),
   requestKey: REQUEST_KEY,
 };
@@ -98,6 +119,7 @@ describe("server sketch transform admission dependencies", () => {
         p_source_version: 1,
         p_output_kind: "architecture",
         p_normalized_instruction_sha256: "b".repeat(64),
+        p_normalized_narration_sha256: null,
         p_png_sha256: "c".repeat(64),
         p_request_key: REQUEST_KEY,
         p_lease_token: LEASE_TOKEN,
@@ -124,6 +146,35 @@ describe("server sketch transform admission dependencies", () => {
       leaseExpiresAt: "2026-08-27T16:02:00.000Z",
     });
     expect(setup.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the bounded narration identity into the durable admission RPC", async () => {
+    const narrationHash = "d".repeat(64);
+    const setup = options((_functionName, args) => {
+      expect(args).toMatchObject({
+        p_normalized_instruction_sha256: "b".repeat(64),
+        p_normalized_narration_sha256: narrationHash,
+      });
+      return {
+        data: {
+          outcome: "admitted",
+          requestKey: REQUEST_KEY,
+          leaseToken: LEASE_TOKEN,
+          leaseExpiresAt: "2026-08-27T16:02:00.000Z",
+        },
+        error: null,
+      };
+    });
+    const result = createServerSketchTransformDependencies(setup.value);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    await expect(
+      result.dependencies.admitTransform({
+        ...admissionInput,
+        normalizedNarrationSha256: narrationHash,
+      }),
+    ).resolves.toMatchObject({ ok: true, outcome: "admitted" });
   });
 
   it("returns only a source-bound cached result and rejects malformed RPC output", async () => {
@@ -193,6 +244,35 @@ describe("server sketch transform admission dependencies", () => {
     await expect(
       malformedResult.dependencies.admitTransform(admissionInput),
     ).resolves.toEqual({ ok: false, code: "admission_unavailable" });
+  });
+
+  it("returns a concrete cached chart for an auto admission request", async () => {
+    const setup = options(() => ({
+      data: {
+        outcome: "cached",
+        requestKey: REQUEST_KEY,
+        transform: {
+          model: "gpt-5.6-terra",
+          responseId: "resp-chart",
+          payload: pieChartPayload,
+        },
+      },
+      error: null,
+    }));
+    const result = createServerSketchTransformDependencies(setup.value);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    await expect(
+      result.dependencies.admitTransform({
+        ...admissionInput,
+        outputKind: "auto",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      outcome: "cached",
+      transform: { payload: pieChartPayload },
+    });
   });
 
   it("preserves compact admission denials without exposing database errors", async () => {

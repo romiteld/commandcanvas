@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_HAND_ACTIVE_ZONE,
   createGestureSketchCommand,
   createInitialSpatialGestureState,
+  mapHandPointerToActiveZone,
   reduceSpatialGesture,
   type SpatialGestureScene,
 } from "@/lib/gesture/spatial-gesture";
@@ -14,6 +16,77 @@ const scene: SpatialGestureScene = {
 };
 
 describe("spatial gesture reducer", () => {
+  it("maps a comfortable central camera zone across the full canvas reach", () => {
+    expect(
+      mapHandPointerToActiveZone(
+        { x: DEFAULT_HAND_ACTIVE_ZONE.left, y: DEFAULT_HAND_ACTIVE_ZONE.top },
+        DEFAULT_HAND_ACTIVE_ZONE,
+      ),
+    ).toEqual({ x: 0, y: 0 });
+    expect(
+      mapHandPointerToActiveZone(
+        { x: DEFAULT_HAND_ACTIVE_ZONE.right, y: DEFAULT_HAND_ACTIVE_ZONE.bottom },
+        DEFAULT_HAND_ACTIVE_ZONE,
+      ),
+    ).toEqual({ x: 1, y: 1 });
+    expect(
+      mapHandPointerToActiveZone({ x: 0.5, y: 0.5 }, DEFAULT_HAND_ACTIVE_ZONE),
+    ).toEqual({ x: 0.5, y: 0.5 });
+  });
+
+  it("uses calibrated reach for targeting and edge actions instead of camera-frame extremes", () => {
+    const calibratedScene: SpatialGestureScene = {
+      ...scene,
+      handActiveZone: DEFAULT_HAND_ACTIVE_ZONE,
+      objects: [
+        {
+          id: "note-front",
+          x: 0,
+          y: 100,
+          width: 180,
+          height: 140,
+          zIndex: 9,
+          pinned: false,
+          minimized: false,
+        },
+      ],
+    };
+    const grabbed = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      {
+        mode: "pinch",
+        pointer: { x: DEFAULT_HAND_ACTIVE_ZONE.left + 0.15, y: 0.4 },
+        timestamp: 1_000,
+      },
+      calibratedScene,
+    );
+    expect(grabbed.state).toMatchObject({
+      phase: "grabbing",
+      grab: { objectId: "note-front" },
+    });
+
+    const flung = reduceSpatialGesture(
+      grabbed.state,
+      {
+        mode: "pinch",
+        pointer: { x: DEFAULT_HAND_ACTIVE_ZONE.left, y: 0.4 },
+        timestamp: 1_180,
+      },
+      calibratedScene,
+    );
+    const released = reduceSpatialGesture(
+      flung.state,
+      { mode: "idle", timestamp: 1_196 },
+      calibratedScene,
+    );
+    expect(released.effects).toContainEqual({
+      type: "object.stage_action",
+      objectId: "note-front",
+      action: "discard",
+      edge: "left",
+    });
+  });
+
   it("commits an index-finger point trace only after tracking ends", () => {
     const started = reduceSpatialGesture(
       createInitialSpatialGestureState(),
@@ -399,7 +472,7 @@ describe("spatial gesture reducer", () => {
     },
   );
 
-  it("treats a slow edge drag as an ordinary move instead of a swipe action", () => {
+  it("stages a recoverable discard when a held object is deliberately released in an edge zone", () => {
     const objectScene: SpatialGestureScene = {
       ...scene,
       objects: [
@@ -432,13 +505,13 @@ describe("spatial gesture reducer", () => {
     );
 
     expect(released.effects).toContainEqual({
-      type: "object.commit_move",
+      type: "object.stage_action",
       objectId: "note-front",
-      x: -10,
-      y: 150,
+      action: "discard",
+      edge: "left",
     });
     expect(released.effects).not.toContainEqual(
-      expect.objectContaining({ type: "object.stage_action" }),
+      expect.objectContaining({ type: "object.commit_move" }),
     );
   });
 
@@ -476,6 +549,31 @@ describe("spatial gesture reducer", () => {
       { type: "object.focus", objectId: "note-front" },
     ]);
     expect(held.state).toMatchObject({ phase: "awaiting_neutral" });
+  });
+
+  it("pans the local viewport with an open palm over blank canvas", () => {
+    const started = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      { mode: "open_palm", pointer: { x: 0.7, y: 0.6 }, timestamp: 1_000 },
+      scene,
+    );
+    expect(started.state).toMatchObject({ phase: "panning" });
+    expect(started.effects).toEqual([
+      { type: "viewport.pan_by", deltaX: 0, deltaY: 0 },
+    ]);
+
+    const moved = reduceSpatialGesture(
+      started.state,
+      { mode: "open_palm", pointer: { x: 0.6, y: 0.5 }, timestamp: 1_016 },
+      scene,
+    );
+    expect(moved.state).toMatchObject({ phase: "panning" });
+    expect(moved.effects).toEqual([
+      { type: "viewport.pan_by", deltaX: -100, deltaY: -50 },
+    ]);
+    expect(moved.effects).not.toContainEqual(
+      expect.objectContaining({ type: "object.commit_move" }),
+    );
   });
 
   it("restores a minimized object after a stable open-palm dwell", () => {
@@ -572,7 +670,7 @@ describe("spatial gesture reducer", () => {
     ]);
     const released = reduceSpatialGesture(
       spread.state,
-      { mode: "idle", timestamp: 1_116 },
+      { mode: "pinch", pointer: { x: 0.25, y: 0.4 }, timestamp: 1_116 },
       objectScene,
     );
     expect(released.effects).toEqual([
@@ -584,6 +682,161 @@ describe("spatial gesture reducer", () => {
       },
       { type: "preview.clear" },
     ]);
+    expect(released.state.phase).toBe("awaiting_neutral");
+  });
+
+  it("zooms the local viewport about the hand midpoint when two hands spread over blank canvas", () => {
+    const started = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      {
+        mode: "bimanual_pinch",
+        pointers: [
+          { x: 0.7, y: 0.4 },
+          { x: 0.9, y: 0.4 },
+        ],
+        span: 0.2,
+        timestamp: 1_000,
+      },
+      scene,
+    );
+    expect(started.state).toMatchObject({ phase: "zooming" });
+    expect(started.effects).toEqual([
+      {
+        type: "viewport.zoom_at",
+        scale: 1,
+        screenPoint: { x: 800, y: 200 },
+      },
+    ]);
+
+    const spread = reduceSpatialGesture(
+      started.state,
+      {
+        mode: "bimanual_pinch",
+        pointers: [
+          { x: 0.65, y: 0.4 },
+          { x: 0.95, y: 0.4 },
+        ],
+        span: 0.3,
+        timestamp: 1_016,
+      },
+      scene,
+    );
+    expect(spread.effects).toEqual([
+      {
+        type: "viewport.zoom_at",
+        scale: 1.5,
+        screenPoint: { x: 800, y: 200 },
+      },
+    ]);
+    expect(spread.effects).not.toContainEqual(
+      expect.objectContaining({ type: "object.preview_resize" }),
+    );
+  });
+
+  it("hit-tests the visible rotated object footprint", () => {
+    const result = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      { mode: "pinch", pointer: { x: 0.35, y: 0.66 } },
+      {
+        ...scene,
+        objects: [
+          {
+            id: "wide-rotated-card",
+            x: 200,
+            y: 150,
+            width: 300,
+            height: 100,
+            rotation: 90,
+            zIndex: 3,
+            pinned: false,
+            minimized: false,
+          },
+        ],
+      },
+    );
+
+    expect(result.state).toMatchObject({
+      phase: "grabbing",
+      grab: { objectId: "wide-rotated-card" },
+    });
+  });
+
+  it("uses the effective visual stacking order for overlapping hand targets", () => {
+    const result = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      { mode: "pinch", pointer: { x: 0.3, y: 0.4 } },
+      {
+        ...scene,
+        objects: [
+          {
+            id: "visually-raised",
+            x: 200,
+            y: 150,
+            width: 200,
+            height: 140,
+            zIndex: 1_000_000,
+            pinned: false,
+            minimized: false,
+          },
+          {
+            id: "durably-higher",
+            x: 200,
+            y: 150,
+            width: 200,
+            height: 140,
+            zIndex: 20,
+            pinned: false,
+            minimized: false,
+          },
+        ],
+      },
+    );
+
+    expect(result.state).toMatchObject({
+      grab: { objectId: "visually-raised" },
+    });
+  });
+
+  it("exposes the exact staged edge action before release", () => {
+    const objectScene: SpatialGestureScene = {
+      ...scene,
+      objects: [
+        {
+          id: "note-front",
+          x: 200,
+          y: 150,
+          width: 180,
+          height: 140,
+          zIndex: 9,
+          pinned: false,
+          minimized: false,
+        },
+      ],
+    };
+    const grabbed = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      { mode: "pinch", pointer: { x: 0.25, y: 0.4 } },
+      objectScene,
+    );
+    const merelyNearEdge = reduceSpatialGesture(
+      grabbed.state,
+      { mode: "pinch", pointer: { x: 0.055, y: 0.4 } },
+      objectScene,
+    );
+    expect(merelyNearEdge.state.grab?.stagedExitAction).toEqual({
+      action: "discard",
+      edge: "left",
+    });
+
+    const grabbedAtEdge = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      { mode: "pinch", pointer: { x: 0.055, y: 0.4 } },
+      {
+        ...objectScene,
+        objects: [{ ...objectScene.objects[0], x: 0 }],
+      },
+    );
+    expect(grabbedAtEdge.state.grab?.stagedExitAction).toBeNull();
   });
 
   it("converts a world-space trace into a bounded semantic sketch command", () => {

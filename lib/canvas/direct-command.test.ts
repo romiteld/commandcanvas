@@ -6,7 +6,13 @@ describe("parseDirectCanvasCommand", () => {
   it.each([
     ["Bring in our project board", { type: "create_board" }],
     ["Put next week's schedule over here", { type: "create_schedule" }],
+    ["start a new thought", { type: "start_thought" }],
+    ["new thought", { type: "start_thought" }],
+    ["finish this thought", { type: "finish_thought" }],
+    ["end thought capture", { type: "finish_thought" }],
     ["start a rough sketch", { type: "open_sketch" }],
+    ["finish drawing", { type: "finish_sketch" }],
+    ["cancel this sketch", { type: "cancel_sketch" }],
     ["make that usable", { type: "transform_selected_sketch" }],
     ["make this rough sketch usable", { type: "transform_selected_sketch" }],
     ["make this sketch professional", { type: "transform_selected_sketch" }],

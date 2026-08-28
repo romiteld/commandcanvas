@@ -1,9 +1,17 @@
 import type { CanvasCommand } from "@/lib/canvas/command-engine";
 import type { CanvasPoint, CanvasViewport } from "@/lib/canvas/coordinates";
 
+export interface HandActiveZone {
+  readonly left: number;
+  readonly right: number;
+  readonly top: number;
+  readonly bottom: number;
+}
+
 export interface SpatialGestureScene {
   bounds: { left: number; top: number; width: number; height: number };
   viewport: CanvasViewport;
+  handActiveZone?: HandActiveZone;
   selectedObjectId?: string | null;
   objects: readonly {
     id: string;
@@ -12,6 +20,7 @@ export interface SpatialGestureScene {
     width: number;
     height: number;
     zIndex: number;
+    rotation?: number;
     pinned: boolean;
     minimized: boolean;
   }[];
@@ -23,7 +32,9 @@ export interface SpatialGestureState {
     | "drawing"
     | "grabbing"
     | "dwelling"
+    | "panning"
     | "resizing"
+    | "zooming"
     | "awaiting_neutral";
   stroke: readonly CanvasPoint[];
   grab: {
@@ -40,6 +51,7 @@ export interface SpatialGestureState {
     currentPointerY: number;
     startedAt: number | null;
     currentAt: number | null;
+    stagedExitAction: SpatialExitAction | null;
   } | null;
   palm: {
     objectId: string;
@@ -55,6 +67,20 @@ export interface SpatialGestureState {
     currentWidth: number;
     currentHeight: number;
   } | null;
+  pan?: {
+    previousPointerX: number;
+    previousPointerY: number;
+  } | null;
+  zoom?: {
+    initialSpan: number;
+    initialScale: number;
+    screenPoint: CanvasPoint;
+  } | null;
+}
+
+export interface SpatialExitAction {
+  action: "minimize" | "discard";
+  edge: "left" | "right" | "bottom";
 }
 
 export interface SpatialGesturePolicy {
@@ -115,6 +141,12 @@ export type SpatialGestureEffect =
       action: "minimize" | "discard";
       edge: "left" | "right" | "bottom";
     }
+  | { type: "viewport.pan_by"; deltaX: number; deltaY: number }
+  | {
+      type: "viewport.zoom_at";
+      scale: number;
+      screenPoint: CanvasPoint;
+    }
   | { type: "object.focus" | "object.restore"; objectId: string }
   | {
       type: "palm.progress";
@@ -125,14 +157,19 @@ export type SpatialGestureEffect =
 
 const PALM_DWELL_MS = 650;
 const PALM_MAX_DRIFT = 0.04;
-const SWIPE_MIN_DURATION_MS = 80;
-const SWIPE_MAX_DURATION_MS = 450;
 const DISCARD_EDGE_THRESHOLD = 0.06;
 const MINIMIZE_DOCK_THRESHOLD = 0.92;
-const SWIPE_MIN_DISTANCE = 0.2;
-const SWIPE_MIN_SPEED_PER_SECOND = 0.65;
+const EDGE_DROP_MIN_DISTANCE = 0.08;
 const MIN_BIMANUAL_SPAN = 0.08;
 const OBJECT_TARGET_SLOP_SCREEN_PX = 42;
+
+const IDENTITY_HAND_ACTIVE_ZONE = Object.freeze(
+  validateHandActiveZone({ left: 0, right: 1, top: 0, bottom: 1 }),
+);
+
+export const DEFAULT_HAND_ACTIVE_ZONE = Object.freeze(
+  validateHandActiveZone({ left: 0.16, right: 0.84, top: 0.12, bottom: 0.88 }),
+);
 
 const DEFAULT_SPATIAL_GESTURE_POLICY: SpatialGesturePolicy = Object.freeze({
   drawingEnabled: true,
@@ -140,7 +177,28 @@ const DEFAULT_SPATIAL_GESTURE_POLICY: SpatialGesturePolicy = Object.freeze({
 });
 
 export function createInitialSpatialGestureState(): SpatialGestureState {
-  return { phase: "idle", stroke: [], grab: null, palm: null, resize: null };
+  return {
+    phase: "idle",
+    stroke: [],
+    grab: null,
+    palm: null,
+    resize: null,
+    pan: null,
+    zoom: null,
+  };
+}
+
+export function mapHandPointerToActiveZone(
+  pointer: CanvasPoint,
+  activeZone: HandActiveZone = DEFAULT_HAND_ACTIVE_ZONE,
+): CanvasPoint {
+  const zone = validateHandActiveZone(activeZone);
+  if (!Number.isFinite(pointer.x) || !Number.isFinite(pointer.y))
+    throw new RangeError("A hand pointer needs finite normalized coordinates.");
+  return {
+    x: rounded(clamp((pointer.x - zone.left) / (zone.right - zone.left), 0, 1)),
+    y: rounded(clamp((pointer.y - zone.top) / (zone.bottom - zone.top), 0, 1)),
+  };
 }
 
 export function reduceSpatialGesture(
@@ -152,16 +210,20 @@ export function reduceSpatialGesture(
   if (input.mode === "idle") return finishActiveGesture(state, "idle");
   if (state.phase === "awaiting_neutral")
     return { state, effects: [] };
+  const mappedInput = mapSpatialGestureInput(
+    input,
+    scene.handActiveZone ?? IDENTITY_HAND_ACTIVE_ZONE,
+  );
 
-  if (input.mode === "bimanual_pinch") {
+  if (mappedInput.mode === "bimanual_pinch") {
     if (!policy.manipulationEnabled)
       return state.phase === "drawing"
         ? finishActiveGesture(state, "idle")
         : { state: createInitialSpatialGestureState(), effects: [] };
-    return reduceBimanualPinch(state, input, scene);
+    return reduceBimanualPinch(state, mappedInput, scene);
   }
 
-  if (input.mode === "open_palm") {
+  if (mappedInput.mode === "open_palm") {
     if (!policy.manipulationEnabled)
       return state.phase === "drawing"
         ? finishActiveGesture(state, "idle")
@@ -169,15 +231,21 @@ export function reduceSpatialGesture(
     if (
       state.phase === "drawing" ||
       state.phase === "grabbing" ||
-      state.phase === "resizing"
+      state.phase === "resizing" ||
+      state.phase === "zooming"
     )
       return finishActiveGesture(state, "awaiting_neutral");
-    return reducePalmDwell(state, input, scene);
+    return reducePalmDwell(state, mappedInput, scene);
   }
 
-  const point = normalizedToWorld(input.pointer, scene);
-  if (input.mode === "point") {
-    if (state.phase === "grabbing" || state.phase === "resizing")
+  const point = normalizedToWorld(mappedInput.pointer, scene);
+  if (mappedInput.mode === "point") {
+    if (
+      state.phase === "grabbing" ||
+      state.phase === "resizing" ||
+      state.phase === "panning" ||
+      state.phase === "zooming"
+    )
       return finishActiveGesture(state, "awaiting_neutral");
     if (!policy.drawingEnabled) {
       if (state.phase === "drawing") return finishActiveGesture(state, "idle");
@@ -209,6 +277,11 @@ export function reduceSpatialGesture(
   }
 
   if (state.phase === "drawing") return finishActiveGesture(state, "idle");
+  // Real two-hand release is asymmetric: one hand normally leaves pinch a
+  // frame before the other. Commit the resize at that first single-hand frame
+  // instead of accidentally turning the remaining pinch into a new grab.
+  if (state.phase === "resizing" || state.phase === "zooming")
+    return finishActiveGesture(state, "awaiting_neutral");
   if (!policy.manipulationEnabled)
     return { state: createInitialSpatialGestureState(), effects: [] };
   if (state.phase === "grabbing" && state.grab) {
@@ -218,10 +291,12 @@ export function reduceSpatialGesture(
       ...state.grab,
       currentX: x,
       currentY: y,
-      currentPointerX: input.pointer.x,
-      currentPointerY: input.pointer.y,
-      currentAt: validTimestamp(input.timestamp),
+      currentPointerX: mappedInput.pointer.x,
+      currentPointerY: mappedInput.pointer.y,
+      currentAt: validTimestamp(mappedInput.timestamp),
+      stagedExitAction: null as SpatialExitAction | null,
     };
+    grab.stagedExitAction = detectExitAction(grab);
     return {
       state: {
         phase: "grabbing",
@@ -256,12 +331,13 @@ export function reduceSpatialGesture(
     initialY: hit.y,
     currentX: hit.x,
     currentY: hit.y,
-    startPointerX: input.pointer.x,
-    startPointerY: input.pointer.y,
-    currentPointerX: input.pointer.x,
-    currentPointerY: input.pointer.y,
-    startedAt: validTimestamp(input.timestamp),
-    currentAt: validTimestamp(input.timestamp),
+    startPointerX: mappedInput.pointer.x,
+    startPointerY: mappedInput.pointer.y,
+    currentPointerX: mappedInput.pointer.x,
+    currentPointerY: mappedInput.pointer.y,
+    startedAt: validTimestamp(mappedInput.timestamp),
+    currentAt: validTimestamp(mappedInput.timestamp),
+    stagedExitAction: null,
   };
   return {
     state: {
@@ -291,7 +367,10 @@ function reducePalmDwell(
   const timestamp = validTimestamp(input.timestamp);
   const point = normalizedToWorld(input.pointer, scene);
   const hit = hitTest(point, scene.objects);
-  if (!hit || timestamp === null)
+  if (state.phase === "panning" && state.pan)
+    return reduceCanvasPan(state, input, scene);
+  if (!hit) return reduceCanvasPan(state, input, scene);
+  if (timestamp === null)
     return { state: createInitialSpatialGestureState(), effects: [] };
 
   const continuing =
@@ -352,6 +431,35 @@ function reducePalmDwell(
   };
 }
 
+function reduceCanvasPan(
+  state: SpatialGestureState,
+  input: Extract<SpatialGestureInput, { mode: "open_palm" }>,
+  scene: SpatialGestureScene,
+): { state: SpatialGestureState; effects: readonly SpatialGestureEffect[] } {
+  const previous = state.phase === "panning" ? state.pan : null;
+  const deltaX = previous
+    ? rounded((input.pointer.x - previous.previousPointerX) * scene.bounds.width)
+    : 0;
+  const deltaY = previous
+    ? rounded((input.pointer.y - previous.previousPointerY) * scene.bounds.height)
+    : 0;
+  return {
+    state: {
+      phase: "panning",
+      stroke: [],
+      grab: null,
+      palm: null,
+      resize: null,
+      pan: {
+        previousPointerX: input.pointer.x,
+        previousPointerY: input.pointer.y,
+      },
+      zoom: null,
+    },
+    effects: [{ type: "viewport.pan_by", deltaX, deltaY }],
+  };
+}
+
 function reduceBimanualPinch(
   state: SpatialGestureState,
   input: Extract<SpatialGestureInput, { mode: "bimanual_pinch" }>,
@@ -359,6 +467,26 @@ function reduceBimanualPinch(
 ): { state: SpatialGestureState; effects: readonly SpatialGestureEffect[] } {
   if (!Number.isFinite(input.span) || input.span < MIN_BIMANUAL_SPAN)
     return { state: createInitialSpatialGestureState(), effects: [] };
+
+  if (state.phase === "zooming" && state.zoom) {
+    const scale = rounded(
+      clamp(
+        state.zoom.initialScale * (input.span / state.zoom.initialSpan),
+        0.35,
+        2.5,
+      ),
+    );
+    return {
+      state,
+      effects: [
+        {
+          type: "viewport.zoom_at",
+          scale,
+          screenPoint: state.zoom.screenPoint,
+        },
+      ],
+    };
+  }
 
   if (state.phase === "resizing" && state.resize) {
     const scale = input.span / state.resize.initialSpan;
@@ -399,15 +527,46 @@ function reduceBimanualPinch(
     x: (input.pointers[0].x + input.pointers[1].x) / 2,
     y: (input.pointers[0].y + input.pointers[1].y) / 2,
   };
-  const selected = scene.selectedObjectId
-    ? scene.objects.find((object) => object.id === scene.selectedObjectId)
-    : undefined;
   const held =
     state.phase === "grabbing" && state.grab
       ? scene.objects.find((object) => object.id === state.grab?.objectId)
       : undefined;
-  const target = held ?? selected ?? hitTest(normalizedToWorld(center, scene), scene.objects);
-  if (!target || target.pinned || target.minimized)
+  const target =
+    held ??
+    hitTest(
+      normalizedToWorld(center, scene),
+      scene.objects,
+      OBJECT_TARGET_SLOP_SCREEN_PX / scene.viewport.scale,
+    );
+  if (!target) {
+    const screenPoint = {
+      x: rounded(center.x * scene.bounds.width),
+      y: rounded(center.y * scene.bounds.height),
+    };
+    return {
+      state: {
+        phase: "zooming",
+        stroke: [],
+        grab: null,
+        palm: null,
+        resize: null,
+        pan: null,
+        zoom: {
+          initialSpan: input.span,
+          initialScale: scene.viewport.scale,
+          screenPoint,
+        },
+      },
+      effects: [
+        {
+          type: "viewport.zoom_at",
+          scale: scene.viewport.scale,
+          screenPoint,
+        },
+      ],
+    };
+  }
+  if (target.pinned || target.minimized)
     return { state: createInitialSpatialGestureState(), effects: [] };
 
   const resize = {
@@ -508,7 +667,8 @@ function finishActiveGesture(
       ],
     };
   if (state.phase === "grabbing" && state.grab) {
-    const exitAction = detectExitAction(state.grab);
+    const exitAction =
+      state.grab.stagedExitAction ?? detectExitAction(state.grab);
     return {
       state:
         nextPhase === "idle"
@@ -575,26 +735,14 @@ function awaitingNeutralState(): SpatialGestureState {
 
 function detectExitAction(
   grab: NonNullable<SpatialGestureState["grab"]>,
-): {
-  action: "minimize" | "discard";
-  edge: "left" | "right" | "bottom";
-} | null {
-  if (grab.startedAt === null || grab.currentAt === null) return null;
-  const duration = grab.currentAt - grab.startedAt;
-  if (duration < SWIPE_MIN_DURATION_MS || duration > SWIPE_MAX_DURATION_MS)
-    return null;
+): SpatialExitAction | null {
   const deltaX = grab.currentPointerX - grab.startPointerX;
   const deltaY = grab.currentPointerY - grab.startPointerY;
-  const horizontalSpeed = (Math.abs(deltaX) / duration) * 1_000;
-  const verticalSpeed = (Math.abs(deltaY) / duration) * 1_000;
-  const crossedDiscardEdge =
-    grab.currentPointerX <= DISCARD_EDGE_THRESHOLD ||
-    grab.currentPointerX >= 1 - DISCARD_EDGE_THRESHOLD;
+  const atLeftEdge = grab.currentPointerX <= DISCARD_EDGE_THRESHOLD;
+  const atRightEdge = grab.currentPointerX >= 1 - DISCARD_EDGE_THRESHOLD;
   if (
-    crossedDiscardEdge &&
-    Math.abs(deltaX) >= SWIPE_MIN_DISTANCE &&
-    Math.abs(deltaX) >= Math.abs(deltaY) * 1.3 &&
-    horizontalSpeed >= SWIPE_MIN_SPEED_PER_SECOND
+    (atLeftEdge && deltaX <= -EDGE_DROP_MIN_DISTANCE) ||
+    (atRightEdge && deltaX >= EDGE_DROP_MIN_DISTANCE)
   )
     return {
       action: "discard",
@@ -602,12 +750,39 @@ function detectExitAction(
     };
   if (
     grab.currentPointerY >= MINIMIZE_DOCK_THRESHOLD &&
-    deltaY >= SWIPE_MIN_DISTANCE &&
-    deltaY >= Math.abs(deltaX) * 1.3 &&
-    verticalSpeed >= SWIPE_MIN_SPEED_PER_SECOND
+    deltaY >= EDGE_DROP_MIN_DISTANCE
   )
     return { action: "minimize", edge: "bottom" };
   return null;
+}
+
+function mapSpatialGestureInput(
+  input: Exclude<SpatialGestureInput, { mode: "idle" }>,
+  activeZone: HandActiveZone,
+): Exclude<SpatialGestureInput, { mode: "idle" }> {
+  if (input.mode !== "bimanual_pinch")
+    return {
+      ...input,
+      pointer: mapHandPointerToActiveZone(input.pointer, activeZone),
+    };
+
+  const pointers = [
+    mapHandPointerToActiveZone(input.pointers[0], activeZone),
+    mapHandPointerToActiveZone(input.pointers[1], activeZone),
+  ] as const;
+  return {
+    ...input,
+    pointers,
+    span:
+      Number.isFinite(input.span) && input.span >= 0
+        ? rounded(
+            Math.hypot(
+              pointers[0].x - pointers[1].x,
+              pointers[0].y - pointers[1].y,
+            ),
+          )
+        : input.span,
+  };
 }
 
 function normalizedToWorld(
@@ -618,6 +793,26 @@ function normalizedToWorld(
     x: (pointer.x * scene.bounds.width - scene.viewport.x) / scene.viewport.scale,
     y: (pointer.y * scene.bounds.height - scene.viewport.y) / scene.viewport.scale,
   };
+}
+
+function validateHandActiveZone(activeZone: HandActiveZone): HandActiveZone {
+  if (
+    !activeZone ||
+    !Number.isFinite(activeZone.left) ||
+    !Number.isFinite(activeZone.right) ||
+    !Number.isFinite(activeZone.top) ||
+    !Number.isFinite(activeZone.bottom) ||
+    activeZone.left < 0 ||
+    activeZone.right > 1 ||
+    activeZone.top < 0 ||
+    activeZone.bottom > 1 ||
+    activeZone.left >= activeZone.right ||
+    activeZone.top >= activeZone.bottom
+  )
+    throw new RangeError(
+      "A hand active zone needs finite, ordered bounds within zero and one.",
+    );
+  return activeZone;
 }
 
 function appendDistinctPoint(
@@ -637,14 +832,39 @@ function hitTest(
 ) {
   return [...objects]
     .sort((left, right) => right.zIndex - left.zIndex)
-    .find(
-      (object) =>
-        point.x >= object.x - slop &&
-        point.x <= object.x + object.width + slop &&
-        point.y >= object.y - slop &&
-        point.y <=
-          object.y + (object.minimized ? 62 : object.height) + slop,
+    .find((object) => pointInsideObject(point, object, slop));
+}
+
+function pointInsideObject(
+  point: CanvasPoint,
+  object: SpatialGestureScene["objects"][number],
+  slop: number,
+) {
+  const height = object.minimized ? 62 : object.height;
+  const rotation = object.rotation ?? 0;
+  if (rotation === 0)
+    return (
+      point.x >= object.x - slop &&
+      point.x <= object.x + object.width + slop &&
+      point.y >= object.y - slop &&
+      point.y <= object.y + height + slop
     );
+
+  const centerX = object.x + object.width / 2;
+  const centerY = object.y + height / 2;
+  const radians = (-rotation * Math.PI) / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  const deltaX = point.x - centerX;
+  const deltaY = point.y - centerY;
+  const localX = centerX + deltaX * cosine - deltaY * sine;
+  const localY = centerY + deltaX * sine + deltaY * cosine;
+  return (
+    localX >= object.x - slop &&
+    localX <= object.x + object.width + slop &&
+    localY >= object.y - slop &&
+    localY <= object.y + height + slop
+  );
 }
 
 function validTimestamp(value: number | undefined) {

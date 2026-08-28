@@ -1,0 +1,319 @@
+import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+
+import { CommandCanvasRoom } from "@/components/command-canvas/command-canvas-room";
+import { createCanvasStore } from "@/lib/canvas/canvas-store";
+import type {
+  HandTrackingController,
+  HandTrackingObservation,
+  HandTrackingStatus,
+} from "@/lib/gesture/hand-tracking-controller";
+import { DEFAULT_HAND_ACTIVE_ZONE } from "@/lib/gesture/spatial-gesture";
+
+function store() {
+  let id = 0;
+  return createCanvasStore("room-hand-navigation", {
+    actor: { id: "host", displayName: "Danny", type: "human" },
+    createId: (prefix) => `${prefix}-${++id}`,
+    now: () => `2026-08-28T12:00:${String(id).padStart(2, "0")}.000Z`,
+  });
+}
+
+function seedNote(
+  target: ReturnType<typeof store>,
+  input: { id: string; x: number; zIndex: number; title?: string },
+) {
+  target.getState().dispatch(
+    {
+      type: "object.create",
+      object: {
+        id: input.id,
+        type: "note",
+        title: input.title ?? input.id,
+        x: input.x,
+        y: 150,
+        width: 220,
+        height: 140,
+        zIndex: input.zIndex,
+        payload: { text: input.id, tone: "sky" },
+      },
+    },
+    "system",
+  );
+}
+
+function fakeHandController() {
+  let status: HandTrackingStatus = { state: "off" };
+  const statusListeners = new Set<(next: HandTrackingStatus) => void>();
+  const observationListeners = new Set<
+    (next: HandTrackingObservation) => void
+  >();
+  const controller: HandTrackingController = {
+    getStatus: () => status,
+    subscribeStatus(listener) {
+      statusListeners.add(listener);
+      return () => statusListeners.delete(listener);
+    },
+    subscribeObservations(listener) {
+      observationListeners.add(listener);
+      return () => observationListeners.delete(listener);
+    },
+    start: vi.fn(async () => undefined),
+    stop: vi.fn(),
+  };
+  return {
+    controller,
+    setStatus(next: HandTrackingStatus) {
+      status = next;
+      statusListeners.forEach((listener) => listener(next));
+    },
+    emit(observation: HandTrackingObservation) {
+      observationListeners.forEach((listener) =>
+        listener(toCameraObservation(observation)),
+      );
+    },
+  };
+}
+
+function toCameraPoint(point: { x: number; y: number }) {
+  return {
+    x:
+      DEFAULT_HAND_ACTIVE_ZONE.left +
+      point.x *
+        (DEFAULT_HAND_ACTIVE_ZONE.right - DEFAULT_HAND_ACTIVE_ZONE.left),
+    y:
+      DEFAULT_HAND_ACTIVE_ZONE.top +
+      point.y *
+        (DEFAULT_HAND_ACTIVE_ZONE.bottom - DEFAULT_HAND_ACTIVE_ZONE.top),
+  };
+}
+
+function toCameraObservation(
+  observation: HandTrackingObservation,
+): HandTrackingObservation {
+  if (observation.mode === "idle") return observation;
+  if (observation.mode !== "bimanual_pinch")
+    return { ...observation, pointer: toCameraPoint(observation.pointer) };
+  const hands = observation.hands.map((hand) => ({
+    ...hand,
+    pointer: toCameraPoint(hand.pointer),
+  })) as unknown as typeof observation.hands;
+  return {
+    ...observation,
+    hands,
+    center: toCameraPoint(observation.center),
+    span: Math.hypot(
+      hands[0].pointer.x - hands[1].pointer.x,
+      hands[0].pointer.y - hands[1].pointer.y,
+    ),
+  };
+}
+
+function setCanvasBounds(container: HTMLElement) {
+  const viewport = container.querySelector<HTMLElement>(".canvas-viewport");
+  if (!viewport) throw new Error("Canvas viewport did not render.");
+  vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    left: 0,
+    top: 0,
+    right: 1_000,
+    bottom: 500,
+    width: 1_000,
+    height: 500,
+    toJSON: () => ({}),
+  });
+}
+
+async function enableHand(
+  hand: ReturnType<typeof fakeHandController>,
+) {
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Open system status" }));
+  await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+  act(() => hand.setStatus({ state: "ready" }));
+  return user;
+}
+
+function bimanual(
+  hand: ReturnType<typeof fakeHandController>,
+  leftX: number,
+  rightX: number,
+  timestamp: number,
+) {
+  hand.emit({
+    mode: "bimanual_pinch",
+    hands: [
+      { handedness: "left", pointer: { x: leftX, y: 0.4 }, confidence: 0.96 },
+      { handedness: "right", pointer: { x: rightX, y: 0.4 }, confidence: 0.96 },
+    ],
+    center: { x: (leftX + rightX) / 2, y: 0.4 },
+    span: rightX - leftX,
+    timestamp,
+  });
+}
+
+describe("CommandCanvas hand-only navigation", () => {
+  it("pans the local viewport with an open palm over blank canvas without a receipt", async () => {
+    const target = store();
+    const hand = fakeHandController();
+    const { container } = render(
+      <CommandCanvasRoom
+        store={target}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await enableHand(hand);
+
+    act(() => {
+      hand.emit({
+        mode: "open_palm",
+        pointer: { x: 0.7, y: 0.6 },
+        confidence: 0.96,
+        timestamp: 1_000,
+      });
+      hand.emit({
+        mode: "open_palm",
+        pointer: { x: 0.6, y: 0.5 },
+        confidence: 0.96,
+        timestamp: 1_016,
+      });
+    });
+
+    expect(target.getState().viewport).toEqual({ x: -100, y: -50, scale: 1 });
+    expect(target.getState().canvas.receipts).toHaveLength(0);
+    expect(screen.getByText("PAN")).toBeVisible();
+  });
+
+  it("zooms the local viewport with two hands over blank canvas without a receipt", async () => {
+    const target = store();
+    const hand = fakeHandController();
+    const { container } = render(
+      <CommandCanvasRoom
+        store={target}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await enableHand(hand);
+
+    act(() => {
+      bimanual(hand, 0.7, 0.9, 1_000);
+      bimanual(hand, 0.65, 0.95, 1_016);
+    });
+
+    expect(target.getState().viewport.scale).toBeCloseTo(1.5);
+    expect(target.getState().canvas.receipts).toHaveLength(0);
+    expect(screen.getByText("CANVAS ZOOM")).toBeVisible();
+  });
+
+  it("keeps Finish and Cancel available if tracking is lost mid-sketch", async () => {
+    const target = store();
+    const hand = fakeHandController();
+    const { container } = render(
+      <CommandCanvasRoom
+        store={target}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    const user = await enableHand(hand);
+    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+    act(() => {
+      hand.emit({ mode: "point", pointer: { x: 0.2, y: 0.3 }, confidence: 0.96, timestamp: 1_000 });
+      hand.emit({ mode: "point", pointer: { x: 0.3, y: 0.4 }, confidence: 0.96, timestamp: 1_016 });
+      hand.emit({ mode: "idle", timestamp: 1_032 });
+      hand.setStatus({ state: "unavailable", message: "Detector stopped." });
+    });
+
+    expect(screen.getByText("TRACKING LOST · SKETCH PRESERVED")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Finish hand sketch" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Cancel hand sketch" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Finish hand sketch" }));
+    expect(
+      Object.values(target.getState().canvas.objects).filter(
+        (object) => object.type === "sketch",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("clears selected chrome before hand drawing so live ink stays unobstructed", async () => {
+    const target = store();
+    seedNote(target, { id: "selected-card", x: 200, zIndex: 1 });
+    const hand = fakeHandController();
+    const { container } = render(
+      <CommandCanvasRoom
+        store={target}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    const user = await enableHand(hand);
+    await user.click(screen.getByRole("button", { name: "Select selected-card" }));
+    expect(screen.getByRole("toolbar", { name: "selected-card spatial controls" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+
+    expect(target.getState().selectedObjectId).toBeNull();
+    expect(screen.queryByRole("toolbar", { name: "selected-card spatial controls" })).toBeNull();
+  });
+
+  it("grabs the card that is visually raised above an overlapping card", async () => {
+    const target = store();
+    seedNote(target, { id: "raised-card", x: 200, zIndex: 1 });
+    seedNote(target, { id: "durably-higher", x: 200, zIndex: 20 });
+    const hand = fakeHandController();
+    const { container } = render(
+      <CommandCanvasRoom
+        store={target}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    const user = await enableHand(hand);
+    await user.click(screen.getByRole("button", { name: "Select raised-card" }));
+
+    act(() =>
+      hand.emit({
+        mode: "pinch",
+        pointer: { x: 0.3, y: 0.4 },
+        confidence: 0.97,
+        timestamp: 1_000,
+      }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Select raised-card" }).closest("article"),
+    ).toHaveClass("is-held");
+    expect(
+      screen.getByRole("button", { name: "Select durably-higher" }).closest("article"),
+    ).not.toHaveClass("is-held");
+  });
+
+  it("arms edge feedback only from the reducer's exact staged action and hides it during resize", async () => {
+    const target = store();
+    seedNote(target, { id: "edge-card", x: 0, zIndex: 1 });
+    const hand = fakeHandController();
+    const { container } = render(
+      <CommandCanvasRoom
+        store={target}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await enableHand(hand);
+
+    act(() => {
+      hand.emit({ mode: "pinch", pointer: { x: 0.055, y: 0.4 }, confidence: 0.97, timestamp: 1_000 });
+      hand.emit({ mode: "pinch", pointer: { x: 0.05, y: 0.4 }, confidence: 0.97, timestamp: 1_016 });
+    });
+    expect(container.querySelector(".gesture-edge-discard-left")).not.toHaveClass("is-armed");
+
+    act(() => hand.emit({ mode: "idle", timestamp: 1_032 }));
+    act(() => bimanual(hand, 0.02, 0.18, 1_100));
+    expect(screen.getByText("RESIZING")).toBeVisible();
+    expect(container.querySelector(".gesture-edge-targets")).toBeNull();
+  });
+});
