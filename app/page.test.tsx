@@ -67,6 +67,14 @@ describe("CommandCanvas landing page", () => {
     expect(screen.getAllByRole("article")).toHaveLength(4);
     expect(screen.getByText("Voice creates objects")).toBeInTheDocument();
     expect(screen.getByText("Draw with your finger")).toBeInTheDocument();
+    expect(
+      container.querySelector(
+        'svg[role="img"][aria-label="Draw with your index finger"]',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      container.querySelector('[data-gesture-finger="index"]'),
+    ).toHaveAttribute("data-hand-orientation", "unmirrored");
     expect(screen.getByText("Collaborators join one room")).toBeInTheDocument();
     expect(screen.getByText("Agents act through tools")).toBeInTheDocument();
     expect(

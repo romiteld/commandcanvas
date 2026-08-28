@@ -270,11 +270,44 @@ const workflowCards: Array<{ title: string; text: string; visual: ReactNode }> =
     text: "Sketch ideas, annotate, and arrange them with natural hand movements.",
     visual: (
       <div className={styles.drawVisual}>
-        <svg viewBox="0 0 260 155">
+        <svg
+          viewBox="0 0 260 155"
+          role="img"
+          aria-label="Draw with your index finger"
+        >
+          <title id="draw-index-title">Draw with your index finger</title>
+          <desc id="draw-index-desc">
+            An index finger points to the end of a dashed line beside a receipt sketch.
+          </desc>
           <path className={styles.drawnLine} d="M24 38 81 22 85 74 26 80ZM85 49h58M144 22l61 6-4 58-59-8ZM175 86c-8 20-26 32-51 37" />
-          <path className={styles.receiptArrow} d="M107 102c33-17 66-18 94-8" />
+          <path
+            className={styles.receiptArrow}
+            data-part="receipt-path"
+            d="M107 102c33-17 66-18 94-8"
+          />
           <text x="151" y="118">Receipt</text>
-          <path className={styles.fingerShape} d="M187 148c-3-22 3-38 13-50 4-5 9-2 8 4l-3 11 18-28c5-7 13-2 9 6l-16 32 8-8c5-5 12 1 7 7l-20 25Z" />
+          <g
+            className={styles.indexPointer}
+            data-gesture-finger="index"
+            data-hand-orientation="unmirrored"
+            data-part="index-pointer"
+            transform="translate(201 94) rotate(-32) scale(3.7) translate(-6.75 0)"
+          >
+            <path
+              className={styles.indexFingerShape}
+              vectorEffect="non-scaling-stroke"
+              d="M8.5 1.75a1.75 1.75 0 0 0-3.5 0v7.264l-2.112-1.66A1.69 1.69 0 0 0 .5 7.605c-.468.501-.468 1.282 0 1.783l3.884 4.414A3.5 3.5 0 0 0 6.937 15h4.626a3.5 3.5 0 0 0 3.5-3.5V7.405a1.69 1.69 0 0 0-1.694-1.689 1.7 1.7 0 0 0-.99.321 1.69 1.69 0 0 0-1.694-1.28c-.37 0-.713.12-.99.322a1.69 1.69 0 0 0-1.195-.523z"
+            />
+          </g>
+          <circle className={styles.indexTipHalo} cx="201" cy="94" r="8" />
+          <circle
+            className={styles.indexTipDot}
+            cx="201"
+            cy="94"
+            r="2.7"
+            data-index-tip="true"
+          />
+          <text className={styles.indexTipLabel} x="207" y="87">INDEX</text>
         </svg>
       </div>
     ),

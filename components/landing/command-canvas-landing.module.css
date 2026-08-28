@@ -509,7 +509,10 @@
 .drawnLine { fill: none; stroke: #7560dc; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .receiptArrow { fill: none; stroke: #2ab491; stroke-width: 2; stroke-dasharray: 4 4; }
 .drawVisual text { fill: #239878; font-size: 10px; font-weight: 700; }
-.fingerShape { fill: #f2b28a; stroke: #cc795e; stroke-width: 1; }
+.indexFingerShape { fill: #f2b28a; stroke: #bd6d57; stroke-width: 1.5; stroke-linejoin: round; }
+.indexTipHalo { fill: rgb(42 180 145 / 16%); stroke: #2ab491; stroke-width: 1.5; }
+.indexTipDot { fill: #1d9678; }
+.drawVisual .indexTipLabel { fill: #1d806a; font-size: 7px; font-weight: 850; letter-spacing: 0.08em; }
 
 .peopleVisual { position: relative; height: 100%; display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
 .videoTile { position: relative; min-height: 68px; display: grid; place-items: center; border-radius: 9px; }
