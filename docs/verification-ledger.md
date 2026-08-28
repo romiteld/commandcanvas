@@ -550,3 +550,39 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 ### CUT
 
 - Production conferencing infrastructure, recording, screen sharing, conferencing-platform integrations, physical marker tracking, permanent gesture deletion, enterprise identity, broad office-suite integrations, billing, native apps, headsets, marketplaces, and desktop automation are not part of this release. Participant video tiles, continuous voice, YOLO finger input, rich spatial gestures, grouping, redo, multi-select, hierarchy, and rotation are implemented rather than cut.
+
+## Checkpoint 17: final public spatial release
+
+### WORKING
+
+- The canonical public judge route is <https://commandcanvas.vercel.app/demo>. It is a no-signup flow backed by Supabase Anonymous Auth: each browser receives its own authenticated identity without a form, password, email prompt, or third-party account.
+- Room admission uses a 256-bit capability token in the copied invite URL. Only its SHA-256 digest is stored in the private capability table. The join RPC refuses role escalation, verifies the authenticated Supabase user, and creates an exact participant membership; the participant URL is then scrubbed to `/demo`, and RLS authorizes subsequent state by user ID and membership.
+- OTP is not part of the judge path. Resend is not used for sign-in or room invitations; it remains confined to the approved meeting-packet boundary. The public environment intentionally has no `RESEND_API_KEY`, so explicit **SEND** records an honest preview-only result.
+- The source release includes the mandatory YOLO26 Hand Pose primary, the visibly labeled MediaPipe recovery engine, main-canvas finger drawing, one-hand magnetic pinch/grab, two-hand resize, open-palm state, recoverable side-edge throws, bottom-dock minimize, grouping, nested frames, rotation, multi-select, undo/redo, opt-in small-room meeting media, regular GPT Realtime voice, the ten-tool WebMCP catalog, vision transformation, packets, and receipts.
+- The final source gate passed ESLint, TypeScript, 73 Vitest files with 694 of 694 tests, both generated hand-worker bundles, and the optimized Next.js production build. The Realtime server dependency is now explicitly covered by the server-only release contract.
+- A read-only security audit found no runtime-authorization, secret-exposure, Realtime-admission, packet-send, or deployed-schema blocker. Browser bundles contain no Supabase, OpenAI, Realtime, or Resend private environment names or credential values.
+
+### VERIFIED IN BROWSER
+
+- The public `/demo` runtime passed its complete stateful browser probe in 21.2 seconds: anonymous room creation, persisted four-stroke sketch, browser PNG rasterization, real GPT-5.6 vision interpretation, preserved source, schema-valid structured diagram, packet preparation, immutable recipient snapshot, approval, cancellation, restaging, explicit host **SEND**, persisted preview-only outcome, reload reconstruction, YOLO worker/model/WASM loading, live local camera track, disable, detachment, ended-track shutdown, and exact room cleanup.
+- Two genuine public browser contexts passed Supabase Presence, cursor Broadcast, offline recovery, durable participant mutation, revision convergence, reload reconstruction, invite-token URL scrubbing, and exact cleanup. In a separate opt-in run, both browsers rendered live local and remote WebRTC audio/video tracks through the dedicated meeting-media topic.
+- A paid regular `gpt-realtime-2.1` WebRTC session heard the controlled spoken audio request, invoked its narrow semantic board tool, and created the shared board through the canonical command and receipt path without a Run click.
+- The public YOLO worker fetched the pinned 21-keypoint model and completed browser inference. The public artifact returned 21,447,188 bytes with SHA-256 `07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc`.
+- Official Chrome for Testing 153 passed `document.modelContext` discovery, absence of the deprecated navigator surface, the exact static ten-tool catalog, native execution, lifecycle changes, cancellation, visible receipts, and cleanup against the canonical public HTTPS origin.
+- The ordinary-browser matrix passed 19 scenarios with 35 deliberate environment-gated skips and zero failures across desktop Chromium, mobile Chromium, an iPhone-profile WebKit runtime, and the normal Chrome WebMCP surface.
+- The public response returned HTTP 200 plus COOP `same-origin`, COEP `require-corp`, HSTS, no-sniff, same-origin framing, no-referrer, and explicit self-only camera/microphone permission headers. The visible source link resolved to the exact Vercel deployment commit under the public AGPL-3.0 repository.
+
+### UNVERIFIED
+
+- ChatGPT's built-in-browser Site Tools discovery, selection, confirmation UI, or invocation remains unverified because that rollout surface is not available in this environment. Native Chrome 153 is verified; it is not evidence for the separate ChatGPT host.
+- Public dynamic registration remains unverified at a second public dynamic HTTPS deployment. The canonical public environment intentionally uses the stable static catalog; dynamic registration is covered in a fresh production bundle and native Chrome 153, while execute-time guards remain authoritative in either mode.
+- The microphone provider path is verified with controlled browser audio, not a physical microphone. A physical person has not yet calibrated and exercised YOLO pointing, finger drawing, one-hand pinch, two-hand resize, open-palm dwell, or edge throws on an iPhone or webcam. Lighting, distance, occlusion, latency, thermals, mirrored-camera ergonomics, and device-specific accuracy remain physical-device checks.
+- Physical touch and stylus pressure, tilt, palm rejection, and device ergonomics remain unverified. Trusted browser touch/pen events and WebKit device profiles are automated evidence only.
+- Real public Resend delivery remains intentionally disabled. An earlier controlled allowlisted provider submission was accepted and reported delivered, but the canonical judge route remains preview-only and never represents that earlier run as a public send.
+- The small-room media run was same-host peer-to-peer. Cross-network restrictive-NAT behavior is unverified; there is no TURN relay or SFU, recording, screen sharing, or production conferencing infrastructure.
+- Current copied room invites are strong but reusable until room reset/deletion. They are not person-bound, expiring, independently revocable, or OTP-verified. Optional email OTP/magic-link identity and expiring or rotatable invitations are a production-auth extension, not part of the no-signup judge path.
+- The deployed Supabase catalog and all required RPC behavior are verified, but four remote migration version IDs differ from the corresponding local filename timestamps. A future raw `supabase db push` must not be used until the CLI migration ledger is reconciled.
+
+### CUT
+
+- Physical pencil or marker tracking, permanent gesture-only destruction, TURN/SFU infrastructure, production conferencing scale, recording, screen sharing, conferencing-platform integrations, enterprise identity, broad office-suite integrations, billing, native apps, headset support, plugin marketplaces, and desktop automation remain outside this release. Formerly deferred participant video, continuous Realtime voice, YOLO finger input, two-hand resize, side throws, grouping, ungrouping, redo, multi-select, nested frames, and rotation are implemented.

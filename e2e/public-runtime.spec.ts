@@ -350,11 +350,19 @@ async function exerciseFakeCameraLifecycle(
   cameraResponses: Array<{ url: string; status: number }>,
 ) {
   await openDrawer(page, "Open system status", "System status drawer");
-  await page.getByRole("button", { name: "Enable hand input" }).click();
-  await expect(page.getByText("Hand input ready · local only").first()).toBeVisible({
-    timeout: 60_000,
+  const systemDrawer = page.getByRole("complementary", {
+    name: "System status drawer",
   });
-  await expect(page.getByText("READY · show one hand")).toBeVisible();
+  const handInputRegion = systemDrawer.getByRole("region", {
+    name: "Hand input",
+    exact: true,
+  });
+  await page.getByRole("button", { name: "Enable hand input" }).click();
+  await expect(handInputRegion.getByRole("status")).toHaveText(
+    "Hand input ready · local only",
+    { timeout: 60_000 },
+  );
+  await expect(systemDrawer.getByText("READY · show one hand")).toBeVisible();
   await expect(
     page.locator('[data-vision-engine="yolo26-hand-pose-2abb91"]'),
   ).toHaveText("Engine YOLO26 Hand Pose");
