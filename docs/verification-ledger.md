@@ -656,3 +656,34 @@ This checkpoint is a draft for the current source candidate. It does not replace
 ### CUT
 
 - Physical pencil, marker, or arbitrary-object tracking; permanent gesture-only deletion; TURN or SFU infrastructure; production conferencing scale; call recording; screen sharing; conferencing-platform integrations; enterprise identity; broad office-suite integrations; billing; native apps; headset support; marketplaces; and desktop automation remain outside this release. Grouping, ungrouping, redo, multi-select, nested frames, rotation, two-hand control, side throws, continuous voice, participant video tiles, OTP rooms, and invitations are implemented rather than cut.
+
+## Checkpoint 20: canvas-first landing, bounded calibration, and final public release
+
+### WORKING
+
+- The root route is now a semantic, indexable, fluid landing page rather than a redirect or flattened screenshot. It links to the no-signup `/demo`, passwordless OTP `/meet`, public documentation, and repository while preserving `/demo`, `/meet`, and `/local` as fixed full-viewport product surfaces.
+- The hero uses the two supplied real iPhone captures as same-origin assets: `public/landing/hand-open-real.jpg` and `public/landing/hand-pinch-real.jpg`. The product mock labels them as real capture evidence rather than presenting an abstract hand illustration.
+- Hand calibration is a temporary sensor-only surface. Calibration observations update the local preview and landmarks but cannot reach canvas mutations. Opening it clears transient target, held, feedback, and preview state and requires a neutral frame before control resumes. On mobile it is a bounded bottom sheet; the canvas remains visible, the hand-control HUD is hidden during calibration, and the former dashed camera boundary is absent.
+- Normal hand input operates on the full canvas. The comfortable central camera region still maps across the complete canvas, while drawing, one-hand grab and move, two-hand resize, open-palm navigation, minimize, recoverable side throw, and Undo remain in the canonical gesture-to-command-to-receipt pipeline.
+- The exact final source passed ESLint, TypeScript, 95 Vitest files with 934 of 934 tests, both generated hand-worker bundles, and an optimized Next.js build with 13 of 13 static-generation jobs complete.
+- The integrated Playwright release matrix on the productization commit discovered 68 scenarios: 26 applicable scenarios passed, 42 hardware, provider, credential, or target-surface gates skipped intentionally, and none failed. The final responsive-heading follow-up added a rendered-text assertion across 320, 360, 390, 393, 768, and 1024 pixels; it failed on the original concatenation and passed after the explicit-whitespace fix.
+
+### VERIFIED IN BROWSER
+
+- Vercel production deployment `dpl_9j2s1FVZACTWWk21BJUt72SBxGnG` is READY from GitHub commit `381c4029f84bd8af50b762aa13dded9eaf484814`, with no alias error. The canonical alias is <https://commandcanvas.vercel.app>.
+- The final canonical root returned HTTP 200 at 390 by 844 and 1440 by 900. At both sizes, the rendered heading normalized to **Where meetings become the deliverable**, document width equaled viewport width, both real hand captures loaded from the exact deployment, and there were no broken images or console errors.
+- Public `/demo`, `/meet`, and `/local` loaded at the mobile viewport. The demo and local canvas shells stayed exactly one dynamic viewport with no document overflow; the meeting route showed the six-digit email-code flow.
+- Local landing checks covered desktop, tablet, narrow mobile, reduced motion, keyboard semantics, and route contracts. Automated accessibility checks reported zero axe violations at 390 by 844 and 1440 by 900.
+- The supplied physical iPhone captures visibly show a live camera frame, a 21-landmark open hand, and a pinch-shaped hand pose. They establish real capture and landmark rendering on that earlier UI; they do not establish successful object acquisition or the ergonomics of the new full-canvas calibration design.
+
+### UNVERIFIED
+
+- A fresh physical-device pass is still required for the final public release: sustained finger-drawing continuity, reliable one-hand pinch acquisition and release, object movement to every edge, two-hand resize and zoom, open-palm pan, recoverable throw, minimize docking, lighting, occlusion, latency, thermals, and relay-to-local fallback are not inferred from automated poses or the two still captures.
+- ChatGPT built-in-browser Site Tools discovery, confirmation UI, and invocation remain unverified because that rollout surface was unavailable. Native Chrome 153 evidence remains a separate verified boundary.
+- Real public Resend delivery remains intentionally unverified and disabled without the dedicated key, verified sender, and exact allowlists. The public packet path stages and records an honest preview-only result rather than claiming delivery.
+- Public dynamic WebMCP registration, physical touch or stylus ergonomics, and cross-network restrictive-NAT meeting media remain separate unverified boundaries.
+
+### CUT
+
+- No approved hand-control capability was cut in this release. The former oversized camera-as-workspace panel and visible dashed camera boundary were removed because they misrepresented the control plane; calibration is temporary and the canvas is the interaction surface.
+- Physical pencil, marker, or arbitrary-object tracking; permanent unrecoverable gesture deletion; TURN or SFU infrastructure; recording; screen sharing; production conferencing scale; conferencing-platform integrations; enterprise identity; broad office-suite integrations; billing; native apps; headset support; marketplaces; and desktop automation remain outside this release.
