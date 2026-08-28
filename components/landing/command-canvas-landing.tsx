@@ -389,7 +389,7 @@ export function CommandCanvasLanding() {
         <section className={styles.hero} id="product">
           <div className={styles.heroCopy}>
             <span className={styles.liveBadge}><i /> Live collaborative workspace</span>
-            <h1 aria-label="Where meetings become the deliverable">Where meetings<br />become the<br />deliverable</h1>
+            <h1 aria-label="Where meetings become the deliverable">Where meetings{" "}<br />become the{" "}<br />deliverable</h1>
             <p>
               Teams use voice, hand input, collaborators, and agents to create notes,
               boards, schedules, sketches, diagrams, charts, and meeting packets

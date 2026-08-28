@@ -92,6 +92,13 @@ test("stays fluid, branded, readable, and touchable across narrow widths", async
     await page.setViewportSize({ width, height: width < 600 ? 800 : 1024 });
     await page.goto("/", { waitUntil: "domcontentloaded" });
 
+    const renderedHeading = (await page.locator("h1").innerText())
+      .replace(/\s+/g, " ")
+      .trim();
+    expect(renderedHeading, `${width}px rendered hero heading`).toBe(
+      "Where meetings become the deliverable",
+    );
+
     const measurements = await page.evaluate(() => {
       const fontSize = (text: string) => {
         const element = Array.from(document.querySelectorAll<HTMLElement>("*"))
