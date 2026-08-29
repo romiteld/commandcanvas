@@ -73,6 +73,7 @@ function createClient(input?: {
   stagedError?: unknown;
   rpc?: RpcResponder;
   admissionResult?: unknown;
+  roomMode?: "demo" | "standard";
 }) {
   const queryBuilder = createQueryBuilder({
     data:
@@ -97,11 +98,17 @@ function createClient(input?: {
       ? input.rpc(functionName, args)
       : { data: null, error: { message: "unexpected_rpc" } };
   });
+  const roomQueryBuilder = createQueryBuilder({
+    data: { mode: input?.roomMode ?? "standard" },
+    error: null,
+  });
   const client = {
-    from: vi.fn(() => queryBuilder),
+    from: vi.fn((table: string) =>
+      table === "rooms" ? roomQueryBuilder : queryBuilder,
+    ),
     rpc,
   } satisfies PacketServiceClient;
-  return { client, rpc, queryBuilder };
+  return { client, rpc, queryBuilder, roomQueryBuilder };
 }
 
 function authorizeResult(
@@ -663,13 +670,44 @@ describe("persisted meeting packet readback", () => {
 });
 
 describe("explicit packet send execution", () => {
+  it("forces an unconfigured public demo room to its explicit preview policy", async () => {
+    const { client, rpc } = createClient({
+      roomMode: "demo",
+      rpc: (functionName) => {
+        if (functionName === "authorize_meeting_packet_send")
+          return { data: authorizeResult("preview"), error: null };
+        return { data: null, error: { message: "unexpected_rpc" } };
+      },
+    });
+    const submitResendEmail = vi.fn();
+    const service = createPacketService(client, {
+      environment: {},
+      submitResendEmail,
+    });
+
+    await expect(
+      service.executeSend(HOST_ID, {
+        roomId: ROOM_ID,
+        sendRequestId: SEND_REQUEST_ID,
+        explicitHostAuthorization: true,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        mode: "preview_only",
+        reason: "demo_room_preview_only",
+      },
+    });
+    expect(rpc).toHaveBeenCalledExactlyOnceWith(
+      "authorize_meeting_packet_send",
+      expect.objectContaining({ p_delivery_mode: "preview" }),
+    );
+    expect(submitResendEmail).not.toHaveBeenCalled();
+  });
+
   it("forces a configured public demo room to preview before any Resend provider call", async () => {
     const { client, rpc } = createClient({
-      admissionResult: {
-        allowed: false,
-        reason: "demo_room_preview_only",
-        changed: false,
-      },
+      roomMode: "demo",
       rpc: (functionName) => {
         if (functionName === "authorize_meeting_packet_send")
           return { data: authorizeResult("preview"), error: null };
@@ -700,13 +738,7 @@ describe("explicit packet send execution", () => {
         reason: "demo_room_preview_only",
       },
     });
-    expect(rpc).toHaveBeenNthCalledWith(1, "reserve_packet_resend_admission", {
-      p_room_id: ROOM_ID,
-      p_send_request_id: SEND_REQUEST_ID,
-      p_host_user_id: HOST_ID,
-    });
-    expect(rpc).toHaveBeenNthCalledWith(
-      2,
+    expect(rpc).toHaveBeenCalledExactlyOnceWith(
       "authorize_meeting_packet_send",
       expect.objectContaining({ p_delivery_mode: "preview" }),
     );

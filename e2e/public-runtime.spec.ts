@@ -91,13 +91,17 @@ test("closes the final public vision, packet, and fake-camera runtime boundaries
     await expect(page.getByText("Live demo room")).toBeVisible({
       timeout: 20_000,
     });
-    await expect(page.getByText("Revision 3")).toBeVisible();
+    await expect(
+      page
+        .getByLabel("Canvas coordinates")
+        .getByText("Revision 3", { exact: true }),
+    ).toBeVisible();
     roomId = await roomCapture.resolveRoomId();
     expect(roomId).toMatch(/^[0-9a-f-]{36}$/);
 
     await createArchitectureSketch(page);
     const sourceSketch = page.getByRole("button", {
-      name: "Select Rough architecture",
+      name: "Select Rough sketch",
     });
     await expect(sourceSketch).toBeVisible();
     await sourceSketch.click();
@@ -134,7 +138,7 @@ test("closes the final public vision, packet, and fake-camera runtime boundaries
       responseId: expect.any(String),
       sourceSketchId: expect.any(String),
       payload: {
-        kind: "architecture",
+        kind: expect.stringMatching(/^(architecture|flowchart|diagram)$/),
         sourceSketchId: expect.any(String),
         nodes: expect.any(Array),
         edges: expect.any(Array),
@@ -144,12 +148,30 @@ test("closes the final public vision, packet, and fake-camera runtime boundaries
       visionBody.transform?.sourceSketchId,
     );
     expect(visionBody.transform?.payload?.nodes?.length).toBeGreaterThanOrEqual(2);
+    const outputKind = visionBody.transform?.payload?.kind;
+    if (
+      outputKind !== "architecture" &&
+      outputKind !== "flowchart" &&
+      outputKind !== "diagram"
+    )
+      throw new Error("The box-and-arrow sketch returned an unsupported visual kind.");
+    const structuredTitle = `Structured ${outputKind}`;
     await expect(sourceSketch).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Select Structured architecture" }),
+      page.getByRole("button", { name: `Select ${structuredTitle}` }),
     ).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText("Revision 5")).toBeVisible();
-    await expect(page.getByText("R5 · typed")).toBeVisible();
+    await expect(
+      page
+        .getByLabel("Canvas coordinates")
+        .getByText("Revision 5", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole("button", {
+          name: `Open activity drawer: Daniel created “${structuredTitle}”.`,
+        })
+        .getByText("R5 · typed", { exact: true }),
+    ).toBeVisible();
 
     await exercisePreviewOnlyPacketWorkflow(page, roomId!);
     await exerciseFakeCameraLifecycle(page, cameraResponses);
@@ -207,7 +229,11 @@ async function createArchitectureSketch(page: Page) {
 
   await expect(page.getByText("4 draft strokes")).toBeVisible();
   await page.getByRole("button", { name: "Finish sketch" }).click();
-  await expect(page.getByText("Revision 4")).toBeVisible({ timeout: 20_000 });
+  await expect(
+    page
+      .getByLabel("Canvas coordinates")
+      .getByText("Revision 4", { exact: true }),
+  ).toBeVisible({ timeout: 20_000 });
 }
 
 async function drawStroke(
@@ -330,7 +356,7 @@ async function exercisePreviewOnlyPacketWorkflow(page: Page, roomId: string) {
     send: {
       mode: "preview_only",
       status: "preview_only",
-      reason: "resend_unconfigured",
+      reason: "demo_room_preview_only",
       message: "Preview only: no email was sent.",
     },
   });
@@ -346,14 +372,14 @@ async function exercisePreviewOnlyPacketWorkflow(page: Page, roomId: string) {
   await expect(page.getByText("Preview only: not sent")).toBeVisible();
   await expect(
     page
-      .getByRole("region", { name: "Infinite canvas" })
+      .getByLabel("Canvas coordinates")
       .getByText("Revision 5", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Select Rough architecture" }),
+    page.getByRole("button", { name: "Select Rough sketch" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Select Structured architecture" }),
+    page.getByRole("button", { name: /^Select Structured (architecture|flowchart|diagram)$/ }),
   ).toBeVisible();
 }
 

@@ -55,7 +55,7 @@ test("rasterizes a pointer sketch for real vision and preserves it beside the st
     await createArchitectureSketch(page);
 
     const sourceSketch = page.getByRole("button", {
-      name: "Select Rough architecture",
+      name: "Select Rough sketch",
     });
     await expect(sourceSketch).toBeVisible();
     await sourceSketch.click();
@@ -133,10 +133,17 @@ test("rasterizes a pointer sketch for real vision and preserves it beside the st
     await expect(
       page.getByRole("button", { name: "Select Structured architecture" }),
     ).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText("Revision 5")).toBeVisible();
-    await expect(page.getByText("R5 · webmcp")).toBeVisible();
     await expect(
-      page.getByText("CommandCanvas agent created “Structured architecture”."),
+      page
+        .getByLabel("Canvas coordinates")
+        .getByText("Revision 5", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole("button", {
+          name: "Open activity drawer: CommandCanvas agent created “Structured architecture”.",
+        })
+        .getByText("R5 · webmcp", { exact: true }),
     ).toBeVisible();
     expect(browserErrors).toEqual([]);
   } finally {
@@ -181,7 +188,11 @@ async function createArchitectureSketch(page: Page) {
 
   await expect(page.getByText("4 draft strokes")).toBeVisible();
   await page.getByRole("button", { name: "Finish sketch" }).click();
-  await expect(page.getByText("Revision 4")).toBeVisible({ timeout: 20_000 });
+  await expect(
+    page
+      .getByLabel("Canvas coordinates")
+      .getByText("Revision 4", { exact: true }),
+  ).toBeVisible({ timeout: 20_000 });
 }
 
 async function drawStroke(

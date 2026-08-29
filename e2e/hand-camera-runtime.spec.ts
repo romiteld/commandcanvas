@@ -63,10 +63,15 @@ test("starts the local hand detector from a real browser camera stream and relea
       timeout: 20_000,
     });
     roomId = await roomCapture.resolveRoomId();
-    await page.getByRole("button", { name: "Open system status" }).click();
-    await page.getByRole("button", { name: "Enable hand input" }).click();
+    const handInput = page.getByRole("region", {
+      name: "Hand input",
+      exact: true,
+    });
+    await handInput
+      .getByRole("button", { name: "Enable hand input" })
+      .click();
     await expect(
-      page.getByText("Hand input ready · local only").last(),
+      handInput.getByText("Hand input ready · local only", { exact: true }),
     ).toBeVisible({ timeout: 60_000 });
     await expect(page.getByText("READY · show one hand")).toBeVisible();
     await expect(
@@ -153,9 +158,9 @@ test("starts the local hand detector from a real browser camera stream and relea
       page.getByRole("region", { name: "Hand interaction controls" }),
     ).toBeVisible();
 
-    await page.getByRole("button", { name: "Open system status" }).click();
-
-    await page.getByRole("button", { name: "Disable hand input" }).click();
+    await handInput
+      .getByRole("button", { name: "Disable hand input" })
+      .click();
     await expect(page.getByText("Camera off · pointer active").last()).toBeVisible();
     expect(
       await page.evaluate(() => {

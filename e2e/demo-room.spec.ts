@@ -43,10 +43,19 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
     await expect(
       pageA.getByRole("button", { name: "Select Submission week" }),
     ).toBeVisible();
-    await expect(pageA.getByText("Revision 3")).toBeVisible();
+    await expect(
+      pageA
+        .getByLabel("Canvas coordinates")
+        .getByText("Revision 3", { exact: true }),
+    ).toBeVisible();
     await expect(pageA.getByLabel("1 participant present")).toBeVisible();
     await pageA.getByRole("button", { name: "Open system status" }).click();
-    await expect(pageA.getByText("Site Tools unavailable")).toBeVisible();
+    await expect(
+      pageA
+        .getByRole("complementary", { name: "System status drawer" })
+        .getByRole("region", { name: "Service status" })
+        .getByText("Site Tools unavailable", { exact: true }),
+    ).toBeVisible();
     await pageA
       .getByRole("button", { name: "Close system status drawer" })
       .click();
@@ -73,11 +82,17 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
     await pageB.getByRole("button", { name: "Open system status" }).click();
     await contextB.setOffline(true);
     await expect(
-      pageB.getByText("Realtime unavailable · state preserved"),
+      pageB
+        .getByRole("complementary", { name: "System status drawer" })
+        .getByRole("region", { name: "Service status" })
+        .getByText("Realtime unavailable · state preserved", { exact: true }),
     ).toBeVisible({ timeout: 10_000 });
     await contextB.setOffline(false);
     await expect(
-      pageB.getByText("2 present via Supabase Realtime"),
+      pageB
+        .getByRole("complementary", { name: "System status drawer" })
+        .getByRole("region", { name: "Service status" })
+        .getByText("2 present via Supabase Realtime", { exact: true }),
     ).toBeVisible({ timeout: 20_000 });
     await pageB
       .getByRole("button", { name: "Close system status drawer" })
@@ -95,14 +110,24 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
     ).toBeVisible({ timeout: 10_000 });
 
     await pageB.getByRole("button", { name: "Create note" }).click();
-    await expect(pageB.getByText("Sarah created “New thought”.")).toBeVisible({
-      timeout: 15_000,
-    });
-    await expect(pageA.getByText("Sarah created “New thought”.")).toBeVisible({
-      timeout: 15_000,
-    });
-    await expect(pageA.getByText("Revision 4")).toBeVisible();
-    await expect(pageB.getByText("R4 · collaborator")).toBeVisible();
+    const participantNoteReceiptName =
+      "Open activity drawer: Sarah created “New thought”.";
+    await expect(
+      pageB.getByRole("button", { name: participantNoteReceiptName }),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(
+      pageA.getByRole("button", { name: participantNoteReceiptName }),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(
+      pageA
+        .getByLabel("Canvas coordinates")
+        .getByText("Revision 4", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      pageB
+        .getByRole("button", { name: participantNoteReceiptName })
+        .getByText("R4 · collaborator", { exact: true }),
+    ).toBeVisible();
 
     await pageB
       .getByRole("button", { name: "Enable multiple selection" })
@@ -112,35 +137,53 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
     await pageB
       .getByRole("button", { name: "Group selected objects" })
       .click();
-    await expect(pageA.getByText("Sarah grouped 2 objects in “Frame 5”.")).toBeVisible({
-      timeout: 15_000,
-    });
+    await expect(
+      pageA.getByRole("button", {
+        name: "Open activity drawer: Sarah grouped 2 objects in “Frame 5”.",
+      }),
+    ).toBeVisible({ timeout: 15_000 });
 
     await pageB.getByRole("button", { name: "Rotate clockwise" }).click();
     await expect(
-      pageA.getByText("Sarah transformed “Frame 5” and its contents spatially."),
+      pageA.getByRole("button", {
+        name: "Open activity drawer: Sarah transformed “Frame 5” and its contents spatially.",
+      }),
     ).toBeVisible({ timeout: 15_000 });
 
     await pageB.getByRole("button", { name: "Undo last change" }).click();
-    await expect(pageA.getByText(/Sarah undid: Sarah transformed “Frame 5”/)).toBeVisible({
-      timeout: 15_000,
-    });
+    await expect(
+      pageA.getByRole("button", {
+        name: /Open activity drawer: Sarah undid: Sarah transformed “Frame 5”/,
+      }),
+    ).toBeVisible({ timeout: 15_000 });
     await pageB.getByRole("button", { name: "Redo last undone change" }).click();
-    await expect(pageA.getByText(/Sarah redid: Sarah transformed “Frame 5”/)).toBeVisible({
-      timeout: 15_000,
-    });
+    await expect(
+      pageA.getByRole("button", {
+        name: /Open activity drawer: Sarah redid: Sarah transformed “Frame 5”/,
+      }),
+    ).toBeVisible({ timeout: 15_000 });
 
     await pageB
       .getByRole("button", { name: "Ungroup selected frame" })
       .click();
-    await expect(pageA.getByText("Sarah ungrouped “Frame 5”.")).toBeVisible({
-      timeout: 15_000,
-    });
-    await expect(pageA.getByText("Revision 9")).toBeVisible();
+    await expect(
+      pageA.getByRole("button", {
+        name: "Open activity drawer: Sarah ungrouped “Frame 5”.",
+      }),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(
+      pageA
+        .getByLabel("Canvas coordinates")
+        .getByText("Revision 9", { exact: true }),
+    ).toBeVisible();
 
     await pageB.reload();
     await expect(pageB.getByText("Live demo room")).toBeVisible({ timeout: 20_000 });
-    await expect(pageB.getByText("Revision 9")).toBeVisible();
+    await expect(
+      pageB
+        .getByLabel("Canvas coordinates")
+        .getByText("Revision 9", { exact: true }),
+    ).toBeVisible();
     await expect(
       pageB.getByRole("button", { name: "Select Frame 5" }),
     ).toHaveCount(0);

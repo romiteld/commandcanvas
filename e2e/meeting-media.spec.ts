@@ -133,13 +133,19 @@ test("two no-signup browsers exchange real WebRTC media after both opt in", asyn
       remoteVideo: "live",
     });
 
-    await pageA.getByRole("button", { name: "Turn camera off" }).click();
-    expect(
-      await pageA.getByTestId("local-meeting-video").evaluate((video) => {
-        const stream = (video as HTMLVideoElement).srcObject as MediaStream;
-        return stream.getVideoTracks()[0]?.enabled;
-      }),
-    ).toBe(false);
+    await pageA.getByRole("button", { name: "Stop sharing video" }).click();
+    await expect(
+      pageA.getByRole("button", { name: "Share video" }),
+    ).toBeVisible();
+    await expect(pageA.getByTestId("local-meeting-video")).toHaveCount(0);
+    await expect(
+      pageA
+        .getByRole("region", { name: "Meeting presence" })
+        .getByText(
+          "Video is not shared. Your camera may remain active locally for hand input.",
+          { exact: true },
+        ),
+    ).toBeVisible();
 
     await pageB.getByRole("button", { name: "Leave meeting video" }).click();
     await expect(pageB.getByTestId("local-meeting-video")).toHaveCount(0);

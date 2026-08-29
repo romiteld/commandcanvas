@@ -448,6 +448,9 @@ const completedSendSchema = z
   .strict();
 
 const hostMembershipRowSchema = z.object({ role: z.literal("host") }).strict();
+const roomModeRowSchema = z
+  .object({ mode: z.enum(["demo", "standard"]) })
+  .strict();
 const persistedPacketRowSchema = z
   .object({
     id: packetIdSchema,
@@ -805,10 +808,15 @@ export function createPacketService(
 
     const staged = await loadStagedSend(client, input.data);
     if (!staged.ok) return staged;
-    let decision = decideDelivery(
-      dependencies.environment,
-      staged.value.recipient_snapshot,
-    );
+    const roomMode = await loadRoomMode(client, input.data.roomId);
+    if (!roomMode.ok) return roomMode;
+    let decision: DeliveryDecision =
+      roomMode.value === "demo"
+        ? { mode: "preview", reason: "demo_room_preview_only" }
+        : decideDelivery(
+            dependencies.environment,
+            staged.value.recipient_snapshot,
+          );
 
     if (decision.mode === "resend") {
       const admissionResponse = await callRpc(
@@ -1195,6 +1203,25 @@ async function loadStagedSend(
       "send_request_unavailable",
       "The staged packet send is no longer available.",
     );
+  }
+}
+
+async function loadRoomMode(
+  client: PacketServiceClient,
+  roomId: string,
+): Promise<PacketServiceResult<"demo" | "standard">> {
+  try {
+    const response = await client
+      .from("rooms")
+      .select("mode")
+      .eq("id", roomId)
+      .maybeSingle();
+    if (hasError(response) || response.data === null) return packetUnavailable();
+    const parsed = roomModeRowSchema.safeParse(response.data);
+    if (!parsed.success) return packetUnavailable();
+    return { ok: true, value: parsed.data.mode };
+  } catch {
+    return packetUnavailable();
   }
 }
 
