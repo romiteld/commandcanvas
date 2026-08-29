@@ -2199,6 +2199,77 @@ describe("CommandCanvasRoom", () => {
     expect(store.getState().canvas.objects["note-async"]?.x).toBe(300);
   });
 
+  it("settles a successful hand transform when realtime already hydrated a newer revision", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-race", title: "Race-safe note", x: 200 });
+    let resolveCommand!: (result: CommandResult) => void;
+    let submitted: CanvasCommand | null = null;
+    const pending = new Promise<CommandResult>((resolve) => {
+      resolveCommand = resolve;
+    });
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+        onCommand={(command) => {
+          submitted = command;
+          return pending;
+        }}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+    await skipHandCalibration(user);
+
+    act(() => acquireAt(hand, 0.25, 0.18));
+    act(() => {
+      hand.emit({
+        mode: "pinch",
+        pointer: { x: 0.35, y: 0.28 },
+        confidence: 0.96,
+        timestamp: 1_210,
+      });
+      hand.emit({
+        mode: "point",
+        pointer: { x: 0.35, y: 0.28 },
+        confidence: 0.96,
+        timestamp: 1_226,
+      });
+    });
+
+    const object = container.querySelector<HTMLElement>(
+      '[data-canvas-object="note-race"]',
+    );
+    await waitFor(() =>
+      expect(object).toHaveAttribute("data-gesture-preview", "true"),
+    );
+    if (!submitted) throw new Error("Expected an authoritative transform command.");
+
+    const successfulCommand = store.getState().dispatch(submitted, "gesture");
+    expect(successfulCommand.ok).toBe(true);
+    seedNote(store, {
+      id: "note-newer-realtime",
+      title: "Newer realtime state",
+      x: 760,
+    });
+    const newerRevision = store.getState().canvas.revision;
+
+    act(() => resolveCommand(successfulCommand));
+
+    await waitFor(() =>
+      expect(object).not.toHaveAttribute("data-gesture-preview"),
+    );
+    expect(store.getState().canvas.revision).toBe(newerRevision);
+    expect(store.getState().canvas.objects["note-newer-realtime"]).toBeDefined();
+    expect(
+      screen.queryByText("The shared canvas did not confirm that command."),
+    ).not.toBeInTheDocument();
+  });
+
   it("rolls an async hand transform back visibly when authority refuses it", async () => {
     const user = userEvent.setup();
     const hand = fakeHandController();

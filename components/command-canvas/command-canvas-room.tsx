@@ -501,7 +501,7 @@ export function CommandCanvasRoom({
         });
         return { ok: false, message: result.error.message };
       }
-      if (result?.ok && !store.getState().hydrateCanvas(result.state)) {
+      if (result?.ok && !store.getState().confirmCanvas(result.state)) {
         const message = "The shared canvas did not confirm that voice action.";
         setCommandExecution({ status: "refused", message });
         return { ok: false, message };
@@ -716,7 +716,7 @@ export function CommandCanvasRoom({
       onRefused?.(result.error.message);
       return;
     }
-    if (result?.ok && !store.getState().hydrateCanvas(result.state)) {
+    if (result?.ok && !store.getState().confirmCanvas(result.state)) {
       const message = "The shared canvas did not confirm that command.";
       setCommandExecution({ status: "refused", message });
       onRefused?.(message);
