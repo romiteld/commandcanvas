@@ -167,6 +167,41 @@ test("keeps the canvas and primary action usable at a mobile viewport", async ({
   await expect(page.getByText("Danny created “Launch board”.")).toBeVisible();
 });
 
+test("keeps the off-state hand sensor compact and out of mobile object hit testing", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-mobile");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/local");
+
+  const handControl = page.getByRole("region", { name: "Hand input" });
+  const handControlBox = await handControl.boundingBox();
+  if (!handControlBox) throw new Error("Hand input geometry is unavailable.");
+  expect(handControlBox.height).toBeLessThanOrEqual(64);
+  await expect(page.getByLabel("Local hand tracking preview")).toBeHidden();
+
+  await page.getByRole("button", { name: "Create note" }).click();
+  const note = page.getByRole("button", { name: "Select New thought" });
+  const noteBox = await note.boundingBox();
+  if (!noteBox) throw new Error("New thought geometry is unavailable.");
+
+  const hitTarget = await page.evaluate(
+    ({ x, y }) => {
+      const target = document.elementFromPoint(x, y);
+      return Boolean(target?.closest('[aria-label="Select New thought"]'));
+    },
+    {
+      x: noteBox.x + noteBox.width / 2,
+      y: noteBox.y + noteBox.height / 2,
+    },
+  );
+  expect(hitTarget).toBe(true);
+
+  await note.click();
+  await expect(page.getByRole("button", { name: "Resize New thought" })).toBeVisible();
+});
+
 test("opens command and system controls over the workspace without resizing the canvas", async ({
   page,
 }, testInfo) => {

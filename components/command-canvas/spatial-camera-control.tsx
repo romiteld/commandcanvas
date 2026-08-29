@@ -420,6 +420,10 @@ export function SpatialCameraControl({
 
   const active = status.state === "starting" || status.state === "ready";
   const sensorPip = status.state === "ready" && !previewExpanded;
+  const compactControl =
+    !previewExpanded &&
+    !sensorPip &&
+    (status.state === "off" || status.state === "starting");
   const trackedHands =
     lastObservation?.mode === "bimanual_pinch"
       ? lastObservation.hands
@@ -449,7 +453,9 @@ export function SpatialCameraControl({
           : sensorPip
             ? " is-sensor-pip"
             : ""
-      }${sensorPip && !sensorPreviewVisible ? " is-sensor-pip-hidden" : ""}`}
+      }${compactControl ? " is-compact" : ""}${
+        sensorPip && !sensorPreviewVisible ? " is-sensor-pip-hidden" : ""
+      }`}
       aria-label="Hand input"
       style={
         {

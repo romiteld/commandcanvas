@@ -2448,8 +2448,9 @@ export function CommandCanvasRoom({
               </div>
             ) : null}
 
-            {handTrackingStatus.state === "ready" ||
-            handInteractionMode === "draw" ? (
+            {!handCalibrationOpen &&
+            (handTrackingStatus.state === "ready" ||
+              handInteractionMode === "draw") ? (
               <section
                 className={`hand-mode-toolbar hand-mode-${handInteractionMode}`}
                 aria-label="Hand interaction controls"

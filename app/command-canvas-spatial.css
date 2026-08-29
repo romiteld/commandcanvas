@@ -710,6 +710,29 @@
   color: var(--space-muted);
 }
 
+.command-canvas-shell .spatial-camera-control.is-compact {
+  top: 76px;
+  width: auto;
+  max-width: calc(100% - 36px);
+  max-height: none;
+  padding: 7px 8px;
+  overflow: visible;
+  border-radius: 999px;
+}
+
+.command-canvas-shell .spatial-camera-control.is-compact > :not(.spatial-camera-heading),
+.command-canvas-shell .spatial-camera-control.is-compact .spatial-camera-heading span {
+  display: none;
+}
+
+.command-canvas-shell .spatial-camera-control.is-compact .spatial-camera-heading button {
+  min-height: 44px;
+}
+
+.command-canvas-shell .spatial-camera-control.is-compact .spatial-camera-actions {
+  display: flex;
+}
+
 .command-canvas-shell .spatial-camera-control .spatial-camera-heading button,
 .command-canvas-shell .spatial-camera-control .camera-calibration-actions button,
 .command-canvas-shell .spatial-camera-control .camera-runtime-disclosure {
@@ -957,6 +980,14 @@
     right: 8px;
     width: min(300px, calc(100% - 16px));
     max-height: calc(100% - 152px);
+  }
+
+  .command-canvas-shell .spatial-camera-control.is-compact {
+    top: calc(66px + env(safe-area-inset-top, 0px));
+    right: 8px;
+    width: auto;
+    max-width: calc(100% - 16px);
+    max-height: none;
   }
 
   .command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas {
