@@ -188,7 +188,9 @@ const MIN_CAMERA_SPAN = 0.45;
 const MAX_CAMERA_HORIZONTAL_SPAN = 0.8;
 const MAX_CAMERA_VERTICAL_SPAN = 0.85;
 const PINCH_MIN_CONFIDENCE = 0.5;
-const PINCH_VOTE_WINDOW_MS = 100;
+const PINCH_VOTE_MIN_WINDOW_MS = 100;
+const PINCH_VOTE_MAX_WINDOW_MS = 360;
+const PINCH_VOTE_CADENCE_MULTIPLIER = 2.5;
 const PINCH_VOTE_COUNT = 2;
 const PINCH_HISTORY_SIZE = 3;
 const REACQUIRE_FREEZE_MS = 120;
@@ -401,11 +403,12 @@ export function voteCalibratedPinch(
         ignored: false,
       },
     };
+  const voteWindowMs = calibratedPinchVoteWindowMs(state, input.timestamp);
   const recentConfidentRatios = [
     ...state.recentConfidentRatios,
     { timestamp: input.timestamp, pinchRatio: input.pinchRatio },
   ]
-    .filter(({ timestamp }) => timestamp >= input.timestamp - PINCH_VOTE_WINDOW_MS)
+    .filter(({ timestamp }) => timestamp >= input.timestamp - voteWindowMs)
     .slice(-PINCH_HISTORY_SIZE);
   const votes = state.pinched
     ? recentConfidentRatios.filter(
@@ -425,7 +428,7 @@ export function voteCalibratedPinch(
   return {
     state: {
       pinched,
-      recentConfidentRatios,
+      recentConfidentRatios: transition ? [] : recentConfidentRatios,
       lastConfidentAt: input.timestamp,
       lastEvidenceTimestamp: input.timestamp,
     },
@@ -443,6 +446,36 @@ export function voteCalibratedPinch(
       ignored: false,
     },
   };
+}
+
+function calibratedPinchVoteWindowMs(
+  state: PinchVoteState,
+  timestamp: number,
+) {
+  const observedTimestamps = [
+    ...(state.recentConfidentRatios.length > 0
+      ? state.recentConfidentRatios.map((sample) => sample.timestamp)
+      : state.lastConfidentAt === null
+        ? []
+        : [state.lastConfidentAt]),
+    timestamp,
+  ];
+  const recentIntervals = observedTimestamps
+    .slice(1)
+    .map((sampleTimestamp, index) =>
+      sampleTimestamp - observedTimestamps[index]!,
+    )
+    .filter((interval) => Number.isFinite(interval) && interval > 0)
+    .slice(-(PINCH_HISTORY_SIZE - 1));
+  const observedCadenceMs =
+    recentIntervals.length > 0 ? Math.max(...recentIntervals) : 0;
+  return Math.min(
+    PINCH_VOTE_MAX_WINDOW_MS,
+    Math.max(
+      PINCH_VOTE_MIN_WINDOW_MS,
+      observedCadenceMs * PINCH_VOTE_CADENCE_MULTIPLIER,
+    ),
+  );
 }
 
 /**
