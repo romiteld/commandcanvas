@@ -387,20 +387,35 @@ async function exerciseFakeCameraLifecycle(
   page: Page,
   cameraResponses: Array<{ url: string; status: number }>,
 ) {
-  await openDrawer(page, "Open system status", "System status drawer");
-  const systemDrawer = page.getByRole("complementary", {
-    name: "System status drawer",
+  const commandDrawer = page.getByRole("complementary", {
+    name: "ChatGPT command drawer",
   });
-  const handInputRegion = systemDrawer.getByRole("region", {
+  if (await commandDrawer.isVisible()) {
+    await page
+      .getByRole("button", { name: "Close ChatGPT command drawer" })
+      .click();
+    await expect(commandDrawer).toBeHidden();
+  }
+
+  const handInputRegion = page.getByRole("region", {
     name: "Hand input",
     exact: true,
   });
-  await page.getByRole("button", { name: "Enable hand input" }).click();
-  await expect(handInputRegion.getByRole("status")).toHaveText(
-    "Hand input ready · local only",
-    { timeout: 60_000 },
+  await handInputRegion
+    .getByRole("button", { name: "Enable hand input" })
+    .click();
+  await expect(
+    handInputRegion.getByText("Hand input ready · local only", {
+      exact: true,
+    }),
+  ).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText("READY · show one hand")).toBeVisible();
+  await expect(page.getByLabel("Hand runtime diagnostics")).toContainText(
+    "MediaPipe Hand Landmarker",
   );
-  await expect(systemDrawer.getByText("READY · show one hand")).toBeVisible();
+  await page
+    .getByRole("button", { name: "Show hand tracking details" })
+    .click();
   await expect(
     page.locator(
       `[data-vision-engine="${MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID}"]`,
@@ -454,8 +469,12 @@ async function exerciseFakeCameraLifecycle(
     ),
   ).toBe(true);
 
-  await page.getByRole("button", { name: "Disable hand input" }).click();
-  await expect(page.getByText("Camera off · pointer active").first()).toBeVisible();
+  await handInputRegion
+    .getByRole("button", { name: "Disable hand input" })
+    .click();
+  await expect(
+    handInputRegion.getByRole("button", { name: "Enable hand input" }),
+  ).toBeVisible();
   const stoppedTrack = await page.evaluate(() => {
     const video = document.querySelector<HTMLVideoElement>(
       'video[aria-label="Local hand tracking preview"]',

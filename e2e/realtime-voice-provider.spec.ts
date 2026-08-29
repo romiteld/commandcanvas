@@ -97,14 +97,15 @@ test("regular GPT Realtime hears speech and submits a canonical canvas mutation"
     ).toContainText(/project board/i, { timeout: 30_000 });
     try {
       await expect(
-        page.getByRole("button", { name: "Select Launch board" }),
+        page.getByRole("button", { name: "Select Project Board" }),
       ).toBeVisible({ timeout: 30_000 });
+      const activityReceipt = page.getByRole("button", {
+        name: "Open activity drawer: Daniel created “Project Board”.",
+      });
+      await expect(activityReceipt).toBeVisible({ timeout: 30_000 });
       await expect(
-        page.getByRole("button", {
-          name: "Open activity drawer: Daniel created “Launch board”.",
-        }),
-      ).toBeVisible({ timeout: 30_000 });
-      await expect(page.getByText("R4 · voice")).toBeVisible({
+        activityReceipt.getByText("R4 · voice", { exact: true }),
+      ).toBeVisible({
         timeout: 15_000,
       });
       expect(browserErrors).toEqual([]);
