@@ -906,7 +906,10 @@ rewriting their historical evidence:
   ordinary canvas mutations. The durable actor remains the participant user,
   with actor type `agent` and source `webmcp`. Packet preparation, approval,
   recipients, staged delivery, final SEND, invitations, and room lifecycle stay
-  host-only at both registration and execute time.
+  host-only at execute time in every mode and are omitted from participant
+  registration when dynamic registration is enabled. Static compatibility mode
+  intentionally advertises the full catalog while retaining identical
+  authoritative execute-time guards.
 - Packet presentation is a typed semantic projection rather than raw JSON.
   Notes, boards, schedules, node diagrams, charts, tables, reference cards, and
   meeting cards share one validated presentation model for the browser preview,
@@ -1041,3 +1044,116 @@ rewriting their historical evidence:
   the Vercel relay feature flag remain disabled. CodeRabbit configuration is in
   source, but the GitHub App is not installed and no authenticated review event
   has run.
+
+## Checkpoint 26: permanent meeting identity and verified transactional delivery
+
+### WORKING
+
+- Commit `c9a33e2ea2cad54ecedc5b54e7aa7aba71f7b017` adds a bounded
+  `otp_rate_limited` result for Supabase's project email quota without exposing
+  provider response text. The change was written test-first, passed the exact
+  Node 22.17.0 release gate with 112 Vitest files and 1,176 of 1,176 tests, and
+  has Daniel Romitelli as its only author and committer.
+- A separate focused Node 22 audit passed 144 of 144 tests across passwordless
+  identity, the meeting lobby, invitation issuance and acceptance, packet
+  preparation and approval, explicit send authorization, Resend submission,
+  and signed-webhook reconciliation.
+- Vercel production built the exact commit, reached `READY`, and serves the canonical
+  `https://commandcanvas.vercel.app` alias. The production `/meet` route returns
+  HTTP 200 with camera and microphone permissions limited to the same origin.
+- The public landing page passed its applicable Chromium-mobile and
+  iPhone-profile WebKit checks with zero failures. A production iPhone-profile
+  capture showed the six-digit passwordless meeting flow without horizontal
+  document overflow. This is browser-profile evidence, not a physical-device
+  claim.
+- The standard meeting path uses permanent email OTP identities. The public
+  `/demo` path remains no-signup and preview-only by design; it does not send
+  invitations or meeting packets.
+
+### VERIFIED IN PUBLIC BROWSER AND PROVIDERS
+
+- Supabase Auth recorded one successful host OTP request and verification and
+  one successful invited-participant OTP request and verification. The normal
+  public UI used exactly one request per identity after the natural project
+  quota windows opened, with no retries and no OTP or session token written to
+  logs or chat.
+- A permanent host created a standard room and submitted an exact-email-bound
+  invitation. Resend reported the invitation delivered. A fresh second browser
+  verified the exact invited address, accepted the opaque single-use
+  capability, entered as `participant`, reloaded, and reconstructed the same
+  room from durable membership after the URL fragment had been scrubbed.
+- Supabase read-back shows exactly one host and one participant, the invitation
+  as delivered and consumed by a member, and the signed `email.delivered`
+  webhook applied to the exact invitation target.
+- The host prepared packet version 1, saved one recipient, approved immutable
+  content and recipient snapshots, staged the send, and explicitly selected
+  **SEND**. Resend accepted and then reported the meeting packet delivered.
+- Supabase read-back shows the outbound share as provider `resend`, status
+  `delivered`, complete, and associated with a provider event. The signed
+  `email.delivered` webhook was applied to the exact packet send-request target.
+  Earlier `email.sent` webhook events were classified as stale after the
+  authoritative delivered state, as designed.
+- Vercel runtime logs show HTTP 200 or 201 for meeting creation, canvas
+  persistence, invitation creation and acceptance, packet preparation, save,
+  approval, staging, explicit execution, and targeted invitation and packet
+  webhooks. The only webhook 503 retries in the window belong to unmatched
+  Supabase OTP emails with no invitation or packet target; they did not affect
+  either verified delivery.
+- Private room, identity, invitation, packet, provider-message, webhook-event,
+  capability, and recipient identifiers are intentionally omitted from this
+  public ledger. They remain in the restricted provider/database evidence used
+  for the read-back above.
+
+### REVIEW AND DEPLOYMENT BOUNDARIES
+
+- Review-only GitHub pull request 1 compares the released cross-cutting change
+  set with the pre-release base and must not be merged. GitHub's automated
+  Copilot reviewer completed a 59-file review. Its single comment proposed
+  phase-filtering static WebMCP registration; that was dispositioned without a
+  code change because static full-catalog registration plus authoritative
+  execute-time guards is the approved compatibility fallback. Dynamic mode is
+  the phase-filtered registration mode. This is not presented as a CodeRabbit
+  review.
+- `.coderabbit.yaml` is valid and repository-specific, but the CodeRabbit
+  GitHub App is not installed for the repository. No CodeRabbit review has run.
+- The separate RTX relay remains fail-closed. Its public corresponding-source
+  repository does not yet exist, production port 8100 is not listening, and
+  `PRIVATE_HAND_RELAY_ENABLED` remains false. Preflight also found that the
+  protected host key is valid while the Vercel signing-key value is malformed;
+  the values must be aligned without disclosure before enablement. The public
+  relay capability route therefore still returns 502 through the already-valid
+  Caddy route. No DNS, firewall, pfSense, or router mutation is needed.
+- The existing CUDA-verified YOLO26 640 FP16 image is tied to exact relay source
+  commit `9f652a67dbe2c824ee68f7985ab13bb0af56ae6f`. Public source must expose that
+  exact commit before the image can be served. Later documentation commits are
+  not substitutes for the source of the running bytes.
+
+### REMAINS UNVERIFIED
+
+- A person still needs to exercise the exact release on a physical phone:
+  index-finger drawing, full-edge reach, pinch acquire/hold/move/release,
+  two-hand resize and canvas zoom, open-palm pan, minimize, recoverable edge
+  throw, hand crossing, lighting, occlusion, sustained cadence, thermals, and
+  local fallback during relay loss.
+- ChatGPT's built-in-browser Site Tools discovery, confirmation, voice-guidance
+  handoff, and live-page invocation remain unverified. Native Chrome 153 and
+  in-page GPT Realtime are separate verified boundaries and are not substitutes
+  for the ChatGPT host.
+- Physical microphone speech recognition, interruption behavior, and
+  conversational latency remain unverified. The paid Realtime provider was
+  exercised previously with controlled browser audio.
+- Public dynamic WebMCP registration remains unverified at a distinct public
+  dynamic HTTPS deployment. The canonical public deployment intentionally uses
+  static registration with identical execute-time guards.
+- Cross-network restrictive-NAT peer media remains unverified; there is no TURN
+  relay or SFU.
+
+### CURRENT SCOPE
+
+- No approved hand-control, object-creation, voice, canvas, collaboration,
+  invitation, packet, or WebMCP capability was cut. Physical pencil, marker, or
+  arbitrary-object tracking; permanent unrecoverable gesture deletion; TURN or
+  SFU infrastructure; recording; screen sharing; production conferencing
+  scale; broad office-suite integrations; enterprise identity; billing; native
+  applications; headset support; marketplaces; and desktop automation remain
+  outside this release.
