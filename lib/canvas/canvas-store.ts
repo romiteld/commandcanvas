@@ -32,6 +32,7 @@ export interface CanvasStoreState {
     actorOverride?: CanvasActor,
   ) => CommandResult;
   hydrateCanvas: (canvas: CanvasState) => boolean;
+  confirmCanvas: (canvas: CanvasState) => boolean;
   selectObject: (objectId: string | null) => void;
   selectObjects: (objectIds: string[]) => void;
   toggleObjectSelection: (objectId: string) => void;
@@ -99,6 +100,12 @@ export function createCanvasStore(
         lastError: null,
       });
       return true;
+    },
+    confirmCanvas(canvas) {
+      const current = get().canvas;
+      if (canvas.roomId !== roomId) return false;
+      if (canvas.revision < current.revision) return true;
+      return get().hydrateCanvas(canvas);
     },
     selectObject(selectedObjectId) {
       const selectedObjectIds = selectedObjectId ? [selectedObjectId] : [];

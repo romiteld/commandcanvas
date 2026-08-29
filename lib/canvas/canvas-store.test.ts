@@ -154,6 +154,35 @@ describe("canvas store", () => {
     expect(local.getState().canvas).toBe(current);
   });
 
+  it("confirms an older same-room command result after realtime already advanced the room", () => {
+    const remote = createCanvasStore("room-demo", dependencies());
+    remote.getState().dispatch(newNote, "collaborator");
+    const commandResult = remote.getState().canvas;
+    remote.getState().dispatch(
+      {
+        type: "object.create",
+        object: {
+          ...newNote.object,
+          id: "note-2",
+          title: "Newer collaborator note",
+          x: 480,
+        },
+      },
+      "collaborator",
+    );
+
+    const local = createCanvasStore("room-demo", dependencies());
+    expect(local.getState().hydrateCanvas(remote.getState().canvas)).toBe(true);
+    const newerState = local.getState().canvas;
+
+    expect(local.getState().confirmCanvas(commandResult)).toBe(true);
+    expect(local.getState().canvas).toBe(newerState);
+    expect(local.getState().canvas.revision).toBe(2);
+    expect(
+      local.getState().confirmCanvas({ ...commandResult, roomId: "other-room" }),
+    ).toBe(false);
+  });
+
   it("clears a selection when authoritative hydration marks that object deleted", () => {
     const local = createCanvasStore("room-demo", dependencies());
     local.getState().dispatch(newNote, "pointer");
