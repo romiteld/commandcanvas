@@ -987,3 +987,57 @@ rewriting their historical evidence:
   identity, broad document-suite integrations, billing, native applications,
   headset support, marketplaces, and desktop automation remain outside this
   release.
+
+## Checkpoint 25: public release and canonical-origin verification
+
+### WORKING
+
+- Source release commit `13ac311e21e7383ae1dab4c5f67f2753daef5600`
+  was pushed to the public `romiteld/commandcanvas` `main` branch. The GitHub
+  repository reports public visibility, `main` as its default branch, and MIT
+  as its recognized license. The commit has Daniel Romitelli as its only author
+  and committer and contains no co-author or generator attribution.
+- Vercel production deployment `dpl_EN2VKhRkrpjsXKhmWfpHQh7frKtr` built from
+  that clean source release, reached `READY`, and was assigned to
+  `https://commandcanvas.vercel.app`.
+- The participant WebMCP migration remains deployed in Supabase. The native GPU
+  relay remains deliberately disabled at the public boundary until its
+  separately licensed source repository is public and linked from the service.
+
+### VERIFIED IN BROWSER
+
+- The canonical public origin passed the 74-scenario release matrix with 28
+  applicable scenarios passed, 46 explicit project, provider, credential, or
+  hardware skips, and zero failures. The applicable targets included Chromium
+  desktop and mobile, iPhone-profile WebKit, and native Chrome 153 WebMCP
+  registration against the ten-tool catalog.
+- The canonical public origin passed the separate controlled-camera lifecycle
+  matrix with 5 applicable scenarios passed, 3 deliberate project skips, and
+  zero failures. The matrix covered desktop and mobile permission, worker,
+  WASM/model loading, calibration layout, compact PiP return, detachment,
+  shutdown, and classic-WASM desktop recovery.
+- `/`, `/demo`, `/local`, `/meet`, and `/icon.svg` each returned HTTP 200 from
+  the canonical alias. Vercel reported no error-level runtime logs during the
+  public verification window.
+
+### REMAINS UNVERIFIED
+
+- A physical phone and person still need to exercise final index drawing,
+  pinch acquisition/release, full-edge reach, one-hand movement, simultaneous
+  two-hand release and resize, open-palm pan, recoverable throw, mirrored-camera
+  ergonomics, lighting, occlusion, latency, and thermals. Controlled media and
+  browser profiles are evidence for lifecycle and layout, not physical accuracy.
+- The ChatGPT built-in browser Site Tools rollout and invocation surface remain
+  unverified. Native Chrome 153 verifies the browser API contract only.
+- Real GPT Realtime microphone/provider behavior, live two-browser media, and a
+  current-release real vision-provider request were not rerun in this release
+  gate. Their deterministic contracts and unchanged implementation remain
+  tested, but this checkpoint does not present them as new physical/provider
+  evidence.
+- Real Resend invitation and packet delivery remain disabled because the Vercel
+  project does not have an owner-supplied sending key or webhook signing secret.
+  The application reports preview-only rather than claiming delivery.
+- The native relay source repository is not public, so production port 8100 and
+  the Vercel relay feature flag remain disabled. CodeRabbit configuration is in
+  source, but the GitHub App is not installed and no authenticated review event
+  has run.
