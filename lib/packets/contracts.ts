@@ -8,6 +8,16 @@ const packetIdSchema = z
   .regex(/^[a-z][a-z0-9-]*$/);
 const noHeaderControls = /^[^\u0000-\u001f\u007f]*$/;
 
+export const PACKET_SAFE_OBJECT_TYPES = [
+  "note",
+  "task_board",
+  "schedule",
+  "diagram",
+  "data_table",
+  "reference_card",
+  "meeting_card",
+] as const;
+
 export const packetTitleSchema = z
   .string()
   .trim()
@@ -56,15 +66,7 @@ export const packetContentSchema = z
         z
           .object({
             objectId: packetIdSchema,
-            objectType: z.enum([
-              "note",
-              "task_board",
-              "schedule",
-              "diagram",
-              "data_table",
-              "reference_card",
-              "meeting_card",
-            ]),
+            objectType: z.enum(PACKET_SAFE_OBJECT_TYPES),
             title: packetTitleSchema,
             payload: z.record(z.string(), z.unknown()),
           })

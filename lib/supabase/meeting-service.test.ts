@@ -7,6 +7,7 @@ import { createMeetingService } from "@/lib/supabase/meeting-service";
 const ACTOR_ID = "22222222-2222-4222-8222-222222222222";
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const INVITATION_ID = "33333333-3333-4333-8333-333333333333";
+const RETRY_CANDIDATE_ID = "77777777-7777-4777-8777-777777777777";
 const REQUEST_ID = "44444444-4444-4444-8444-444444444444";
 const INVITE_SECRET = "test-only-invite-secret-with-at-least-32-bytes";
 
@@ -121,7 +122,7 @@ describe("meeting service", () => {
     };
     const client = clientWith([response, response]);
     const service = createMeetingService(client, {
-      createUuid: () => INVITATION_ID,
+      createUuid: () => RETRY_CANDIDATE_ID,
       randomBytes: (size) => Buffer.alloc(size, 1),
       now: () => new Date("2026-08-28T12:00:00.000Z"),
       inviteTokenSecret: INVITE_SECRET,
@@ -136,11 +137,55 @@ describe("meeting service", () => {
     const first = await service.createInvitation(ACTOR_ID, ROOM_ID, input);
     const second = await service.createInvitation(ACTOR_ID, ROOM_ID, input);
     expect(first.ok && first.value.token).toBe(second.ok && second.value.token);
+    expect(first.ok && first.value.invitationId).toBe(INVITATION_ID);
+    expect(second.ok && second.value.invitationId).toBe(INVITATION_ID);
     expect(client.rpc).toHaveBeenNthCalledWith(
       2,
       "create_room_email_invitation",
-      expect.objectContaining({ p_request_id: REQUEST_ID }),
+      expect.objectContaining({
+        p_invitation_id: RETRY_CANDIDATE_ID,
+        p_request_id: REQUEST_ID,
+      }),
     );
+  });
+
+  it("refuses a created invitation whose durable identity differs from the requested identity", async () => {
+    const service = createMeetingService(
+      clientWith([
+        {
+          data: {
+            outcome: "created",
+            invitationId: INVITATION_ID,
+            roomId: ROOM_ID,
+            expiresAt: "2026-08-29T12:00:00.000Z",
+            roomName: "Product review",
+            idempotencyKey: `commandcanvas:invite:${INVITATION_ID}`,
+            deliveryStatus: "created",
+            providerMessageId: null,
+          },
+          error: null,
+        },
+      ]),
+      {
+        createUuid: () => RETRY_CANDIDATE_ID,
+        randomBytes: (size) => Buffer.alloc(size, 1),
+        now: () => new Date("2026-08-28T12:00:00.000Z"),
+        inviteTokenSecret: INVITE_SECRET,
+      },
+    );
+
+    const result = await service.createInvitation(ACTOR_ID, ROOM_ID, {
+      requestId: REQUEST_ID,
+      email: "sarah@example.com",
+      displayName: "Sarah",
+      color: "#a855f7",
+      expiresInHours: 24,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "service_unavailable" },
+    });
   });
 
   it("accepts by actor plus opaque token only and returns a participant room", async () => {

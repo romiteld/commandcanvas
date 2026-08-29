@@ -12,14 +12,20 @@ import {
   type StagedPacketSendView,
 } from "@/components/command-canvas/meeting-packet-panel";
 import type { CanvasStoreState } from "@/lib/canvas/canvas-store";
+import type { CanvasObject } from "@/lib/canvas/object-model";
 import type { DemoRoomSession } from "@/lib/demo/room-session";
-import type { BrowserPersistedPacketWorkflow } from "@/lib/packets/browser-api";
+import type {
+  BrowserExecutedPacketSend,
+  BrowserPersistedPacketWorkflow,
+} from "@/lib/packets/browser-api";
+import { PACKET_SAFE_OBJECT_TYPES } from "@/lib/packets/contracts";
 
 export interface MeetingPacketWorkflowState {
   packet: MeetingPacketView | null;
   activity?: readonly MeetingPacketActivityView[];
   stagedSend?: StagedPacketSendView;
   sendOutcome?: MeetingPacketSendOutcomeView;
+  canStageSend?: boolean;
   error?: string;
 }
 
@@ -86,8 +92,26 @@ export interface MeetingPacketWorkflowController {
   recordError: (message: string) => void;
 }
 
-const EMPTY_PACKET_WORKFLOW: MeetingPacketWorkflowState = { packet: null };
+const EMPTY_PACKET_WORKFLOW: MeetingPacketWorkflowState = {
+  packet: null,
+  canStageSend: false,
+};
 const NO_PACKET_RECIPIENTS: readonly MeetingPacketRecipientInput[] = [];
+const MEETING_PACKET_OBJECT_TYPES = new Set<CanvasObject["type"]>(
+  PACKET_SAFE_OBJECT_TYPES,
+);
+
+export function isMeetingPacketObjectType(type: CanvasObject["type"]) {
+  return MEETING_PACKET_OBJECT_TYPES.has(type);
+}
+
+export function packetSendOutcomeFromExecution(
+  executed: BrowserExecutedPacketSend,
+): MeetingPacketSendOutcomeView {
+  if (executed.status === "preview_only") return { kind: "preview_only" };
+  if (executed.status === "reconciling") return { kind: "reconciling" };
+  return { kind: "submitted" };
+}
 
 export function useMeetingPacketWorkflow(options: {
   session: PacketSession | null;
@@ -193,8 +217,7 @@ export function useMeetingPacketWorkflow(options: {
           store.getState().canvas.objects,
         ).filter(
           (object) =>
-            !object.deletedAt &&
-            ["note", "task_board", "schedule", "diagram"].includes(object.type),
+            !object.deletedAt && isMeetingPacketObjectType(object.type),
         );
         const semanticIds = new Set(semanticObjects.map((object) => object.id));
         const selectedObjectIds = input.objectIds
@@ -257,8 +280,8 @@ export function useMeetingPacketWorkflow(options: {
           contentSnapshot: prepared.value.contentSnapshot,
           recipients,
         };
-        commit({ packet });
-        await refreshPersisted({ packet }, signal);
+        commit({ packet, canStageSend: false });
+        await refreshPersisted({ packet, canStageSend: false }, signal);
         return { ok: true as const, value: prepared.value };
       }),
     [
@@ -307,8 +330,8 @@ export function useMeetingPacketWorkflow(options: {
             "The saved recipient snapshot could not be verified.",
           );
         const packet: MeetingPacketView = { ...current, recipients };
-        commit({ packet });
-        await refreshPersisted({ packet });
+        commit({ packet, canStageSend: false });
+        await refreshPersisted({ packet, canStageSend: false });
         return { ok: true as const, value: updated.value };
       });
       if (!result.ok) throw new Error(result.error.message);
@@ -359,8 +382,8 @@ export function useMeetingPacketWorkflow(options: {
             recipients: approved.value.recipientSnapshot,
           },
         };
-        commit({ packet });
-        await refreshPersisted({ packet });
+        commit({ packet, canStageSend: true });
+        await refreshPersisted({ packet, canStageSend: true });
         return { ok: true as const, value: approved.value };
       });
       if (!result.ok) throw new Error(result.error.message);
@@ -409,8 +432,11 @@ export function useMeetingPacketWorkflow(options: {
           recipientHash: staged.value.recipientHash,
           recipients: staged.value.recipientSnapshot,
         };
-        commit({ packet: current, stagedSend });
-        await refreshPersisted({ packet: current, stagedSend }, signal);
+        commit({ packet: current, stagedSend, canStageSend: false });
+        await refreshPersisted(
+          { packet: current, stagedSend, canStageSend: false },
+          signal,
+        );
         return { ok: true as const, value: staged.value };
       }),
     [commit, refreshPersisted, runOperation, session],
@@ -446,6 +472,7 @@ export function useMeetingPacketWorkflow(options: {
         const next: MeetingPacketWorkflowState = {
           packet: current.packet,
           sendOutcome: { kind: "cancelled" },
+          canStageSend: true,
         };
         commit(next);
         await refreshPersisted(next);
@@ -483,10 +510,8 @@ export function useMeetingPacketWorkflow(options: {
         if (!executed.ok) return executed;
         const next: MeetingPacketWorkflowState = {
           packet: current.packet,
-          sendOutcome:
-            executed.value.mode === "preview_only"
-              ? { kind: "preview_only" }
-              : { kind: "submitted" },
+          sendOutcome: packetSendOutcomeFromExecution(executed.value),
+          canStageSend: executed.value.status === "preview_only",
         };
         commit(next);
         await refreshPersisted(next);
@@ -499,6 +524,7 @@ export function useMeetingPacketWorkflow(options: {
             ? { packet: current.packet }
             : current),
           sendOutcome: { kind: "failure", message: result.error.message },
+          canStageSend: false,
         };
         commit(fallback);
         await refreshPersisted(fallback);
@@ -556,7 +582,7 @@ export function MeetingPacketWorkflowPanel({
           />
           {state.packet.status === "approved" &&
           !state.stagedSend &&
-          state.sendOutcome?.kind !== "submitted" ? (
+          state.canStageSend === true ? (
             <button
               type="button"
               className="packet-fallback-action"
@@ -616,7 +642,8 @@ export function packetWorkflowFromPersisted(
       description: receipt.description,
     }),
   );
-  if (!persisted.packet) return { packet: null, activity };
+  if (!persisted.packet)
+    return { packet: null, activity, canStageSend: false };
 
   const persistedPacket = persisted.packet;
   const objectCount = persistedPacket.contentSnapshot.content.objects.length;
@@ -652,7 +679,8 @@ export function packetWorkflowFromPersisted(
         };
 
   const latestSend = persisted.latestSend;
-  if (!latestSend) return { packet, activity };
+  if (!latestSend)
+    return { packet, activity, canStageSend: packet.status === "approved" };
   if (
     latestSend.status === "awaiting_human_approval" &&
     packet.status === "approved" &&
@@ -670,13 +698,29 @@ export function packetWorkflowFromPersisted(
         recipientHash: latestSend.recipientHash,
         recipients: latestSend.recipients,
       },
+      canStageSend: false,
     };
   if (latestSend.status === "cancelled")
-    return { packet, activity, sendOutcome: { kind: "cancelled" } };
+    return {
+      packet,
+      activity,
+      sendOutcome: { kind: "cancelled" },
+      canStageSend: true,
+    };
   if (latestSend.status === "preview_only")
-    return { packet, activity, sendOutcome: { kind: "preview_only" } };
+    return {
+      packet,
+      activity,
+      sendOutcome: { kind: "preview_only" },
+      canStageSend: true,
+    };
   if (latestSend.deliveryStatus === "delivered")
-    return { packet, activity, sendOutcome: { kind: "delivered" } };
+    return {
+      packet,
+      activity,
+      sendOutcome: { kind: "delivered" },
+      canStageSend: false,
+    };
   if (
     latestSend.providerMessageId !== null &&
     (latestSend.deliveryStatus === "bounced" ||
@@ -691,14 +735,26 @@ export function packetWorkflowFromPersisted(
         kind: "failure",
         message: deliveryFailureMessage(latestSend.deliveryStatus),
       },
+      canStageSend: false,
     };
   if (
+    latestSend.status === "sending" ||
     latestSend.status === "reconciling" ||
     latestSend.deliveryStatus === "reconciling"
   )
-    return { packet, activity, sendOutcome: { kind: "reconciling" } };
+    return {
+      packet,
+      activity,
+      sendOutcome: { kind: "reconciling" },
+      canStageSend: false,
+    };
   if (latestSend.status === "submitted")
-    return { packet, activity, sendOutcome: { kind: "submitted" } };
+    return {
+      packet,
+      activity,
+      sendOutcome: { kind: "submitted" },
+      canStageSend: false,
+    };
   if (latestSend.status === "failed")
     return {
       packet,
@@ -707,8 +763,19 @@ export function packetWorkflowFromPersisted(
         kind: "failure",
         message: "The recorded delivery attempt did not complete.",
       },
+      canStageSend: true,
     };
-  return { packet, activity };
+  if (latestSend.status === "expired")
+    return {
+      packet,
+      activity,
+      sendOutcome: {
+        kind: "failure",
+        message: "The staged packet send expired before authorization.",
+      },
+      canStageSend: true,
+    };
+  return { packet, activity, canStageSend: false };
 }
 
 function deliveryFailureMessage(

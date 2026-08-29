@@ -253,13 +253,15 @@ export function createMeetingService(
         const parsed = invitationRpcSchema.safeParse(response.data);
         if (
           !parsed.success ||
-          parsed.data.roomId !== roomId
+          parsed.data.roomId !== roomId ||
+          (parsed.data.outcome === "created" &&
+            parsed.data.invitationId !== invitationId)
         )
           return unavailable();
         return {
           ok: true,
           value: {
-            invitationId,
+            invitationId: parsed.data.invitationId,
             roomId,
             email: input.data.email,
             displayName: input.data.displayName,
