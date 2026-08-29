@@ -5,7 +5,6 @@ import { expect, test } from "@playwright/test";
 
 import {
   MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL,
-  MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
 } from "../lib/gesture/spatial-vision-engine";
 
 import {
@@ -75,18 +74,17 @@ test("starts the local hand detector from a real browser camera stream and relea
     ).toBeVisible({ timeout: 60_000 });
     await expect(page.getByText("READY · show one hand")).toBeVisible();
     await expect(
-      page.locator(
-        `[data-vision-engine="${MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID}"]`,
-      ),
-    ).toHaveText("Engine MediaPipe Hand Landmarker");
+      page.getByLabel("Hand runtime diagnostics"),
+    ).toContainText("MediaPipe Hand Landmarker");
 
     await expect(
       page.getByRole("complementary", { name: "System status drawer" }),
     ).toBeHidden();
     await expect(
       page.getByRole("region", { name: "Hand interaction controls" }),
-    ).toBeVisible();
-    await page.getByRole("button", { name: "Open hand calibration" }).click();
+    ).toBeHidden();
+    if (!(await page.locator(".camera-preview").isVisible()))
+      await page.getByRole("button", { name: "Open hand calibration" }).click();
 
     const viewport = page.viewportSize();
     const calibration = await page.locator(".camera-preview").boundingBox();

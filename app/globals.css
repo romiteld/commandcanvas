@@ -2328,9 +2328,11 @@ button:focus-visible {
 }
 
 .spatial-camera-control.is-expanded .camera-preview {
-  min-height: 52dvh;
+  min-height: 0;
   height: 52dvh;
+  max-height: 60dvh;
   border-radius: 18px;
+  overflow: hidden;
   box-shadow: 0 22px 70px rgb(9 15 26 / 26%);
 }
 
@@ -2445,16 +2447,23 @@ button:focus-visible {
 
 @media (max-width: 820px) {
   .persistent-system-drawer:has(.spatial-camera-control.is-expanded) {
-    inset: max(6px, env(safe-area-inset-top, 0px)) 6px max(6px, env(safe-area-inset-bottom, 0px));
+    top: auto;
+    right: 6px;
+    bottom: max(6px, env(safe-area-inset-bottom, 0px));
+    left: 6px;
+    height: min(48dvh, 430px);
+    max-height: 48dvh;
   }
 
   .spatial-camera-control.is-expanded {
-    padding: 12px;
+    min-height: 0;
+    padding: 10px;
   }
 
   .spatial-camera-control.is-expanded .camera-preview {
-    min-height: 56dvh;
-    height: 56dvh;
+    min-height: 0;
+    height: min(27dvh, 240px);
+    max-height: 28dvh;
   }
 
   .hand-mode-toolbar {
