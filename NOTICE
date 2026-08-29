@@ -1,0 +1,8 @@
+CommandCanvas Hand Relay
+Copyright (C) 2026 Daniel Romitelli
+
+This relay release is licensed under the GNU Affero General Public License,
+version 3 only. See LICENSE.
+
+Third-party runtimes and hand-pose models retain their own copyrights and
+applicable license terms. See THIRD_PARTY_NOTICES.md and SOURCE.md.

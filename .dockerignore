@@ -1,0 +1,12 @@
+**
+!services/
+!services/hand-relay/
+!services/hand-relay/Dockerfile
+!services/hand-relay/commandcanvas_hand_relay/
+!services/hand-relay/commandcanvas_hand_relay/**
+!services/hand-relay/models/
+!services/hand-relay/models/*.onnx
+!services/hand-relay/requirements.lock
+!public/
+!public/models/
+!public/models/yolo26_hand_pose_320_fp16.onnx
