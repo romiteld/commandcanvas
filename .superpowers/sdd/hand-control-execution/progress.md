@@ -1,0 +1,104 @@
+# SDD ledger — plan: /home/romiteld/Development/AI_ML/commandcanvas-hand-control-recovery/.superpowers/sdd/hand-control-execution.md
+
+## Workspace and baseline
+
+- Base: `24fdeb778df6dd3e8269b922802d97c7aa03c43b`
+- Branch: `feat/hand-control-recovery`
+- Worktree: `/home/romiteld/Development/AI_ML/commandcanvas-hand-control-recovery`
+- Ruling: use a sibling worktree rather than an unignored project-local `.worktrees` directory — protects clean `main` without a bookkeeping commit — if wrong, cleanup requires an explicit `git worktree remove` at finish.
+- Initial environment run: Node 20 plus inherited Windows `TEMP` caused 95 import failures with `ENOENT` under `/mnt/c/Users/Danny/AppData/Local/Temp`; no production code ran.
+- Verified baseline: Node 22.14.0 with `TMPDIR=/tmp TEMP=/tmp TMP=/tmp`; `npm test`; 95 files, 934 tests passed, exit 0.
+
+## Preflight consistency scan
+
+| Task or shared pair | Producer → consumer / internal check | Finding and ruling |
+|---|---|---|
+| Task 1 | Landmark measurements → Tasks 2, 3, 5, 6, 7 | Consistent. Preserve public observation compatibility while adding raw measurements. |
+| Task 2 | Calibration/pinch/identity → Tasks 3 and 4 | Consistent. Calibration profile is interaction state, not detector state. |
+| Task 3 | Spatial phases/intents → Task 4 UI and Task 7 replay | Consistent. Preview intents remain ephemeral; commit remains canonical. |
+| Task 4 | Drawing/motion UX → Task 7 browser acceptance | Consistent. UI may consume phases but never reinterpret landmarks. |
+| Task 5 | Scheduler/engine metrics → Tasks 6 and 7 | Consistent. Engine choice changes source only, never semantics. |
+| Task 6 | RTX YOLO/RTMPose adapter → Task 7 benchmark | License gate and model absence are explicit; implementation must remain evaluation-only until cleared. |
+| Task 7 | Evidence and release checks | Consistent. Fake/replay/browser evidence must not be mislabeled physical. |
+| Tasks 1 + 2 | Both touch hand interpretation state | Ruling: Task 1 owns physical measurements/filter primitives; Task 2 alone owns calibrated thresholds, temporal voting, and loss/identity policy — if wrong, refactor may duplicate history state. |
+| Tasks 2 + 3 | Both influence interaction phases | Ruling: Task 2 outputs reliable observations/identity; Task 3 owns object targeting and canvas phases — if wrong, detector code may acquire objects. |
+| Tasks 3 + 4 | Both touch room gesture orchestration | Ruling: reducer changes land before UI wiring; Task 4 consumes reducer intents without duplicating business logic — if wrong, component integration may require reducer adjustment. |
+| Tasks 5 + 6 | Both touch private relay contracts | Ruling: Task 5 establishes scheduling/640/metrics first; Task 6 adds optional hybrid pipeline behind the stable contract — if wrong, protocol changes may require a compatibility shim. |
+| Every task | Tests specified against production behavior | Consistent with TDD. Each implementer must record a genuine RED failure and GREEN output. |
+
+## Global rulings
+
+- Ruling: implement control-stack correctness before promoting any Hugging Face model — verified defects exist independently of detector choice — if wrong, model work may arrive later but no public behavior is misrepresented.
+- Ruling: the user’s requirement that YOLO is mandatory is satisfied by retaining YOLO as detector/reacquirer in every private RTX hybrid — if wrong, a later benchmark could show a different detector wins, but that does not override the explicit product requirement.
+- Ruling: no deployment, push, or external infrastructure mutation occurs in this branch task — those are separate externally visible side effects — if wrong, the user must explicitly authorize release integration later.
+- Ruling: natural spatial grammar is index fingertip for cursor/ink, open palm for clutch or blank-canvas pan, thumb-index pinch for grab/release, and two stable pinches for object translation/scale/rotation — aligns control with the user’s physical model — if wrong, gesture tuning may need remapping but the typed intent boundary remains stable.
+- Ruling: voice/WebMCP creates or retrieves semantic objects such as articles, notes, boards, and diagrams; the hand vision model supplies geometry only — prevents a detector choice from limiting object creation — if wrong, a future multimodal intent layer can consume the same `CanvasIntent` contract.
+- Acceptance lock: architecture diagrams are examples, not an audience or object-vocabulary boundary. Spoken/ChatGPT requests may create any supported typed semantic object (including diagrams, charts, tables, notes/thoughts, boards, schedules, reference/article cards, and packets) through proposal/schema validation and the canonical mutation/receipt path. A spoken `new thought` creates one focused card and streams speech-to-text into that card until explicit finish; it must not open repeated panels or create one object per interim transcript.
+- Ruling: after Task 1, execute runtime Task 5 and RTX model Task 6 before the remaining UI polish because the user explicitly prioritized a materially better 3090 path — if wrong, calibration work is delayed by two reviewed slices but no existing input fallback is removed.
+- Ruling: the ChatGPT built-in browser is a first-class verification target. Camera/voice/touch remain normal page capabilities, while ChatGPT receives only page/session-scoped semantic WebMCP tools and canvas state; camera frames and raw landmarks are never exposed as site-tool inputs — if wrong, an integration could weaken privacy and duplicate gesture business logic.
+
+## Online spatial-interaction research lock (2026-08-28)
+
+- Verified pattern: mature spatial stacks separate `hover/candidate -> acquire -> manipulate -> release`; they do not fire mutations from a stateless gesture label. Meta's 2026 grab spec uses a 10-degree acquire cone held for 100 ms and a 20-degree untarget cone, plus separate pinch start/stop thresholds. CommandCanvas will translate that into screen-space sticky target enter/exit radii and dwell, not copy headset-meter values.
+- Verified pattern: Ultraleap and Meta both use pinch hysteresis, and Meta separates hand existence, targeting, selection, alignment, manipulation, and release. Task 2 owns calibrated pinch voting; Task 3 owns sticky target and active interaction ownership.
+- Verified pattern: Microsoft direct manipulation maps index finger to 2D slate interaction, one hand to translation, and two hands to translation/scale/rotation. CommandCanvas will implement 2D screen-plane transforms only; webcam landmark `z` is not treated as calibrated physical depth.
+- Verified pattern: a browser hand-drawing example (`malik-builds/HandCanvas`) uses index-only drawing, independent cursor rendering, EMA/dead-zone stabilization, and midpoint Bezier strokes. We will not copy its classifier; Task 4 will use the production normalized measurements and One Euro output, resample by distance/time, and preserve pointer fallback.
+- Verified pattern: a browser two-hand example (`Hand City`) gives both-hands state priority, normalizes pinch distance by palm size, applies hysteresis, and keeps the existing object anchor. Task 3 will use an explicit priority ladder and capture transform baselines on entry/upgrade.
+- Verified pattern: large-display HCI work shows that absolute full-frame mapping creates reach and precision problems. CommandCanvas will use per-session calibration plus hybrid mapping: comfortable motor-space maps to the full canvas, low-speed motion gets precision gain, active interactions can clutch/recenter, and the preview is optional rather than the interaction boundary.
+- Ruling: open palm is contextual, not globally live. It may clutch/recenter or pan only when no object/drawing interaction owns the hand and the canvas-navigation context is active. This prevents the current open-palm/fist false-drawing failure.
+- Ruling: object discard may be initiated by a deliberate release into a visible edge trash zone using a short object-velocity window, but it is a recoverable soft discard with immediate Undo. Tracking loss can never be interpreted as release, throw, or delete.
+- Ruling: no cinematic symbolic gesture controls maximize/minimize/delete directly. Continuous geometry uses hands; discrete object commands remain local object affordances and voice/WebMCP tools, with a throw-to-trash convenience path for discard.
+- Ruling: Iron Man contributes multimodal orchestration (voice plus visually purposeful widgets with damped motion), not a computer-vision implementation. Perception's production account says at least some filmed gestures were improvised first and the UI/user flow was designed afterward; that is choreography evidence, not tracking evidence. Minority Report contributes direct spatial composition and multi-user canvas lineage; sustained arms-up choreography and invisible destructive swipes are explicitly rejected.
+- Ruling: public `/demo` registration and receipts remain top-level DOM/page behavior because OpenAI documents that ChatGPT Site Tools operate against the same open page and signed-in session, and currently do not discover tools exposed only by embedded content.
+
+## Task progress
+
+- Task 1: COMPLETE and independently APPROVED at `2e6dcd90fb0cbe92cbc4d21d5debd9c73f676889`. Verified in source/tests: index-tip pointer semantics, separated physical measurements, timestamp-aware One Euro filtering, predicted-sample state retention, latched-pinch retention through unreliable thumb data, and complete open-palm confidence gating across every consumed landmark (`0, 5, 6, 8, 10, 12, 14, 16, 17, 18, 20`). Final focused verification: 2 files / 29 tests; implementation report records 96 files / 943 tests plus lint/typecheck green. Physical smoothness remains explicitly unverified until real camera/device evidence.
+- Task 2: pending
+- Task 3: pending
+- Task 4: pending
+- Task 5: COMPLETE in the Task 5 implementation commit. Verified: focused RED/GREEN contract; bounded runtime metrics and startup fallback; rVFC/rAF scheduler and first-plus-newest bitmap queue; stale-result boundary; worker timing; adaptive 640 browser relay source without relabeling the 320 server model; compact diagnostics; typecheck/lint; 97 files / 960 tests; production webpack build; and one real system-Chrome YOLO worker inference. Physical hand smoothness, RTX behavior, fake-camera runtime, public deployment, and ChatGPT/WebKit target-host behavior remain explicitly unverified.
+- Task 6: pending
+- Task 7: pending
+
+## ChatGPT built-in browser WebMCP source audit (2026-08-28)
+
+- VERIFIED IN SOURCE: tools register only through the top-level page's `document.modelContext`; no deprecated `navigator.modelContext` fallback is accepted.
+- VERIFIED IN SOURCE: `/demo`, `/meet`, and `/local` render CommandCanvas directly in their route document rather than an iframe, and registration waits for the live room/session to initialize.
+- VERIFIED IN SOURCE: invocation reads the current page/session/Zustand state, applies strict schemas plus execute-time phase/role guards, propagates registration and invocation cancellation signals, and routes mutations through the canonical command/receipt path.
+- VERIFIED IN SOURCE: packet delivery remains staged by WebMCP and requires the host to press the visible SEND control before the server-side external side effect.
+- UNVERIFIED IN TARGET HOST: ChatGPT desktop built-in-browser discovery, invocation, host confirmation UI, account/model eligibility, and page-lifecycle behavior have not been exercised in this branch. Chrome 153 evidence cannot close that boundary.
+- Ruling: static registration remains the public default until a separately deployed dynamic build is exercised in the actual ChatGPT built-in browser. Execute-time guards remain authoritative in both modes.
+- UI RULING: add one compact floating `ChatGPT` control on the canvas. It opens the command/tool/approval/receipt drawer and reports real Site Tools availability. Its microphone segment uses the surrounding ChatGPT Voice control when hosted in ChatGPT and falls back to opt-in CommandCanvas Realtime voice in an ordinary browser. No supported webpage API is documented for programmatically activating the host ChatGPT microphone, so the page must guide rather than fake that action. Both voice paths converge on the same validated intent/mutation/receipt layer.
+- SOURCE AUDIT DETAIL: the existing `Command ChatGPT` trigger is monolithic and the drawer currently leads with embedded Realtime whenever configured, even if Site Tools are registered. Replace it with two accessible segments: primary drawer plus mic. Site Tools mode is primary and shows surrounding-Voice guidance; unavailable mode starts regular `gpt-realtime-2.1`; an explicit fallback remains available but never presents two active transcripts.
+- WEBMCP ACTIVITY RULING: add a privacy-minimal ephemeral execution observer (`running`, `completed`, `awaiting_human_approval`, `refused`, `cancelled`) with tool name, compact message, and optional receipt ID, but never raw tool input. Keep the last six route-local events; durable mutations remain represented by immutable receipts.
+- OPENAI DEVELOPERS PLUGIN RULING: `window.openai` is a ChatGPT Apps SDK widget compatibility surface, not a supported detector or host-microphone bridge for this top-level WebMCP site. Do not convert CommandCanvas into an embedded Apps SDK widget or assume parent/referrer/user-agent access. Feature-detect only the current `document.modelContext` registration surface.
+
+## Current model and room-delivery audit (2026-08-28)
+
+- VERIFIED IN SOURCE: the browser primary is a pinned YOLO26s hand-pose checkpoint, Hugging Face `poptoz/yolo26-hand-pose-face-detection` revision `2abb91a7030e1aa5231ec900ccb2c07ab3f03460`, repackaged as a 21,447,188-byte FP16 ONNX asset with SHA-256 `07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc` and the `[1,300,69]` 21-keypoint output contract.
+- VERIFIED CURRENT UPSTREAM: Ultralytics documents YOLO26 as the current family and documents training `yolo26n-pose.pt` on its 21-keypoint hand dataset. This establishes model-family currency, not superiority for CommandCanvas.
+- IMPORTANT QUALITY DISTINCTION: the model card's original checkpoint is trained/exported for 640x640 input; the current browser and production relay inference adapters use 320x320. Task 5 raises useful source capture to 640 without falsely claiming a 640 model; Task 6 must separately evaluate a real 640 YOLO detector/reacquirer plus stabilized crop pose estimation on the RTX relay.
+- CANDIDATE EVIDENCE: the RTMPose hand model zoo reports a 256x256 RTMPose-m hand candidate with PCK@0.2 81.5 on COCO-WholeBody-Hand and 96.4 / AUC 83.9 on Hand5. Those published metrics are not directly comparable to the current YOLO model card's Pose mAP; promotion requires same-frame CommandCanvas traces and target-device latency/quality gates.
+- VERIFIED IN SOURCE: authenticated `/meet` already implements six-digit Supabase Email OTP, exact-email 24-hour invitation records, fragment-contained join tokens, single-use acceptance, an email entry dialog, Resend-backed invitation submission with preview/copy fallback, and private Supabase Presence/Broadcast channels.
+- REQUIRED HARDENING: invitation provider sends need deterministic Resend idempotency keys and persisted provider/send state; user-facing copy should say `Send invitation`, not imply that merely creating the database invitation guarantees email delivery. Delivery status must remain `submitted`, `delivered`, `failed`, or `preview_only` rather than collapsing provider acceptance into delivery.
+- Ruling: Vercel Workflows is not required for one transactional invite POST because Resend idempotency plus persisted send state is simpler and safer. Reconsider Workflow only for a genuinely durable multi-step packet process that must pause/resume across approval or provider retries; do not introduce it merely because it exists.
+
+## Auth, invite, Realtime, and Resend source audit (2026-08-28)
+
+- VERIFIED IN SOURCE/TESTS: 17 focused files / 152 tests passed for six-digit Supabase Email OTP; server re-resolution of a confirmed non-anonymous user; exact-email, expiring, digest-stored, single-use invitation admission; private room Presence/Broadcast; packet recipient normalization and immutable approval snapshot; WebMCP send staging; explicit host SEND; and packet Resend idempotency.
+- REQUIRED INVITE UX/HARDENING: rename the action to `Send invitation`; keep copy-link as fallback; authenticated `/meet` must not require a preconfigured recipient allowlist once server-enabled host authorization, actor/room/global quotas, and a recipient-hash cooldown are authoritative; use invitation-specific Resend idempotency; persist provider ID/status; load the real room title.
+- REQUIRED DELIVERY TRUTH: provider acceptance is `submitted`, never `delivered`; add signed, bounded, deduplicated Resend webhook ingestion for `delivered`, `bounced`, `failed`, and `suppressed`; prevent out-of-order event regression; expose host-readable delivery status without storing raw invite tokens.
+- REQUIRED PACKET MIGRATION: replace durable packet `sent` terminology with `submitted`, preserve existing provider IDs on replay, and track later provider delivery status separately.
+- VERIFIED ARCHITECTURAL RULING: Supabase already owns the durable packet/invite state machine. Vercel Workflow adds no material value to the current single transactional send; reserve it for a future scheduled or multi-day pause/resume flow.
+- UNVERIFIED EXTERNAL: current hosted OTP template, real mailbox receipt, real invite delivery/admission, two deployed-browser WebSocket synchronization, Resend webhook reachability, and ChatGPT built-in-browser send staging require deliberate integration checks after implementation.
+
+## RTX 3090 Ti pipeline audit (2026-08-28)
+
+- VERIFIED IN SOURCE: the current private relay is CUDA-only and checksum/shape gated, but the mounted model, preprocessing tensor, and server inference are all 320x320; a 640 browser upload alone does not create true-640 inference.
+- VERIFIED UPSTREAM: the pinned YOLO26s hand-pose source was trained/exported at 640. The tracked CommandCanvas artifact is a deliberate 320 re-export.
+- IMPLEMENTATION RULING: true-640 all-YOLO becomes the production RTX baseline first. YOLO remains mandatory full-frame detection and 21-landmark estimation. If the exact 640 artifact is absent, wrong, CPU-backed, or fails warmup, the relay is not ready and the browser falls back; it must never label 320 inference as 640.
+- EVALUATION RULING: `tasmulaev/rtmpose-m-distill` remains an optional top-down crop candidate behind `PRIVATE_HAND_RELAY_PIPELINE=yolo_rtmpose`; it cannot replace YOLO, is not bundled or publicly shipped pending weight/training-lineage review, and is promoted only if same-frame traces materially beat true-640 all-YOLO while passing all latency/identity/gesture gates.
+- CAPACITY RULING: keep one bounded native GPU job, newest-only client work, no cross-user batching, no CPU fallback, no runtime TensorRT build, and no exclusive GPU mode because AutoLensAI may share the RTX device lightly.
+- REQUIRED EVIDENCE: same independently labeled frame bytes across 320 YOLO, true-640 RTX YOLO, optional hybrid, and browser fallback; include jitter, dropout, 30 pinch cycles, false grabs, two-hand crossing, corner reach, loss/occlusion, drawing, throw, delivered rate, queue/decode/model/total latency, GPU memory, and AutoLensAI-idle/light-load runs.
+- UNVERIFIED PHYSICAL/DEVICE: true-640 live latency, physical smoothness, shared-GPU behavior, two-hand identity, and hybrid superiority remain unclaimed until exercised.

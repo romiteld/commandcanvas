@@ -33,6 +33,14 @@ import {
   type PrivateHandRelayWorkerLike,
   type PrivateHandRelayWorkerOptions,
 } from "@/lib/gesture/private-hand-relay-worker";
+import {
+  createHandRuntimeProfile,
+  type HandRuntimeDropKind,
+  type HandRuntimeMetricsSnapshot,
+  type HandRuntimePreferenceIdentity,
+  type HandRuntimePreferenceStorage,
+  type HandRuntimeProfile,
+} from "@/lib/gesture/hand-runtime-profile";
 
 export type HandTrackingStatus =
   | { state: "off" | "starting" | "ready" }
@@ -93,6 +101,7 @@ export interface HandTrackingController {
   subscribeEngineStatus?(
     listener: (engine: HandTrackingEngineStatus | null) => void,
   ): () => void;
+  acknowledgeRendered?(capturedAtMs: number, renderedAtMs?: number): boolean;
   start(video: HTMLVideoElement): Promise<void>;
   stop(): void;
 }
@@ -119,6 +128,7 @@ export interface HandTrackingEngineStatus {
   relayRoundTripMs?: number;
   droppedBeforeEncode?: number;
   droppedBeforeSend?: number;
+  runtimeMetrics?: HandRuntimeMetricsSnapshot;
 }
 
 export interface PrivateHandRelayControllerOptions
@@ -144,10 +154,19 @@ export interface HandTrackingControllerDependencies {
   createImageBitmap?: (source: CanvasImageSource) => Promise<ImageBitmap>;
   requestAnimationFrame?: (callback: FrameRequestCallback) => number;
   cancelAnimationFrame?: (handle: number) => void;
+  requestVideoFrameCallback?: (
+    video: HTMLVideoElement,
+    callback: VideoFrameRequestCallback,
+  ) => number;
+  cancelVideoFrameCallback?: (
+    video: HTMLVideoElement,
+    handle: number,
+  ) => void;
   setTimeout?: (callback: () => void, delayMs: number) => number;
   clearTimeout?: (handle: number) => void;
   workerReadyTimeoutMs?: number;
   now?: () => number;
+  preferenceStorage?: HandRuntimePreferenceStorage;
   privateHandRelay?: PrivateHandRelayControllerOptions;
 }
 
@@ -159,6 +178,7 @@ const PINCH_TRACKING_GRACE_MS = 180;
 const POINT_TRACKING_GRACE_MS = 220;
 const UNKNOWN_HAND_TRACK_TTL_MS = 360;
 const UNKNOWN_HAND_TRACK_MAX_DISTANCE = 0.35;
+const MAX_SEMANTIC_RESULT_AGE_MS = 120;
 
 export function createHandTrackingController(
   provided: HandTrackingControllerDependencies = {},
@@ -207,48 +227,90 @@ export function createHandTrackingController(
   function recordRuntimeResult(
     run: HandTrackingRun,
     frameTimestamp: number,
+    completedAt: number,
     processingLatencyMs?: number,
     relayMetrics?: HandTrackingRelayMetrics,
   ) {
-    if (!engineStatus || !Number.isFinite(frameTimestamp)) return;
-    const completedAt = dependencies.now();
-    if (!Number.isFinite(completedAt) || completedAt < frameTimestamp) return;
-    run.roundTripSamples.push(completedAt - frameTimestamp);
-    run.resultCompletionTimes.push(completedAt);
-    if (run.roundTripSamples.length > 30) run.roundTripSamples.shift();
-    if (run.resultCompletionTimes.length > 30) run.resultCompletionTimes.shift();
-    const sorted = [...run.roundTripSamples].sort((left, right) => left - right);
-    const midpoint = Math.floor(sorted.length / 2);
-    const median = sorted.length % 2
-      ? sorted[midpoint]!
-      : (sorted[midpoint - 1]! + sorted[midpoint]!) / 2;
-    const first = run.resultCompletionTimes[0]!;
-    const last = run.resultCompletionTimes.at(-1)!;
-    const elapsed = last - first;
-    const resultRateFps =
-      run.resultCompletionTimes.length >= 2 && elapsed > 0
-        ? ((run.resultCompletionTimes.length - 1) * 1_000) / elapsed
-        : undefined;
-    engineStatus = {
-      ...engineStatus,
-      detectorRoundTripMs: rounded(median),
-      ...(resultRateFps === undefined
-        ? {}
-        : { resultRateFps: rounded(resultRateFps) }),
-      runtimeSamples: run.roundTripSamples.length,
-      ...(processingLatencyMs === undefined
-        ? {}
-        : { processingLatencyMs: rounded(processingLatencyMs) }),
+    if (!engineStatus || !Number.isFinite(frameTimestamp)) return false;
+    const captureLatencyMs = run.captureLatencies.get(frameTimestamp);
+    run.captureLatencies.delete(frameTimestamp);
+    const accepted = run.runtimeProfile.recordResult({
+      capturedAtMs: frameTimestamp,
+      receivedAtMs: completedAt,
+      ...(captureLatencyMs === undefined ? {} : { captureLatencyMs }),
+      ...(processingLatencyMs === undefined ? {} : { processingLatencyMs }),
       ...(relayMetrics
         ? {
-            encodeLatencyMs: rounded(relayMetrics.encodeLatencyMs),
-            relayRoundTripMs: rounded(relayMetrics.relayRoundTripMs),
-            droppedBeforeEncode: relayMetrics.droppedBeforeEncode,
-            droppedBeforeSend: relayMetrics.droppedBeforeSend,
+            encodeLatencyMs: relayMetrics.encodeLatencyMs,
+            relayLatencyMs: relayMetrics.relayRoundTripMs,
           }
         : {}),
+    });
+    if (!accepted) return false;
+    if (relayMetrics) {
+      recordCumulativeRelayDrop(
+        run,
+        "before-encode",
+        relayMetrics.droppedBeforeEncode,
+      );
+      recordCumulativeRelayDrop(
+        run,
+        "before-send",
+        relayMetrics.droppedBeforeSend,
+      );
+    }
+    updateRuntimeMetrics(run);
+    return true;
+  }
+
+  function updateRuntimeMetrics(run: HandTrackingRun, forcePublish = false) {
+    if (!engineStatus) return;
+    const snapshot = run.runtimeProfile.snapshot();
+    engineStatus = {
+      ...engineStatus,
+      runtimeMetrics: snapshot,
+      ...(snapshot.captureToReceiveMs === null
+        ? {}
+        : { detectorRoundTripMs: snapshot.captureToReceiveMs.p50 }),
+      ...(snapshot.deliveredRateHz === null
+        ? {}
+        : { resultRateFps: snapshot.deliveredRateHz }),
+      runtimeSamples: snapshot.sampleCount,
+      ...(snapshot.processingLatencyMs === null
+        ? {}
+        : { processingLatencyMs: snapshot.processingLatencyMs.p50 }),
+      ...(snapshot.encodeLatencyMs === null
+        ? {}
+        : { encodeLatencyMs: snapshot.encodeLatencyMs.p50 }),
+      ...(snapshot.relayLatencyMs === null
+        ? {}
+        : { relayRoundTripMs: snapshot.relayLatencyMs.p50 }),
+      droppedBeforeEncode: snapshot.droppedBeforeEncode,
+      droppedBeforeSend: snapshot.droppedBeforeSend,
     };
-    engineListeners.forEach((listener) => listener(engineStatus));
+    if (forcePublish || run.runtimeProfile.shouldPublish(dependencies.now()))
+      engineListeners.forEach((listener) => listener(engineStatus));
+  }
+
+  function recordDrop(
+    run: HandTrackingRun,
+    kind: HandRuntimeDropKind,
+    count = 1,
+  ) {
+    if (!run.runtimeProfile.recordDrop(kind, count)) return;
+    run.cumulativeDrops[kind] += count;
+    updateRuntimeMetrics(run);
+  }
+
+  function recordCumulativeRelayDrop(
+    run: HandTrackingRun,
+    kind: "before-encode" | "before-send",
+    nextValue: number,
+  ) {
+    if (!Number.isSafeInteger(nextValue) || nextValue < 0) return;
+    const previous = run.lastRelayDrops[kind];
+    if (nextValue > previous) recordDrop(run, kind, nextValue - previous);
+    run.lastRelayDrops[kind] = Math.max(previous, nextValue);
   }
 
   function clearRunResources(run: HandTrackingRun) {
@@ -259,13 +321,20 @@ export function createHandTrackingController(
       );
     run.sharedVideoTrack = null;
     run.sharedVideoTrackEndedListener = null;
-    if (run.animationFrame !== null && dependencies.cancelAnimationFrame)
-      dependencies.cancelAnimationFrame(run.animationFrame);
-    run.animationFrame = null;
-    run.frameInFlight = false;
+    removeVideoEndedListener(run);
+    cancelScheduledFrame(run);
+    run.engineEpoch += 1;
+    run.captureRequested = false;
+    run.captureInFlight = false;
+    run.workerFrameInFlight = false;
+    closePendingBitmap(run);
     if (run.readyTimeout !== null) {
       dependencies.clearTimeout(run.readyTimeout);
       run.readyTimeout = null;
+    }
+    if (run.startupTimeout !== null) {
+      dependencies.clearTimeout(run.startupTimeout);
+      run.startupTimeout = null;
     }
     if (run.worker) {
       try {
@@ -284,8 +353,7 @@ export function createHandTrackingController(
     run.intentStates.clear();
     run.unknownHandTracks.clear();
     run.lastSingleObservation = null;
-    run.roundTripSamples = [];
-    run.resultCompletionTimes = [];
+    run.captureLatencies.clear();
   }
 
   function failUnavailable(
@@ -307,8 +375,13 @@ export function createHandTrackingController(
     const createWorkerForEngine = dependencies.createWorkerForEngine;
     if (!engine || !createWorkerForEngine) throw new Error(UNAVAILABLE_MESSAGE);
     const worker = createWorkerForEngine(engine);
+    run.engineEpoch += 1;
+    run.captureRequested = false;
+    run.workerFrameInFlight = false;
+    closePendingBitmap(run);
     run.engineIndex = engineIndex;
     run.worker = worker;
+    resetRuntimeProfile(run, engine);
     setEngineStatus(
       engine,
       engineIndex > 0,
@@ -352,7 +425,10 @@ export function createHandTrackingController(
       run.worker !== worker
     )
       return;
-    run.frameInFlight = false;
+    run.engineEpoch += 1;
+    run.workerFrameInFlight = false;
+    run.captureRequested = false;
+    closePendingBitmap(run);
     if (run.readyTimeout !== null) {
       dependencies.clearTimeout(run.readyTimeout);
       run.readyTimeout = null;
@@ -363,9 +439,11 @@ export function createHandTrackingController(
       return;
     }
 
-    if (run.animationFrame !== null && dependencies.cancelAnimationFrame)
-      dependencies.cancelAnimationFrame(run.animationFrame);
-    run.animationFrame = null;
+    cancelScheduledFrame(run);
+    if (run.startupTimeout !== null) {
+      dependencies.clearTimeout(run.startupTimeout);
+      run.startupTimeout = null;
+    }
     try {
       worker.postMessage({ type: "dispose" });
     } catch {
@@ -373,8 +451,6 @@ export function createHandTrackingController(
     }
     worker.terminate();
     run.worker = null;
-    run.roundTripSamples = [];
-    run.resultCompletionTimes = [];
     run.intentStates.clear();
     run.lastSingleObservation = null;
     const failedEngine = run.visionEngines[run.engineIndex];
@@ -398,42 +474,90 @@ export function createHandTrackingController(
   }
 
   function scheduleFrame(run: HandTrackingRun) {
+    if (
+      dependencies.requestVideoFrameCallback &&
+      dependencies.cancelVideoFrameCallback
+    ) {
+      const handle = dependencies.requestVideoFrameCallback(
+        run.video,
+        () => handleScheduledVideoFrame(run, null),
+      );
+      run.scheduledFrame = { kind: "video", handle };
+      return;
+    }
     if (!dependencies.requestAnimationFrame) return;
-    run.animationFrame = dependencies.requestAnimationFrame(() => {
-      if (activeRun !== run || run.cancelled || status.state !== "ready") return;
-      if (run.sharedVideoTrack?.readyState === "ended") {
-        handleSharedCameraStopped(run);
-        return;
-      }
-      scheduleFrame(run);
-      if (!run.frameInFlight && run.video.readyState >= 2)
-        void captureFrame(run);
+    const handle = dependencies.requestAnimationFrame(() => {
+      const currentTime = run.video.currentTime;
+      handleScheduledVideoFrame(
+        run,
+        Number.isFinite(currentTime) ? currentTime : null,
+      );
     });
+    run.scheduledFrame = { kind: "animation", handle };
+  }
+
+  function handleScheduledVideoFrame(
+    run: HandTrackingRun,
+    mediaTime: number | null,
+  ) {
+    run.scheduledFrame = null;
+    if (activeRun !== run || run.cancelled || status.state !== "ready") return;
+    if (run.sharedVideoTrack?.readyState === "ended") {
+      handleSharedCameraStopped(run);
+      return;
+    }
+    scheduleFrame(run);
+    if (run.video.readyState < 2) return;
+    if (mediaTime !== null) {
+      if (run.lastVideoCurrentTime === mediaTime) return;
+      run.lastVideoCurrentTime = mediaTime;
+    }
+    requestCapture(run);
+  }
+
+  function requestCapture(run: HandTrackingRun) {
+    if (!dependencies.createImageBitmap || !run.worker) return;
+    if (run.captureInFlight) {
+      run.captureRequested = true;
+      return;
+    }
+    void captureFrame(run);
   }
 
   async function captureFrame(run: HandTrackingRun) {
     if (!dependencies.createImageBitmap || !run.worker) return;
-    run.frameInFlight = true;
+    run.captureInFlight = true;
+    run.captureRequested = false;
+    const epoch = run.engineEpoch;
+    const worker = run.worker;
+    const capturedAtMs = dependencies.now();
     let bitmap: ImageBitmap | null = null;
     try {
       bitmap = await dependencies.createImageBitmap(run.video);
+      const captureFinishedAtMs = dependencies.now();
+      run.captureInFlight = false;
       if (
         activeRun !== run ||
         run.cancelled ||
-        !run.worker ||
+        run.worker !== worker ||
+        run.engineEpoch !== epoch ||
         status.state !== "ready"
       ) {
         bitmap.close();
+        recordDrop(run, "late-capture");
         return;
       }
-      const timestamp = dependencies.now();
-      run.worker.postMessage(
-        { type: "frame", frame: bitmap, timestamp },
-        [bitmap],
-      );
-      if (run.worker.frameQueueMode === "newest-only") run.frameInFlight = false;
+      const captured: PendingCapturedBitmap = {
+        bitmap,
+        timestamp: capturedAtMs,
+        captureLatencyMs: Math.max(0, captureFinishedAtMs - capturedAtMs),
+        epoch,
+        worker,
+      };
       bitmap = null;
+      enqueueCapturedBitmap(run, captured);
     } catch (error) {
+      run.captureInFlight = false;
       bitmap?.close();
       if (activeRun !== run || run.cancelled) return;
       failUnavailable(
@@ -442,7 +566,66 @@ export function createHandTrackingController(
           ? error.message
           : "The local camera frame could not be processed.",
       );
+    } finally {
+      if (
+        run.captureRequested &&
+        activeRun === run &&
+        !run.cancelled &&
+        status.state === "ready"
+      )
+        requestCapture(run);
     }
+  }
+
+  function enqueueCapturedBitmap(
+    run: HandTrackingRun,
+    captured: PendingCapturedBitmap,
+  ) {
+    if (run.workerFrameInFlight) {
+      if (run.pendingBitmap) {
+        run.pendingBitmap.bitmap.close();
+        recordDrop(run, "superseded");
+      }
+      run.pendingBitmap = captured;
+      return;
+    }
+    sendCapturedBitmap(run, captured);
+  }
+
+  function sendCapturedBitmap(
+    run: HandTrackingRun,
+    captured: PendingCapturedBitmap,
+  ) {
+    if (
+      activeRun !== run ||
+      run.cancelled ||
+      run.engineEpoch !== captured.epoch ||
+      run.worker !== captured.worker ||
+      status.state !== "ready"
+    ) {
+      captured.bitmap.close();
+      recordDrop(run, "late-capture");
+      return;
+    }
+    run.workerFrameInFlight = true;
+    run.captureLatencies.set(captured.timestamp, captured.captureLatencyMs);
+    while (run.captureLatencies.size > 60) {
+      const oldest = run.captureLatencies.keys().next().value as
+        | number
+        | undefined;
+      if (oldest === undefined) break;
+      run.captureLatencies.delete(oldest);
+    }
+    captured.worker.postMessage(
+      { type: "frame", frame: captured.bitmap, timestamp: captured.timestamp },
+      [captured.bitmap],
+    );
+  }
+
+  function sendPendingBitmap(run: HandTrackingRun) {
+    const pending = run.pendingBitmap;
+    run.pendingBitmap = null;
+    if (pending) sendCapturedBitmap(run, pending);
   }
 
   function handleWorkerMessage(
@@ -453,19 +636,22 @@ export function createHandTrackingController(
     if (activeRun !== run || run.cancelled || run.worker !== worker) return;
     if (message.type === "ready") {
       if (message.diagnostics) applyDetectorDiagnostics(message.diagnostics);
+      configureRuntimePreference(run, message.diagnostics);
       if (run.readyTimeout !== null) {
         dependencies.clearTimeout(run.readyTimeout);
         run.readyTimeout = null;
       }
+      if (shouldUseRememberedFallback(run, worker)) return;
       setStatus({ state: "ready" });
       run.resolveReady?.();
       run.resolveReady = null;
       run.rejectReady = null;
       scheduleFrame(run);
+      scheduleStartupDecision(run, worker);
       return;
     }
     if (message.type === "error") {
-      run.frameInFlight = false;
+      run.workerFrameInFlight = false;
       handleEngineFailure(
         run,
         worker,
@@ -478,19 +664,27 @@ export function createHandTrackingController(
       return;
     }
 
-    run.frameInFlight = false;
+    run.workerFrameInFlight = false;
+    const receivedAt = dependencies.now();
     recordRuntimeResult(
       run,
       message.timestamp,
+      receivedAt,
       message.processingLatencyMs,
       message.relayMetrics,
     );
+    if (evaluateStartupDecision(run, worker, receivedAt)) return;
+    sendPendingBitmap(run);
+    if (receivedAt - message.timestamp > MAX_SEMANTIC_RESULT_AGE_MS) {
+      recordDrop(run, "stale");
+      emitLossOrGrace(run, receivedAt);
+      return;
+    }
     if (message.hands.length === 0) {
       emitLossOrGrace(run, message.timestamp);
       return;
     }
     const stateKeys = assignHandStateKeys(run, message.hands, message.timestamp);
-    const receivedAt = dependencies.now();
     const source = run.visionEngines[run.engineIndex]?.descriptor.id ?? "unknown";
     const activeKeys = new Set<string>();
     const interpreted = message.hands.map((hand, index) => {
@@ -634,6 +828,151 @@ export function createHandTrackingController(
     emit({ mode: "idle", timestamp, trackingState: "lost" });
   }
 
+  function resetRuntimeProfile(
+    run: HandTrackingRun,
+    engine: SpatialVisionEngine,
+    identity: HandRuntimePreferenceIdentity | null = null,
+  ) {
+    run.runtimePreferenceIdentity = identity;
+    run.runtimeProfile = createHandRuntimeProfile({
+      startedAtMs: dependencies.now(),
+      preferenceStorage: dependencies.preferenceStorage,
+      ...(identity ? { preferenceIdentity: identity } : {}),
+    });
+    for (const [kind, count] of Object.entries(run.cumulativeDrops) as Array<
+      [HandRuntimeDropKind, number]
+    >) {
+      if (count > 0) run.runtimeProfile.recordDrop(kind, count);
+    }
+    run.startupDecisionMade = engine.descriptor.role !== "default";
+    run.lastRelayDrops = { "before-encode": 0, "before-send": 0 };
+    updateRuntimeMetrics(run, true);
+  }
+
+  function configureRuntimePreference(
+    run: HandTrackingRun,
+    diagnostics?: HandDetectorDiagnostics,
+  ) {
+    const engine = run.visionEngines[run.engineIndex];
+    if (!engine || engine.descriptor.role !== "default") return;
+    const provider = diagnostics?.executionProvider;
+    const deviceClass: HandRuntimePreferenceIdentity["deviceClass"] =
+      provider === "webgpu" && diagnostics?.highPerformanceGpuRequested
+        ? "high-performance-gpu"
+        : provider === "webgpu" || provider === "cuda" || provider === "tensorrt"
+          ? "gpu"
+          : "cpu-or-unknown";
+    resetRuntimeProfile(run, engine, {
+      engineId: engine.descriptor.id,
+      modelVersion: engine.descriptor.modelVersion,
+      deviceClass,
+    });
+  }
+
+  function shouldUseRememberedFallback(
+    run: HandTrackingRun,
+    worker: HandTrackingWorkerLike,
+  ) {
+    const engine = run.visionEngines[run.engineIndex];
+    if (!engine || engine.descriptor.role !== "default") return false;
+    const preference = run.runtimeProfile.loadPreference();
+    if (preference === "retain-yolo") {
+      run.startupDecisionMade = true;
+      return false;
+    }
+    if (preference !== "fallback-mediapipe") return false;
+    run.startupDecisionMade = true;
+    handleEngineFailure(
+      run,
+      worker,
+      "YOLO startup preference selected the measured MediaPipe fallback for this session and model.",
+    );
+    return true;
+  }
+
+  function scheduleStartupDecision(
+    run: HandTrackingRun,
+    worker: HandTrackingWorkerLike,
+  ) {
+    const engine = run.visionEngines[run.engineIndex];
+    if (
+      run.startupDecisionMade ||
+      !engine ||
+      engine.descriptor.role !== "default"
+    )
+      return;
+    run.startupTimeout = dependencies.setTimeout(() => {
+      run.startupTimeout = null;
+      evaluateStartupDecision(run, worker, dependencies.now());
+    }, 1_200);
+  }
+
+  function evaluateStartupDecision(
+    run: HandTrackingRun,
+    worker: HandTrackingWorkerLike,
+    nowMs: number,
+  ) {
+    const engine = run.visionEngines[run.engineIndex];
+    if (
+      run.startupDecisionMade ||
+      activeRun !== run ||
+      run.cancelled ||
+      run.worker !== worker ||
+      !engine ||
+      engine.descriptor.role !== "default"
+    )
+      return false;
+    const decision = run.runtimeProfile.startupDecision(nowMs);
+    if (decision.state === "pending") return false;
+    run.startupDecisionMade = true;
+    if (run.startupTimeout !== null) {
+      dependencies.clearTimeout(run.startupTimeout);
+      run.startupTimeout = null;
+    }
+    run.runtimeProfile.savePreference(decision.state);
+    if (decision.state === "retain-yolo") return false;
+    const rate = decision.deliveredRateHz?.toFixed(1) ?? "unmeasured";
+    const tail = decision.captureToReceiveP95Ms?.toFixed(1) ?? "unmeasured";
+    handleEngineFailure(
+      run,
+      worker,
+      `YOLO startup performance missed the local 18 Hz / 100 ms thresholds (${rate} Hz, p95 ${tail} ms).`,
+    );
+    return true;
+  }
+
+  function closePendingBitmap(run: HandTrackingRun) {
+    run.pendingBitmap?.bitmap.close();
+    run.pendingBitmap = null;
+  }
+
+  function cancelScheduledFrame(run: HandTrackingRun) {
+    const scheduled = run.scheduledFrame;
+    run.scheduledFrame = null;
+    if (!scheduled) return;
+    if (scheduled.kind === "video") {
+      dependencies.cancelVideoFrameCallback?.(run.video, scheduled.handle);
+      return;
+    }
+    dependencies.cancelAnimationFrame?.(scheduled.handle);
+  }
+
+  function watchVideoEnded(run: HandTrackingRun) {
+    if (typeof run.video.addEventListener !== "function") return;
+    const onEnded = () => handleSharedCameraStopped(run);
+    run.videoEndedListener = onEnded;
+    run.video.addEventListener("ended", onEnded, { once: true });
+  }
+
+  function removeVideoEndedListener(run: HandTrackingRun) {
+    if (
+      run.videoEndedListener &&
+      typeof run.video.removeEventListener === "function"
+    )
+      run.video.removeEventListener("ended", run.videoEndedListener);
+    run.videoEndedListener = null;
+  }
+
   function watchSharedCamera(run: HandTrackingRun) {
     if (run.ownsStream || !run.stream) return;
     const track =
@@ -675,14 +1014,28 @@ export function createHandTrackingController(
       engineListeners.add(listener);
       return () => engineListeners.delete(listener);
     },
+    acknowledgeRendered(capturedAtMs, renderedAtMs = dependencies.now()) {
+      const run = activeRun;
+      if (!run) return false;
+      const accepted = run.runtimeProfile.acknowledgeRendered(
+        capturedAtMs,
+        renderedAtMs,
+      );
+      if (accepted) updateRuntimeMetrics(run);
+      return accepted;
+    },
     async start(targetVideo) {
       if (status.state === "starting" || status.state === "ready") return;
       if (
         (!dependencies.getSharedMediaStream && !dependencies.getUserMedia) ||
         !dependencies.createWorkerForEngine ||
         !dependencies.createImageBitmap ||
-        !dependencies.requestAnimationFrame ||
-        !dependencies.cancelAnimationFrame
+        !(
+          (dependencies.requestVideoFrameCallback &&
+            dependencies.cancelVideoFrameCallback) ||
+          (dependencies.requestAnimationFrame &&
+            dependencies.cancelAnimationFrame)
+        )
       ) {
         const error = new Error(UNAVAILABLE_MESSAGE);
         setStatus({ state: "unavailable", message: error.message });
@@ -723,6 +1076,7 @@ export function createHandTrackingController(
           run.rejectReady = reject;
         });
         watchSharedCamera(run);
+        watchVideoEnded(run);
         if (activeRun === run && !run.cancelled) startEngineWorker(run, 0);
         const readyResult = await waitForRunOrStop(run, ready);
         if (readyResult.stopped) return;
@@ -773,10 +1127,15 @@ interface HandTrackingRun {
   worker: HandTrackingWorkerLike | null;
   readonly visionEngines: readonly SpatialVisionEngine[];
   engineIndex: number;
+  engineEpoch: number;
   pendingFallbackReason?: string;
   pendingFallbackKind?: HandTrackingEngineStatus["fallbackKind"];
-  animationFrame: number | null;
-  frameInFlight: boolean;
+  scheduledFrame: ScheduledFrame | null;
+  captureInFlight: boolean;
+  captureRequested: boolean;
+  workerFrameInFlight: boolean;
+  pendingBitmap: PendingCapturedBitmap | null;
+  lastVideoCurrentTime: number | null;
   intentStates: Map<string, HandIntentState>;
   unknownHandTracks: Map<string, UnknownHandTrack>;
   nextUnknownHandTrackId: number;
@@ -790,11 +1149,29 @@ interface HandTrackingRun {
   resolveReady: (() => void) | null;
   rejectReady: ((error: Error) => void) | null;
   readyTimeout: number | null;
+  startupTimeout: number | null;
+  startupDecisionMade: boolean;
   sharedVideoTrack: MediaStreamTrack | null;
   sharedVideoTrackEndedListener: EventListener | null;
-  roundTripSamples: number[];
-  resultCompletionTimes: number[];
+  videoEndedListener: EventListener | null;
+  runtimeProfile: HandRuntimeProfile;
+  runtimePreferenceIdentity: HandRuntimePreferenceIdentity | null;
+  captureLatencies: Map<number, number>;
+  cumulativeDrops: Record<HandRuntimeDropKind, number>;
+  lastRelayDrops: Record<"before-encode" | "before-send", number>;
 }
+
+interface PendingCapturedBitmap {
+  readonly bitmap: ImageBitmap;
+  readonly timestamp: number;
+  readonly captureLatencyMs: number;
+  readonly epoch: number;
+  readonly worker: HandTrackingWorkerLike;
+}
+
+type ScheduledFrame =
+  | { readonly kind: "video"; readonly handle: number }
+  | { readonly kind: "animation"; readonly handle: number };
 
 function createRun(
   id: number,
@@ -813,8 +1190,13 @@ function createRun(
     worker: null,
     visionEngines,
     engineIndex: 0,
-    animationFrame: null,
-    frameInFlight: false,
+    engineEpoch: 0,
+    scheduledFrame: null,
+    captureInFlight: false,
+    captureRequested: false,
+    workerFrameInFlight: false,
+    pendingBitmap: null,
+    lastVideoCurrentTime: null,
     intentStates: new Map(),
     unknownHandTracks: new Map(),
     nextUnknownHandTrackId: 0,
@@ -825,10 +1207,22 @@ function createRun(
     resolveReady: null,
     rejectReady: null,
     readyTimeout: null,
+    startupTimeout: null,
+    startupDecisionMade: false,
     sharedVideoTrack: null,
     sharedVideoTrackEndedListener: null,
-    roundTripSamples: [],
-    resultCompletionTimes: [],
+    videoEndedListener: null,
+    runtimeProfile: createHandRuntimeProfile({ startedAtMs: 0 }),
+    runtimePreferenceIdentity: null,
+    captureLatencies: new Map(),
+    cumulativeDrops: {
+      superseded: 0,
+      "late-capture": 0,
+      stale: 0,
+      "before-encode": 0,
+      "before-send": 0,
+    },
+    lastRelayDrops: { "before-encode": 0, "before-send": 0 },
   };
 }
 
@@ -1119,6 +1513,18 @@ function resolveDependencies(
       (typeof globalThis.cancelAnimationFrame === "function"
         ? globalThis.cancelAnimationFrame.bind(globalThis)
         : undefined),
+    requestVideoFrameCallback:
+      provided.requestVideoFrameCallback ??
+      (typeof HTMLVideoElement !== "undefined" &&
+      typeof HTMLVideoElement.prototype.requestVideoFrameCallback === "function"
+        ? (video, callback) => video.requestVideoFrameCallback(callback)
+        : undefined),
+    cancelVideoFrameCallback:
+      provided.cancelVideoFrameCallback ??
+      (typeof HTMLVideoElement !== "undefined" &&
+      typeof HTMLVideoElement.prototype.cancelVideoFrameCallback === "function"
+        ? (video, handle) => video.cancelVideoFrameCallback(handle)
+        : undefined),
     setTimeout:
       provided.setTimeout ??
       ((callback, delayMs) =>
@@ -1128,6 +1534,8 @@ function resolveDependencies(
       ((handle) => globalThis.clearTimeout(handle)),
     workerReadyTimeoutMs: provided.workerReadyTimeoutMs ?? 45_000,
     now: provided.now ?? (() => performance.now()),
+    preferenceStorage:
+      provided.preferenceStorage ?? safeSessionPreferenceStorage(),
   };
 }
 
@@ -1183,10 +1591,21 @@ interface ResolvedHandTrackingControllerDependencies {
   createImageBitmap?: HandTrackingControllerDependencies["createImageBitmap"];
   requestAnimationFrame?: HandTrackingControllerDependencies["requestAnimationFrame"];
   cancelAnimationFrame?: HandTrackingControllerDependencies["cancelAnimationFrame"];
+  requestVideoFrameCallback?: HandTrackingControllerDependencies["requestVideoFrameCallback"];
+  cancelVideoFrameCallback?: HandTrackingControllerDependencies["cancelVideoFrameCallback"];
   setTimeout: NonNullable<HandTrackingControllerDependencies["setTimeout"]>;
   clearTimeout: NonNullable<HandTrackingControllerDependencies["clearTimeout"]>;
   workerReadyTimeoutMs: number;
   now: NonNullable<HandTrackingControllerDependencies["now"]>;
+  preferenceStorage?: HandRuntimePreferenceStorage;
+}
+
+function safeSessionPreferenceStorage(): HandRuntimePreferenceStorage | undefined {
+  try {
+    return typeof sessionStorage === "undefined" ? undefined : sessionStorage;
+  } catch {
+    return undefined;
+  }
 }
 
 function isPermissionRefusal(error: unknown) {

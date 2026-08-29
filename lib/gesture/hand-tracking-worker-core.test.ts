@@ -104,12 +104,41 @@ describe("hand tracking worker runtime", () => {
     expect(postMessage).toHaveBeenLastCalledWith({
       type: "result",
       timestamp: 42,
+      processingLatencyMs: expect.any(Number),
       hands: [
         { handedness: "left", confidence: 0.93, landmarks: leftHand },
         { handedness: "right", confidence: 0.91, landmarks: rightHand },
       ],
     });
     expect(postMessage.mock.lastCall?.[0]).not.toHaveProperty("frame");
+  });
+
+  it("reports exact detector-call wall time from the injected monotonic clock", async () => {
+    const times = [10, 34];
+    const frame = { close: vi.fn() } as unknown as ImageBitmap;
+    const postMessage = vi.fn();
+    const runtime = createHandTrackingWorkerRuntime({
+      loadDetector: async () => ({
+        detectForVideo: async () => ({ landmarks: [], handedness: [] }),
+        close: vi.fn(),
+      }),
+      postMessage,
+      now: () => times.shift()!,
+    });
+    await runtime.handleMessage({
+      type: "initialize",
+      wasmBaseUrl: "/onnxruntime/",
+      modelAssetUrl: "/models/hand.onnx",
+    });
+
+    await runtime.handleMessage({ type: "frame", frame, timestamp: 100 });
+
+    expect(postMessage).toHaveBeenLastCalledWith({
+      type: "result",
+      timestamp: 100,
+      hands: [],
+      processingLatencyMs: 24,
+    });
   });
 
   it("reports no hand without inventing a recognition result", async () => {
@@ -133,6 +162,7 @@ describe("hand tracking worker runtime", () => {
     expect(postMessage).toHaveBeenLastCalledWith({
       type: "result",
       timestamp: 84,
+      processingLatencyMs: expect.any(Number),
       hands: [],
     });
   });

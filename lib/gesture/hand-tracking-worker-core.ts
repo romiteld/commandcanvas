@@ -96,8 +96,10 @@ export interface HandTrackingWorkerRuntime {
 export function createHandTrackingWorkerRuntime(dependencies: {
   loadDetector: (options: HandDetectorLoadOptions) => Promise<HandDetector>;
   postMessage: (message: HandTrackingWorkerOutboundMessage) => void;
+  now?: () => number;
 }): HandTrackingWorkerRuntime {
   let detector: HandDetector | null = null;
+  const now = dependencies.now ?? (() => performance.now());
   return {
     async handleMessage(message) {
       if (message.type === "initialize") {
@@ -125,10 +127,12 @@ export function createHandTrackingWorkerRuntime(dependencies: {
 
       try {
         if (!detector) throw new Error("Hand detector is not ready.");
+        const processingStartedAt = now();
         const result = await detector.detectForVideo(
           message.frame,
           message.timestamp,
         );
+        const processingFinishedAt = now();
         const hands = result.landmarks.slice(0, 2).flatMap((points, index) => {
           const landmarks = parseLandmarks(points);
           if (!landmarks) return [];
@@ -147,6 +151,10 @@ export function createHandTrackingWorkerRuntime(dependencies: {
           type: "result",
           timestamp: message.timestamp,
           hands,
+          processingLatencyMs: Math.max(
+            0,
+            processingFinishedAt - processingStartedAt,
+          ),
         });
       } catch (error) {
         dependencies.postMessage({

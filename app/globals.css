@@ -2237,6 +2237,13 @@ button:focus-visible {
   color: var(--ink);
 }
 
+.camera-calibration-readout .hand-runtime-chip {
+  border-color: rgb(28 151 139 / 34%);
+  background: rgb(28 151 139 / 10%);
+  color: var(--ink);
+  font-weight: 720;
+}
+
 .camera-calibration-actions {
   display: flex;
   justify-content: flex-end;

@@ -47,6 +47,7 @@ function fakeController() {
       engineListeners.add(listener);
       return () => engineListeners.delete(listener);
     },
+    acknowledgeRendered: vi.fn(() => true),
     start: vi.fn(async () => undefined),
     stop: vi.fn(() => undefined),
   };
@@ -377,6 +378,51 @@ describe("SpatialCameraControl", () => {
     expect(
       await screen.findByText("Fallback MediaPipe Hand Landmarker"),
     ).toBeVisible();
+  });
+
+  it("shows one compact truthful runtime chip and acknowledges the rendered camera result", async () => {
+    const fake = fakeController();
+    render(<SpatialCameraControl createController={() => fake.controller} />);
+
+    act(() => {
+      fake.setEngine({
+        id: "yolo26-hand-pose-2abb91",
+        displayName: "YOLO26 Hand Pose",
+        runtime: "onnx-runtime-web",
+        fallback: false,
+        executionProvider: "webgpu",
+        runtimeMetrics: {
+          sampleCount: 12,
+          deliveredRateHz: 24.1,
+          captureLatencyMs: { p50: 4, p95: 7 },
+          processingLatencyMs: { p50: 18, p95: 31 },
+          encodeLatencyMs: null,
+          relayLatencyMs: null,
+          captureToReceiveMs: { p50: 55, p95: 71 },
+          captureToRenderMs: null,
+          droppedSuperseded: 1,
+          droppedLateCapture: 0,
+          droppedStale: 1,
+          droppedBeforeEncode: 0,
+          droppedBeforeSend: 0,
+        },
+      });
+      fake.setStatus({ state: "ready" });
+      fake.emit({
+        mode: "point",
+        pointer: { x: 0.4, y: 0.5 },
+        confidence: 0.94,
+        capturedAt: 333,
+        timestamp: 333,
+      });
+    });
+
+    expect(
+      await screen.findByText("YOLO26 · WebGPU · 24.1 Hz · p95 71 ms · dropped 2"),
+    ).toBeVisible();
+    await vi.waitFor(() =>
+      expect(fake.controller.acknowledgeRendered).toHaveBeenCalledWith(333),
+    );
   });
 
   it("distinguishes a high-performance WebGPU request from the actual WASM fallback", async () => {

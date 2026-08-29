@@ -67,6 +67,7 @@ export function SpatialCameraControl({
   const spatialModeRequestedRef = useRef(false);
   const calibrationOpenRef = useRef(false);
   const lifecycleStopIssuedRef = useRef(false);
+  const lastAcknowledgedCaptureRef = useRef<number | null>(null);
   const observationHandlerRef = useRef(onObservation);
   const statusHandlerRef = useRef(onStatusChange);
   const spatialModeStartedHandlerRef = useRef(onSpatialModeStarted);
@@ -149,6 +150,22 @@ export function SpatialCameraControl({
       }
     };
   }, [controller]);
+
+  useEffect(() => {
+    if (!lastObservation || lastObservation.mode === "idle") return;
+    const capturedAt =
+      "capturedAt" in lastObservation
+        ? lastObservation.capturedAt ?? lastObservation.timestamp
+        : lastObservation.timestamp;
+    if (
+      !Number.isFinite(capturedAt) ||
+      capturedAt < 0 ||
+      lastAcknowledgedCaptureRef.current === capturedAt
+    )
+      return;
+    lastAcknowledgedCaptureRef.current = capturedAt;
+    controller.acknowledgeRendered?.(capturedAt);
+  }, [controller, lastObservation]);
 
   useEffect(() => {
     const stopForPageLifecycle = () => {
@@ -381,6 +398,15 @@ export function SpatialCameraControl({
       </div>
       {status.state === "ready" ? (
         <div className="camera-calibration-readout" aria-label="Hand calibration readout">
+          {runtimeChipLabel(engineStatus) ? (
+            <output
+              className="hand-runtime-chip"
+              aria-label="Hand runtime diagnostics"
+              data-hand-runtime-chip
+            >
+              {runtimeChipLabel(engineStatus)}
+            </output>
+          ) : null}
           <strong>21-point hand landmarks</strong>
           {engineStatus ? (
             <span data-vision-engine={engineStatus.id}>
@@ -591,4 +617,28 @@ function statusLabel(
     case "unavailable":
       return "Hand input unavailable · pointer active";
   }
+}
+
+function runtimeChipLabel(engineStatus: HandTrackingEngineStatus | null) {
+  const metrics = engineStatus?.runtimeMetrics;
+  if (!engineStatus || !metrics) return null;
+  const engine = engineStatus.id.startsWith("yolo26")
+    ? "YOLO26"
+    : engineStatus.processingLocation === "private-relay"
+      ? "Private YOLO"
+      : engineStatus.displayName;
+  const provider = engineStatus.executionProvider
+    ? executionProviderLabel(engineStatus.executionProvider)
+    : engineStatus.runtime;
+  const rate = metrics.deliveredRateHz?.toFixed(1) ?? "-";
+  const tail = metrics.captureToReceiveMs?.p95;
+  const dropped =
+    metrics.droppedSuperseded +
+    metrics.droppedLateCapture +
+    metrics.droppedStale +
+    metrics.droppedBeforeEncode +
+    metrics.droppedBeforeSend;
+  return `${engine} · ${provider} · ${rate} Hz · p95 ${
+    tail === undefined ? "-" : Math.round(tail)
+  } ms · dropped ${dropped}`;
 }

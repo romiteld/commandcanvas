@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createHandTrackingController,
+  type HandTrackingObservation,
   type HandTrackingWorkerLike,
 } from "@/lib/gesture/hand-tracking-controller";
 import type { HandLandmarks } from "@/lib/gesture/hand-intent";
@@ -104,6 +105,10 @@ function harness(now: () => number = () => 1_000) {
   };
 }
 
+beforeEach(() => {
+  sessionStorage.clear();
+});
+
 describe("hand tracking controller lifecycle", () => {
   it("does not request camera permission or create a worker before explicit start", () => {
     const { controller, getUserMedia, createWorker } = harness();
@@ -113,7 +118,7 @@ describe("hand tracking controller lifecycle", () => {
     expect(createWorker).not.toHaveBeenCalled();
   });
 
-  it("starts local one-frame-at-a-time inference and releases every resource", async () => {
+  it("starts local first-plus-newest inference and releases every resource", async () => {
     const {
       controller,
       worker,
@@ -169,8 +174,7 @@ describe("hand tracking controller lifecycle", () => {
 
     const secondTick = [...frames.values()].at(-1);
     secondTick?.(1_016);
-    await Promise.resolve();
-    expect(createImageBitmap).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(createImageBitmap).toHaveBeenCalledTimes(2));
 
     worker.emit({
       type: "result",
@@ -179,7 +183,7 @@ describe("hand tracking controller lifecycle", () => {
     });
     const thirdTick = [...frames.values()].at(-1);
     thirdTick?.(1_032);
-    await vi.waitFor(() => expect(createImageBitmap).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(createImageBitmap).toHaveBeenCalledTimes(3));
 
     controller.stop();
     expect(track.stop).toHaveBeenCalledOnce();
@@ -1164,6 +1168,279 @@ describe("hand tracking controller lifecycle", () => {
     expect(controller.getStatus()).toEqual({
       state: "unavailable",
       message: "YOLO26 Hand Pose did not become ready in time.",
+    });
+  });
+
+  it("prefers video-frame callbacks and cancels the exact scheduled callback on stop", async () => {
+    const worker = new FakeWorker();
+    const callbacks = new Map<number, VideoFrameRequestCallback>();
+    let callbackId = 0;
+    const requestVideoFrameCallback = vi.fn(
+      (_video: HTMLVideoElement, callback: VideoFrameRequestCallback) => {
+        callbacks.set(++callbackId, callback);
+        return callbackId;
+      },
+    );
+    const cancelVideoFrameCallback = vi.fn(
+      (_video: HTMLVideoElement, id: number) => callbacks.delete(id),
+    );
+    const requestAnimationFrame = vi.fn(() => 99);
+    const video = {
+      srcObject: null,
+      readyState: 4,
+      currentTime: 0,
+      play: vi.fn(async () => undefined),
+    } as unknown as HTMLVideoElement;
+    const controller = createHandTrackingController({
+      getUserMedia: vi.fn(async () => ({
+        getTracks: () => [{ stop: vi.fn() }],
+      }) as unknown as MediaStream),
+      createWorker: () => worker,
+      createImageBitmap: vi.fn(async () => ({ close: vi.fn() }) as unknown as ImageBitmap),
+      requestVideoFrameCallback,
+      cancelVideoFrameCallback,
+      requestAnimationFrame,
+      cancelAnimationFrame: vi.fn(),
+      now: () => 1_000,
+    });
+
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    expect(requestVideoFrameCallback).toHaveBeenCalledOnce();
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+    const scheduledId = [...callbacks.keys()][0]!;
+    controller.stop();
+    expect(cancelVideoFrameCallback).toHaveBeenCalledWith(video, scheduledId);
+    expect(callbacks.size).toBe(0);
+  });
+
+  it("deduplicates requestAnimationFrame ticks that expose the same video currentTime", async () => {
+    const { controller, worker, video, frames, createImageBitmap } = harness();
+    Object.defineProperty(video, "currentTime", {
+      configurable: true,
+      writable: true,
+      value: 1,
+    });
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    [...frames.values()].at(-1)?.(1_000);
+    await vi.waitFor(() => expect(createImageBitmap).toHaveBeenCalledOnce());
+    worker.emit({ type: "result", timestamp: 1_000, hands: [] });
+    [...frames.values()].at(-1)?.(1_016);
+    await Promise.resolve();
+    expect(createImageBitmap).toHaveBeenCalledOnce();
+
+    video.currentTime = 1.033;
+    [...frames.values()].at(-1)?.(1_032);
+    await vi.waitFor(() => expect(createImageBitmap).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps first inference plus only the newest pending bitmap and closes the superseded bitmap", async () => {
+    const { controller, worker, video, frames, bitmaps, createImageBitmap } = harness();
+    Object.defineProperty(video, "currentTime", {
+      configurable: true,
+      writable: true,
+      value: 1,
+    });
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    [...frames.values()].at(-1)?.(1_000);
+    await vi.waitFor(() => expect(createImageBitmap).toHaveBeenCalledOnce());
+    video.currentTime = 1.016;
+    [...frames.values()].at(-1)?.(1_016);
+    await vi.waitFor(() => expect(createImageBitmap).toHaveBeenCalledTimes(2));
+    video.currentTime = 1.032;
+    [...frames.values()].at(-1)?.(1_032);
+    await vi.waitFor(() => expect(createImageBitmap).toHaveBeenCalledTimes(3));
+
+    expect(bitmaps[1]?.close).toHaveBeenCalledOnce();
+    expect(bitmaps[2]?.close).not.toHaveBeenCalled();
+    expect(
+      worker.postMessage.mock.calls.filter(([message]) => message.type === "frame"),
+    ).toHaveLength(1);
+
+    worker.emit({ type: "result", timestamp: 1_000, hands: [] });
+    expect(
+      worker.postMessage.mock.calls.filter(([message]) => message.type === "frame"),
+    ).toHaveLength(2);
+    expect(worker.postMessage).toHaveBeenLastCalledWith(
+      { type: "frame", frame: bitmaps[2], timestamp: 1_000 },
+      [bitmaps[2]],
+    );
+    expect(controller.getEngineStatus?.()?.runtimeMetrics).toMatchObject({
+      droppedSuperseded: 1,
+    });
+  });
+
+  it("closes a capture completed after an engine epoch change instead of sending it to the fallback", async () => {
+    const primaryWorker = new FakeWorker();
+    const fallbackWorker = new FakeWorker();
+    let resolveBitmap!: (bitmap: ImageBitmap) => void;
+    const bitmap = { close: vi.fn() } as unknown as ImageBitmap;
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    const video = {
+      srcObject: null,
+      readyState: 4,
+      currentTime: 1,
+      play: vi.fn(async () => undefined),
+    } as unknown as HTMLVideoElement;
+    const controller = createHandTrackingController({
+      getUserMedia: vi.fn(async () => ({
+        getTracks: () => [{ stop: vi.fn() }],
+      }) as unknown as MediaStream),
+      createWorkerForEngine: vi.fn((engine: { id: string }) =>
+        engine.id.startsWith("yolo26") ? primaryWorker : fallbackWorker,
+      ),
+      createImageBitmap: vi.fn(
+        () => new Promise<ImageBitmap>((resolve) => { resolveBitmap = resolve; }),
+      ),
+      requestAnimationFrame: vi.fn((callback) => {
+        frames.set(++frameId, callback);
+        return frameId;
+      }),
+      cancelAnimationFrame: vi.fn((id) => frames.delete(id)),
+      now: () => 1_000,
+    });
+
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(primaryWorker.postMessage).toHaveBeenCalled());
+    primaryWorker.emit({ type: "ready" });
+    await starting;
+    [...frames.values()].at(-1)?.(1_000);
+    primaryWorker.emit({ type: "error", message: "primary stopped" });
+    await vi.waitFor(() => expect(fallbackWorker.postMessage).toHaveBeenCalled());
+    resolveBitmap(bitmap);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(bitmap.close).toHaveBeenCalledOnce();
+    expect(
+      fallbackWorker.postMessage.mock.calls.some(([message]) => message.type === "frame"),
+    ).toBe(false);
+    fallbackWorker.emit({ type: "ready" });
+    expect(controller.getEngineStatus?.()?.runtimeMetrics).toMatchObject({
+      droppedLateCapture: 1,
+    });
+  });
+
+  it("falls back one-way when twelve post-warmup YOLO results miss the delivered-rate threshold", async () => {
+    let now = 1_000;
+    const primaryWorker = new FakeWorker();
+    const fallbackWorker = new FakeWorker();
+    const video = {
+      srcObject: null,
+      readyState: 4,
+      play: vi.fn(async () => undefined),
+    } as unknown as HTMLVideoElement;
+    const controller = createHandTrackingController({
+      getUserMedia: vi.fn(async () => ({
+        getTracks: () => [{ stop: vi.fn() }],
+      }) as unknown as MediaStream),
+      createWorkerForEngine: vi.fn((engine: { id: string }) =>
+        engine.id.startsWith("yolo26") ? primaryWorker : fallbackWorker,
+      ),
+      createImageBitmap: vi.fn(async () => ({ close: vi.fn() }) as unknown as ImageBitmap),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      now: () => now,
+    });
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(primaryWorker.postMessage).toHaveBeenCalled());
+    primaryWorker.emit({ type: "ready" });
+    await starting;
+
+    for (let index = 0; index < 14; index += 1) {
+      now = 1_100 + index * 60;
+      primaryWorker.emit({
+        type: "result",
+        timestamp: now - 80,
+        hands: [],
+      });
+    }
+
+    await vi.waitFor(() =>
+      expect(fallbackWorker.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "initialize" }),
+      ),
+    );
+    expect(controller.getEngineStatus?.()).toMatchObject({
+      id: "mediapipe-hand-landmarker-v1",
+      fallback: true,
+      fallbackReason: expect.stringMatching(/startup performance/i),
+    });
+  });
+
+  it("accepts age 120 ms, rejects age 120.001 ms before interpretation, and counts the stale result", async () => {
+    let now = 1_120;
+    const { controller, worker, video } = harness(() => now);
+    const observations: HandTrackingObservation[] = [];
+    controller.subscribeObservations((observation) => observations.push(observation));
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    worker.emit({
+      type: "result",
+      timestamp: 1_000,
+      hands: [{ handedness: "left", confidence: 0.96, landmarks: hand() }],
+    });
+    now = 1_240.001;
+    worker.emit({
+      type: "result",
+      timestamp: 1_120,
+      hands: [{
+        handedness: "left",
+        confidence: 0.96,
+        landmarks: hand({ x: 0.6, y: 0.4 }, { x: 0.62, y: 0.4 }),
+      }],
+    });
+
+    expect(observations[0]).toMatchObject({ mode: "point", trackingState: "tracked" });
+    expect(observations[1]).toEqual({
+      mode: "idle",
+      timestamp: 1_240.001,
+      trackingState: "lost",
+    });
+    expect(controller.getEngineStatus?.()?.runtimeMetrics).toMatchObject({
+      droppedStale: 1,
+    });
+  });
+
+  it("publishes metric updates no faster than 250 ms and accepts a render acknowledgement", async () => {
+    let now = 1_000;
+    const { controller, worker, video } = harness(() => now);
+    const engineEvents: unknown[] = [];
+    controller.subscribeEngineStatus?.((engine) => engineEvents.push(engine));
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+    const beforeMetrics = engineEvents.length;
+
+    worker.emit({ type: "result", timestamp: 990, hands: [] });
+    const afterFirst = engineEvents.length;
+    now = 1_100;
+    worker.emit({ type: "result", timestamp: 1_090, hands: [] });
+    expect(engineEvents.length).toBe(afterFirst);
+    now = 1_250;
+    worker.emit({ type: "result", timestamp: 1_240, hands: [] });
+    expect(afterFirst).toBeGreaterThan(beforeMetrics);
+    expect(engineEvents.length).toBe(afterFirst + 1);
+
+    expect(controller.acknowledgeRendered?.(1_240, 1_280)).toBe(true);
+    expect(controller.getEngineStatus?.()?.runtimeMetrics).toMatchObject({
+      captureToRenderMs: { p50: 40, p95: 40 },
     });
   });
 });

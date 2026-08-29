@@ -41,8 +41,9 @@ export interface PrivateHandRelayWorkerLike extends HandTrackingWorkerLike {
 }
 
 export const PRIVATE_HAND_RELAY_ENGINE_ID = "private-yolo-hand-relay-v1";
-const PRIVATE_HAND_RELAY_USEFUL_DIMENSION = 320;
-const PRIVATE_HAND_RELAY_TARGET_BYTES = 65_536;
+const PRIVATE_HAND_RELAY_USEFUL_WIDTH = 640;
+const PRIVATE_HAND_RELAY_USEFUL_HEIGHT = 480;
+const PRIVATE_HAND_RELAY_TARGET_BYTES = 131_072;
 
 export function createPrivateHandRelaySpatialVisionEngine(): SpatialVisionEngine {
   return {
@@ -82,7 +83,8 @@ export function createPrivateHandRelayWorker(
 ): PrivateHandRelayWorkerLike {
   const requestSession = options.requestSession ?? requestPrivateHandRelaySession;
   const createTransport = options.createTransport ?? createPrivateHandRelayTransport;
-  const encodeFrame = options.encodeFrame ?? encodePrivateHandRelayFrame;
+  const encodeFrame =
+    options.encodeFrame ?? createAdaptivePrivateHandRelayFrameEncoder();
   const now = options.now ?? (() => performance.now());
   const setTimer =
     options.setTimeout ??
@@ -298,11 +300,11 @@ export function createPrivateHandRelayWorker(
         ),
         maxWidth: Math.min(
           activeCapability.limits.maxWidth,
-          PRIVATE_HAND_RELAY_USEFUL_DIMENSION,
+          PRIVATE_HAND_RELAY_USEFUL_WIDTH,
         ),
         maxHeight: Math.min(
           activeCapability.limits.maxHeight,
-          PRIVATE_HAND_RELAY_USEFUL_DIMENSION,
+          PRIVATE_HAND_RELAY_USEFUL_HEIGHT,
         ),
       };
       const encoded = await encodeFrame(next.frame, encodingLimits);
@@ -440,6 +442,17 @@ export async function encodePrivateHandRelayFrame(
   frame: ImageBitmap,
   limits: PrivateHandRelayEncodingLimits,
 ): Promise<Blob> {
+  return createAdaptivePrivateHandRelayFrameEncoder()(frame, limits);
+}
+
+/**
+ * Creates a run-scoped adaptive encoder. A successful bounded profile is tried
+ * first for later frames, avoiding repeated oversized encodes without retaining
+ * any camera pixels or blobs.
+ */
+export function createAdaptivePrivateHandRelayFrameEncoder(): PrivateHandRelayFrameEncoder {
+  let successfulAttemptIndex: number | null = null;
+  return async (frame, limits) => {
   if (typeof OffscreenCanvas !== "function")
     throw new Error("Private GPU frame encoding is unavailable in this browser.");
   const sourceWidth = Math.max(1, frame.width);
@@ -449,14 +462,29 @@ export async function encodePrivateHandRelayFrame(
     limits.maxWidth / sourceWidth,
     limits.maxHeight / sourceHeight,
   );
-  const attempts = [
-    { scale: initialScale, type: "image/webp", quality: 0.72 },
-    { scale: initialScale, type: "image/webp", quality: 0.52 },
-    { scale: initialScale * 0.75, type: "image/webp", quality: 0.48 },
-    { scale: initialScale * 0.75, type: "image/jpeg", quality: 0.52 },
+  const fallbackScale = Math.min(
+    initialScale,
+    480 / Math.max(sourceWidth, sourceHeight),
+  );
+  const profiles = [
+    { scale: initialScale, type: "image/webp", quality: 0.78 },
+    { scale: initialScale, type: "image/webp", quality: 0.62 },
+    { scale: initialScale, type: "image/webp", quality: 0.48 },
+    { scale: fallbackScale, type: "image/webp", quality: 0.52 },
+    { scale: fallbackScale, type: "image/jpeg", quality: 0.58 },
+    { scale: fallbackScale, type: "image/jpeg", quality: 0.42 },
   ] as const;
+  const attemptIndices = successfulAttemptIndex === null
+    ? profiles.map((_, index) => index)
+    : [
+        successfulAttemptIndex,
+        ...profiles
+          .map((_, index) => index)
+          .filter((index) => index !== successfulAttemptIndex),
+      ];
 
-  for (const attempt of attempts) {
+  for (const attemptIndex of attemptIndices) {
+    const attempt = profiles[attemptIndex]!;
     const width = Math.max(1, Math.floor(sourceWidth * attempt.scale));
     const height = Math.max(1, Math.floor(sourceHeight * attempt.scale));
     const canvas = new OffscreenCanvas(width, height);
@@ -477,8 +505,11 @@ export async function encodePrivateHandRelayFrame(
       encoded.size > 0 &&
       encoded.size <= limits.maxBytes &&
       (encoded.type === "image/webp" || encoded.type === "image/jpeg")
-    )
+    ) {
+      successfulAttemptIndex = attemptIndex;
       return encoded;
+    }
   }
   throw new Error("Camera frame exceeds the private GPU relay size limit.");
+  };
 }

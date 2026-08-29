@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createAdaptivePrivateHandRelayFrameEncoder,
   createPrivateHandRelayWorker,
   type PrivateHandRelayFrameEncoder,
 } from "@/lib/gesture/private-hand-relay-worker";
@@ -212,7 +213,7 @@ describe("private hand relay worker endpoint", () => {
     expect(encodeFrame).toHaveBeenNthCalledWith(
       1,
       first,
-      expect.objectContaining({ maxBytes: 65_536, maxWidth: 320, maxHeight: 320 }),
+      expect.objectContaining({ maxBytes: 131_072, maxWidth: 640, maxHeight: 480 }),
     );
     expect(first.close).toHaveBeenCalledOnce();
     expect(enqueueFrame).toHaveBeenNthCalledWith(
@@ -257,7 +258,7 @@ describe("private hand relay worker endpoint", () => {
     expect(encodeFrame).toHaveBeenNthCalledWith(
       2,
       newest,
-      expect.objectContaining({ maxBytes: 65_536, maxWidth: 320, maxHeight: 320 }),
+      expect.objectContaining({ maxBytes: 131_072, maxWidth: 640, maxHeight: 480 }),
     );
     expect(newest.close).toHaveBeenCalledOnce();
     expect(enqueueFrame).toHaveBeenNthCalledWith(
@@ -344,7 +345,7 @@ describe("private hand relay worker endpoint", () => {
         return { enqueueFrame, stop: vi.fn() };
       },
       encodeFrame: vi.fn(async () =>
-        new Blob([new Uint8Array(65_537)], { type: "image/webp" }),
+        new Blob([new Uint8Array(131_073)], { type: "image/webp" }),
       ),
     });
     const messages: unknown[] = [];
@@ -397,5 +398,68 @@ describe("private hand relay worker endpoint", () => {
       type: "error",
       message: "Private GPU camera upload consent was revoked.",
     });
+  });
+
+  it("preserves aspect ratio, adapts quality through 480/JPEG, and reuses the successful profile", async () => {
+    const originalOffscreenCanvas = globalThis.OffscreenCanvas;
+    const attempts: Array<{
+      width: number;
+      height: number;
+      type: string;
+      quality: number;
+    }> = [];
+    let conversions = 0;
+    class FakeOffscreenCanvas {
+      constructor(
+        readonly width: number,
+        readonly height: number,
+      ) {}
+
+      getContext() {
+        return { drawImage: vi.fn() };
+      }
+
+      async convertToBlob(options: { type: string; quality: number }) {
+        attempts.push({ width: this.width, height: this.height, ...options });
+        conversions += 1;
+        const accepted = conversions === 5 || conversions === 6;
+        return new Blob(
+          [new Uint8Array(accepted ? 100_000 : 140_000)],
+          { type: options.type },
+        );
+      }
+    }
+    Object.defineProperty(globalThis, "OffscreenCanvas", {
+      configurable: true,
+      value: FakeOffscreenCanvas,
+    });
+    try {
+      const encoder = createAdaptivePrivateHandRelayFrameEncoder();
+      const frame = bitmap("source");
+      const limits = { maxBytes: 131_072, maxWidth: 640, maxHeight: 480 };
+
+      const first = await encoder(frame, limits);
+      expect(first.type).toBe("image/jpeg");
+      expect(attempts.slice(0, 5)).toEqual([
+        { width: 640, height: 360, type: "image/webp", quality: 0.78 },
+        { width: 640, height: 360, type: "image/webp", quality: 0.62 },
+        { width: 640, height: 360, type: "image/webp", quality: 0.48 },
+        { width: 480, height: 270, type: "image/webp", quality: 0.52 },
+        { width: 480, height: 270, type: "image/jpeg", quality: 0.58 },
+      ]);
+
+      await encoder(frame, limits);
+      expect(attempts[5]).toEqual({
+        width: 480,
+        height: 270,
+        type: "image/jpeg",
+        quality: 0.58,
+      });
+    } finally {
+      Object.defineProperty(globalThis, "OffscreenCanvas", {
+        configurable: true,
+        value: originalOffscreenCanvas,
+      });
+    }
   });
 });
