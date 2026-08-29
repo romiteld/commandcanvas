@@ -203,18 +203,28 @@ diagnostics.
 ### Typecheck boundary
 
 `npm run typecheck` passed after the delivery implementation and browser/UI
-contract update. A later repository-wide rerun, while Task 4 was actively
-editing shared gesture files, was blocked only by missing in-progress Task 4
-exports in:
+contract update. The final repository-wide rerun, while the hand/room lane was
+actively editing its files, was blocked only by three non-delivery diagnostics:
 
 ```text
-lib/gesture/canvas-motion-layer.test.ts
-lib/gesture/spatial-room-input.test.ts
+components/command-canvas/command-canvas-room.tsx
+components/command-canvas/spatial-camera-control.test.tsx
 ```
 
-No delivery file appeared in that later diagnostic set. The root integration
-lane must rerun repository typecheck after Task 4 completes; this report does
-not label the concurrent snapshot globally green.
+No delivery file appeared in that diagnostic set. The root integration lane
+must rerun repository typecheck after the hand/room work completes; this report
+does not label the concurrent snapshot globally green.
+
+### Repository-wide unit boundary
+
+The final concurrent repository snapshot ran 1,084 tests: 1,076 passed and
+eight failed in `command-canvas-room.test.tsx`,
+`spatial-camera-control.test.tsx`, and `lib/realtime-voice/tools.test.ts`. Those
+are active hand/room/voice lane tests and do not import or exercise Task 6
+delivery code. Because repository typecheck and full unit were already red in
+those parallel files, a production build was not represented as a useful
+Task 6 verification gate. The owned delivery suite and migration contracts
+were rerun afterward and remained 124/124 and 40/40 green.
 
 ### Static diff and package state
 
