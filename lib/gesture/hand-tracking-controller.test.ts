@@ -5,6 +5,10 @@ import {
   type HandTrackingObservation,
   type HandTrackingWorkerLike,
 } from "@/lib/gesture/hand-tracking-controller";
+import {
+  createInitialHandReliabilityState,
+  reduceHandReliability,
+} from "@/lib/gesture/hand-calibration";
 import type { HandLandmarks } from "@/lib/gesture/hand-intent";
 import { YOLO_HAND_POSE_MODEL_URL } from "@/lib/gesture/yolo-hand-pose-detector";
 
@@ -721,7 +725,7 @@ describe("hand tracking controller lifecycle", () => {
         source: "yolo26-hand-pose-2abb91",
         capturedAt: 1_000,
         receivedAt: 1_000,
-        trackId: "left",
+        trackId: expect.stringMatching(/^hand-track-/),
         prediction: { predicted: false },
         trackingState: "tracked",
         timestamp: 1_000,
@@ -828,6 +832,107 @@ describe("hand tracking controller lifecycle", () => {
     });
   });
 
+  it("produces one spatially continuous track for a rapid label flip and reordered second-hand entrance", async () => {
+    let now = 1_000;
+    const { controller, worker, video } = harness(() => now);
+    const observations: HandTrackingObservation[] = [];
+    controller.subscribeObservations((observation) => observations.push(observation));
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    worker.emit({
+      type: "result",
+      timestamp: now,
+      hands: [
+        {
+          handedness: "left",
+          confidence: 0.92,
+          landmarks: shiftedHand(-0.15, 0.33),
+        },
+      ],
+    });
+    now = 1_016;
+    worker.emit({
+      type: "result",
+      timestamp: now,
+      hands: [
+        {
+          handedness: "left",
+          confidence: 0.92,
+          landmarks: shiftedHand(0.05, 0.33),
+        },
+      ],
+    });
+    now = 1_032;
+    worker.emit({
+      type: "result",
+      timestamp: now,
+      hands: [
+        {
+          handedness: "left",
+          confidence: 0.96,
+          landmarks: shiftedHand(-0.18, 0.5),
+        },
+        {
+          handedness: "right",
+          confidence: 0.92,
+          landmarks: shiftedHand(0.35, 0.33),
+        },
+      ],
+    });
+
+    const primaryFrames = observations.filter(
+      (observation): observation is Extract<
+        HandTrackingObservation,
+        { mode: "point" | "pinch" | "open_palm" }
+      > => observation.mode !== "idle" && observation.mode !== "bimanual_pinch",
+    );
+    expect(primaryFrames).toHaveLength(3);
+    const [first, second, third] = primaryFrames;
+    expect(first?.trackId).toBeTruthy();
+    expect([first?.trackId, second?.trackId, third?.trackId]).toEqual([
+      first?.trackId,
+      first?.trackId,
+      first?.trackId,
+    ]);
+    expect(first?.trackId).not.toBe("left");
+    expect(first?.trackId).not.toBe("right");
+    expect(third?.handedness).toBe("right");
+
+    let reliability = createInitialHandReliabilityState();
+    for (const observation of primaryFrames) {
+      const measurements = observation.measurements;
+      if (!observation.trackId || !measurements)
+        throw new Error("The controller must produce Task 1 measurement provenance.");
+      reliability = reduceHandReliability(
+        reliability,
+        {
+          timestamp: observation.timestamp,
+          hands: [
+            {
+              trackId: observation.trackId,
+              handedness: observation.handedness ?? "unknown",
+              pointer: observation.pointer,
+              confidence: observation.confidence,
+              indexTipConfidence: measurements.indexTipConfidence,
+              thumbTipConfidence: measurements.thumbTipConfidence,
+              predicted: observation.prediction?.predicted ?? true,
+              pinchRatio: observation.pinchRatio ?? Number.NaN,
+            },
+          ],
+        },
+        { engage: 0.38, release: 0.52 },
+      ).state;
+    }
+    expect(reliability.activeHandId).toBe(first?.trackId);
+    expect(reliability.lastValid).toMatchObject({
+      trackId: first?.trackId,
+      timestamp: 1_032,
+    });
+  });
+
   it("emits a semantic bimanual pinch with two tagged pointers and span", async () => {
     const { controller, worker, video } = harness();
     const observations: unknown[] = [];
@@ -864,6 +969,13 @@ describe("hand tracking controller lifecycle", () => {
             confidence: 0.96,
             landmarks: expect.any(Array),
             pinchDistance: 0.02,
+            trackId: expect.stringMatching(/^hand-track-/),
+            prediction: { predicted: false },
+            measurements: expect.objectContaining({
+              indexTipConfidence: 1,
+              thumbTipConfidence: 1,
+            }),
+            trackingState: "tracked",
           }),
           expect.objectContaining({
             handedness: "right",
@@ -871,6 +983,13 @@ describe("hand tracking controller lifecycle", () => {
             confidence: 0.94,
             landmarks: expect.any(Array),
             pinchDistance: 0.02,
+            trackId: expect.stringMatching(/^hand-track-/),
+            prediction: { predicted: false },
+            measurements: expect.objectContaining({
+              indexTipConfidence: 1,
+              thumbTipConfidence: 1,
+            }),
+            trackingState: "tracked",
           }),
         ],
         center: { x: 0.5, y: 0.4 },

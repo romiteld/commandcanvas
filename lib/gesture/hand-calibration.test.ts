@@ -10,6 +10,27 @@ import {
   voteCalibratedPinch,
 } from "@/lib/gesture/hand-calibration";
 
+function pinchSample(
+  timestamp: number,
+  pinchRatio: number,
+  overrides: Partial<{
+    confidence: number;
+    indexTipConfidence: number;
+    thumbTipConfidence: number;
+    predicted: boolean;
+  }> = {},
+) {
+  return {
+    timestamp,
+    pinchRatio,
+    confidence: 0.9,
+    indexTipConfidence: 0.9,
+    thumbTipConfidence: 0.9,
+    predicted: false,
+    ...overrides,
+  };
+}
+
 describe("hand calibration", () => {
   it("accepts percentile reach and records its expanded comfortable camera bounds", () => {
     const result = buildHandCalibration({
@@ -178,36 +199,38 @@ describe("calibrated pinch voting", () => {
 
     const first = voteCalibratedPinch(
       createInitialPinchVoteState(),
-      { timestamp: 1_000, confidence: 0.9, pinchRatio: 0.3 },
+      pinchSample(1_000, 0.3),
       thresholds,
     );
     expect(first.snapshot).toMatchObject({ pinched: false, candidate: "engage" });
 
     const engaged = voteCalibratedPinch(
       first.state,
-      { timestamp: 1_040, confidence: 0.9, pinchRatio: 0.31 },
+      pinchSample(1_040, 0.31),
       thresholds,
     );
     expect(engaged.snapshot).toEqual({
       pinched: true,
       candidate: null,
       transition: "engaged",
+      ignored: false,
     });
 
     const releaseCandidate = voteCalibratedPinch(
       engaged.state,
-      { timestamp: 1_070, confidence: 0.9, pinchRatio: 0.55 },
+      pinchSample(1_070, 0.55),
       thresholds,
     );
     const released = voteCalibratedPinch(
       releaseCandidate.state,
-      { timestamp: 1_095, confidence: 0.9, pinchRatio: 0.56 },
+      pinchSample(1_095, 0.56),
       thresholds,
     );
     expect(released.snapshot).toEqual({
       pinched: false,
       candidate: null,
       transition: "released",
+      ignored: false,
     });
   });
 
@@ -216,16 +239,16 @@ describe("calibrated pinch voting", () => {
     const engaged = voteCalibratedPinch(
       voteCalibratedPinch(
         createInitialPinchVoteState(),
-        { timestamp: 1_000, confidence: 0.9, pinchRatio: 0.3 },
+        pinchSample(1_000, 0.3),
         thresholds,
       ).state,
-      { timestamp: 1_040, confidence: 0.9, pinchRatio: 0.3 },
+      pinchSample(1_040, 0.3),
       thresholds,
     );
 
     const uncertain = voteCalibratedPinch(
       engaged.state,
-      { timestamp: 1_100, confidence: 0.2, pinchRatio: 0.8 },
+      pinchSample(1_100, 0.8, { confidence: 0.2 }),
       thresholds,
     );
 
@@ -233,8 +256,148 @@ describe("calibrated pinch voting", () => {
       pinched: true,
       candidate: null,
       transition: null,
+      ignored: false,
     });
     expect(uncertain.state.lastConfidentAt).toBe(1_040);
+  });
+
+  it("requires real index and thumb confidence before either pinch transition", () => {
+    const thresholds = { engage: 0.38, release: 0.52 };
+
+    for (const uncertain of [
+      pinchSample(1_040, 0.3, { thumbTipConfidence: 0.2 }),
+      pinchSample(1_040, 0.3, { indexTipConfidence: 0.2 }),
+      pinchSample(1_040, 0.3, { predicted: true }),
+    ]) {
+      const candidate = voteCalibratedPinch(
+        voteCalibratedPinch(
+          createInitialPinchVoteState(),
+          pinchSample(1_000, 0.3),
+          thresholds,
+        ).state,
+        uncertain,
+        thresholds,
+      );
+      expect(candidate.snapshot).toMatchObject({
+        pinched: false,
+        transition: null,
+      });
+    }
+
+    const held = voteCalibratedPinch(
+      voteCalibratedPinch(
+        createInitialPinchVoteState(),
+        pinchSample(1_000, 0.3),
+        thresholds,
+      ).state,
+      pinchSample(1_040, 0.3),
+      thresholds,
+    );
+    expect(held.snapshot).toMatchObject({ pinched: true });
+
+    let state = held.state;
+    for (const uncertain of [
+      pinchSample(1_070, 0.7, { thumbTipConfidence: 0.2 }),
+      pinchSample(1_085, 0.7, { indexTipConfidence: 0.2 }),
+      pinchSample(1_100, 0.7, { predicted: true }),
+    ]) {
+      const transition = voteCalibratedPinch(state, uncertain, thresholds);
+      expect(transition.snapshot).toMatchObject({
+        pinched: true,
+        transition: null,
+      });
+      state = transition.state;
+    }
+  });
+
+  it("ignores duplicate and older confidence evidence for engage and release", () => {
+    const thresholds = { engage: 0.38, release: 0.52 };
+    const first = voteCalibratedPinch(
+      createInitialPinchVoteState(),
+      pinchSample(1_000, 0.3),
+      thresholds,
+    );
+    const duplicateEngage = voteCalibratedPinch(
+      first.state,
+      pinchSample(1_000, 0.3),
+      thresholds,
+    );
+    const olderEngage = voteCalibratedPinch(
+      duplicateEngage.state,
+      pinchSample(999, 0.3),
+      thresholds,
+    );
+    expect(duplicateEngage.snapshot).toMatchObject({
+      pinched: false,
+      transition: null,
+      ignored: true,
+    });
+    expect(olderEngage.state).toEqual(first.state);
+
+    const held = voteCalibratedPinch(
+      olderEngage.state,
+      pinchSample(1_040, 0.3),
+      thresholds,
+    );
+    expect(held.snapshot).toMatchObject({ pinched: true, transition: "engaged" });
+
+    const releaseCandidate = voteCalibratedPinch(
+      held.state,
+      pinchSample(1_070, 0.7),
+      thresholds,
+    );
+    const duplicateRelease = voteCalibratedPinch(
+      releaseCandidate.state,
+      pinchSample(1_070, 0.7),
+      thresholds,
+    );
+    const olderRelease = voteCalibratedPinch(
+      duplicateRelease.state,
+      pinchSample(1_060, 0.7),
+      thresholds,
+    );
+    expect(duplicateRelease.snapshot).toMatchObject({
+      pinched: true,
+      transition: null,
+      ignored: true,
+    });
+    expect(olderRelease.state).toEqual(releaseCandidate.state);
+
+    const released = voteCalibratedPinch(
+      olderRelease.state,
+      pinchSample(1_095, 0.7),
+      thresholds,
+    );
+    expect(released.snapshot).toMatchObject({
+      pinched: false,
+      transition: "released",
+    });
+  });
+
+  it("refuses a confident sample that arrives behind newer uncertain evidence", () => {
+    const thresholds = { engage: 0.38, release: 0.52 };
+    const first = voteCalibratedPinch(
+      createInitialPinchVoteState(),
+      pinchSample(1_000, 0.3),
+      thresholds,
+    );
+    const uncertain = voteCalibratedPinch(
+      first.state,
+      pinchSample(1_050, 0.3, { thumbTipConfidence: 0.2 }),
+      thresholds,
+    );
+    const outOfOrder = voteCalibratedPinch(
+      uncertain.state,
+      pinchSample(1_040, 0.3),
+      thresholds,
+    );
+
+    expect(outOfOrder.state).toEqual(uncertain.state);
+    expect(outOfOrder.snapshot).toMatchObject({
+      pinched: false,
+      transition: null,
+      ignored: true,
+    });
   });
 });
 
@@ -252,6 +415,8 @@ describe("hand identity and loss reliability", () => {
             handedness: "left",
             pointer: { x: 100, y: 140 },
             confidence: 0.91,
+            indexTipConfidence: 0.91,
+            thumbTipConfidence: 0.91,
             predicted: false,
             pinchRatio: 0.3,
           },
@@ -269,6 +434,8 @@ describe("hand identity and loss reliability", () => {
             handedness: "left",
             pointer: { x: 160, y: 140 },
             confidence: 0.93,
+            indexTipConfidence: 0.93,
+            thumbTipConfidence: 0.93,
             predicted: false,
             pinchRatio: 0.7,
           },
@@ -277,6 +444,8 @@ describe("hand identity and loss reliability", () => {
             handedness: "right",
             pointer: { x: 760, y: 140 },
             confidence: 0.91,
+            indexTipConfidence: 0.91,
+            thumbTipConfidence: 0.91,
             predicted: false,
             pinchRatio: 0.3,
           },
@@ -289,6 +458,8 @@ describe("hand identity and loss reliability", () => {
       trackId: "track-primary",
       handedness: "right",
       confidence: 0.91,
+      indexTipConfidence: 0.91,
+      thumbTipConfidence: 0.91,
       predicted: false,
       real: true,
       trackingState: "tracked",
@@ -302,6 +473,8 @@ describe("hand identity and loss reliability", () => {
         trackId: "track-second",
         handedness: "left",
         confidence: 0.93,
+        indexTipConfidence: 0.93,
+        thumbTipConfidence: 0.93,
         predicted: false,
         real: true,
         trackingState: "tracked",
@@ -314,6 +487,8 @@ describe("hand identity and loss reliability", () => {
         trackId: "track-primary",
         handedness: "right",
         confidence: 0.91,
+        indexTipConfidence: 0.91,
+        thumbTipConfidence: 0.91,
         predicted: false,
         real: true,
         trackingState: "tracked",
@@ -336,6 +511,8 @@ describe("hand identity and loss reliability", () => {
             handedness: "unknown",
             pointer: { x: 100, y: 140 },
             confidence: 0.9,
+            indexTipConfidence: 0.9,
+            thumbTipConfidence: 0.9,
             predicted: false,
             pinchRatio: 0.3,
           },
@@ -353,6 +530,8 @@ describe("hand identity and loss reliability", () => {
             handedness: "unknown",
             pointer: { x: 100, y: 140 },
             confidence: 0.9,
+            indexTipConfidence: 0.9,
+            thumbTipConfidence: 0.9,
             predicted: false,
             pinchRatio: 0.3,
           },
@@ -396,6 +575,8 @@ describe("hand identity and loss reliability", () => {
             handedness: "unknown",
             pointer: { x: 220, y: 140 },
             confidence: 0.9,
+            indexTipConfidence: 0.9,
+            thumbTipConfidence: 0.9,
             predicted: false,
             pinchRatio: 0.3,
           },
@@ -421,6 +602,8 @@ describe("hand identity and loss reliability", () => {
             handedness: "unknown",
             pointer: { x: 5, y: 250 },
             confidence: 0.9,
+            indexTipConfidence: 0.9,
+            thumbTipConfidence: 0.9,
             predicted: false,
             pinchRatio: 0.3,
           },
@@ -459,6 +642,8 @@ describe("hand identity and loss reliability", () => {
             handedness: "unknown",
             pointer: { x: 100, y: 100 },
             confidence: 0.9,
+            indexTipConfidence: 0.9,
+            thumbTipConfidence: 0.9,
             predicted: false,
             pinchRatio: 0.3,
           },
@@ -481,6 +666,8 @@ describe("hand identity and loss reliability", () => {
             handedness: "unknown",
             pointer: { x: 221, y: 100 },
             confidence: 0.9,
+            indexTipConfidence: 0.9,
+            thumbTipConfidence: 0.9,
             predicted: false,
             pinchRatio: 0.3,
           },
@@ -495,5 +682,49 @@ describe("hand identity and loss reliability", () => {
       release: { point: { x: 100, y: 100 }, releasedAt: 1_220 },
       edgeAction: null,
     });
+  });
+
+  it("does not let duplicate or older loss evidence rewind grace timing", () => {
+    const tracked = reduceHandReliability(
+      createInitialHandReliabilityState(),
+      {
+        timestamp: 1_000,
+        hands: [
+          {
+            trackId: "track-primary",
+            handedness: "unknown",
+            pointer: { x: 100, y: 100 },
+            confidence: 0.9,
+            indexTipConfidence: 0.9,
+            thumbTipConfidence: 0.9,
+            predicted: false,
+            pinchRatio: 0.3,
+          },
+        ],
+      },
+      thresholds,
+    );
+    const reacquire = reduceHandReliability(
+      tracked.state,
+      { timestamp: 1_150, hands: [] },
+      thresholds,
+    );
+    const duplicate = reduceHandReliability(
+      reacquire.state,
+      { timestamp: 1_150, hands: [] },
+      thresholds,
+    );
+    const older = reduceHandReliability(
+      duplicate.state,
+      { timestamp: 1_120, hands: [] },
+      thresholds,
+    );
+
+    expect(reacquire.snapshot).toMatchObject({ trackingState: "reacquire" });
+    expect(duplicate.snapshot).toMatchObject({
+      trackingState: "reacquire",
+      ignored: true,
+    });
+    expect(older.state).toEqual(reacquire.state);
   });
 });

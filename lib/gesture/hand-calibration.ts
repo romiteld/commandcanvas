@@ -66,6 +66,9 @@ export interface CalibratedPinchThresholds {
 export interface PinchVoteInput {
   readonly timestamp: number;
   readonly confidence: number;
+  readonly indexTipConfidence: number;
+  readonly thumbTipConfidence: number;
+  readonly predicted: boolean;
   readonly pinchRatio: number;
 }
 
@@ -76,12 +79,16 @@ export interface PinchVoteState {
     readonly pinchRatio: number;
   }[];
   readonly lastConfidentAt: number | null;
+  /** Latest observed pinch sample, including uncertainty that did not vote. */
+  readonly lastEvidenceTimestamp: number | null;
 }
 
 export interface PinchVoteSnapshot {
   readonly pinched: boolean;
   readonly candidate: "engage" | "release" | null;
   readonly transition: "engaged" | "released" | null;
+  /** Non-strictly-newer evidence was refused without advancing temporal state. */
+  readonly ignored: boolean;
 }
 
 export interface PinchVoteTransition {
@@ -95,6 +102,10 @@ export interface HandReliabilityHandInput {
   /** Canvas-space CSS pixels, used only to enforce safe reacquisition. */
   readonly pointer: { readonly x: number; readonly y: number };
   readonly confidence: number;
+  /** Task 1 provenance: pointer validity is independent of aggregate confidence. */
+  readonly indexTipConfidence: number;
+  /** Task 1 provenance: pinch requires real thumb evidence as well as index evidence. */
+  readonly thumbTipConfidence: number;
   readonly predicted: boolean;
   readonly pinchRatio: number;
 }
@@ -118,6 +129,8 @@ export interface HandReliabilityState {
     readonly timestamp: number;
   } | null;
   readonly lossStartedAt: number | null;
+  /** Latest frame accepted by this reducer; duplicate/older frames cannot rewind it. */
+  readonly lastEvidenceTimestamp: number | null;
   readonly pinchVote: PinchVoteState;
   /** Per-track timestamps are additive provenance for one- and two-hand consumers. */
   readonly handLastValidAt: Readonly<Record<string, number>>;
@@ -127,6 +140,8 @@ export interface HandReliabilityHandSnapshot {
   readonly trackId: string;
   readonly handedness: "left" | "right" | "unknown";
   readonly confidence: number;
+  readonly indexTipConfidence: number;
+  readonly thumbTipConfidence: number;
   readonly predicted: boolean;
   readonly real: boolean;
   readonly trackingState: HandReliabilityTrackingState;
@@ -149,6 +164,7 @@ export interface HandReliabilitySnapshot {
     readonly lastValidAt: number;
     readonly releasedAt: number;
   } | null;
+  readonly ignored: boolean;
   /** Task 2 never promotes loss to an edge operation; Task 3 owns edge gates. */
   readonly edgeAction: null;
 }
@@ -264,6 +280,7 @@ export function createInitialPinchVoteState(): PinchVoteState {
     pinched: false,
     recentConfidentRatios: [],
     lastConfidentAt: null,
+    lastEvidenceTimestamp: null,
   };
 }
 
@@ -272,6 +289,7 @@ export function createInitialHandReliabilityState(): HandReliabilityState {
     activeHandId: null,
     lastValid: null,
     lossStartedAt: null,
+    lastEvidenceTimestamp: null,
     pinchVote: createInitialPinchVoteState(),
     handLastValidAt: {},
   };
@@ -288,12 +306,17 @@ export function reduceHandReliability(
   thresholds: CalibratedPinchThresholds,
 ): HandReliabilityTransition {
   assertFiniteTimestamp(frame.timestamp);
+  if (
+    state.lastEvidenceTimestamp !== null &&
+    frame.timestamp <= state.lastEvidenceTimestamp
+  )
+    return ignoredReliabilityTransition(state, frame);
   const handLastValidAt = recordValidHands(state.handLastValidAt, frame);
   const active = state.activeHandId
     ? frame.hands.find((hand) => hand.trackId === state.activeHandId) ?? null
     : selectInitialActiveHand(frame.hands);
 
-  if (!state.activeHandId && active && isReliableHand(active)) {
+  if (!state.activeHandId && active && isPointerReliable(active)) {
     const pinch = voteCalibratedPinch(
       state.pinchVote,
       { ...active, timestamp: frame.timestamp },
@@ -307,13 +330,14 @@ export function reduceHandReliability(
         timestamp: frame.timestamp,
       },
       lossStartedAt: null,
+      lastEvidenceTimestamp: frame.timestamp,
       pinchVote: pinch.state,
       handLastValidAt,
     };
     return trackedReliabilityTransition(next, frame, pinch.snapshot);
   }
 
-  if (active && isReliableHand(active)) {
+  if (active && isPointerReliable(active)) {
     const reacquireViolation =
       state.lossStartedAt !== null &&
       (!state.lastValid ||
@@ -334,6 +358,7 @@ export function reduceHandReliability(
         timestamp: frame.timestamp,
       },
       lossStartedAt: null,
+      lastEvidenceTimestamp: frame.timestamp,
       pinchVote: pinch.state,
       handLastValidAt,
     };
@@ -353,13 +378,27 @@ export function voteCalibratedPinch(
   input: PinchVoteInput,
   thresholds: CalibratedPinchThresholds,
 ): PinchVoteTransition {
-  if (!isConfidentPinchSample(input))
+  if (
+    state.lastEvidenceTimestamp !== null &&
+    input.timestamp <= state.lastEvidenceTimestamp
+  )
     return {
       state,
       snapshot: {
         pinched: state.pinched,
         candidate: null,
         transition: null,
+        ignored: true,
+      },
+    };
+  if (!isConfidentPinchSample(input))
+    return {
+      state: { ...state, lastEvidenceTimestamp: input.timestamp },
+      snapshot: {
+        pinched: state.pinched,
+        candidate: null,
+        transition: null,
+        ignored: false,
       },
     };
   const recentConfidentRatios = [
@@ -388,6 +427,7 @@ export function voteCalibratedPinch(
       pinched,
       recentConfidentRatios,
       lastConfidentAt: input.timestamp,
+      lastEvidenceTimestamp: input.timestamp,
     },
     snapshot: {
       pinched,
@@ -400,6 +440,7 @@ export function voteCalibratedPinch(
               : "engage"
             : null,
       transition,
+      ignored: false,
     },
   };
 }
@@ -501,6 +542,11 @@ function isConfidentPinchSample(input: PinchVoteInput) {
     Number.isFinite(input.timestamp) &&
     Number.isFinite(input.confidence) &&
     input.confidence >= PINCH_MIN_CONFIDENCE &&
+    Number.isFinite(input.indexTipConfidence) &&
+    input.indexTipConfidence >= PINCH_MIN_CONFIDENCE &&
+    Number.isFinite(input.thumbTipConfidence) &&
+    input.thumbTipConfidence >= PINCH_MIN_CONFIDENCE &&
+    !input.predicted &&
     Number.isFinite(input.pinchRatio) &&
     input.pinchRatio >= 0
   );
@@ -523,7 +569,7 @@ function applyLoss(
   handLastValidAt: Readonly<Record<string, number>>,
 ): HandReliabilityTransition {
   if (!state.lastValid) {
-    const next = { ...state, handLastValidAt };
+    const next = { ...state, handLastValidAt, lastEvidenceTimestamp: frame.timestamp };
     return {
       state: next,
       snapshot: createReliabilitySnapshot(
@@ -547,6 +593,7 @@ function applyLoss(
   const next: HandReliabilityState = {
     ...state,
     lossStartedAt: state.lossStartedAt ?? state.lastValid.timestamp,
+    lastEvidenceTimestamp: frame.timestamp,
     handLastValidAt,
   };
   return {
@@ -577,6 +624,7 @@ function safelyRelease(
     activeHandId: null,
     lastValid: null,
     lossStartedAt: null,
+    lastEvidenceTimestamp: frame.timestamp,
     pinchVote: createInitialPinchVoteState(),
     handLastValidAt,
   };
@@ -598,6 +646,7 @@ function createReliabilitySnapshot(
   trackingState: HandReliabilityTrackingState,
   pinch: PinchVoteSnapshot,
   release: HandReliabilitySnapshot["release"],
+  ignored = false,
 ): HandReliabilitySnapshot {
   const hands = frame.hands.map((hand) =>
     snapshotHand(
@@ -619,6 +668,7 @@ function createReliabilitySnapshot(
     lastValidAt: state.lastValid?.timestamp ?? release?.lastValidAt ?? null,
     lossStartedAt: state.lossStartedAt,
     release,
+    ignored,
     edgeAction: null,
   };
 }
@@ -635,6 +685,8 @@ function snapshotHand(
     trackId: hand.trackId,
     handedness: hand.handedness,
     confidence: hand.confidence,
+    indexTipConfidence: hand.indexTipConfidence,
+    thumbTipConfidence: hand.thumbTipConfidence,
     predicted: hand.predicted,
     real: !hand.predicted,
     trackingState,
@@ -647,16 +699,18 @@ function snapshotHand(
 
 function selectInitialActiveHand(hands: readonly HandReliabilityHandInput[]) {
   return hands
-    .filter(isReliableHand)
+    .filter(isPointerReliable)
     .sort((left, right) => right.confidence - left.confidence)[0] ?? null;
 }
 
-function isReliableHand(hand: HandReliabilityHandInput) {
+function isPointerReliable(hand: HandReliabilityHandInput) {
   return (
     hand.trackId.length > 0 &&
     !hand.predicted &&
     Number.isFinite(hand.confidence) &&
     hand.confidence >= PINCH_MIN_CONFIDENCE &&
+    Number.isFinite(hand.indexTipConfidence) &&
+    hand.indexTipConfidence >= PINCH_MIN_CONFIDENCE &&
     Number.isFinite(hand.pointer.x) &&
     Number.isFinite(hand.pointer.y) &&
     Number.isFinite(hand.pinchRatio) &&
@@ -670,7 +724,7 @@ function recordValidHands(
 ) {
   const next = { ...previous };
   for (const hand of frame.hands) {
-    if (isReliableHand(hand)) next[hand.trackId] = frame.timestamp;
+    if (isPointerReliable(hand)) next[hand.trackId] = frame.timestamp;
   }
   return next;
 }
@@ -680,11 +734,46 @@ function handLastValidAt(state: HandReliabilityState, trackId: string) {
 }
 
 function handTrackingState(hand: HandReliabilityHandInput): HandReliabilityTrackingState {
-  return isReliableHand(hand) ? "tracked" : "uncertain";
+  return isPointerReliable(hand) ? "tracked" : "uncertain";
 }
 
-function unchangedPinchSnapshot(state: PinchVoteState): PinchVoteSnapshot {
-  return { pinched: state.pinched, candidate: null, transition: null };
+function unchangedPinchSnapshot(
+  state: PinchVoteState,
+  ignored = false,
+): PinchVoteSnapshot {
+  return { pinched: state.pinched, candidate: null, transition: null, ignored };
+}
+
+function ignoredReliabilityTransition(
+  state: HandReliabilityState,
+  frame: HandReliabilityFrame,
+): HandReliabilityTransition {
+  return {
+    state,
+    snapshot: createReliabilitySnapshot(
+      state,
+      frame,
+      currentReliabilityTrackingState(state),
+      unchangedPinchSnapshot(state.pinchVote, true),
+      null,
+      true,
+    ),
+  };
+}
+
+function currentReliabilityTrackingState(
+  state: HandReliabilityState,
+): HandReliabilityTrackingState {
+  if (!state.activeHandId) return "released";
+  if (!state.lossStartedAt || !state.lastValid) return "tracked";
+  return trackingStateForLoss(
+    (state.lastEvidenceTimestamp ?? state.lastValid.timestamp) -
+      state.lastValid.timestamp,
+  );
+}
+
+function trackingStateForLoss(elapsedMs: number): HandReliabilityTrackingState {
+  return elapsedMs >= REACQUIRE_VISIBLE_MS ? "reacquire" : "uncertain";
 }
 
 function assertFiniteTimestamp(timestamp: number) {

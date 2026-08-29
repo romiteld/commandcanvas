@@ -79,8 +79,13 @@ export interface HandTrackingPointer {
   pointer: { x: number; y: number };
   confidence: number;
   landmarks?: HandLandmarks;
+  /** Additive provenance for two-hand Task 2 reliability consumers. */
+  trackId?: HandTrackId;
+  prediction?: HandPredictionMarker;
+  measurements?: HandPhysicalMeasurements;
   pinchDistance?: number;
   pinchRatio?: number;
+  trackingState?: "tracked" | "grace";
 }
 
 export interface HandTrackingWorkerLike {
@@ -176,8 +181,8 @@ const SHARED_CAMERA_STOPPED_MESSAGE =
   "The shared camera stopped. Enable hand input again to reconnect.";
 const PINCH_TRACKING_GRACE_MS = 180;
 const POINT_TRACKING_GRACE_MS = 220;
-const UNKNOWN_HAND_TRACK_TTL_MS = 360;
-const UNKNOWN_HAND_TRACK_MAX_DISTANCE = 0.35;
+const HAND_TRACK_TTL_MS = 360;
+const HAND_TRACK_MAX_DISTANCE = 0.35;
 const MAX_SEMANTIC_RESULT_AGE_MS = 120;
 
 export function createHandTrackingController(
@@ -351,7 +356,7 @@ export function createHandTrackingController(
     run.stream = null;
     run.ownsStream = false;
     run.intentStates.clear();
-    run.unknownHandTracks.clear();
+    run.handTracks.clear();
     run.lastSingleObservation = null;
     run.captureLatencies.clear();
   }
@@ -719,7 +724,7 @@ export function createHandTrackingController(
       return { hand, trackId: key, transition };
     });
     for (const key of run.intentStates.keys()) {
-      if (!activeKeys.has(key) && !run.unknownHandTracks.has(key))
+      if (!activeKeys.has(key) && !run.handTracks.has(key))
         run.intentStates.delete(key);
     }
     const accepted = interpreted.filter(
@@ -728,17 +733,35 @@ export function createHandTrackingController(
     const pinches = accepted.flatMap((entry) => {
       const output = entry.transition.output;
       return output.accepted && output.mode === "pinch"
-        ? [{ hand: entry.hand, output }]
+        ? [
+            {
+              hand: entry.hand,
+              output,
+              trackId: entry.trackId,
+              measurements: entry.transition.measurements,
+              prediction: entry.transition.prediction,
+            },
+          ]
         : [];
     });
     if (pinches.length >= 2) {
-      const hands = pinches.slice(0, 2).map(({ hand, output }) => ({
+      const hands = pinches.slice(0, 2).map(({
+        hand,
+        output,
+        trackId,
+        measurements,
+        prediction,
+      }) => ({
         handedness: hand.handedness,
         pointer: output.pointer,
         confidence: output.confidence,
         landmarks: hand.landmarks,
+        trackId,
+        prediction,
+        measurements: measurements ?? undefined,
         pinchDistance: output.pinchDistance,
         pinchRatio: output.pinchRatio,
+        trackingState: "tracked" as const,
       })) as unknown as [HandTrackingPointer, HandTrackingPointer];
       const [first, second] = hands;
       emit({
@@ -1147,8 +1170,8 @@ interface HandTrackingRun {
   pendingBitmap: PendingCapturedBitmap | null;
   lastVideoCurrentTime: number | null;
   intentStates: Map<string, HandIntentState>;
-  unknownHandTracks: Map<string, UnknownHandTrack>;
-  nextUnknownHandTrackId: number;
+  handTracks: Map<string, HandTrack>;
+  nextHandTrackId: number;
   lastSingleObservation: Extract<
     HandTrackingObservation,
     { mode: "point" | "pinch" | "open_palm" }
@@ -1208,8 +1231,8 @@ function createRun(
     pendingBitmap: null,
     lastVideoCurrentTime: null,
     intentStates: new Map(),
-    unknownHandTracks: new Map(),
-    nextUnknownHandTrackId: 0,
+    handTracks: new Map(),
+    nextHandTrackId: 0,
     lastSingleObservation: null,
     cancelled: false,
     stopped,
@@ -1236,9 +1259,10 @@ function createRun(
   };
 }
 
-interface UnknownHandTrack {
+interface HandTrack {
   key: string;
   center: { x: number; y: number };
+  velocity: { x: number; y: number };
   lastSeenAt: number;
 }
 
@@ -1247,38 +1271,35 @@ function assignHandStateKeys(
   hands: readonly TrackedHandLandmarks[],
   timestamp: number,
 ) {
-  pruneUnknownHandTracks(run, timestamp);
+  pruneHandTracks(run, timestamp);
   const keys = new Array<string>(hands.length);
-  const unknownHands = hands.flatMap((hand, index) => {
-    if (hand.handedness !== "unknown") {
-      keys[index] = hand.handedness;
-      return [];
-    }
-    return [{ index, center: palmCenter(hand.landmarks) }];
-  });
-  const tracks = [...run.unknownHandTracks.values()];
-  const assignments = matchUnknownHands(unknownHands, tracks);
+  const observedHands = hands.map((hand, index) => ({
+    index,
+    center: palmCenter(hand.landmarks),
+  }));
+  const tracks = [...run.handTracks.values()];
+  const assignments = matchTrackedHands(observedHands, tracks, timestamp);
   const reservedKeys = new Set(assignments.map(({ track }) => track.key));
 
   for (const { hand, track } of assignments) {
-    track.center = hand.center;
-    track.lastSeenAt = timestamp;
+    updateHandTrack(track, hand.center, timestamp);
     keys[hand.index] = track.key;
   }
-  for (const hand of unknownHands) {
+  for (const hand of observedHands) {
     if (keys[hand.index]) continue;
-    while (run.unknownHandTracks.size >= 2) {
-      const evicted = [...run.unknownHandTracks.values()]
+    while (run.handTracks.size >= 2) {
+      const evicted = [...run.handTracks.values()]
         .filter((track) => !reservedKeys.has(track.key))
         .sort((left, right) => left.lastSeenAt - right.lastSeenAt)[0];
       if (!evicted) break;
-      run.unknownHandTracks.delete(evicted.key);
+      run.handTracks.delete(evicted.key);
       run.intentStates.delete(evicted.key);
     }
-    const key = `unknown-track-${++run.nextUnknownHandTrackId}`;
-    run.unknownHandTracks.set(key, {
+    const key = `hand-track-${++run.nextHandTrackId}`;
+    run.handTracks.set(key, {
       key,
       center: hand.center,
+      velocity: { x: 0, y: 0 },
       lastSeenAt: timestamp,
     });
     reservedKeys.add(key);
@@ -1287,9 +1308,10 @@ function assignHandStateKeys(
   return keys;
 }
 
-function matchUnknownHands(
+function matchTrackedHands(
   hands: readonly { index: number; center: { x: number; y: number } }[],
-  tracks: readonly UnknownHandTrack[],
+  tracks: readonly HandTrack[],
+  timestamp: number,
 ) {
   if (hands.length === 2 && tracks.length === 2) {
     const straight = [
@@ -1304,13 +1326,13 @@ function matchUnknownHands(
       .filter((pairs) =>
         pairs.every(
           ({ hand, track }) =>
-            pointDistance(hand.center, track.center) <=
-            UNKNOWN_HAND_TRACK_MAX_DISTANCE,
+            trackedHandDistance(hand.center, track, timestamp) <=
+            HAND_TRACK_MAX_DISTANCE,
         ),
       )
       .sort(
         (left, right) =>
-          assignmentDistance(left) - assignmentDistance(right),
+          assignmentDistance(left, timestamp) - assignmentDistance(right, timestamp),
       );
     if (candidates[0]) return candidates[0];
   }
@@ -1322,10 +1344,10 @@ function matchUnknownHands(
       tracks.map((track) => ({
         hand,
         track,
-        distance: pointDistance(hand.center, track.center),
+        distance: trackedHandDistance(hand.center, track, timestamp),
       })),
     )
-    .filter(({ distance }) => distance <= UNKNOWN_HAND_TRACK_MAX_DISTANCE)
+    .filter(({ distance }) => distance <= HAND_TRACK_MAX_DISTANCE)
     .sort((left, right) => left.distance - right.distance)
     .flatMap(({ hand, track }) => {
       if (matchedHands.has(hand.index) || matchedTracks.has(track.key)) return [];
@@ -1335,10 +1357,10 @@ function matchUnknownHands(
     });
 }
 
-function pruneUnknownHandTracks(run: HandTrackingRun, timestamp: number) {
-  for (const track of run.unknownHandTracks.values()) {
-    if (timestamp - track.lastSeenAt <= UNKNOWN_HAND_TRACK_TTL_MS) continue;
-    run.unknownHandTracks.delete(track.key);
+function pruneHandTracks(run: HandTrackingRun, timestamp: number) {
+  for (const track of run.handTracks.values()) {
+    if (timestamp - track.lastSeenAt <= HAND_TRACK_TTL_MS) continue;
+    run.handTracks.delete(track.key);
     run.intentStates.delete(track.key);
   }
 }
@@ -1355,13 +1377,45 @@ function palmCenter(landmarks: HandLandmarks) {
 function assignmentDistance(
   pairs: readonly {
     hand: { center: { x: number; y: number } };
-    track: UnknownHandTrack;
+    track: HandTrack;
   }[],
+  timestamp: number,
 ) {
   return pairs.reduce(
-    (sum, { hand, track }) => sum + pointDistance(hand.center, track.center),
+    (sum, { hand, track }) =>
+      sum + trackedHandDistance(hand.center, track, timestamp),
     0,
   );
+}
+
+function updateHandTrack(
+  track: HandTrack,
+  center: { x: number; y: number },
+  timestamp: number,
+) {
+  const elapsedMs = timestamp - track.lastSeenAt;
+  const velocity =
+    elapsedMs > 0
+      ? {
+          x: (center.x - track.center.x) / elapsedMs,
+          y: (center.y - track.center.y) / elapsedMs,
+        }
+      : track.velocity;
+  track.center = center;
+  track.velocity = velocity;
+  track.lastSeenAt = timestamp;
+}
+
+function trackedHandDistance(
+  center: { x: number; y: number },
+  track: HandTrack,
+  timestamp: number,
+) {
+  const elapsedMs = Math.max(0, timestamp - track.lastSeenAt);
+  return pointDistance(center, {
+    x: track.center.x + track.velocity.x * elapsedMs,
+    y: track.center.y + track.velocity.y * elapsedMs,
+  });
 }
 
 function pointDistance(
