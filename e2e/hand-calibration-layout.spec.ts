@@ -13,7 +13,7 @@ test.use({
   },
 });
 
-test("uses full-canvas mobile calibration then returns to a bounded hideable PiP", async ({
+test("keeps mobile calibration in a bounded sensor sheet then returns to a hideable PiP", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-mobile");
@@ -49,11 +49,16 @@ test("uses full-canvas mobile calibration then returns to a bounded hideable PiP
     ).objectFit,
     boundaryCount: document.querySelectorAll(".camera-interaction-boundary").length,
   }));
-  expect(calibrationControl.x).toBeCloseTo(canvas.x, 0);
-  expect(calibrationControl.y).toBeCloseTo(canvas.y, 0);
-  expect(calibrationControl.width).toBeCloseTo(canvas.width, 0);
-  expect(calibrationControl.height).toBeCloseTo(canvas.height, 0);
-  expect(camera.height).toBeGreaterThan(viewport.height * 0.45);
+  expect(calibrationControl.width).toBeLessThanOrEqual(viewport.width * 0.98);
+  expect(calibrationControl.height).toBeLessThanOrEqual(viewport.height * 0.5);
+  expect(Math.max(0, calibrationControl.y - canvas.y)).toBeGreaterThan(
+    viewport.height * 0.4,
+  );
+  expect(calibrationControl.y + calibrationControl.height).toBeLessThanOrEqual(
+    canvas.y + canvas.height,
+  );
+  expect(camera.height).toBeGreaterThan(viewport.height * 0.18);
+  expect(camera.height).toBeLessThanOrEqual(viewport.height * 0.3);
   expect(geometry.scrollWidth).toBe(geometry.clientWidth);
   expect(geometry.videoObjectFit).toBe("contain");
   expect(geometry.boundaryCount).toBe(0);
@@ -85,4 +90,41 @@ test("uses full-canvas mobile calibration then returns to a bounded hideable PiP
   await page.getByRole("button", { name: "Hide hand sensor preview" }).click();
   await expect(sensor).toHaveClass(/is-sensor-pip-hidden/);
   await expect(page.getByLabel("Local hand tracking preview")).toBeHidden();
+});
+
+test("keeps desktop calibration bounded over a visible canvas", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-desktop");
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/local", { waitUntil: "domcontentloaded" });
+  await page.getByRole("region", { name: "Infinite canvas" }).waitFor();
+
+  await page.getByRole("button", { name: "Enable hand input" }).click();
+  const handControl = page.locator(".spatial-camera-control");
+  await expect(handControl).toHaveClass(/is-calibrating-full-canvas/, {
+    timeout: 60_000,
+  });
+
+  const viewport = page.viewportSize();
+  const calibrationBounds = await handControl.boundingBox();
+  const cameraBounds = await page.locator(".camera-preview").boundingBox();
+  const canvasBounds = await page.locator(".canvas-viewport").boundingBox();
+  if (!viewport || !calibrationBounds || !cameraBounds || !canvasBounds)
+    throw new Error("The desktop calibration geometry is unavailable.");
+
+  expect(calibrationBounds.width).toBeLessThanOrEqual(viewport.width * 0.68);
+  expect(calibrationBounds.height).toBeLessThanOrEqual(viewport.height * 0.72);
+  expect(Math.max(0, calibrationBounds.y - canvasBounds.y)).toBeGreaterThan(
+    viewport.height * 0.18,
+  );
+  expect(cameraBounds.height).toBeGreaterThan(viewport.height * 0.35);
+  expect(cameraBounds.height).toBeLessThanOrEqual(viewport.height * 0.55);
+
+  await page.getByRole("button", { name: "Skip hand calibration" }).click();
+  await expect(handControl).toHaveClass(/is-sensor-pip/);
+  await expect(
+    page.getByRole("region", { name: "Hand interaction controls" }),
+  ).toBeVisible();
 });

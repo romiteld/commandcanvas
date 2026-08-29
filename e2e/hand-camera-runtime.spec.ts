@@ -86,19 +86,34 @@ test("starts the local hand detector from a real browser camera stream and relea
     if (!(await page.locator(".camera-preview").isVisible()))
       await page.getByRole("button", { name: "Open hand calibration" }).click();
 
+    const calibrationSurface = page.locator(
+      ".spatial-camera-control.is-calibrating-full-canvas",
+    );
+    await expect(calibrationSurface).toBeVisible();
     const viewport = page.viewportSize();
     const calibration = await page.locator(".camera-preview").boundingBox();
-    const drawer = await page.locator(".persistent-system-drawer").boundingBox();
+    const calibrationBounds = await calibrationSurface.boundingBox();
     const canvas = await page.locator(".canvas-viewport").boundingBox();
-    if (!viewport || !calibration || !drawer || !canvas)
+    if (!viewport || !calibration || !calibrationBounds || !canvas)
       throw new Error("Spatial calibration geometry is unavailable.");
     expect(calibration.height).toBeLessThanOrEqual(
-      viewport.height * (testInfo.project.name === "chromium-mobile" ? 0.3 : 0.6),
+      viewport.height * (testInfo.project.name === "chromium-mobile" ? 0.3 : 0.55),
     );
     if (testInfo.project.name === "chromium-mobile") {
-      expect(drawer.height).toBeLessThanOrEqual(viewport.height * 0.5);
-      expect(Math.max(0, drawer.y - canvas.y)).toBeGreaterThan(
+      expect(calibrationBounds.height).toBeLessThanOrEqual(viewport.height * 0.5);
+      expect(calibrationBounds.width).toBeLessThanOrEqual(viewport.width * 0.98);
+      expect(Math.max(0, calibrationBounds.y - canvas.y)).toBeGreaterThan(
         viewport.height * 0.4,
+      );
+    } else {
+      expect(calibrationBounds.height).toBeLessThanOrEqual(
+        viewport.height * 0.72,
+      );
+      expect(calibrationBounds.width).toBeLessThanOrEqual(
+        viewport.width * 0.68,
+      );
+      expect(Math.max(0, calibrationBounds.y - canvas.y)).toBeGreaterThan(
+        viewport.height * 0.18,
       );
     }
     expect(
@@ -148,7 +163,7 @@ test("starts the local hand detector from a real browser camera stream and relea
       ),
     ).toBe(true);
 
-    await page.getByRole("button", { name: "Return to full canvas" }).click();
+    await page.getByRole("button", { name: "Skip hand calibration" }).click();
     await expect(
       page.getByRole("complementary", { name: "System status drawer" }),
     ).toBeHidden();

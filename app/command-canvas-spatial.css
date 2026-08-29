@@ -769,19 +769,24 @@
 
 .command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas {
   z-index: 72;
-  inset: 0;
-  width: auto;
-  max-height: none;
+  top: auto;
+  right: auto;
+  bottom: 18px;
+  left: 50%;
+  width: min(760px, calc(100% - 36px));
+  min-height: 0;
+  max-height: min(72dvh, 648px);
   align-content: start;
   margin: 0;
   padding: clamp(18px, 3vw, 34px);
   overflow: auto;
-  border: 0;
-  border-radius: 0;
+  border: 1px solid rgb(89 234 213 / 32%);
+  border-radius: 24px;
   background:
     radial-gradient(circle at 50% 35%, rgb(34 83 103 / 28%), transparent 50%),
     rgb(4 13 21 / 98%);
-  box-shadow: none;
+  box-shadow: 0 30px 96px rgb(0 0 0 / 62%);
+  transform: translateX(-50%);
 }
 
 .command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas .spatial-camera-heading strong {
@@ -790,10 +795,19 @@
 
 .command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas .camera-preview {
   min-height: 0;
-  height: min(68dvh, 760px);
+  height: min(50dvh, 440px);
+  max-height: 55dvh;
   border-color: rgb(89 234 213 / 32%);
   border-radius: 20px;
   box-shadow: 0 28px 90px rgb(0 0 0 / 58%);
+}
+
+.command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas .camera-calibration-actions {
+  position: sticky;
+  z-index: 3;
+  bottom: 0;
+  padding-top: 8px;
+  background: linear-gradient(180deg, transparent, rgb(4 13 21 / 96%) 18%);
 }
 
 .command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas .camera-sensor-context {
@@ -991,15 +1005,37 @@
   }
 
   .command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas {
-    inset: 0;
+    top: auto;
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom, 0px));
+    left: 8px;
     width: auto;
-    max-height: none;
-    padding: max(10px, env(safe-area-inset-top, 0px)) 10px max(10px, env(safe-area-inset-bottom, 0px));
+    height: min(48dvh, 430px);
+    max-height: 48dvh;
+    padding: 10px;
+    border-radius: 18px;
+    transform: none;
   }
 
   .command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas .camera-preview {
-    height: min(62dvh, 620px);
+    height: min(27dvh, 220px);
+    max-height: 28dvh;
     border-radius: 14px;
+  }
+
+  .command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas .camera-calibration-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas .camera-calibration-progress {
+    grid-column: 1 / -1;
+  }
+
+  .command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas .camera-calibration-actions button {
+    min-height: 44px;
+    padding-inline: 8px;
   }
 
   .command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas .camera-calibration-readout {
