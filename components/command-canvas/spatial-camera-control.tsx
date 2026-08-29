@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useId,
   useRef,
@@ -16,13 +17,31 @@ import type {
   HandTrackingStatus,
 } from "@/lib/gesture/hand-tracking-controller";
 import { createHandTrackingController } from "@/lib/gesture/hand-tracking-controller";
+import {
+  buildHandCalibration,
+  createFallbackHandCalibration,
+  type HandCalibrationProfile,
+  type HandCalibrationResult,
+  type HandCalibrationSamples,
+} from "@/lib/gesture/hand-calibration";
+
+export type SpatialCalibrationResult =
+  | HandCalibrationResult
+  | {
+      readonly accepted: false;
+      readonly reason: "skipped";
+      readonly profile: HandCalibrationProfile;
+    };
 
 export interface SpatialCameraControlProps {
   calibrationOpen?: boolean;
+  calibrationDeviceKey?: string;
+  calibrationProfile?: HandCalibrationProfile | null;
   createController?: (
     preferences: SpatialCameraControllerPreferences,
   ) => HandTrackingController;
   privateGpuRelayAvailable?: boolean;
+  onCalibrationResult?: (result: SpatialCalibrationResult) => void;
   onCalibrationOpenChange?: (open: boolean) => void;
   onObservation?: (observation: HandTrackingObservation) => void;
   onStatusChange?: (status: HandTrackingStatus) => void;
@@ -35,8 +54,11 @@ export interface SpatialCameraControllerPreferences {
 
 export function SpatialCameraControl({
   calibrationOpen,
+  calibrationDeviceKey = "default-camera-session",
+  calibrationProfile = null,
   createController = () => createHandTrackingController(),
   privateGpuRelayAvailable = false,
+  onCalibrationResult,
   onCalibrationOpenChange,
   onObservation,
   onStatusChange,
@@ -72,6 +94,14 @@ export function SpatialCameraControl({
   const [videoAspectRatio, setVideoAspectRatio] = useState(4 / 3);
   const [sensorPreviewVisible, setSensorPreviewVisible] = useState(true);
   const [sensorPipOffset, setSensorPipOffset] = useState({ x: 0, y: 0 });
+  const [capturedCalibration, setCapturedCalibration] =
+    useState<HandCalibrationProfile | null>(null);
+  const [calibrationCounts, setCalibrationCounts] = useState({
+    reach: 0,
+    open: 0,
+    closed: 0,
+  });
+  const sectionRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const sensorPipDragRef = useRef<{
     pointerId: number;
@@ -79,7 +109,16 @@ export function SpatialCameraControl({
     startY: number;
     initialX: number;
     initialY: number;
+    initialLeft: number;
+    initialTop: number;
   } | null>(null);
+  const calibrationSamplesRef = useRef<HandCalibrationSamples>(
+    emptyCalibrationSamples(calibrationDeviceKey),
+  );
+  const calibrationDeviceKeyRef = useRef(calibrationDeviceKey);
+  const retainedCalibrationRef = useRef<HandCalibrationProfile | null>(
+    calibrationProfile,
+  );
   const spatialModeStartedRef = useRef(false);
   const spatialModeRequestedRef = useRef(false);
   const calibrationOpenRef = useRef(false);
@@ -90,25 +129,112 @@ export function SpatialCameraControl({
   const statusHandlerRef = useRef(onStatusChange);
   const spatialModeStartedHandlerRef = useRef(onSpatialModeStarted);
   const calibrationOpenHandlerRef = useRef(onCalibrationOpenChange);
+  const calibrationResultHandlerRef = useRef(onCalibrationResult);
 
   const previewExpanded = calibrationOpen ?? internalCalibrationOpen;
+  const retainedCalibration = calibrationProfile ?? capturedCalibration;
 
   useEffect(() => {
     calibrationOpenRef.current = previewExpanded;
   }, [previewExpanded]);
 
-  function setPreviewExpanded(next: boolean) {
+  useEffect(() => {
+    calibrationDeviceKeyRef.current = calibrationDeviceKey;
+    retainedCalibrationRef.current = retainedCalibration;
+  }, [calibrationDeviceKey, retainedCalibration]);
+
+  const setPreviewExpanded = useCallback((next: boolean) => {
     calibrationOpenRef.current = next;
     setInternalCalibrationOpen(next);
     calibrationOpenHandlerRef.current?.(next);
+  }, []);
+
+  const startSpatialMode = useCallback(() => {
+    spatialModeStartedRef.current = true;
+    spatialModeRequestedRef.current = false;
+    setPreviewExpanded(false);
+    setSensorPreviewVisible(true);
+    spatialModeStartedHandlerRef.current?.();
+  }, [setPreviewExpanded]);
+
+  const beginCalibrationCapture = useCallback(() => {
+    calibrationSamplesRef.current = emptyCalibrationSamples(
+      calibrationDeviceKeyRef.current,
+    );
+    setCalibrationCounts({ reach: 0, open: 0, closed: 0 });
+    setPreviewExpanded(true);
+  }, [setPreviewExpanded]);
+
+  const captureCalibrationObservation = useCallback((
+    observation: HandTrackingObservation,
+  ) => {
+    if (observation.mode === "idle" || observation.mode === "bimanual_pinch")
+      return;
+    const pointer = observation.measurements?.indexTip ?? observation.pointer;
+    const pinchRatio =
+      observation.measurements?.pinchRatio ?? observation.pinchRatio;
+    if (
+      !Number.isFinite(pointer.x) ||
+      !Number.isFinite(pointer.y) ||
+      pointer.x < 0 ||
+      pointer.x > 1 ||
+      pointer.y < 0 ||
+      pointer.y > 1
+    )
+      return;
+    const current = calibrationSamplesRef.current;
+    const reachSamples = [...current.reachSamples, pointer];
+    const openPinchRatios =
+      (observation.mode === "point" || observation.mode === "open_palm") &&
+      Number.isFinite(pinchRatio)
+        ? [...current.openPinchRatios, pinchRatio as number]
+        : current.openPinchRatios;
+    const closedPinchRatios =
+      observation.mode === "pinch" && Number.isFinite(pinchRatio)
+        ? [...current.closedPinchRatios, pinchRatio as number]
+        : current.closedPinchRatios;
+    calibrationSamplesRef.current = {
+      ...current,
+      reachSamples,
+      openPinchRatios,
+      closedPinchRatios,
+    };
+    setCalibrationCounts({
+      reach: reachSamples.length,
+      open: openPinchRatios.length,
+      closed: closedPinchRatios.length,
+    });
+  }, []);
+
+  function useCapturedCalibration() {
+    const result = buildHandCalibration(calibrationSamplesRef.current);
+    retainedCalibrationRef.current = result.profile;
+    setCapturedCalibration(result.profile);
+    calibrationResultHandlerRef.current?.(result);
+    startSpatialMode();
+  }
+
+  function skipCalibration() {
+    const profile = createFallbackHandCalibration({
+      deviceKey: calibrationDeviceKey,
+      mirrorX: true,
+      createdAt: Date.now(),
+    });
+    const result: SpatialCalibrationResult = {
+      accepted: false,
+      reason: "skipped",
+      profile,
+    };
+    retainedCalibrationRef.current = profile;
+    setCapturedCalibration(profile);
+    calibrationResultHandlerRef.current?.(result);
+    startSpatialMode();
   }
 
   function returnToCanvas() {
-    setPreviewExpanded(false);
-    if (status.state !== "ready") return;
-    spatialModeStartedRef.current = true;
-    spatialModeRequestedRef.current = false;
-    spatialModeStartedHandlerRef.current?.();
+    if (!retainedCalibration && onCalibrationResult) return;
+    if (status.state === "ready") startSpatialMode();
+    else setPreviewExpanded(false);
   }
 
   useEffect(() => {
@@ -116,7 +242,14 @@ export function SpatialCameraControl({
     statusHandlerRef.current = onStatusChange;
     spatialModeStartedHandlerRef.current = onSpatialModeStarted;
     calibrationOpenHandlerRef.current = onCalibrationOpenChange;
-  }, [onCalibrationOpenChange, onObservation, onSpatialModeStarted, onStatusChange]);
+    calibrationResultHandlerRef.current = onCalibrationResult;
+  }, [
+    onCalibrationOpenChange,
+    onCalibrationResult,
+    onObservation,
+    onSpatialModeStarted,
+    onStatusChange,
+  ]);
 
   useEffect(() => {
     const unsubscribeStatus = controller.subscribeStatus((next) => {
@@ -128,11 +261,14 @@ export function SpatialCameraControl({
         spatialModeRequestedRef.current &&
         !spatialModeStartedRef.current
       ) {
-        spatialModeStartedRef.current = true;
-        spatialModeRequestedRef.current = false;
-        setPreviewExpanded(false);
-        setSensorPreviewVisible(true);
-        spatialModeStartedHandlerRef.current?.();
+        if (
+          calibrationResultHandlerRef.current &&
+          !retainedCalibrationRef.current
+        ) {
+          beginCalibrationCapture();
+        } else {
+          startSpatialMode();
+        }
       }
       if (next.state !== "ready") {
         setRuntimeDetailsOpen(false);
@@ -153,6 +289,7 @@ export function SpatialCameraControl({
               ? "pointConfidence"
               : "pinchConfidence"]: observation.confidence,
           }));
+        if (calibrationOpenRef.current) captureCalibrationObservation(observation);
         if (spatialModeStartedRef.current && !calibrationOpenRef.current)
           observationHandlerRef.current?.(observation);
       },
@@ -169,7 +306,12 @@ export function SpatialCameraControl({
         controller.stop();
       }
     };
-  }, [controller]);
+  }, [
+    beginCalibrationCapture,
+    captureCalibrationObservation,
+    controller,
+    startSpatialMode,
+  ]);
 
   useEffect(() => {
     if (!lastObservation || lastObservation.mode === "idle") return;
@@ -209,7 +351,7 @@ export function SpatialCameraControl({
       document.removeEventListener("visibilitychange", stopWhenHidden);
       window.removeEventListener("pagehide", stopForPageLifecycle);
     };
-  }, [controller]);
+  }, [controller, setPreviewExpanded]);
 
   function startTracking({
     preserveSpatialMode = false,
@@ -263,8 +405,22 @@ export function SpatialCameraControl({
         ? [lastObservation]
         : [];
 
+  useEffect(() => {
+    if (!sensorPip) return;
+    const keepReachable = () => {
+      setSensorPipOffset((current) => clampCurrentSensorPip(current));
+    };
+    window.addEventListener("resize", keepReachable);
+    window.addEventListener("orientationchange", keepReachable);
+    return () => {
+      window.removeEventListener("resize", keepReachable);
+      window.removeEventListener("orientationchange", keepReachable);
+    };
+  }, [sensorPip]);
+
   return (
     <section
+      ref={sectionRef}
       className={`spatial-camera-control${
         previewExpanded
           ? " is-expanded is-calibrating-full-canvas"
@@ -288,12 +444,16 @@ export function SpatialCameraControl({
             aria-label="Move hand sensor preview"
             onPointerDown={(event) => {
               event.preventDefault();
+              const bounds = sectionRef.current?.getBoundingClientRect();
+              if (!bounds) return;
               sensorPipDragRef.current = {
                 pointerId: event.pointerId,
                 startX: event.clientX,
                 startY: event.clientY,
                 initialX: sensorPipOffset.x,
                 initialY: sensorPipOffset.y,
+                initialLeft: bounds.left,
+                initialTop: bounds.top,
               };
               event.currentTarget.setPointerCapture?.(event.pointerId);
             }}
@@ -337,8 +497,11 @@ export function SpatialCameraControl({
                 returnToCanvas();
                 return;
               }
-              setPreviewExpanded(true);
+              beginCalibrationCapture();
             }}
+            disabled={
+              previewExpanded && !retainedCalibration && Boolean(onCalibrationResult)
+            }
           >
             {previewExpanded ? "Done" : "Calibrate"}
           </button>
@@ -614,16 +777,54 @@ export function SpatialCameraControl({
         </div>
       ) : null}
       {previewExpanded ? (
-        <div className="camera-calibration-actions">
+        <div className="camera-calibration-actions" aria-label="Hand calibration samples">
+          <div className="camera-calibration-progress" role="status">
+            <strong>{calibrationCounts.reach} reach samples</strong>
+            <span>
+              {calibrationCounts.open} open · {calibrationCounts.closed} closed
+            </span>
+            <small>
+              Reach to comfortable corners, then show an open pinch and a closed
+              pinch. This maps your reach to the entire canvas.
+            </small>
+          </div>
           <button
             type="button"
-            aria-label="Return to full canvas"
-            disabled={status.state !== "ready"}
-            onClick={returnToCanvas}
+            aria-label="Use hand calibration"
+            disabled={
+              status.state !== "ready" ||
+              calibrationCounts.reach < 6 ||
+              calibrationCounts.open < 2 ||
+              calibrationCounts.closed < 2
+            }
+            onClick={useCapturedCalibration}
           >
-            Return to canvas
+            Use calibration
           </button>
+          <button
+            type="button"
+            aria-label="Skip hand calibration"
+            disabled={status.state !== "ready"}
+            onClick={skipCalibration}
+          >
+            Skip for now
+          </button>
+          {retainedCalibration || !onCalibrationResult ? (
+            <button
+              type="button"
+              aria-label="Return to full canvas"
+              disabled={status.state !== "ready"}
+              onClick={returnToCanvas}
+            >
+              Return to canvas
+            </button>
+          ) : null}
         </div>
+      ) : null}
+      {retainedCalibration && !previewExpanded ? (
+        <span className="camera-calibration-retained" role="status">
+          Calibrated for this camera session
+        </span>
       ) : null}
       {engineStatus?.processingLocation === "private-relay" || privateGpuConsent ? (
         <p>
@@ -647,9 +848,33 @@ export function SpatialCameraControl({
     const drag = sensorPipDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     event.preventDefault();
+    const control = sectionRef.current;
+    const workspace = control?.parentElement;
+    if (!control || !workspace) return;
+    const workspaceBounds = workspace.getBoundingClientRect();
+    const controlBounds = control.getBoundingClientRect();
+    const dockBounds = workspace
+      .querySelector<HTMLElement>(".tool-dock")
+      ?.getBoundingClientRect();
+    const safe = sensorPipSafeBounds(
+      workspaceBounds,
+      dockBounds,
+      controlBounds.width,
+      controlBounds.height,
+    );
+    const left = clamp(
+      drag.initialLeft + event.clientX - drag.startX,
+      safe.left,
+      safe.right,
+    );
+    const top = clamp(
+      drag.initialTop + event.clientY - drag.startY,
+      safe.top,
+      safe.bottom,
+    );
     setSensorPipOffset({
-      x: drag.initialX + event.clientX - drag.startX,
-      y: drag.initialY + event.clientY - drag.startY,
+      x: drag.initialX + left - drag.initialLeft,
+      y: drag.initialY + top - drag.initialTop,
     });
   }
 
@@ -661,6 +886,74 @@ export function SpatialCameraControl({
       event.currentTarget.releasePointerCapture(event.pointerId);
     sensorPipDragRef.current = null;
   }
+
+  function clampCurrentSensorPip(current: { x: number; y: number }) {
+    const control = sectionRef.current;
+    const workspace = control?.parentElement;
+    if (!control || !workspace) return current;
+    const workspaceBounds = workspace.getBoundingClientRect();
+    const controlBounds = control.getBoundingClientRect();
+    const dockBounds = workspace
+      .querySelector<HTMLElement>(".tool-dock")
+      ?.getBoundingClientRect();
+    if (
+      workspaceBounds.width <= 0 ||
+      workspaceBounds.height <= 0 ||
+      controlBounds.width <= 0 ||
+      controlBounds.height <= 0
+    )
+      return current;
+    const safe = sensorPipSafeBounds(
+      workspaceBounds,
+      dockBounds,
+      controlBounds.width,
+      controlBounds.height,
+    );
+    return {
+      x:
+        current.x +
+        clamp(controlBounds.left, safe.left, safe.right) -
+        controlBounds.left,
+      y:
+        current.y +
+        clamp(controlBounds.top, safe.top, safe.bottom) -
+        controlBounds.top,
+    };
+  }
+}
+
+function sensorPipSafeBounds(
+  workspace: DOMRect,
+  dock: DOMRect | undefined,
+  width: number,
+  height: number,
+) {
+  const inset = 8;
+  const maxBottom = Math.min(
+    workspace.bottom - inset,
+    dock && dock.top > workspace.top ? dock.top - inset : workspace.bottom - inset,
+  );
+  return {
+    left: workspace.left + inset,
+    right: Math.max(workspace.left + inset, workspace.right - inset - width),
+    top: workspace.top + inset,
+    bottom: Math.max(workspace.top + inset, maxBottom - height),
+  };
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function emptyCalibrationSamples(deviceKey: string): HandCalibrationSamples {
+  return {
+    deviceKey,
+    mirrorX: true,
+    createdAt: Date.now(),
+    reachSamples: [],
+    closedPinchRatios: [],
+    openPinchRatios: [],
+  };
 }
 
 const HAND_CONNECTIONS = [

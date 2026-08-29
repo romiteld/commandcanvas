@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   SpatialCameraControl,
   type SpatialCameraControllerPreferences,
+  type SpatialCalibrationResult,
 } from "@/components/command-canvas/spatial-camera-control";
 import type {
   HandTrackingController,
@@ -64,6 +65,37 @@ function fakeController() {
       engineStatus = next;
       engineListeners.forEach((listener) => listener(next));
     },
+  };
+}
+
+function calibrationObservation(
+  mode: "point" | "pinch",
+  pointer: { x: number; y: number },
+  pinchRatio: number,
+  timestamp: number,
+): HandTrackingObservation {
+  return {
+    mode,
+    pointer,
+    confidence: 0.97,
+    handedness: "right",
+    trackId: "calibration-hand",
+    prediction: { predicted: false },
+    trackingState: "tracked",
+    pinchRatio,
+    measurements: {
+      indexTip: pointer,
+      thumbTip: { x: pointer.x + 0.02, y: pointer.y },
+      pinchMidpoint: { x: pointer.x + 0.01, y: pointer.y },
+      palmMcpCentroid: pointer,
+      pinchDistance: pinchRatio * 0.2,
+      palmScale: 0.2,
+      pinchRatio,
+      confidence: 0.97,
+      indexTipConfidence: 0.96,
+      thumbTipConfidence: 0.95,
+    },
+    timestamp,
   };
 }
 
@@ -699,6 +731,29 @@ describe("SpatialCameraControl", () => {
     );
     expect(onObservation).toHaveBeenCalledOnce();
 
+    const workspace = control?.parentElement as HTMLElement;
+    vi.spyOn(workspace, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1_000,
+      bottom: 800,
+      width: 1_000,
+      height: 800,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(control!, "getBoundingClientRect").mockReturnValue({
+      x: 120,
+      y: 100,
+      left: 120,
+      top: 100,
+      right: 360,
+      bottom: 300,
+      width: 240,
+      height: 200,
+      toJSON: () => ({}),
+    });
     const drag = screen.getByRole("button", { name: "Move hand sensor preview" });
     fireEvent.pointerDown(drag, { pointerId: 8, clientX: 40, clientY: 40 });
     fireEvent.pointerMove(drag, { pointerId: 8, clientX: 100, clientY: 120 });
@@ -709,6 +764,147 @@ describe("SpatialCameraControl", () => {
     await user.click(screen.getByRole("button", { name: "Hide hand sensor preview" }));
     expect(control).toHaveClass("is-sensor-pip-hidden");
     expect(screen.getByRole("button", { name: "Show hand sensor preview" })).toBeVisible();
+  });
+
+  it("collects reach and open/closed pinch evidence into a retained device profile", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    const results: SpatialCalibrationResult[] = [];
+    render(
+      <SpatialCameraControl
+        createController={() => fake.controller}
+        calibrationDeviceKey="iphone-front-camera"
+        onCalibrationResult={(result) => results.push(result)}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => fake.setStatus({ state: "ready" }));
+    expect(
+      screen.getByRole("button", { name: "Skip hand calibration" }),
+    ).toBeVisible();
+
+    const reach = [
+      { x: 0.18, y: 0.16 },
+      { x: 0.82, y: 0.16 },
+      { x: 0.18, y: 0.82 },
+      { x: 0.82, y: 0.82 },
+    ];
+    act(() => {
+      for (let repeat = 0; repeat < 8; repeat += 1) {
+        const pointer = reach[repeat % reach.length]!;
+        fake.emit(
+          calibrationObservation("point", pointer, 0.72, 5_000 + repeat * 16),
+        );
+      }
+      for (let repeat = 0; repeat < 8; repeat += 1) {
+        const pointer = reach[repeat % reach.length]!;
+        fake.emit(
+          calibrationObservation("pinch", pointer, 0.22, 5_200 + repeat * 16),
+        );
+      }
+    });
+
+    expect(screen.getByText(/16 reach samples/i)).toBeVisible();
+    expect(screen.getByText(/8 open · 8 closed/i)).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Use hand calibration" }),
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      accepted: true,
+      profile: {
+        deviceKey: "iphone-front-camera",
+        pinchClosedRatio: 0.22,
+        pinchOpenRatio: 0.72,
+      },
+    });
+    expect(screen.getByText(/calibrated for this camera session/i)).toBeVisible();
+  });
+
+  it("clamps extreme PiP drags to the mobile workspace and dock on every side", async () => {
+    const fake = fakeController();
+    const { container } = render(
+      <SpatialCameraControl createController={() => fake.controller} />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    const control = container.querySelector<HTMLElement>(".spatial-camera-control");
+    if (!control) throw new Error("Expected hand input control.");
+    const workspace = control.parentElement as HTMLElement;
+    const dock = document.createElement("div");
+    dock.className = "tool-dock";
+    workspace.append(dock);
+    vi.spyOn(workspace, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 400,
+      bottom: 600,
+      width: 400,
+      height: 600,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(dock, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 520,
+      left: 0,
+      top: 520,
+      right: 400,
+      bottom: 600,
+      width: 400,
+      height: 80,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(control, "getBoundingClientRect").mockImplementation(() => {
+      const offsetX = Number.parseFloat(
+        control.style.getPropertyValue("--sensor-pip-x") || "0",
+      );
+      const offsetY = Number.parseFloat(
+        control.style.getPropertyValue("--sensor-pip-y") || "0",
+      );
+      const left = 120 + offsetX;
+      const top = 250 + offsetY;
+      return {
+        x: left,
+        y: top,
+        left,
+        top,
+        right: left + 240,
+        bottom: top + 200,
+        width: 240,
+        height: 200,
+        toJSON: () => ({}),
+      };
+    });
+
+    const drag = screen.getByRole("button", { name: "Move hand sensor preview" });
+    const move = (pointerId: number, x: number, y: number) => {
+      fireEvent.pointerDown(drag, { pointerId, clientX: 100, clientY: 100 });
+      fireEvent.pointerMove(drag, { pointerId, clientX: x, clientY: y });
+      fireEvent.pointerUp(drag, { pointerId, clientX: x, clientY: y });
+    };
+
+    move(1, -10_000, 100);
+    expect(control.style.getPropertyValue("--sensor-pip-x")).toBe("-112px");
+    move(2, 10_000, 100);
+    expect(control.style.getPropertyValue("--sensor-pip-x")).toBe("32px");
+    move(3, 100, -10_000);
+    expect(control.style.getPropertyValue("--sensor-pip-y")).toBe("-242px");
+    move(4, 100, 10_000);
+    expect(control.style.getPropertyValue("--sensor-pip-y")).toBe("62px");
+
+    expect(drag).toBeVisible();
+    expect(control.getBoundingClientRect()).toMatchObject({
+      left: 152,
+      top: 312,
+      right: 392,
+      bottom: 512,
+    });
+
+    act(() => window.dispatchEvent(new Event("resize")));
+    expect(control.getBoundingClientRect().right).toBeLessThanOrEqual(392);
+    expect(control.getBoundingClientRect().bottom).toBeLessThanOrEqual(512);
   });
 
   it("presents the camera as a sensor preview rather than a movement boundary", () => {

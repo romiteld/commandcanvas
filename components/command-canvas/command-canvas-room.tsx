@@ -14,6 +14,7 @@ import type { StoreApi } from "zustand";
 import { useStore } from "zustand";
 
 import { DiagramPreview } from "@/components/command-canvas/diagram-preview";
+import { HandInkPreview } from "@/components/command-canvas/hand-ink-preview";
 import {
   HumanCommandControl,
   type HumanCommandObjectSnapshot,
@@ -24,6 +25,7 @@ import {
   RealtimeVoiceControl,
   type RealtimeVoiceControlProps,
 } from "@/components/command-canvas/realtime-voice-control";
+import { SemanticObjectPreview } from "@/components/command-canvas/semantic-object-preview";
 import { SketchComposer } from "@/components/command-canvas/sketch-composer";
 import { SketchPreview } from "@/components/command-canvas/sketch-preview";
 import {
@@ -60,10 +62,8 @@ import {
 } from "@/lib/gesture/canvas-motion-layer";
 import type { RealtimeVoiceIntentResult } from "@/lib/realtime-voice/tools";
 import {
-  DEFAULT_HAND_ACTIVE_ZONE,
   createGestureSketchCommand,
   createInitialSpatialGestureState,
-  mapHandPointerToActiveZone,
   reduceSpatialGesture,
   spatialGestureCompletionToCommand,
   type SpatialGestureEffect,
@@ -71,11 +71,14 @@ import {
   type SpatialGestureState,
 } from "@/lib/gesture/spatial-gesture";
 import {
+  createInitialSpatialRoomInputState,
   createInitialStrokeSampleState,
+  reduceSpatialRoomObservation,
   sampleTrackedStrokePoint,
-  spatialInputFromHandObservation,
+  type SpatialRoomInputState,
   type StrokeSampleState,
 } from "@/lib/gesture/spatial-room-input";
+import type { HandCalibrationProfile } from "@/lib/gesture/hand-calibration";
 import type { CanvasSketchTransformer } from "@/lib/vision/canvas-transform";
 
 const configuredSourceRevision =
@@ -141,6 +144,12 @@ const POINTER_SKETCH_WIDTH = 720;
 const POINTER_SKETCH_HEIGHT = 420;
 const COMPACT_POINTER_SKETCH_WIDTH = 420;
 const COMPACT_POINTER_SKETCH_HEIGHT = 720;
+const FULL_CANVAS_HAND_ZONE = Object.freeze({
+  left: 0,
+  right: 1,
+  top: 0,
+  bottom: 1,
+});
 
 type ServiceTone = "idle" | "working" | "ready";
 
@@ -175,9 +184,6 @@ export function CommandCanvasRoom({
   const [pan, setPan] = useState<CanvasPanState | null>(null);
   const [sketchComposerOpen, setSketchComposerOpen] = useState(false);
   const [multiSelectMode, setMultiSelectMode] = useState(false);
-  const [gestureStrokePreview, setGestureStrokePreview] = useState<
-    readonly CanvasPoint[]
-  >([]);
   const [gestureSketchStrokes, setGestureSketchStrokes] = useState<
     readonly (readonly CanvasPoint[])[]
   >([]);
@@ -202,6 +208,8 @@ export function CommandCanvasRoom({
   const [palmFinishPreview, setPalmFinishPreview] = useState<number | null>(null);
   const [openDrawer, setOpenDrawer] = useState<WorkspaceDrawer>(null);
   const [handCalibrationOpen, setHandCalibrationOpen] = useState(false);
+  const [handCalibrationProfile, setHandCalibrationProfile] =
+    useState<HandCalibrationProfile | null>(null);
   const [typedFallbackOpen, setTypedFallbackOpen] = useState(false);
   const [commandExecution, setCommandExecution] =
     useState<CommandExecutionState>({ status: "idle" });
@@ -214,15 +222,17 @@ export function CommandCanvasRoom({
   const [latestReceiptVisible, setLatestReceiptVisible] = useState(false);
   const canvasViewportRef = useRef<HTMLDivElement>(null);
   const spatialGestureState = useRef(createInitialSpatialGestureState());
+  const spatialRoomInputState = useRef<SpatialRoomInputState>(
+    createInitialSpatialRoomInputState(),
+  );
   const canvasMotionLayerRef = useRef<CanvasMotionLayer | null>(null);
   const gesturePreviewObjectId = useRef<string | null>(null);
   const gestureSketchStrokesRef = useRef<readonly (readonly CanvasPoint[])[]>([]);
   const strokeSampleStateRef = useRef<StrokeSampleState>(
     createInitialStrokeSampleState(),
   );
-  const strokePreviewFrameRef = useRef<number | null>(null);
-  const pendingStrokePreviewRef = useRef<readonly CanvasPoint[] | null>(null);
   const palmFinishStartedAtRef = useRef<number | null>(null);
+  const palmFinishPreviewValueRef = useRef<number | null>(null);
   const edgePreviewVisibleRef = useRef(false);
   const handTargetObjectIdRef = useRef<string | null>(null);
   const handEraseLatchedRef = useRef(false);
@@ -237,6 +247,7 @@ export function CommandCanvasRoom({
   );
   const activeVoiceThoughtIdRef = useRef<string | null>(null);
   const gestureExitTimeoutsRef = useRef(new Map<string, number>());
+  const pendingGestureCompletionObjectIdsRef = useRef(new Set<string>());
   const canvas = useStore(store, (state) => state.canvas);
   const selectedObjectId = useStore(store, (state) => state.selectedObjectId);
   const selectedObjectIds = useStore(store, (state) => state.selectedObjectIds);
@@ -255,7 +266,9 @@ export function CommandCanvasRoom({
   );
   const transformationPairs = objects.flatMap((object) => {
     if (object.type !== "diagram") return [];
-    const source = canvas.objects[object.payload.sourceSketchId];
+    const sourceSketchId = object.payload.sourceSketchId;
+    if (!sourceSketchId) return [];
+    const source = canvas.objects[sourceSketchId];
     return source && !source.deletedAt && source.type === "sketch"
       ? [{ source, diagram: object }]
       : [];
@@ -315,8 +328,6 @@ export function CommandCanvasRoom({
       for (const timeoutId of gestureExitTimeoutsRef.current.values())
         window.clearTimeout(timeoutId);
       gestureExitTimeoutsRef.current.clear();
-      if (strokePreviewFrameRef.current !== null)
-        window.cancelAnimationFrame(strokePreviewFrameRef.current);
     },
     [],
   );
@@ -403,32 +414,41 @@ export function CommandCanvasRoom({
     command: CanvasCommand,
     source: CanvasCommandSource,
     onApplied?: () => void,
+    onRefused?: (message: string) => void,
   ) {
     if (!onCommand) {
       const result = dispatch(command, source);
       if (result.ok) onApplied?.();
+      else onRefused?.(result.error.message);
       return;
     }
-    if (interactionPending) return;
+    if (interactionPending) {
+      onRefused?.("Wait for the current canvas action to finish.");
+      return;
+    }
 
     setCommandExecution({ status: "pending" });
     let execution: void | CommandResult | Promise<void | CommandResult>;
     try {
       execution = onCommand(command, source);
     } catch (error) {
-      setCommandExecution(commandRefusal(error));
+      const refusal = commandRefusal(error);
+      setCommandExecution(refusal);
+      onRefused?.(refusal.message);
       return;
     }
 
     if (!isPromiseLike(execution)) {
-      finishRemoteCommand(execution, onApplied);
+      finishRemoteCommand(execution, onApplied, onRefused);
       return;
     }
 
     void Promise.resolve(execution).then(
-      (result) => finishRemoteCommand(result, onApplied),
+      (result) => finishRemoteCommand(result, onApplied, onRefused),
       (error) => {
-        setCommandExecution(commandRefusal(error));
+        const refusal = commandRefusal(error);
+        setCommandExecution(refusal);
+        onRefused?.(refusal.message);
       },
     );
   }
@@ -663,15 +683,22 @@ export function CommandCanvasRoom({
   function finishRemoteCommand(
     result: void | CommandResult,
     onApplied?: () => void,
+    onRefused?: (message: string) => void,
   ) {
     if (result && !result.ok) {
       setCommandExecution({
         status: "refused",
         message: result.error.message,
       });
+      onRefused?.(result.error.message);
       return;
     }
-    if (result?.ok) store.getState().hydrateCanvas(result.state);
+    if (result?.ok && !store.getState().hydrateCanvas(result.state)) {
+      const message = "The shared canvas did not confirm that command.";
+      setCommandExecution({ status: "refused", message });
+      onRefused?.(message);
+      return;
+    }
     setCommandExecution({ status: "idle" });
     onApplied?.();
   }
@@ -1088,6 +1115,9 @@ export function CommandCanvasRoom({
       case "create_note":
         createNote(source, intent.text);
         return { ok: true, message: "Note command submitted." };
+      case "create_semantic_object":
+        runCommand({ type: "object.create", object: intent.object }, source);
+        return { ok: true, message: "Semantic object command submitted." };
       case "create_board":
         createTaskBoard(source);
         return { ok: true, message: "Board command submitted." };
@@ -1095,7 +1125,11 @@ export function CommandCanvasRoom({
         createSchedule(source);
         return { ok: true, message: "Schedule command submitted." };
       case "open_sketch":
-        if (handTrackingStatus.state === "ready") {
+        if (
+          handTrackingStatus.state === "ready" &&
+          (intent as DirectCanvasIntent & { inputMode?: "hand" | "pointer" })
+            .inputMode !== "pointer"
+        ) {
           beginHandDrawing();
           return { ok: true, message: "Tracked-hand drawing started." };
         }
@@ -1452,42 +1486,54 @@ export function CommandCanvasRoom({
     if (!canvasViewport || interactionPending) return;
     const bounds = canvasViewport.getBoundingClientRect();
     if (bounds.width <= 0 || bounds.height <= 0) return;
-    const input = spatialInputFromHandObservation(
+    if (!handCalibrationProfile) return;
+    const roomInput = reduceSpatialRoomObservation(
+      spatialRoomInputState.current,
       observation,
-      edgePreviewVisibleRef.current,
+      {
+        calibration: handCalibrationProfile,
+        canvas: bounds,
+        gainState: handControlGainState(
+          handInteractionMode,
+          spatialGestureState.current,
+          handTargetObjectIdRef.current,
+        ),
+        edgePreviewVisible: edgePreviewVisibleRef.current,
+      },
     );
+    spatialRoomInputState.current = roomInput.state;
+    const input = roomInput.input;
     const displayPointer =
       input.mode === "idle"
         ? null
-        : mapHandPointerToActiveZone(
-            input.mode === "bimanual_pinch"
-              ? {
-                  x: (input.pointers[0].x + input.pointers[1].x) / 2,
-                  y: (input.pointers[0].y + input.pointers[1].y) / 2,
-                }
-              : input.pointer,
-            DEFAULT_HAND_ACTIVE_ZONE,
-          );
+        : input.mode === "bimanual_pinch"
+          ? {
+              x: (input.pointers[0].x + input.pointers[1].x) / 2,
+              y: (input.pointers[0].y + input.pointers[1].y) / 2,
+            }
+          : input.pointer;
     if (displayPointer) canvasMotionLayerRef.current?.previewCursor(displayPointer);
     else canvasMotionLayerRef.current?.hideCursor();
 
     if (handInteractionMode === "draw" && handDrawingTool === "erase") {
-      if (observation.mode === "idle") {
+      if (input.mode !== "point") {
         handEraseLatchedRef.current = false;
-        setHandFeedback(null);
+        if (input.mode === "idle") setHandFeedback(null);
+        else
+          setHandFeedback({
+            mode: input.mode,
+            pointer: displayPointer!,
+            label: "ERASE · POINT",
+          });
         return;
       }
       const pointer = displayPointer!;
       setHandFeedback({
-        mode: observation.mode,
+        mode: input.mode,
         pointer,
-        label:
-          observation.mode === "point" ? "ERASING" : "ERASE · POINT",
+        label: "ERASING",
       });
-      if (
-        observation.mode === "point" &&
-        !handEraseLatchedRef.current
-      ) {
+      if (!handEraseLatchedRef.current) {
         handEraseLatchedRef.current = true;
         eraseNearestGestureStroke(pointer, bounds);
       }
@@ -1545,7 +1591,7 @@ export function CommandCanvasRoom({
       {
         bounds,
         viewport: current.viewport,
-        handActiveZone: DEFAULT_HAND_ACTIVE_ZONE,
+        handActiveZone: FULL_CANVAS_HAND_ZONE,
         selectedObjectId: current.selectedObjectId,
         targetedObjectId: handTargetObjectIdRef.current,
         objects: sceneObjects,
@@ -1568,13 +1614,17 @@ export function CommandCanvasRoom({
     )
       setHandFeedback(null);
     if (observation.mode !== "idle") {
+      const semanticMode = input.mode === "idle" ? observation.mode : input.mode;
       updateHandFeedback({
-        mode: observation.mode,
+        mode: semanticMode,
         pointer: displayPointer!,
         grabbedObjectId: transition.state.held?.objectId,
         interactionPhase: transition.state.phase,
         label: contextualHandLabel(
-          observation,
+          semanticMode,
+          observation.mode === "bimanual_pinch"
+            ? undefined
+            : observation.trackingState,
           transition.state,
           handInteractionMode,
           gestureEdgePreview,
@@ -1759,7 +1809,12 @@ export function CommandCanvasRoom({
         setGestureEdgePreview(null);
         edgePreviewVisibleRef.current = false;
         const objectId = gesturePreviewObjectId.current;
-        if (objectId && gestureExitTimeoutsRef.current.has(objectId)) return;
+        if (
+          objectId &&
+          (gestureExitTimeoutsRef.current.has(objectId) ||
+            pendingGestureCompletionObjectIdsRef.current.has(objectId))
+        )
+          return;
         gesturePreviewObjectId.current = null;
         if (objectId) {
           clearObjectPreview(objectId);
@@ -1774,7 +1829,8 @@ export function CommandCanvasRoom({
   ) {
     const command = spatialGestureCompletionToCommand(effect);
     const objectId = effect.objectId;
-    const finish = () => {
+    const settle = () => {
+      pendingGestureCompletionObjectIdsRef.current.delete(objectId);
       gestureExitTimeoutsRef.current.delete(objectId);
       setGestureExitAnimations((current) => {
         const next = { ...current };
@@ -1782,8 +1838,13 @@ export function CommandCanvasRoom({
         return next;
       });
       canvasMotionLayerRef.current?.clearObject(objectId);
-      gesturePreviewObjectId.current = null;
-      runCommand(command, "gesture");
+      if (gesturePreviewObjectId.current === objectId)
+        gesturePreviewObjectId.current = null;
+    };
+    const submit = () => {
+      gestureExitTimeoutsRef.current.delete(objectId);
+      pendingGestureCompletionObjectIdsRef.current.add(objectId);
+      runCommand(command, "gesture", settle, settle);
     };
     const reduceMotion =
       typeof window.matchMedia === "function" &&
@@ -1795,48 +1856,38 @@ export function CommandCanvasRoom({
     ) {
       const exit = effect.edge === "right" ? "discard-right" : "discard-left";
       setGestureExitAnimations((current) => ({ ...current, [objectId]: exit }));
-      const timeoutId = window.setTimeout(finish, 190);
+      const timeoutId = window.setTimeout(submit, 190);
       gestureExitTimeoutsRef.current.set(objectId, timeoutId);
-    } else finish();
+    } else submit();
     setGestureEdgePreview(null);
     edgePreviewVisibleRef.current = false;
   }
 
   function updateHandFeedback(next: HandCanvasFeedback) {
-    setHandFeedback((current) =>
-      current &&
-      current.label === next.label &&
-      current.mode === next.mode &&
-      current.grabbedObjectId === next.grabbedObjectId &&
-      current.interactionPhase === next.interactionPhase
-        ? current
-        : next,
-    );
+    if (
+      handFeedback &&
+      handFeedback.label === next.label &&
+      handFeedback.mode === next.mode &&
+      handFeedback.grabbedObjectId === next.grabbedObjectId &&
+      handFeedback.interactionPhase === next.interactionPhase
+    )
+      return;
+    setHandFeedback(next);
   }
 
   function scheduleStrokePreview(points: readonly CanvasPoint[]) {
-    pendingStrokePreviewRef.current = points;
-    if (strokePreviewFrameRef.current !== null) return;
-    strokePreviewFrameRef.current = window.requestAnimationFrame(() => {
-      strokePreviewFrameRef.current = null;
-      const pending = pendingStrokePreviewRef.current;
-      pendingStrokePreviewRef.current = null;
-      if (pending) setGestureStrokePreview(pending);
-    });
+    canvasMotionLayerRef.current?.previewInk(points);
   }
 
   function clearScheduledStrokePreview() {
-    pendingStrokePreviewRef.current = null;
-    if (strokePreviewFrameRef.current !== null) {
-      window.cancelAnimationFrame(strokePreviewFrameRef.current);
-      strokePreviewFrameRef.current = null;
-    }
-    setGestureStrokePreview([]);
+    canvasMotionLayerRef.current?.clearInk();
   }
 
   function resetPalmFinishPreview() {
     palmFinishStartedAtRef.current = null;
-    setPalmFinishPreview((current) => (current === null ? current : null));
+    if (palmFinishPreviewValueRef.current === null) return;
+    palmFinishPreviewValueRef.current = null;
+    setPalmFinishPreview(null);
   }
 
   function updatePalmFinishPreview(timestamp: number) {
@@ -1845,7 +1896,11 @@ export function CommandCanvasRoom({
     const startedAt = palmFinishStartedAtRef.current ?? timestamp;
     palmFinishStartedAtRef.current = startedAt;
     const elapsed = Math.max(0, timestamp - startedAt);
-    setPalmFinishPreview(Math.min(1, elapsed / 300));
+    const progress = Math.min(1, elapsed / 300);
+    if (palmFinishPreviewValueRef.current !== progress) {
+      palmFinishPreviewValueRef.current = progress;
+      setPalmFinishPreview(progress);
+    }
     if (elapsed >= 300) finishHandDrawing();
   }
 
@@ -2222,9 +2277,9 @@ export function CommandCanvasRoom({
                   diagram={diagram}
                 />
               ))}
-              {gestureSketchStrokes.length > 0 || gestureStrokePreview.length > 0 ? (
+              {handInteractionMode === "draw" || gestureSketchStrokes.length > 0 ? (
                 <svg className="gesture-stroke-preview" aria-hidden="true" viewBox="0 0 1 1">
-                  {[...gestureSketchStrokes, gestureStrokePreview]
+                  {gestureSketchStrokes
                     .filter((points) => points.length > 0)
                     .map((points, index) => (
                       <polyline
@@ -2234,6 +2289,7 @@ export function CommandCanvasRoom({
                           .join(" ")}
                       />
                     ))}
+                  <HandInkPreview />
                 </svg>
               ) : null}
               {objects.map((object) => (
@@ -2426,7 +2482,7 @@ export function CommandCanvasRoom({
                       aria-pressed={handDrawingTool === "erase"}
                       onClick={() => {
                         spatialGestureState.current = createInitialSpatialGestureState();
-                        setGestureStrokePreview([]);
+                        clearScheduledStrokePreview();
                         handEraseLatchedRef.current = false;
                         setHandDrawingTool((current) => current === "draw" ? "erase" : "draw");
                       }}
@@ -2436,7 +2492,6 @@ export function CommandCanvasRoom({
                     <button
                       type="button"
                       aria-label="Finish hand sketch"
-                      disabled={gestureSketchStrokes.length === 0 && gestureStrokePreview.length < 2}
                       onClick={finishHandDrawing}
                     >
                       Finish
@@ -2488,8 +2543,14 @@ export function CommandCanvasRoom({
 
         <SpatialCameraControl
           calibrationOpen={handCalibrationOpen}
+          calibrationDeviceKey="commandcanvas-hand-camera"
+          calibrationProfile={handCalibrationProfile}
           createController={createHandTrackingController}
           privateGpuRelayAvailable={privateGpuRelayAvailable}
+          onCalibrationResult={(result) => {
+            spatialRoomInputState.current = createInitialSpatialRoomInputState();
+            setHandCalibrationProfile(result.profile);
+          }}
           onCalibrationOpenChange={(open) => {
             if (open) {
               openHandCalibration();
@@ -2521,28 +2582,32 @@ export function CommandCanvasRoom({
           </button>
           <button
             type="button"
-            onClick={() => {
-              if (handTrackingStatus.state === "ready") beginHandDrawing();
-              else openPointerSketch();
-            }}
+            onClick={openPointerSketch}
             aria-label={
               handTrackingStatus.state === "ready"
-                ? "Draw with tracked hand"
+                ? "Draw with touch, stylus, or mouse"
                 : "Create sketch"
             }
-            aria-pressed={handInteractionMode === "draw" || sketchComposerOpen}
-            className={
-              handInteractionMode === "draw" || sketchComposerOpen
-                ? "is-active"
-                : undefined
-            }
+            aria-pressed={sketchComposerOpen}
+            className={sketchComposerOpen ? "is-active" : undefined}
             disabled={interactionPending || drawingActive}
           >
             <span aria-hidden="true">⌁</span>
-            <small>
-              {handTrackingStatus.state === "ready" ? "Hand draw" : "Draw"}
-            </small>
+            <small>Draw</small>
           </button>
+          {handTrackingStatus.state === "ready" ? (
+            <button
+              type="button"
+              onClick={beginHandDrawing}
+              aria-label="Draw with hand"
+              aria-pressed={handInteractionMode === "draw"}
+              className={handInteractionMode === "draw" ? "is-active" : undefined}
+              disabled={interactionPending || drawingActive}
+            >
+              <span aria-hidden="true">☝</span>
+              <small>Hand</small>
+            </button>
+          ) : null}
           <button
             type="button"
             aria-label="Undo last change"
@@ -3073,6 +3138,10 @@ function CanvasObjectContent({
           <DiagramPreview payload={object.payload} />
         </div>
       );
+    case "data_table":
+    case "reference_card":
+    case "meeting_card":
+      return <SemanticObjectPreview object={object} />;
     case "frame":
       return (
         <div className="frame-preview">
@@ -3095,6 +3164,12 @@ function objectTypeClass(object: CanvasObject) {
       return "sketch-object";
     case "diagram":
       return "diagram-object";
+    case "data_table":
+      return "data-table-object";
+    case "reference_card":
+      return "reference-card-object";
+    case "meeting_card":
+      return `meeting-card-object meeting-card-${object.payload.kind}`;
     case "frame":
       return `frame-object tone-${object.payload.tone}`;
   }
@@ -3127,6 +3202,12 @@ function objectTypeLabel(object: CanvasObject) {
       }
     case "frame":
       return "FRAME";
+    case "data_table":
+      return "DATA TABLE";
+    case "reference_card":
+      return "REFERENCE";
+    case "meeting_card":
+      return object.payload.kind.replaceAll("_", " ").toUpperCase();
   }
 }
 
@@ -3219,7 +3300,8 @@ interface HandCanvasFeedback {
 }
 
 function contextualHandLabel(
-  observation: Exclude<HandTrackingObservation, { mode: "idle" }>,
+  mode: HandCanvasFeedback["mode"],
+  trackingState: "tracked" | "grace" | undefined,
   state: SpatialGestureState,
   interactionMode: HandInteractionMode,
   edgePreview: Extract<
@@ -3227,15 +3309,12 @@ function contextualHandLabel(
     { type: "object.preview_edge_action" }
   > | null,
 ) {
-  if (
-    observation.mode !== "bimanual_pinch" &&
-    observation.trackingState === "grace"
-  )
+  if (mode !== "bimanual_pinch" && trackingState === "grace")
     return "REACQUIRE";
   if (interactionMode === "draw")
-    return observation.mode === "point"
+    return mode === "point"
       ? "DRAWING"
-      : observation.mode === "open_palm"
+      : mode === "open_palm"
         ? "PEN UP"
         : "DRAW · READY";
   if (edgePreview?.armed)
@@ -3249,11 +3328,27 @@ function contextualHandLabel(
     return "RESIZE";
   if (state.held) return "HELD";
   if (state.phase === "panning")
-    return observation.mode === "bimanual_pinch" ? "CANVAS ZOOM" : "PAN";
-  if (state.phase === "pinch_pending" || observation.mode === "pinch")
+    return mode === "bimanual_pinch" ? "CANVAS ZOOM" : "PAN";
+  if (state.phase === "pinch_pending" || mode === "pinch")
     return "PINCH";
   if (state.candidate) return "TARGET";
   return "POINT";
+}
+
+function handControlGainState(
+  interactionMode: HandInteractionMode,
+  state: SpatialGestureState,
+  targetObjectId: string | null,
+) {
+  if (interactionMode === "draw") return "draw" as const;
+  if (
+    state.phase === "transforming_two" ||
+    state.phase === "two_hand_pending"
+  )
+    return "two_hand" as const;
+  if (state.held) return "held" as const;
+  if (targetObjectId || state.candidate) return "target" as const;
+  return "hover" as const;
 }
 
 

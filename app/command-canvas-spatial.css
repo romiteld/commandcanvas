@@ -409,6 +409,109 @@
   box-shadow: 0 14px 34px rgb(0 0 0 / 32%);
 }
 
+.command-canvas-shell .data-table-object::before {
+  background: #4878dc;
+}
+
+.command-canvas-shell .reference-card-object::before {
+  background: #8d69d7;
+}
+
+.command-canvas-shell .meeting-card-object::before {
+  background: #e08a4a;
+}
+
+.command-canvas-shell :is(
+    .data-table-object,
+    .reference-card-object,
+    .meeting-card-object
+  ) .object-kicker {
+  color: #365baa;
+}
+
+.command-canvas-shell .semantic-table-preview {
+  width: 100%;
+  overflow: auto;
+  border: 1px solid rgb(85 112 134 / 18%);
+  border-radius: 10px;
+}
+
+.command-canvas-shell .semantic-table-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.command-canvas-shell .semantic-table-preview :is(th, td) {
+  padding: 7px 8px;
+  border-bottom: 1px solid rgb(85 112 134 / 14%);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.command-canvas-shell .semantic-table-preview th {
+  background: rgb(52 92 172 / 8%);
+  color: #294475;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.command-canvas-shell :is(.reference-card-preview, .meeting-card-preview) {
+  width: 100%;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.command-canvas-shell .semantic-card-kind {
+  color: #6b4fb2;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.09em;
+}
+
+.command-canvas-shell .reference-card-preview blockquote {
+  margin: 0;
+  padding: 7px 9px;
+  border-left: 2px solid #8d69d7;
+  background: rgb(141 105 215 / 7%);
+  color: #4d5867;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.command-canvas-shell .reference-source {
+  color: #6b7480;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-canvas-shell .meeting-card-preview ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: #4d5867;
+  font-size: 11px;
+}
+
+.command-canvas-shell .meeting-card-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.command-canvas-shell .meeting-card-metadata > * {
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: rgb(224 138 74 / 10%);
+  color: #79502f;
+  font-size: 9px;
+}
+
 .command-canvas-shell .object-spatial-chrome {
   border-color: rgb(150 190 211 / 32%);
   background: rgb(9 25 38 / 94%);
@@ -613,6 +716,32 @@
   border-color: rgb(89 234 213 / 28%);
   background: rgb(237 247 255 / 7%);
   color: var(--space-text);
+}
+
+.command-canvas-shell .camera-calibration-progress {
+  display: grid;
+  flex: 1 1 230px;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgb(89 234 213 / 20%);
+  border-radius: 12px;
+  background: rgb(89 234 213 / 6%);
+}
+
+.command-canvas-shell .camera-calibration-progress span,
+.command-canvas-shell .camera-calibration-progress small {
+  color: var(--space-muted);
+}
+
+.command-canvas-shell .camera-calibration-retained {
+  align-self: start;
+  padding: 4px 8px;
+  border: 1px solid rgb(89 234 213 / 24%);
+  border-radius: 999px;
+  background: rgb(89 234 213 / 8%);
+  color: #b9fff5;
+  font-size: 10px;
 }
 
 .command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas {

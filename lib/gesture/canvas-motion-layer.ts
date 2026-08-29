@@ -4,6 +4,8 @@ import type { SpatialTransform } from "@/lib/gesture/spatial-gesture";
 export interface CanvasMotionLayer {
   previewCursor(point: CanvasPoint): void;
   hideCursor(): void;
+  previewInk(points: readonly CanvasPoint[]): void;
+  clearInk(): void;
   previewObject(objectId: string, transform: SpatialTransform): void;
   clearObject(objectId: string): void;
   clear(): void;
@@ -31,6 +33,7 @@ export function createCanvasMotionLayer(
     ((handle: number) => window.cancelAnimationFrame(handle));
   const objectUpdates = new Map<string, ObjectUpdate>();
   let cursor: CanvasPoint | null | undefined;
+  let ink: readonly CanvasPoint[] | null | undefined;
   let frame: number | null = null;
   let disposed = false;
 
@@ -50,6 +53,19 @@ export function createCanvasMotionLayer(
       root.setAttribute("data-hand-cursor-visible", "true");
     }
     cursor = undefined;
+    if (ink !== undefined) {
+      const preview = root.querySelector<SVGPolylineElement>(
+        "[data-hand-ink-preview]",
+      );
+      if (preview)
+        preview.setAttribute(
+          "points",
+          ink
+            ? ink.map((point) => `${round(point.x)},${round(point.y)}`).join(" ")
+            : "",
+        );
+      ink = undefined;
+    }
     for (const [objectId, update] of objectUpdates) {
       const object = root.querySelector<HTMLElement>(
         `[data-canvas-object="${cssEscape(objectId)}"]`,
@@ -90,6 +106,14 @@ export function createCanvasMotionLayer(
       cursor = null;
       requestWrite();
     },
+    previewInk(points) {
+      ink = points;
+      requestWrite();
+    },
+    clearInk() {
+      ink = null;
+      requestWrite();
+    },
     previewObject(objectId, transform) {
       objectUpdates.set(objectId, { kind: "preview", transform });
       requestWrite();
@@ -100,6 +124,7 @@ export function createCanvasMotionLayer(
     },
     clear() {
       cursor = null;
+      ink = null;
       const root = options.root();
       for (const object of root?.querySelectorAll<HTMLElement>(
         "[data-gesture-preview]",
@@ -111,6 +136,7 @@ export function createCanvasMotionLayer(
       disposed = true;
       if (frame !== null) cancel(frame);
       frame = null;
+      ink = undefined;
       objectUpdates.clear();
     },
   };

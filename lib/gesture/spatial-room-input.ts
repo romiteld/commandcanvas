@@ -1,4 +1,16 @@
 import type { CanvasPoint } from "@/lib/canvas/coordinates";
+import {
+  createInitialHandReliabilityState,
+  mapCalibratedPointer,
+  reduceHandReliability,
+  resolvePinchThresholds,
+  type CanvasBounds,
+  type HandCalibrationProfile,
+  type HandControlGainState,
+  type HandReliabilityHandSnapshot,
+  type HandReliabilityHandInput,
+  type HandReliabilityState,
+} from "@/lib/gesture/hand-calibration";
 import type {
   HandTrackingObservation,
   HandTrackingPointer,
@@ -11,6 +23,229 @@ import type {
 
 const STROKE_DISTANCE_PX = 1.75;
 const STROKE_SAMPLE_INTERVAL_MS = 12;
+
+export interface SpatialRoomInputState {
+  readonly reliability: HandReliabilityState;
+}
+
+export interface SpatialRoomInputOptions {
+  readonly calibration: HandCalibrationProfile;
+  readonly canvas: CanvasBounds;
+  readonly gainState: HandControlGainState;
+  readonly edgePreviewVisible: boolean;
+}
+
+export interface SpatialRoomInputTransition {
+  readonly state: SpatialRoomInputState;
+  readonly input: SpatialGestureInput;
+}
+
+interface MappedBimanualInput {
+  readonly original: HandTrackingPointer;
+  readonly pointer: CanvasPoint;
+  readonly motionPointer: CanvasPoint;
+  readonly reliabilityInput: HandReliabilityHandInput;
+}
+
+export function createInitialSpatialRoomInputState(): SpatialRoomInputState {
+  return { reliability: createInitialHandReliabilityState() };
+}
+
+/**
+ * Production Task 2 -> Task 3 boundary. Camera geometry is calibrated before
+ * it becomes normalized full-canvas input, and Task 2 owns temporal pinch
+ * voting/reliability. Legacy observations without physical measurements keep
+ * their detector semantic mode so older pointer-only adapters remain usable.
+ */
+export function reduceSpatialRoomObservation(
+  state: SpatialRoomInputState,
+  observation: HandTrackingObservation,
+  options: SpatialRoomInputOptions,
+): SpatialRoomInputTransition {
+  const thresholds = resolvePinchThresholds(options.calibration);
+  if (observation.mode === "idle") {
+    const reliability = reduceHandReliability(
+      state.reliability,
+      { timestamp: observation.timestamp, hands: [] },
+      thresholds,
+    );
+    return {
+      state: { reliability: reliability.state },
+      input: {
+        mode: "idle",
+        timestamp: observation.timestamp,
+        reason: observation.trackingState === "lost" ? "loss" : "release",
+      },
+    };
+  }
+
+  if (observation.mode === "bimanual_pinch") {
+    const mappedHands = observation.hands.map((hand, index) => {
+      const mappedPointer = mapPointer(
+        options.calibration,
+        hand.measurements?.indexTip ?? hand.pointer,
+        options.canvas,
+        "two_hand",
+      );
+      const mappedMotion = mapPointer(
+        options.calibration,
+        hand.measurements?.palmMcpCentroid ?? hand.pointer,
+        options.canvas,
+        "two_hand",
+      );
+      return {
+        original: hand,
+        pointer: mappedPointer,
+        motionPointer: mappedMotion,
+        reliabilityInput: reliabilityHandInput(hand, index, mappedPointer, 0),
+      };
+    }) as [MappedBimanualInput, MappedBimanualInput];
+    const reliability = reduceHandReliability(
+      state.reliability,
+      {
+        timestamp: observation.timestamp,
+        hands: mappedHands.map((hand) => hand.reliabilityInput),
+      },
+      thresholds,
+    );
+    const hands = mappedHands.map((hand, index) => {
+      const snapshot = reliability.snapshot.hands.find(
+        (candidate) => candidate.trackId === hand.reliabilityInput.trackId,
+      );
+      return {
+        pointer: hand.pointer,
+        motionPointer: hand.motionPointer,
+        ...(snapshot
+          ? reliabilityFromSnapshot(snapshot)
+          : reliabilityFromPointer(hand.original, index)),
+      };
+    }) as [SpatialBimanualHand, SpatialBimanualHand];
+    return {
+      state: { reliability: reliability.state },
+      input: {
+        mode: "bimanual_pinch",
+        pointers: [hands[0].pointer, hands[1].pointer],
+        span: Math.hypot(
+          hands[1].pointer.x - hands[0].pointer.x,
+          hands[1].pointer.y - hands[0].pointer.y,
+        ),
+        timestamp: observation.timestamp,
+        hands,
+        edgePreviewVisible: options.edgePreviewVisible,
+      },
+    };
+  }
+
+  const pointer = mapPointer(
+    options.calibration,
+    observation.measurements?.indexTip ?? observation.pointer,
+    options.canvas,
+    options.gainState,
+  );
+  const motionPointer = mapPointer(
+    options.calibration,
+    observation.measurements?.palmMcpCentroid ?? observation.pointer,
+    options.canvas,
+    options.gainState,
+  );
+  const reliabilityInput = reliabilityHandInput(
+    observation,
+    0,
+    pointer,
+    observation.pinchRatio ?? observation.measurements?.pinchRatio ?? 0,
+  );
+  const reliability = reduceHandReliability(
+    state.reliability,
+    { timestamp: observation.timestamp, hands: [reliabilityInput] },
+    thresholds,
+  );
+  const snapshot = reliability.snapshot.activeHand;
+  const hasPhysicalPinchEvidence =
+    observation.measurements !== undefined || observation.pinchRatio !== undefined;
+  const mode =
+    observation.mode === "open_palm"
+      ? "open_palm"
+      : hasPhysicalPinchEvidence
+        ? reliability.snapshot.pinch.pinched
+          ? "pinch"
+          : "point"
+        : observation.mode;
+  return {
+    state: { reliability: reliability.state },
+    input: {
+      mode,
+      pointer,
+      motionPointer,
+      timestamp: observation.timestamp,
+      reliability: snapshot
+        ? reliabilityFromSnapshot(snapshot)
+        : reliabilityFromPointer(observation, 0),
+      edgePreviewVisible: options.edgePreviewVisible,
+    },
+  };
+}
+
+function mapPointer(
+  calibration: HandCalibrationProfile,
+  cameraPoint: CanvasPoint,
+  canvas: CanvasBounds,
+  gainState: HandControlGainState,
+): CanvasPoint {
+  const mapped = mapCalibratedPointer(
+    calibration,
+    cameraPoint,
+    canvas,
+    gainState,
+  );
+  return {
+    x: (mapped.point.x - canvas.left) / canvas.width,
+    y: (mapped.point.y - canvas.top) / canvas.height,
+  };
+}
+
+function reliabilityHandInput(
+  hand: Pick<
+    HandTrackingPointer,
+    | "confidence"
+    | "trackId"
+    | "prediction"
+    | "trackingState"
+    | "measurements"
+  > & { readonly handedness?: "left" | "right" | "unknown" },
+  fallbackIndex: number,
+  pointer: CanvasPoint,
+  fallbackPinchRatio: number,
+): HandReliabilityHandInput {
+  const measurements = hand.measurements;
+  return {
+    trackId: hand.trackId ?? `legacy-hand-${fallbackIndex}`,
+    handedness: hand.handedness ?? "unknown",
+    pointer,
+    confidence: hand.confidence,
+    indexTipConfidence:
+      measurements?.indexTipConfidence ?? hand.confidence,
+    thumbTipConfidence:
+      measurements?.thumbTipConfidence ?? hand.confidence,
+    predicted: hand.prediction?.predicted ?? false,
+    pinchRatio: measurements?.pinchRatio ?? fallbackPinchRatio,
+  };
+}
+
+function reliabilityFromSnapshot(
+  snapshot: HandReliabilityHandSnapshot,
+): SpatialReliabilityEvidence {
+  return {
+    trackId: snapshot.trackId,
+    confidence: Math.min(
+      snapshot.confidence,
+      snapshot.indexTipConfidence,
+      snapshot.thumbTipConfidence,
+    ),
+    real: snapshot.real,
+    predicted: snapshot.predicted,
+    trackingState: snapshot.trackingState,
+  };
+}
 
 export interface StrokeSampleState {
   readonly pointer: CanvasPoint | null;

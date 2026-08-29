@@ -9,7 +9,7 @@ import type {
   HandTrackingObservation,
   HandTrackingStatus,
 } from "@/lib/gesture/hand-tracking-controller";
-import { DEFAULT_HAND_ACTIVE_ZONE } from "@/lib/gesture/spatial-gesture";
+import type { HandControlGainState } from "@/lib/gesture/hand-calibration";
 
 function store() {
   let id = 0;
@@ -49,6 +49,7 @@ function fakeHandController() {
   const observationListeners = new Set<
     (next: HandTrackingObservation) => void
   >();
+  let pinching = false;
   const controller: HandTrackingController = {
     getStatus: () => status,
     subscribeStatus(listener) {
@@ -70,40 +71,83 @@ function fakeHandController() {
     },
     emit(observation: HandTrackingObservation) {
       observationListeners.forEach((listener) =>
-        listener(toCameraObservation(observation)),
+        listener(
+          toCameraObservation(
+            observation,
+            observation.mode === "bimanual_pinch"
+              ? "two_hand"
+              : pinching
+                ? "held"
+                : observation.mode === "pinch"
+                  ? "target"
+                  : "hover",
+          ),
+        ),
       );
+      pinching =
+        observation.mode === "pinch" || observation.mode === "bimanual_pinch";
     },
   };
 }
 
-function toCameraPoint(point: { x: number; y: number }) {
+function toCameraPoint(
+  point: { x: number; y: number },
+  gainState: HandControlGainState,
+) {
   return {
-    x:
-      DEFAULT_HAND_ACTIVE_ZONE.left +
-      point.x *
-        (DEFAULT_HAND_ACTIVE_ZONE.right - DEFAULT_HAND_ACTIVE_ZONE.left),
-    y:
-      DEFAULT_HAND_ACTIVE_ZONE.top +
-      point.y *
-        (DEFAULT_HAND_ACTIVE_ZONE.bottom - DEFAULT_HAND_ACTIVE_ZONE.top),
+    x: inverseFallbackAxis(point.x, 1_000, gainState, 0.15, 0.7),
+    y: inverseFallbackAxis(point.y, 500, gainState, 0.12, 0.76),
   };
+}
+
+function inverseFallbackAxis(
+  canvasRatio: number,
+  canvasSize: number,
+  gainState: HandControlGainState,
+  cameraStart: number,
+  cameraSpan: number,
+) {
+  const gain =
+    gainState === "hover"
+      ? 1.5
+      : gainState === "target"
+        ? 1.25
+        : gainState === "two_hand"
+          ? 1
+          : 1.1;
+  const safeRatio = Math.min(24, canvasSize / 2) / canvasSize;
+  const softened = Math.min(
+    1,
+    Math.max(0, (canvasRatio - safeRatio) / (1 - safeRatio * 2)),
+  );
+  let low = 0;
+  let high = 1;
+  for (let index = 0; index < 24; index += 1) {
+    const middle = (low + high) / 2;
+    const value = middle * middle * (3 - 2 * middle);
+    if (value < softened) low = middle;
+    else high = middle;
+  }
+  const beforeGain = ((low + high) / 2 - 0.5) / gain + 0.5;
+  return cameraStart + beforeGain * cameraSpan;
 }
 
 function toCameraObservation(
   observation: HandTrackingObservation,
+  gainState: HandControlGainState,
 ): HandTrackingObservation {
   if (observation.mode === "idle") return observation;
   if (observation.mode !== "bimanual_pinch")
     return {
       ...observation,
-      pointer: toCameraPoint(observation.pointer),
+      pointer: toCameraPoint(observation.pointer, gainState),
       trackId: observation.trackId ?? "hand-a",
       prediction: observation.prediction ?? { predicted: false },
       trackingState: observation.trackingState ?? "tracked",
     };
   const hands = observation.hands.map((hand, index) => ({
     ...hand,
-    pointer: toCameraPoint(hand.pointer),
+    pointer: toCameraPoint(hand.pointer, "two_hand"),
     trackId: hand.trackId ?? `hand-${index === 0 ? "a" : "b"}`,
     prediction: hand.prediction ?? { predicted: false },
     trackingState: hand.trackingState ?? "tracked",
@@ -111,7 +155,7 @@ function toCameraObservation(
   return {
     ...observation,
     hands,
-    center: toCameraPoint(observation.center),
+    center: toCameraPoint(observation.center, "two_hand"),
     span: Math.hypot(
       hands[0].pointer.x - hands[1].pointer.x,
       hands[0].pointer.y - hands[1].pointer.y,
@@ -142,6 +186,9 @@ async function enableHand(
   await user.click(screen.getByRole("button", { name: "Open system status" }));
   await user.click(screen.getByRole("button", { name: "Enable hand input" }));
   act(() => hand.setStatus({ state: "ready" }));
+  await user.click(
+    await screen.findByRole("button", { name: "Skip hand calibration" }),
+  );
   return user;
 }
 

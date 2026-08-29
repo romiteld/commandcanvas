@@ -2,10 +2,53 @@ import { describe, expect, it } from "vitest";
 
 import type { HandTrackingObservation } from "@/lib/gesture/hand-tracking-controller";
 import {
+  createInitialSpatialRoomInputState,
   createInitialStrokeSampleState,
+  reduceSpatialRoomObservation,
   sampleTrackedStrokePoint,
   spatialInputFromHandObservation,
 } from "@/lib/gesture/spatial-room-input";
+import type { HandCalibrationProfile } from "@/lib/gesture/hand-calibration";
+
+function calibration(
+  overrides: Partial<HandCalibrationProfile>,
+): HandCalibrationProfile {
+  return {
+    deviceKey: "camera-a",
+    cameraBounds: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+    safeCanvasInsetPx: 24,
+    pinchClosedRatio: 0.2,
+    pinchOpenRatio: 0.8,
+    mirrorX: true,
+    createdAt: 1,
+    ...overrides,
+  };
+}
+
+function measuredObservation(timestamp: number): HandTrackingObservation {
+  return {
+    mode: "point",
+    pointer: { x: 0.95, y: 0.95 },
+    confidence: 0.97,
+    trackId: "track-a",
+    prediction: { predicted: false },
+    trackingState: "tracked",
+    measurements: {
+      indexTip: { x: 0.4, y: 0.4 },
+      thumbTip: { x: 0.42, y: 0.4 },
+      pinchMidpoint: { x: 0.41, y: 0.4 },
+      palmMcpCentroid: { x: 0.46, y: 0.5 },
+      pinchDistance: 0.08,
+      palmScale: 0.2,
+      pinchRatio: 0.4,
+      confidence: 0.97,
+      indexTipConfidence: 0.96,
+      thumbTipConfidence: 0.95,
+    },
+    pinchRatio: 0.4,
+    timestamp,
+  };
+}
 
 describe("spatial room input adapter", () => {
   it("uses landmark 8 for targeting and palm geometry only for held motion", () => {
@@ -102,6 +145,90 @@ describe("spatial room input adapter", () => {
         { trackId: "track-1", pointer: { x: 0.2, y: 0.4 } },
         { trackId: "track-2", pointer: { x: 0.8, y: 0.4 } },
       ],
+    });
+  });
+
+  it("maps the same landmark differently for two retained calibration profiles", () => {
+    const canvas = { left: 0, top: 0, width: 1_000, height: 500 };
+    const wide = reduceSpatialRoomObservation(
+      createInitialSpatialRoomInputState(),
+      measuredObservation(1_000),
+      {
+        calibration: calibration({}),
+        canvas,
+        gainState: "draw",
+        edgePreviewVisible: false,
+      },
+    );
+    const narrow = reduceSpatialRoomObservation(
+      createInitialSpatialRoomInputState(),
+      measuredObservation(1_000),
+      {
+        calibration: calibration({
+          cameraBounds: { x: 0.3, y: 0.2, width: 0.5, height: 0.6 },
+        }),
+        canvas,
+        gainState: "draw",
+        edgePreviewVisible: false,
+      },
+    );
+
+    expect(wide.input).toMatchObject({ mode: "point" });
+    expect(narrow.input).toMatchObject({ mode: "point" });
+    if (wide.input.mode === "idle" || wide.input.mode === "bimanual_pinch")
+      throw new Error("Expected a calibrated single-hand input.");
+    if (narrow.input.mode === "idle" || narrow.input.mode === "bimanual_pinch")
+      throw new Error("Expected a calibrated single-hand input.");
+    expect(wide.input.pointer).not.toEqual(narrow.input.pointer);
+    expect(wide.input.pointer).not.toEqual({ x: 0.95, y: 0.95 });
+  });
+
+  it("uses Task 2 calibrated thresholds and two-of-three voting for semantic pinch", () => {
+    const canvas = { left: 0, top: 0, width: 1_000, height: 500 };
+    const strictProfile = calibration({
+      pinchClosedRatio: 0.2,
+      pinchOpenRatio: 0.8,
+    });
+    const personalProfile = calibration({
+      pinchClosedRatio: 0.4,
+      pinchOpenRatio: 0.8,
+    });
+    const options = {
+      canvas,
+      gainState: "hover" as const,
+      edgePreviewVisible: false,
+    };
+
+    const strictFirst = reduceSpatialRoomObservation(
+      createInitialSpatialRoomInputState(),
+      measuredObservation(2_000),
+      { ...options, calibration: strictProfile },
+    );
+    const strictSecond = reduceSpatialRoomObservation(
+      strictFirst.state,
+      measuredObservation(2_016),
+      { ...options, calibration: strictProfile },
+    );
+    const personalFirst = reduceSpatialRoomObservation(
+      createInitialSpatialRoomInputState(),
+      measuredObservation(2_000),
+      { ...options, calibration: personalProfile },
+    );
+    const personalSecond = reduceSpatialRoomObservation(
+      personalFirst.state,
+      measuredObservation(2_016),
+      { ...options, calibration: personalProfile },
+    );
+
+    expect(strictSecond.input.mode).toBe("point");
+    expect(personalFirst.input.mode).toBe("point");
+    expect(personalSecond.input.mode).toBe("pinch");
+    expect(personalSecond.input).toMatchObject({
+      reliability: {
+        trackId: "track-a",
+        real: true,
+        trackingState: "tracked",
+      },
     });
   });
 

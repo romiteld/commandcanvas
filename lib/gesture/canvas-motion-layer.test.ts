@@ -69,4 +69,37 @@ describe("canvas motion layer", () => {
     expect(object.style.getPropertyValue("--gesture-x")).toBe("");
     expect(durableMutation).not.toHaveBeenCalled();
   });
+
+  it("coalesces twenty ink samples into one isolated DOM write", () => {
+    const root = document.createElement("div");
+    const ink = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    ink.setAttribute("data-hand-ink-preview", "");
+    root.append(ink);
+    const callbacks: FrameRequestCallback[] = [];
+    const requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    const layer = createCanvasMotionLayer({
+      root: () => root,
+      requestAnimationFrame,
+      cancelAnimationFrame: vi.fn(),
+    });
+
+    for (let index = 0; index < 20; index += 1)
+      layer.previewInk(
+        Array.from({ length: index + 1 }, (_, pointIndex) => ({
+          x: pointIndex * 2,
+          y: pointIndex * 3,
+        })),
+      );
+
+    expect(requestAnimationFrame).toHaveBeenCalledOnce();
+    callbacks[0]?.(16);
+    expect(ink.getAttribute("points")).toContain("38,57");
+
+    layer.clearInk();
+    callbacks[1]?.(32);
+    expect(ink.getAttribute("points")).toBe("");
+  });
 });
