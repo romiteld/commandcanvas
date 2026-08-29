@@ -313,3 +313,241 @@ action, or infrastructure mutation occurred.
 - DEFERRED BY SCOPE: React room wiring, calibration overlay/PiP, visual
   interpolation, new edge-zone presentation, completion consumption, and
   drawing presentation remain Task 4 work.
+
+## Independent review fix round 1 — 2026-08-29
+
+### Outcome
+
+`DONE_WITH_CONCERNS`
+
+The four Important findings from independent review were reproduced with real
+reducer and command-engine tests, then fixed in implementation commit
+`9aea7dafad589ebd2314dcfea0eb118d81f927c3`.
+
+### Changes made
+
+- Pinch-pending ownership is immutable. A different track cannot finish the
+  owner's acquisition dwell.
+- Every single-hand input to an owned object is checked against
+  `held.ownerTrackId` before safety, movement, release, motion-history, or edge
+  evaluation. This includes `lost_grace`; a trusted non-owner cannot finalize
+  another hand's frozen transform. The only second-track admission path remains
+  the explicit stable `bimanual_pinch` gate.
+- Two-hand baseline and update geometry are ordered by the stored
+  `ownerTrackId` and `secondTrackId`, independent of detector array order. A
+  missing or replacement stored second track enters `lost_grace` and emits no
+  transform preview.
+- Captured object transforms are canonicalized before the first preview.
+  Width is bounded to 160 through 2,000, height to 80 through 1,400, and
+  rotation to -180 through 180.
+- Uniform two-hand scaling intersects the relative 0.25 through 4.0 range with
+  the absolute object bounds. For example, a 200 by 120 object bottoms out at
+  160 by 96 rather than the schema-invalid 50 by 30. A 1,000 by 800 object
+  tops out at 1,750 by 1,400, preserving its aspect ratio.
+- The composed two-hand rotation is normalized after adding the baseline
+  rotation. Maximize captures the viewport-derived world origin but clamps its
+  dimensions to the same canonical object bounds.
+- A changed transform frozen in `lost_grace` now emits exactly one
+  `object.complete_transform` on terminal safe release or grace expiry. Edge
+  eligibility and motion history are cleared before finalization, so loss
+  cannot complete maximize, minimize, or discard. Reset ownership prevents a
+  later terminal frame from duplicating the completion.
+
+### Task 2 and Task 4 boundary
+
+Task 2 remains the authority for stable track identity, confidence,
+real/predicted provenance, pinch voting, loss, and safe-release provenance.
+Task 3 consumes those fields and owns only spatial authorization and effects.
+
+The Task 4 adapter is responsible for mapping a terminal Task 2 release to the
+existing explicit reducer input `{ mode: "idle", reason: "release", timestamp }`.
+Loss remains `{ mode: "idle", reason: "loss", timestamp }`. Task 3 does not
+infer track identity from detector array position and does not edit the room,
+adapter, presentation, CSS, or React tests in this fix round.
+
+### Strict TDD evidence
+
+Every behavior below was added to
+`lib/gesture/spatial-gesture-recovery.test.ts` before its production change.
+All focused commands used Node `v22.14.0`:
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test -- lib/gesture/spatial-gesture-recovery.test.ts
+```
+
+Owner authorization RED:
+
+```text
+Test Files  1 failed (1)
+Tests  4 failed | 21 passed (25)
+```
+
+The four failures showed `hand-b` completing `hand-a`'s pending acquisition,
+moving its object, releasing it, and arming a side throw. After the owner gate:
+
+```text
+Test Files  1 passed (1)
+Tests  25 passed (25)
+```
+
+Stored two-hand identity RED:
+
+```text
+Test Files  1 failed (1)
+Tests  2 failed | 25 passed (27)
+```
+
+Reversing the input array changed rotation from `18.530766` to
+`-161.469234`, and replacing stored `hand-b` with `hand-c` incorrectly stayed
+in `transforming_two`. After ID-ordered geometry and replacement refusal:
+
+```text
+Test Files  1 passed (1)
+Tests  27 passed (27)
+```
+
+Canonical transform RED was deliberately advanced one boundary at a time:
+
+```text
+Tests  2 failed | 26 passed (28)  # 50x30 minimum and command boundary
+Tests  1 failed | 27 passed (28)  # 4000x3200 maximum
+Tests  1 failed | 27 passed (28)  # 191.801409-degree rotation
+Tests  1 failed | 27 passed (28)  # 6000x4000 maximize
+```
+
+The rotation expectation was corrected before production work from a
+normalized-coordinate estimate to the hand-derived 1,000 by 600 world-space
+angle: approximately `-168.20` degrees. The maximize fixture was likewise
+relocated into its zoomed viewport before accepting the intended 6,000 by
+4,000 RED. After all canonical constraints:
+
+```text
+Test Files  1 passed (1)
+Tests  28 passed (28)
+```
+
+Terminal loss finalization RED:
+
+```text
+Test Files  1 failed (1)
+Tests  2 failed | 28 passed (30)
+```
+
+Terminal safe release emitted no completion; expiry emitted only
+`preview.clear`. After the common loss finalizer:
+
+```text
+Test Files  1 passed (1)
+Tests  30 passed (30)
+```
+
+Two additional defense-in-depth cycles were then run. A trusted non-owner
+could finalize the owner's loss-grace transform:
+
+```text
+Test Files  1 failed (1)
+Tests  1 failed | 30 passed (31)
+
+Test Files  1 passed (1)
+Tests  31 passed (31)
+```
+
+A stale undersized, 540-degree object emitted an invalid acquisition preview:
+
+```text
+Test Files  1 failed (1)
+Tests  1 failed | 31 passed (32)
+
+Test Files  1 passed (1)
+Tests  32 passed (32)
+```
+
+### Real command-engine coverage
+
+Reducer-generated minimum-size, maximum-size, rotated, minimize, maximize, and
+discard completions are mapped with `spatialGestureCompletionToCommand` and
+passed to the real `applyCanvasCommand`. The tests do not mock schema parsing or
+command application. Minimum, maximum, rotation, minimize, and maximize all
+return `ok: true`; the original discard test still proves exact shared Undo
+restoration.
+
+### Final verification
+
+Focused reducer command:
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test -- lib/gesture/spatial-gesture.test.ts lib/gesture/spatial-gesture-recovery.test.ts
+```
+
+Fresh result immediately before commit:
+
+```text
+Test Files  2 passed (2)
+Tests  36 passed (36)
+```
+
+Lint:
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm run lint
+```
+
+```text
+exit 0, no diagnostics
+```
+
+Scoped staged diff:
+
+```bash
+git diff --cached --check
+git diff --cached --name-only
+```
+
+```text
+exit 0, no whitespace errors
+lib/gesture/spatial-gesture-recovery.test.ts
+lib/gesture/spatial-gesture.ts
+```
+
+Full repository typecheck was run after correcting the only Task 3 fixture
+diagnostic (`amber` was replaced with canonical note tone `coral`):
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm run typecheck
+```
+
+It remained blocked by a concurrent, untracked Resend lane outside Task 3:
+
+```text
+lib/resend/webhook.test.ts(8,8): error TS2307: Cannot find module '@/lib/resend/webhook' or its corresponding type declarations.
+```
+
+No Task 3 diagnostic remained. The independent coordinator directed Task 3 to
+commit without waiting on or editing that lane. A fresh full-suite run was not
+claimed in this fix round because the shared tree simultaneously contained
+uncommitted Task 4 and Resend work. The focused reducer suite is the bounded
+verification evidence for this commit.
+
+### Commit and evidence boundary
+
+```text
+9aea7dafad589ebd2314dcfea0eb118d81f927c3
+Author: Daniel Romitelli <danny.romitelli@gmail.com>
+Committer: Daniel Romitelli <danny.romitelli@gmail.com>
+Subject: Harden spatial gesture ownership and completion
+```
+
+- VERIFIED: all owner authorization paths named in review; stable two-hand ID
+  ordering and replacement refusal; canonical acquisition, two-hand, rotation,
+  and maximize transforms; real canonical command application; terminal loss
+  completion; edge cancellation; and no duplicate completion.
+- BLOCKED OUTSIDE TASK 3: a full-repository typecheck is red only at the
+  concurrent untracked Resend import quoted above.
+- NOT RE-RUN ON SHARED DIRTY TREE: the full repository suite.
+- UNVERIFIED PHYSICAL: camera ergonomics, detector reorder/dropout behavior on
+  real frames, visual preview acknowledgement, real throw rates, render cadence,
+  browser behavior, RTX behavior, and mobile behavior remain Task 4/7 physical
+  evidence work.
+- SCOPE PRESERVED: no room, React, CSS, Task 2, Task 4 adapter, canonical command
+  engine, deployment, credential, service, or infrastructure file was edited or
+  committed by Task 3 in this review round.
