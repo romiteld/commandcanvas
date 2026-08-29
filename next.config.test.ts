@@ -13,6 +13,10 @@ describe("application response headers", () => {
     expect(nextConfig.devIndicators).toBe(false);
   });
 
+  it("uses the TypeScript compiler API so production builds do not depend on CLI pipe capture", () => {
+    expect(nextConfig.experimental?.useTypeScriptCli).toBe(false);
+  });
+
   it("applies the release security headers to every route without a broad CSP", async () => {
     const rules = await nextConfig.headers?.();
     const globalRule = rules?.find((rule) => rule.source === "/:path*");

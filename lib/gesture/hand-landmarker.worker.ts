@@ -28,7 +28,7 @@ const runtime = createHandTrackingWorkerRuntime({
       throw new Error(
         "Local hand tracking needs the browser's in-page fallback because OffscreenCanvas is unavailable.",
       );
-    return loadMediaPipeHandDetector(options);
+    return loadMediaPipeHandDetector(options, undefined, { useModule: true });
   },
   postMessage(message: HandTrackingWorkerOutboundMessage) {
     workerScope.postMessage(message);

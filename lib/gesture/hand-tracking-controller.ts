@@ -877,7 +877,7 @@ export function createHandTrackingController(
     >) {
       if (count > 0) run.runtimeProfile.recordDrop(kind, count);
     }
-    run.startupDecisionMade = engine.descriptor.role !== "default";
+    run.startupDecisionMade = engine.descriptor.role !== "candidate";
     run.lastRelayDrops = { "before-encode": 0, "before-send": 0 };
     updateRuntimeMetrics(run, true);
   }
@@ -887,7 +887,7 @@ export function createHandTrackingController(
     diagnostics?: HandDetectorDiagnostics,
   ) {
     const engine = run.visionEngines[run.engineIndex];
-    if (!engine || engine.descriptor.role !== "default") return;
+    if (!engine || engine.descriptor.role !== "candidate") return;
     const provider = diagnostics?.executionProvider;
     const deviceClass: HandRuntimePreferenceIdentity["deviceClass"] =
       provider === "webgpu" && diagnostics?.highPerformanceGpuRequested
@@ -907,7 +907,7 @@ export function createHandTrackingController(
     worker: HandTrackingWorkerLike,
   ) {
     const engine = run.visionEngines[run.engineIndex];
-    if (!engine || engine.descriptor.role !== "default") return false;
+    if (!engine || engine.descriptor.role !== "candidate") return false;
     const preference = run.runtimeProfile.loadPreference();
     if (preference === "retain-yolo") {
       run.startupDecisionMade = true;
@@ -931,7 +931,7 @@ export function createHandTrackingController(
     if (
       run.startupDecisionMade ||
       !engine ||
-      engine.descriptor.role !== "default"
+      engine.descriptor.role !== "candidate"
     )
       return;
     run.startupTimeout = dependencies.setTimeout(() => {
@@ -952,7 +952,7 @@ export function createHandTrackingController(
       run.cancelled ||
       run.worker !== worker ||
       !engine ||
-      engine.descriptor.role !== "default"
+      engine.descriptor.role !== "candidate"
     )
       return false;
     const decision = run.runtimeProfile.startupDecision(nowMs);

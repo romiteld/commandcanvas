@@ -9,6 +9,9 @@ const sourceRevision = /^[0-9a-f]{40}$/.test(
 const nextConfig: NextConfig = {
   agentRules: false,
   devIndicators: false,
+  experimental: {
+    useTypeScriptCli: false,
+  },
   env: {
     NEXT_PUBLIC_COMMANDCANVAS_SOURCE_REVISION: sourceRevision,
   },

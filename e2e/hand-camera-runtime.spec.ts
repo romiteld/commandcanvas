@@ -189,6 +189,81 @@ test("starts the local hand detector from a real browser camera stream and relea
   }
 });
 
+test("starts the in-page MediaPipe recovery with classic WASM assets", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    process.env.RUN_CAMERA_E2E !== "true" ||
+      testInfo.project.name !== "chromium-desktop",
+  );
+  test.setTimeout(90_000);
+  if (
+    !fakeCameraPath ||
+    !isAbsolute(fakeCameraPath) ||
+    !fakeCameraPath.endsWith(".y4m") ||
+    !existsSync(fakeCameraPath)
+  )
+    throw new Error(
+      "COMMANDCANVAS_FAKE_CAMERA_PATH must name an existing absolute .y4m fixture.",
+    );
+
+  await page.addInitScript(() => {
+    Object.defineProperty(globalThis, "OffscreenCanvas", {
+      configurable: true,
+      value: undefined,
+    });
+  });
+  const roomCapture = captureCreatedRoom(page);
+  const pageErrors: string[] = [];
+  const wasmScripts: string[] = [];
+  let roomId: string | null = null;
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("response", (response) => {
+    const path = new URL(response.url()).pathname;
+    if (path.includes("/mediapipe/wasm/") && path.endsWith(".js"))
+      wasmScripts.push(path);
+  });
+
+  try {
+    await page.goto("/demo");
+    await expect(page.getByText("Live demo room")).toBeVisible({
+      timeout: 20_000,
+    });
+    roomId = await roomCapture.resolveRoomId();
+    const handInput = page.getByRole("region", {
+      name: "Hand input",
+      exact: true,
+    });
+    await handInput
+      .getByRole("button", { name: "Enable hand input" })
+      .click();
+    await expect(
+      handInput.getByText("Hand input ready · local only", { exact: true }),
+    ).toBeVisible({ timeout: 60_000 });
+
+    expect(
+      wasmScripts.some((path) =>
+        /vision_wasm_(?:nosimd_)?internal\.js$/.test(path),
+      ),
+    ).toBe(true);
+    expect(
+      wasmScripts.some((path) => path.endsWith("vision_wasm_module_internal.js")),
+    ).toBe(false);
+    expect(pageErrors).toEqual([]);
+
+    await handInput
+      .getByRole("button", { name: "Disable hand input" })
+      .click();
+  } finally {
+    try {
+      roomId ??= await roomCapture.resolveRoomId();
+    } finally {
+      roomCapture.stop();
+    }
+    if (roomId) await deleteHostedRoom(page, roomId);
+  }
+});
+
 function isMediaPipeHandEngineAsset(url: string) {
   return (
     url.includes("/workers/hand-landmarker.js") ||

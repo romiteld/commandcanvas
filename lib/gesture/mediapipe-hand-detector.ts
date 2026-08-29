@@ -31,10 +31,11 @@ const defaultDependencies: MediaPipeHandDetectorDependencies = {
 export async function loadMediaPipeHandDetector(
   options: HandDetectorLoadOptions,
   dependencies: MediaPipeHandDetectorDependencies = defaultDependencies,
+  loader: { useModule: boolean } = { useModule: false },
 ): Promise<HandDetector> {
   const fileset = await dependencies.resolveVisionTasks(
     options.wasmBaseUrl,
-    true,
+    loader.useModule,
   );
   return dependencies.createDetector(fileset, {
     baseOptions: { modelAssetPath: options.modelAssetUrl },

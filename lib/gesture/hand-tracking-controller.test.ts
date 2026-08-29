@@ -11,6 +11,7 @@ import {
 } from "@/lib/gesture/hand-calibration";
 import type { HandLandmarks } from "@/lib/gesture/hand-intent";
 import {
+  createDefaultSpatialVisionEnginePlan,
   MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL,
   MEDIA_PIPE_IN_PAGE_RECOVERY_ENGINE_ID,
   MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
@@ -1535,7 +1536,7 @@ describe("hand tracking controller lifecycle", () => {
     expect(fallbackWorker.terminate).not.toHaveBeenCalled();
   });
 
-  it("falls back one-way when twelve post-warmup MediaPipe worker results miss the delivered-rate threshold", async () => {
+  it("keeps a healthy local MediaPipe worker when its startup samples miss private-relay thresholds", async () => {
     let now = 1_000;
     const primaryWorker = new FakeWorker();
     const fallbackWorker = new FakeWorker();
@@ -1572,13 +1573,71 @@ describe("hand tracking controller lifecycle", () => {
       });
     }
 
+    expect(fallbackWorker.postMessage).not.toHaveBeenCalled();
+    expect(controller.getEngineStatus?.()).toMatchObject({
+      id: MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
+      fallback: false,
+    });
+  });
+
+  it("falls back one-way when a private relay candidate misses the startup performance threshold", async () => {
+    let now = 1_000;
+    const candidateWorker = new FakeWorker();
+    const fallbackWorker = new FakeWorker();
+    const basePlan = createDefaultSpatialVisionEnginePlan();
+    const candidate = {
+      ...basePlan.primary,
+      descriptor: {
+        ...basePlan.primary.descriptor,
+        id: "private-yolo-test",
+        displayName: "Private YOLO test relay",
+        role: "candidate" as const,
+        runtime: "private-hand-relay",
+      },
+    };
+    const video = {
+      srcObject: null,
+      readyState: 4,
+      play: vi.fn(async () => undefined),
+    } as unknown as HTMLVideoElement;
+    const controller = createHandTrackingController({
+      visionEnginePlan: {
+        primary: candidate,
+        fallback: basePlan.primary,
+        fallbackOn: ["initialization-error", "runtime-error"],
+      },
+      getUserMedia: vi.fn(async () => ({
+        getTracks: () => [{ stop: vi.fn() }],
+      }) as unknown as MediaStream),
+      createWorkerForEngine: vi.fn((engine: { id: string }) =>
+        engine.id === "private-yolo-test" ? candidateWorker : fallbackWorker,
+      ),
+      createImageBitmap: vi.fn(async () => ({ close: vi.fn() }) as unknown as ImageBitmap),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      now: () => now,
+    });
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(candidateWorker.postMessage).toHaveBeenCalled());
+    candidateWorker.emit({ type: "ready" });
+    await starting;
+
+    for (let index = 0; index < 14; index += 1) {
+      now = 1_100 + index * 60;
+      candidateWorker.emit({
+        type: "result",
+        timestamp: now - 80,
+        hands: [],
+      });
+    }
+
     await vi.waitFor(() =>
       expect(fallbackWorker.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({ type: "initialize" }),
       ),
     );
     expect(controller.getEngineStatus?.()).toMatchObject({
-      id: MEDIA_PIPE_IN_PAGE_RECOVERY_ENGINE_ID,
+      id: MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
       fallback: true,
       fallbackReason: expect.stringMatching(/startup performance/i),
     });
