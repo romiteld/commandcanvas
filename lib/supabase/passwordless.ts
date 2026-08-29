@@ -19,7 +19,14 @@ export interface PasswordlessAuthClient {
     signInWithOtp?: (input: {
       email: string;
       options: { shouldCreateUser: true };
-    }) => Promise<{ data: unknown; error: { message: string } | null }>;
+    }) => Promise<{
+      data: unknown;
+      error: {
+        message: string;
+        code?: string;
+        status?: number;
+      } | null;
+    }>;
     verifyOtp?: (input: {
       email: string;
       token: string;
@@ -64,12 +71,7 @@ export async function requestEmailOtp(
       email: parsed.data,
       options: { shouldCreateUser: true },
     });
-    if (response.error)
-      return {
-        ok: false,
-        code: "otp_request_failed",
-        message: "The sign-in code could not be sent.",
-      };
+    if (response.error) return otpRequestError(response.error);
     return { ok: true, email: parsed.data };
   } catch {
     return {
@@ -78,6 +80,23 @@ export async function requestEmailOtp(
       message: "The sign-in code could not be sent.",
     };
   }
+}
+
+function otpRequestError(error: { code?: string; status?: number }) {
+  if (
+    error.code === "over_email_send_rate_limit" ||
+    error.status === 429
+  )
+    return {
+      ok: false as const,
+      code: "otp_rate_limited",
+      message: "Email limit reached. Please wait before requesting another code.",
+    };
+  return {
+    ok: false as const,
+    code: "otp_request_failed",
+    message: "The sign-in code could not be sent.",
+  };
 }
 
 export async function verifyEmailOtp(

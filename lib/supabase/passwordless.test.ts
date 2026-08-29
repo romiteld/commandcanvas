@@ -21,6 +21,29 @@ describe("Supabase email OTP flow", () => {
     });
   });
 
+  it("reports a bounded actionable error when Supabase email delivery is rate limited", async () => {
+    const signInWithOtp = vi.fn(async () => ({
+      data: {},
+      error: {
+        code: "over_email_send_rate_limit",
+        message: "429: email rate limit exceeded",
+        status: 429,
+      },
+    }));
+
+    const result = await requestEmailOtp(
+      { auth: { signInWithOtp } },
+      "danny@example.com",
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      code: "otp_rate_limited",
+      message: "Email limit reached. Please wait before requesting another code.",
+    });
+    expect(JSON.stringify(result)).not.toContain("429:");
+  });
+
   it("verifies only a six-digit email token and canonical matching permanent user", async () => {
     const verifyOtp = vi.fn(async () => ({
       data: {
