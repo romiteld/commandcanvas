@@ -21,7 +21,16 @@ function hand(index = { x: 0.3, y: 0.4 }, thumb = { x: 0.1, y: 0.4 }) {
   const points = Array.from({ length: 21 }, () => ({ x: 0.3, y: 0.78, z: 0 }));
   points[0] = { x: 0.3, y: 0.82, z: 0 };
   points[5] = { x: 0.2, y: 0.62, z: 0 };
-  points[6] = { x: 0.25, y: 0.54, z: 0 };
+  points[6] = {
+    x: points[5].x + (index.x - points[5].x) * 0.34,
+    y: points[5].y + (index.y - points[5].y) * 0.34,
+    z: 0,
+  };
+  points[7] = {
+    x: points[5].x + (index.x - points[5].x) * 0.67,
+    y: points[5].y + (index.y - points[5].y) * 0.67,
+    z: 0,
+  };
   points[9] = { x: 0.3, y: 0.6, z: 0 };
   points[10] = { x: 0.31, y: 0.69, z: 0 };
   points[12] = { x: 0.31, y: 0.76, z: 0 };

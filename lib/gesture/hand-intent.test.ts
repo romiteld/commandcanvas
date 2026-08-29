@@ -17,19 +17,26 @@ function frame(input?: {
   timestamp?: number;
 }): HandFrame {
   const landmarks = pointingHand();
+  const index = input?.index ?? { x: 0.5, y: 0.5 };
   landmarks[4] = {
     ...(input?.thumb ?? { x: 0.2, y: 0.5 }),
     z: 0,
     visibility: input?.thumbVisibility ?? 0.95,
   };
   landmarks[8] = {
-    ...(input?.index ?? { x: 0.5, y: 0.5 }),
+    ...index,
     z: 0,
     visibility: input?.indexVisibility ?? 0.95,
   };
+  const indexMcp = landmarks[5];
   landmarks[6] = {
-    x: (landmarks[0].x + landmarks[8].x) / 2,
-    y: (landmarks[0].y + landmarks[8].y) / 2,
+    x: indexMcp.x + (index.x - indexMcp.x) * 0.34,
+    y: indexMcp.y + (index.y - indexMcp.y) * 0.34,
+    z: 0,
+  };
+  landmarks[7] = {
+    x: indexMcp.x + (index.x - indexMcp.x) * 0.67,
+    y: indexMcp.y + (index.y - indexMcp.y) * 0.67,
     z: 0,
   };
   return {
@@ -558,7 +565,7 @@ describe("pinch hysteresis", () => {
     });
   });
 
-  it("requires reliable extended non-index fingertips before classifying an open palm", () => {
+  it("refuses an open hand with unreliable non-index fingertips instead of drawing", () => {
     const base = openPalmFrame();
     const landmarks = [...base.landmarks] as HandLandmark[];
     for (const index of [12, 16, 20])
@@ -571,9 +578,10 @@ describe("pinch hysteresis", () => {
     );
 
     expect(transition.output).toMatchObject({
-      accepted: true,
-      mode: "point",
-      pointer: { x: 0.5, y: 0.25 },
+      accepted: false,
+      mode: "idle",
+      pointer: null,
+      reason: "no_deliberate_gesture",
     });
   });
 

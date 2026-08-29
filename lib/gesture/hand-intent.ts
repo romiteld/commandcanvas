@@ -143,11 +143,29 @@ export const DEFAULT_HAND_INTENT_CONFIG: HandIntentConfig = Object.freeze({
 const THUMB_TIP_INDEX = 4;
 const INDEX_TIP_INDEX = 8;
 const WRIST_INDEX = 0;
+const INDEX_MCP_INDEX = 5;
 const INDEX_PIP_INDEX = 6;
+const INDEX_DIP_INDEX = 7;
+const INDEX_FINGER_JOINTS = [
+  INDEX_MCP_INDEX,
+  INDEX_PIP_INDEX,
+  INDEX_DIP_INDEX,
+  INDEX_TIP_INDEX,
+] as const;
 const OTHER_FINGER_JOINTS = [
   { pip: 10, tip: 12 },
   { pip: 14, tip: 16 },
   { pip: 18, tip: 20 },
+] as const;
+const DELIBERATE_POINT_LANDMARK_INDICES = [
+  WRIST_INDEX,
+  ...INDEX_FINGER_JOINTS,
+  10,
+  12,
+  14,
+  16,
+  18,
+  20,
 ] as const;
 const OPEN_PALM_LANDMARK_INDICES = [
   WRIST_INDEX,
@@ -310,10 +328,12 @@ export function interpretHandFrame(
     lastAcceptedTimestamp: frame.timestamp,
   };
   const deliberatePoint =
-    hasReliableIndexPointLandmarks(
+    hasReliableDeliberatePointLandmarks(
       frame.landmarks,
       config.minKeypointVisibility,
-    ) && isIndexExtended(frame.landmarks);
+    ) &&
+    isIndexExtended(frame.landmarks) &&
+    areOtherFingersFolded(frame.landmarks);
   if (!pinchLatched && !openPalm && !deliberatePoint)
     return refuse(
       "no_deliberate_gesture",
@@ -344,18 +364,35 @@ export function interpretHandFrame(
 function isIndexExtended(landmarks: HandLandmarks) {
   const wrist = landmarks[WRIST_INDEX];
   const pipDistance = distance(wrist, landmarks[INDEX_PIP_INDEX]);
+  const indexPathLength =
+    distance(landmarks[INDEX_MCP_INDEX], landmarks[INDEX_PIP_INDEX]) +
+    distance(landmarks[INDEX_PIP_INDEX], landmarks[INDEX_DIP_INDEX]) +
+    distance(landmarks[INDEX_DIP_INDEX], landmarks[INDEX_TIP_INDEX]);
+  const indexReach = distance(
+    landmarks[INDEX_MCP_INDEX],
+    landmarks[INDEX_TIP_INDEX],
+  );
   return (
     pipDistance >= 0.02 &&
-    distance(wrist, landmarks[INDEX_TIP_INDEX]) >= pipDistance * 1.15
+    distance(wrist, landmarks[INDEX_TIP_INDEX]) >= pipDistance * 1.15 &&
+    indexReach >= indexPathLength * 0.86
   );
 }
 
-function hasReliableIndexPointLandmarks(
+function hasReliableDeliberatePointLandmarks(
   landmarks: HandLandmarks,
   minimumVisibility: number,
 ) {
-  return [WRIST_INDEX, INDEX_PIP_INDEX, INDEX_TIP_INDEX].every(
+  return DELIBERATE_POINT_LANDMARK_INDICES.every(
     (index) => landmarkVisibility(landmarks[index]) >= minimumVisibility,
+  );
+}
+
+function areOtherFingersFolded(landmarks: HandLandmarks) {
+  const wrist = landmarks[WRIST_INDEX];
+  return OTHER_FINGER_JOINTS.every(
+    ({ pip, tip }) =>
+      distance(wrist, landmarks[tip]) <= distance(wrist, landmarks[pip]) * 1.02,
   );
 }
 
