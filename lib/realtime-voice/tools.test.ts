@@ -1,12 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  REALTIME_VOICE_INSTRUCTIONS,
   REALTIME_VOICE_TOOL_DEFINITIONS,
   executeRealtimeVoiceTool,
   type RealtimeVoiceIntentHandler,
 } from "@/lib/realtime-voice/tools";
 
 describe("Realtime voice tools", () => {
+  it("requires direct object requests to mutate before any confirmation", () => {
+    expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
+      "For a direct creation request, call create_semantic_object without inspecting the canvas first.",
+    );
+    expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
+      "If you already inspected for a creation request, continue in the same response by calling create_semantic_object before confirming anything to the user.",
+    );
+  });
+
   it("exposes only the approved reversible canvas vocabulary", () => {
     expect(
       REALTIME_VOICE_TOOL_DEFINITIONS.map((tool) => tool.name),

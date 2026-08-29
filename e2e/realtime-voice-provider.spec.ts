@@ -95,32 +95,35 @@ test("regular GPT Realtime hears speech and submits a canonical canvas mutation"
     await expect(
       page.getByRole("list", { name: "Live voice transcript" }),
     ).toContainText(/project board/i, { timeout: 30_000 });
-    await page.waitForTimeout(8_000);
-    const providerEvents = await page.evaluate(
-      () =>
-        (
-          window as typeof window & {
-            __commandCanvasRealtimeEventSummaries?: Array<
-              Record<string, unknown>
-            >;
-          }
-        ).__commandCanvasRealtimeEventSummaries ?? [],
-    );
-    await testInfo.attach("realtime-provider-event-types.json", {
-      body: Buffer.from(JSON.stringify(providerEvents, null, 2)),
-      contentType: "application/json",
-    });
-    await expect(
-      page.getByText(/running create board/i),
-    ).toBeVisible({ timeout: 30_000 });
-    await expect(
-      page.getByText("Daniel created “Launch board”."),
-    ).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText("R4 · voice")).toBeVisible({ timeout: 15_000 });
-    await expect(
-      page.getByRole("button", { name: "Select Launch board" }),
-    ).toBeVisible();
-    expect(browserErrors).toEqual([]);
+    try {
+      await expect(
+        page.getByRole("button", { name: "Select Launch board" }),
+      ).toBeVisible({ timeout: 30_000 });
+      await expect(
+        page.getByRole("button", {
+          name: "Open activity drawer: Daniel created “Launch board”.",
+        }),
+      ).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByText("R4 · voice")).toBeVisible({
+        timeout: 15_000,
+      });
+      expect(browserErrors).toEqual([]);
+    } finally {
+      const providerEvents = await page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __commandCanvasRealtimeEventSummaries?: Array<
+                Record<string, unknown>
+              >;
+            }
+          ).__commandCanvasRealtimeEventSummaries ?? [],
+      );
+      await testInfo.attach("realtime-provider-event-types.json", {
+        body: Buffer.from(JSON.stringify(providerEvents, null, 2)),
+        contentType: "application/json",
+      });
+    }
   } finally {
     try {
       roomId ??= await roomCapture.resolveRoomId();
