@@ -1222,3 +1222,35 @@ rewriting their historical evidence:
   lighting, occlusion, thermal behavior, and private-relay fallback remain
   unverified. These deterministic corrections address proven state-machine
   defects but do not substitute for a physical rehearsal.
+
+## Checkpoint 28: public interaction-hardening release
+
+### VERIFIED IN PRODUCTION
+
+- Public `main` commit `ecc2071153a0a5f2f307b10fb7330ebf4b01b3e8`
+  contains the cadence-aware pinch vote, deliberate point-pose correction,
+  landmark-to-room regression coverage, and Checkpoint 27. Every commit has
+  Daniel Romitelli as its only author and committer and has no co-author or
+  generator attribution.
+- Vercel built that exact GitHub commit from the public `romiteld/commandcanvas`
+  repository, reached `READY` as a production deployment, and assigned the
+  canonical `https://commandcanvas.vercel.app` alias without an alias error.
+- Fresh canonical requests to `/`, `/demo`, and `/meet` each returned HTTP 200
+  with HTML content.
+- The exact public landing page passed its applicable Chromium-mobile and
+  iPhone-profile WebKit scenarios: 2 passed, 6 project-specific skips, and zero
+  failures. Both profiles rendered the real destinations with no browser,
+  console, or request failures and no horizontal document overflow.
+- The review-only pull-request branch was fast-forwarded to the exact candidate.
+  No CodeRabbit result is claimed until the GitHub App produces a review event.
+
+### STILL GATED
+
+- The separate public relay repository and CodeRabbit GitHub App installation
+  require repository-owner grants that the current GitHub token cannot perform.
+  The relay therefore remains disabled and the existing CodeRabbit request has
+  no bot response.
+- Physical phone gesture accuracy and ChatGPT built-in-browser Site Tools remain
+  external target-surface checks. The public release is available for those
+  rehearsals, but neither is inferred from unit, browser-profile, native Chrome,
+  or provider evidence.
