@@ -232,7 +232,11 @@ async function drawStroke(
 }
 
 async function exercisePreviewOnlyPacketWorkflow(page: Page, roomId: string) {
-  await openDrawer(page, "Open command drawer", "Command drawer");
+  await openDrawer(
+    page,
+    "Open ChatGPT command drawer",
+    "ChatGPT command drawer",
+  );
   const prepareResponsePromise = waitForPacketResponse(
     page,
     `/api/rooms/${roomId}/packets/prepare`,
@@ -289,7 +293,11 @@ async function exercisePreviewOnlyPacketWorkflow(page: Page, roomId: string) {
 
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.getByText("Live demo room")).toBeVisible({ timeout: 20_000 });
-  await openDrawer(page, "Open command drawer", "Command drawer");
+  await openDrawer(
+    page,
+    "Open ChatGPT command drawer",
+    "ChatGPT command drawer",
+  );
   await expect(page.getByText("Approved packet v1").first()).toBeVisible();
   await expect(
     page.getByText("Send request cancelled: no email was sent"),
@@ -330,7 +338,11 @@ async function exercisePreviewOnlyPacketWorkflow(page: Page, roomId: string) {
 
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.getByText("Live demo room")).toBeVisible({ timeout: 20_000 });
-  await openDrawer(page, "Open command drawer", "Command drawer");
+  await openDrawer(
+    page,
+    "Open ChatGPT command drawer",
+    "ChatGPT command drawer",
+  );
   await expect(page.getByText("Preview only: not sent")).toBeVisible();
   await expect(
     page

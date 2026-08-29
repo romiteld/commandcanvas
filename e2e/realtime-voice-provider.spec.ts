@@ -84,7 +84,9 @@ test("regular GPT Realtime hears speech and submits a canonical canvas mutation"
     });
     roomId = await roomCapture.resolveRoomId();
 
-    await page.getByRole("button", { name: "Open command drawer" }).click();
+    await page
+      .getByRole("button", { name: "Open ChatGPT command drawer" })
+      .click();
     await page.getByRole("button", { name: "Start live voice" }).click();
 
     await expect(page.getByText("Listening", { exact: true })).toBeVisible({

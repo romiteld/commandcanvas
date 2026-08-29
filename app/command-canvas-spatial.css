@@ -1026,6 +1026,11 @@
     height: 120px;
   }
 
+  .command-canvas-shell .spatial-camera-control.is-sensor-pip .spatial-camera-heading button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
   /* Hand input requires an explicit permission tap. Keep that route legible
      instead of collapsing every system capability into anonymous dots. */
   .command-canvas-shell .system-status-trigger .compact-status:nth-child(2) {
@@ -1103,8 +1108,8 @@
   }
 
   .command-canvas-shell .meeting-filmstrip-actions button {
-    min-width: 34px;
-    min-height: 32px;
+    min-width: 44px;
+    min-height: 44px;
     padding-inline: 7px;
     font-size: 8px;
   }

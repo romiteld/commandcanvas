@@ -68,6 +68,20 @@ test("uses full-canvas mobile calibration then returns to a bounded hideable PiP
   expect(sensorBox.height).toBeLessThan(viewport.height * 0.55);
   await expect(page.getByRole("region", { name: "Hand interaction controls" })).toBeVisible();
 
+  for (const accessibleName of [
+    "Move hand sensor preview",
+    "Hide hand sensor preview",
+    "Open hand calibration",
+    "Disable hand input",
+  ]) {
+    const target = await sensor
+      .getByRole("button", { name: accessibleName })
+      .boundingBox();
+    if (!target) throw new Error(`${accessibleName} geometry is unavailable.`);
+    expect(target.width).toBeGreaterThanOrEqual(44);
+    expect(target.height).toBeGreaterThanOrEqual(44);
+  }
+
   await page.getByRole("button", { name: "Hide hand sensor preview" }).click();
   await expect(sensor).toHaveClass(/is-sensor-pip-hidden/);
   await expect(page.getByLabel("Local hand tracking preview")).toBeHidden();

@@ -8,11 +8,58 @@ import { requireProductionApiProxyOrigin } from "../lib/testing/live-probe-guard
 
 test.use({
   launchOptions: {
+    ...(process.env.COMMANDCANVAS_CHROME_PATH
+      ? { executablePath: process.env.COMMANDCANVAS_CHROME_PATH }
+      : {}),
     args: [
       "--use-fake-device-for-media-stream",
       "--use-fake-ui-for-media-stream",
     ],
   },
+});
+
+test("keeps collapsed meeting controls at least 44px at a 390px viewport", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    process.env.RUN_SUPABASE_E2E !== "true" ||
+      testInfo.project.name !== "chromium-mobile",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  const apiProxyOrigin = process.env.COMMANDCANVAS_API_PROXY_ORIGIN;
+  if (apiProxyOrigin) await installApiProxy(page, apiProxyOrigin);
+  const roomCapture = captureCreatedRoom(page);
+  let roomId: string | null = null;
+
+  try {
+    await page.goto("/demo");
+    await expect(page.getByText("Live demo room")).toBeVisible({
+      timeout: 20_000,
+    });
+    roomId = await roomCapture.resolveRoomId();
+
+    const controls = page.locator(".meeting-filmstrip-actions button");
+    expect(await controls.count()).toBeGreaterThanOrEqual(2);
+    for (const control of await controls.all()) {
+      const target = await control.boundingBox();
+      if (!target) throw new Error("Meeting control geometry is unavailable.");
+      expect(target.width).toBeGreaterThanOrEqual(44);
+      expect(target.height).toBeGreaterThanOrEqual(44);
+    }
+    expect(
+      await page.evaluate(() => ({
+        clientWidth: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+      })),
+    ).toEqual({ clientWidth: 390, scrollWidth: 390 });
+  } finally {
+    try {
+      roomId ??= await roomCapture.resolveRoomId();
+    } finally {
+      roomCapture.stop();
+    }
+    if (roomId) await deleteHostedRoom(page, roomId);
+  }
 });
 
 test("two no-signup browsers exchange real WebRTC media after both opt in", async ({

@@ -227,18 +227,22 @@ test("opens command and system controls over the workspace without resizing the 
   if (!before) throw new Error("canvas geometry is unavailable");
 
   await expect(
-    page.getByRole("complementary", { name: "Command drawer" }),
+    page.getByRole("complementary", { name: "ChatGPT command drawer" }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: "Open command drawer" }).click();
+  await page
+    .getByRole("button", { name: "Open ChatGPT command drawer" })
+    .click();
   await expect(
-    page.getByRole("complementary", { name: "Command drawer" }),
+    page.getByRole("complementary", { name: "ChatGPT command drawer" }),
   ).toBeVisible();
   await expect(
     page.getByRole("textbox", { name: "Direct canvas command" }),
   ).toBeVisible();
   expect(await canvas.boundingBox()).toEqual(before);
 
-  await page.getByRole("button", { name: "Close command drawer" }).click();
+  await page
+    .getByRole("button", { name: "Close ChatGPT command drawer" })
+    .click();
   await page.getByRole("button", { name: "Open system status" }).click();
   await expect(
     page.getByRole("complementary", { name: "System status drawer" }),
@@ -354,7 +358,9 @@ test("reviews a deterministic browser speech transcript before a canonical voice
   });
 
   await page.goto("/local");
-  await page.getByRole("button", { name: "Open command drawer" }).click();
+  await page
+    .getByRole("button", { name: "Open ChatGPT command drawer" })
+    .click();
   expect(
     await page.evaluate(
       () =>

@@ -85,10 +85,12 @@ test("submits an explicitly approved packet to the configured Resend provider", 
 });
 
 async function openCommandDrawer(page: Page) {
-  const trigger = page.getByRole("button", { name: "Open command drawer" });
+  const trigger = page.getByRole("button", {
+    name: "Open ChatGPT command drawer",
+  });
   if ((await trigger.getAttribute("aria-expanded")) !== "true")
     await trigger.click();
   await expect(
-    page.getByRole("complementary", { name: "Command drawer" }),
+    page.getByRole("complementary", { name: "ChatGPT command drawer" }),
   ).toBeVisible();
 }
