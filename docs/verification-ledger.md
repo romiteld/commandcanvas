@@ -1241,6 +1241,16 @@ rewriting their historical evidence:
   iPhone-profile WebKit scenarios: 2 passed, 6 project-specific skips, and zero
   failures. Both profiles rendered the real destinations with no browser,
   console, or request failures and no horizontal document overflow.
+- A fresh public two-browser run created a no-signup room, joined a real second
+  browser, observed two Supabase Presence members, broadcast the participant
+  cursor, persisted collaborator mutations and receipts, disconnected and
+  reconnected Realtime, reloaded the participant, reconstructed revision 9,
+  and deleted the exact temporary room. The single applicable scenario passed.
+- A separate fresh public media run passed the 390-pixel mobile-control geometry
+  check and a two-browser opt-in WebRTC exchange. Both local and remote audio
+  and video tracks reached `live`, video-share and leave controls removed the
+  correct tiles, and both temporary rooms were deleted. Two applicable
+  scenarios passed and two project-inapplicable scenarios skipped.
 - The review-only pull-request branch was fast-forwarded to the exact candidate.
   No CodeRabbit result is claimed until the GitHub App produces a review event.
 
