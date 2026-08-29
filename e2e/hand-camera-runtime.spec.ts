@@ -174,7 +174,9 @@ test("starts the local hand detector from a real browser camera stream and relea
     await handInput
       .getByRole("button", { name: "Disable hand input" })
       .click();
-    await expect(page.getByText("Camera off · pointer active").last()).toBeVisible();
+    await expect(
+      handInput.getByRole("button", { name: "Enable hand input" }),
+    ).toBeVisible();
     expect(
       await page.evaluate(() => {
         const video = document.querySelector<HTMLVideoElement>(
