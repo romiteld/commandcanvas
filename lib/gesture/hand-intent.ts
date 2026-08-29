@@ -210,6 +210,7 @@ export function interpretHandFrame(
       frame.timestamp,
       frame.confidence,
       { predicted: true },
+      state,
     );
 
   const physical = measureHandLandmarks(
@@ -256,11 +257,18 @@ export function interpretHandFrame(
     config.minKeypointVisibility;
   const pinchKeypointsReliable = thumbReliable && indexReliable;
   const pinchLatched =
-    pinchKeypointsReliable &&
-    (state.pinchLatched
-      ? pinchRatio < config.pinchReleaseRatio
-      : pinchRatio <= config.pinchEngageRatio);
-  const openPalm = indexReliable && isOpenPalm(frame.landmarks);
+    pinchKeypointsReliable
+      ? state.pinchLatched
+        ? pinchRatio < config.pinchReleaseRatio
+        : pinchRatio <= config.pinchEngageRatio
+      : state.pinchLatched;
+  const openPalm =
+    indexReliable &&
+    hasReliableOpenPalmFingertips(
+      frame.landmarks,
+      config.minKeypointVisibility,
+    ) &&
+    isOpenPalm(frame.landmarks);
   if (!indexReliable)
     return refuse(
       "low_keypoint_confidence",
@@ -319,6 +327,15 @@ function isOpenPalm(landmarks: HandLandmarks) {
       const pipDistance = distance(wrist, landmarks[pip]);
       return distance(wrist, landmarks[tip]) >= pipDistance * 1.15;
     },
+  );
+}
+
+function hasReliableOpenPalmFingertips(
+  landmarks: HandLandmarks,
+  minimumVisibility: number,
+) {
+  return [INDEX_TIP_INDEX, 12, 16, 20].every(
+    (index) => landmarkVisibility(landmarks[index]) >= minimumVisibility,
   );
 }
 
@@ -444,9 +461,10 @@ function refuse(
   timestamp: number | null,
   confidence: number | null,
   prediction: HandPredictionMarker = { predicted: false },
+  state: HandIntentState = createInitialHandIntentState(),
 ): HandIntentTransition {
   return {
-    state: createInitialHandIntentState(),
+    state,
     output: {
       accepted: false,
       mode: "idle",

@@ -8,7 +8,7 @@ Implemented the physical hand-measurement foundation without changing detector a
 - Added independent measurements for index tip, thumb tip, pinch midpoint, palm/MCP centroid, palm scale, palm-scale-normalized pinch ratio, and hand/keypoint confidence.
 - Kept the visible pointer tied to the filtered index fingertip for pointing, pinch, relaxed, and open-palm samples. Open-palm remains a semantic mode but no longer redirects the pointer to the palm centroid.
 - Replaced the position EMA with pure timestamp-aware One Euro scalar/2D filter primitives. Defaults are `minCutoff=1.0`, `beta=0.007`, and `dCutoff=1.0`.
-- Added a prediction marker to the transition contract. A predicted frame is explicitly refused with `predicted_sample`, resets semantic state, and cannot trigger a gesture transition.
+- Added a prediction marker to the transition contract. A predicted frame is explicitly refused with `predicted_sample`, retains its prior semantic/filter state, and cannot trigger a gesture transition.
 - Preserved public observation compatibility by making the newly surfaced physical metadata additive/optional on `HandTrackingObservation`; its established `mode`, `pointer`, `confidence`, landmarks, pinch fields, and timestamp remain available.
 - Wired capture/receive timestamp, engine ID, stable track key, prediction marker, and physical measurements through the controller for downstream tasks.
 
@@ -22,6 +22,7 @@ Deferred intentionally: calibration, temporal pinch voting, loss/reacquire polic
 - `lib/gesture/hand-tracking-controller.ts` — carries additive physical metadata into public tracked observations.
 - `lib/gesture/hand-intent.test.ts` — regression coverage for relaxed pointer availability, open-palm index coordinates, separated measurements, prediction refusal, and timestamp-aware filtering.
 - `lib/gesture/hand-tracking-controller.test.ts` — controller-level assertion for source, timestamps, track ID, prediction marker, and measurements.
+- `lib/gesture/one-euro-filter.test.ts` — multi-step scalar reference vector that distinguishes the raw-previous and filtered-previous derivative recurrences.
 
 ## TDD evidence
 
@@ -91,6 +92,48 @@ Test Files  3 passed (3)
 Tests  53 passed (53)
 ```
 
+## Follow-up review fixes
+
+### RED — confidence gating and predicted-state retention
+
+Command:
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test -- lib/gesture/hand-intent.test.ts lib/gesture/one-euro-filter.test.ts
+```
+
+Expected failure observed before the follow-up reducer change:
+
+```text
+Test Files  1 failed | 1 passed (2)
+Tests  3 failed | 25 passed (28)
+```
+
+The failures proved that predicted input reset a latched reducer, an unreliable thumb released a latched pinch, and low-confidence non-index fingertips still produced `open_palm`.
+
+### GREEN — confidence gating and predicted-state retention
+
+Command:
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test -- lib/gesture/hand-intent.test.ts lib/gesture/one-euro-filter.test.ts
+```
+
+Output:
+
+```text
+Test Files  2 passed (2)
+Tests  28 passed (28)
+```
+
+The reducer now retains a latched pinch when the thumb becomes unreliable while still rendering an adequate index pointer; requires reliable index, middle, ring, and little fingertips for `open_palm`; and returns the exact prior reducer state for a predicted sample.
+
+### One Euro reference conclusion
+
+No One Euro production correction was required. The primary paper's Appendix Algorithm 1 computes `dx` from `xfilt.hatxprev`, and Algorithm 2 defines that value as the previous filtered result, not the previous raw input: [Casiez, Roussel, and Vogel (2012), Appendix A](https://direction.bordeaux.inria.fr/~roussel/publications/2012-CHI-one-euro-filter.pdf). The maintained canonical C++ source is consistent and explicitly says its August 2023 correction uses `lastFilteredValue`: [OneEuroFilter.cpp](https://chromium.googlesource.com/chromium/src/%2B/141.0.7390.54/third_party/one_euro_filter/src/OneEuroFilter.cpp).
+
+The committed multi-step vector uses values `0 → 1 → 0.5` at `0/16/32ms` with `{ minCutoff: 1, beta: 0.5, dCutoff: 1 }`. The canonical filtered-previous recurrence yields `0.345071` at the third sample; a raw-previous recurrence yields `0.318759`, so the test detects either implementation. The present filter matches the canonical value; no prior-raw state was added.
+
 ## Verification
 
 Focused detector-adapter verification:
@@ -120,16 +163,17 @@ PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tm
 ```
 
 ```text
-Test Files  95 passed (95)
-Tests  938 passed (938)
+Test Files  96 passed (96)
+Tests  942 passed (942)
 ```
 
 ## Self-review
 
 - The index coordinate is selected independently of semantic mode; open palm is classified but never changes `pointer` away from landmark 8.
 - Pinch geometry remains raw-current geometry, so One Euro filtering does not alter engage/release hysteresis inputs.
-- Predicted samples are carried as marked contract data and rejected before state/filter updates; they cannot participate in semantic transitions.
-- The One Euro implementation tracks values, derivative, and timestamps as reducer state. It supports scalar and 2D filtering while keeping replay deterministic.
+- Predicted samples are carried as marked contract data and rejected without mutating prior state/filter data; they cannot participate in semantic transitions.
+- A low-confidence thumb cannot release an existing pinch latch, while an adequate index remains renderable. `open_palm` requires reliable extended finger tips rather than geometry alone.
+- The One Euro implementation tracks values, derivative, and timestamps as reducer state. Its filtered-previous derivative recurrence is covered by a reference vector matching the paper appendix and maintained canonical source.
 - Existing MediaPipe and YOLO detector result shapes are unchanged. Added controller observation fields are optional and additive.
 - `git diff --check`, lint, typecheck, focused tests, detector-adapter tests, and the full unit suite are clean.
 

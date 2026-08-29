@@ -242,6 +242,51 @@ describe("hand intent validation", () => {
     });
     expect(transition.state).toEqual(createInitialHandIntentState());
   });
+
+  it("leaves a latched pinch and filter state untouched for a predicted sample", () => {
+    const latched = interpretHandFrame(
+      createInitialHandIntentState(),
+      frame({
+        thumb: { x: 0.48, y: 0.5 },
+        index: { x: 0.5, y: 0.5 },
+        timestamp: 1_000,
+      }),
+      1_000,
+    );
+    expect(latched.output).toMatchObject({ accepted: true, mode: "pinch" });
+
+    const predicted = interpretHandFrame(
+      latched.state,
+      {
+        ...frame({
+          thumb: { x: 0.2, y: 0.5 },
+          index: { x: 0.8, y: 0.4 },
+          timestamp: 1_016,
+        }),
+        predicted: true,
+      },
+      1_016,
+    );
+
+    expect(predicted.output).toMatchObject({
+      accepted: false,
+      mode: "idle",
+      reason: "predicted_sample",
+    });
+    expect(predicted.prediction).toEqual({ predicted: true });
+    expect(predicted.state).toEqual(latched.state);
+
+    const resumed = interpretHandFrame(
+      predicted.state,
+      frame({
+        thumb: { x: 0.44, y: 0.5 },
+        index: { x: 0.5, y: 0.5 },
+        timestamp: 1_016,
+      }),
+      1_016,
+    );
+    expect(resumed.output).toMatchObject({ accepted: true, mode: "pinch" });
+  });
 });
 
 describe("pointer smoothing", () => {
@@ -455,6 +500,59 @@ describe("pinch hysteresis", () => {
       accepted: false,
       mode: "idle",
       reason: "low_keypoint_confidence",
+    });
+  });
+
+  it("does not release a latched pinch from a low-confidence thumb while retaining an index pointer", () => {
+    const latched = interpretHandFrame(
+      createInitialHandIntentState(),
+      frame({
+        thumb: { x: 0.48, y: 0.5 },
+        index: { x: 0.5, y: 0.5 },
+        timestamp: 1_000,
+      }),
+      1_000,
+      exact,
+    );
+    expect(latched.output).toMatchObject({ accepted: true, mode: "pinch" });
+
+    const uncertainThumb = interpretHandFrame(
+      latched.state,
+      frame({
+        thumb: { x: 0.2, y: 0.5 },
+        thumbVisibility: 0.2,
+        index: { x: 0.7, y: 0.4 },
+        indexVisibility: 0.95,
+        timestamp: 1_016,
+      }),
+      1_016,
+      exact,
+    );
+
+    expect(uncertainThumb.state.pinchLatched).toBe(true);
+    expect(uncertainThumb.output).toMatchObject({
+      accepted: true,
+      mode: "pinch",
+      pointer: { x: expect.any(Number), y: expect.any(Number) },
+    });
+  });
+
+  it("requires reliable extended non-index fingertips before classifying an open palm", () => {
+    const base = openPalmFrame();
+    const landmarks = [...base.landmarks] as HandLandmark[];
+    for (const index of [12, 16, 20])
+      landmarks[index] = { ...landmarks[index]!, visibility: 0.2 };
+
+    const transition = interpretHandFrame(
+      createInitialHandIntentState(),
+      { ...base, landmarks: landmarks as unknown as HandLandmarks },
+      1_000,
+    );
+
+    expect(transition.output).toMatchObject({
+      accepted: true,
+      mode: "point",
+      pointer: { x: 0.5, y: 0.25 },
     });
   });
 
