@@ -1,9 +1,12 @@
 # Optional private GPU hand relay
 
-Status as of 2026-08-28: installed and externally reachable at
-`https://hands.autolensai.com`. The service is an opt-in acceleration path, not
-the privacy default and not a judge dependency. Local YOLO remains the default
-and the automatic fallback.
+Deployment boundary as of 2026-08-29: the true-640 source, container contract,
+and dated local CUDA verification are ready. The edge route is configured for
+`https://hands.autolensai.com`, but the production true-640 listener has not yet
+been started and the public capability route must not be represented as ready
+until a fresh probe succeeds. The relay remains an opt-in acceleration path,
+not the privacy default and not a judge dependency. Local YOLO remains the
+default and the automatic fallback.
 
 ## Processing choices
 
@@ -44,7 +47,7 @@ session, a network failure, or an invalid relay result closes the remote path
 and selects the local engine. Private relay failure is not a reason to stop the
 canvas.
 
-## Installed topology
+## Target topology
 
 ```text
 CommandCanvas browser
@@ -58,13 +61,14 @@ CommandCanvas browser
   -> ONNX Runtime CUDAExecutionProvider, CUDA device 0
 ```
 
-The public capability route is
+The intended public capability route is
 `https://hands.autolensai.com/v1/capabilities`. Caddy exposes only
 `/v1/capabilities` and `/v1/hand-pose`; unrelated paths return 404. The native
 service remains loopback-bound at `127.0.0.1:8100`, uses
-`restart: unless-stopped`, has no CPU inference mode, and mounts the tracked
-model artifact read-only. The existing AutoLensAI matte process, port, model,
-credentials, and lifecycle remain separate.
+`restart: unless-stopped`, has no CPU inference mode, and copies the tracked
+model artifact into its immutable image after checksum verification. The
+existing AutoLensAI matte process, port, model, credentials, and lifecycle
+remain separate.
 
 The DNS A record points `hands.autolensai.com` to the existing public edge.
 No pfSense mutation was needed because WAN TCP 443 already reached the Caddy
@@ -109,9 +113,10 @@ The installed v1 protocol enforces:
 The native model exposes x/y and per-keypoint visibility. The relay reports
 `z: 0` and `handedness: "unknown"` rather than inventing depth or handedness.
 
-## Installed configuration
+## Required production configuration
 
-The Vercel application has these server-only names:
+Before the private relay can be enabled, the Vercel application must have these
+server-only names:
 
 ```dotenv
 PRIVATE_HAND_RELAY_ENABLED=true
@@ -126,9 +131,10 @@ non-secret template is at
 matching signing key is independent of Supabase, Vercel, Resend, pfSense,
 AutoLensAI, and every other application secret.
 
-## Installed evidence
+## Historical 320 deployment evidence
 
-The following evidence was recorded on 2026-08-28:
+The following evidence was recorded for the earlier 320 listener on 2026-08-28.
+It does not establish the current availability of the true-640 listener:
 
 - the public capability route returned HTTP 200, ready and warm;
 - the runtime identified `NVIDIA GeForce RTX 3090 (CUDA device 0)` and

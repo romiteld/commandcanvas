@@ -40,8 +40,8 @@ def test_container_requires_nvidia_and_copies_checksum_gated_model_bytes() -> No
     assert rollback["profiles"] == ["rollback-320"]
     assert production["image"] == "commandcanvas-hand-relay:yolo26-640-fp16"
     assert rollback["image"] == "commandcanvas-hand-relay:yolo26-320-fp16-rollback"
-    assert production["ports"] == ["127.0.0.1:8101:8100"]
-    assert rollback["ports"] == ["127.0.0.1:8100:8100"]
+    assert production["ports"] == ["127.0.0.1:8100:8100"]
+    assert rollback["ports"] == ["127.0.0.1:8102:8100"]
     assert "volumes" not in production
     assert "volumes" not in rollback
     assert production["build"]["args"] == {

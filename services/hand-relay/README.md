@@ -23,8 +23,8 @@ Neither service uses a runtime host bind mount.
 
 | Image | Input | Build source | Bytes | SHA-256 | Host port |
 | --- | ---: | --- | ---: | --- | ---: |
-| `commandcanvas-hand-relay:yolo26-640-fp16` | 640 | pinned upstream ONNX staged under ignored `services/hand-relay/models/` | 21,547,949 | `f85eae141155d4de959051d3c7d44f68f1881dfe6b6e180e33d6c3fc3372c59e` | 8101 |
-| `commandcanvas-hand-relay:yolo26-320-fp16-rollback` | 320 | tracked `public/models/yolo26_hand_pose_320_fp16.onnx` | 21,447,188 | `07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc` | 8100 |
+| `commandcanvas-hand-relay:yolo26-640-fp16` | 640 | tracked `services/hand-relay/models/yolo26_hand_pose_640_fp16.onnx` | 21,547,949 | `f85eae141155d4de959051d3c7d44f68f1881dfe6b6e180e33d6c3fc3372c59e` | 8100 |
+| `commandcanvas-hand-relay:yolo26-320-fp16-rollback` | 320 | tracked `public/models/yolo26_hand_pose_320_fp16.onnx` | 21,447,188 | `07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc` | 8102 |
 
 Both variants resolve to the same pinned model repository and revision:
 
@@ -48,30 +48,22 @@ local true-640 run has now exercised those checks on an RTX 3090; the dated
 evidence and its limits are recorded in
 [`../../docs/local-cuda-verification-2026-08-29.md`](../../docs/local-cuda-verification-2026-08-29.md).
 
-## Stage the true-640 build input
+## Verify the tracked true-640 build input
 
-Normal tests never download a model. Before building the production image,
-stage the exact pinned file in the ignored build-input directory:
-
-```bash
-hf download poptoz/yolo26-hand-pose-face-detection \
-  models/yolo26_hand_pose_fp16.onnx \
-  --revision 2abb91a7030e1aa5231ec900ccb2c07ab3f03460 \
-  --local-dir /tmp/commandcanvas-yolo26-640
-```
+Normal tests never download or replace a model. The corresponding-source
+repository tracks the exact pinned 640 artifact used by the production image.
+Verify its bytes before building:
 
 ```bash
-install -D -m 0444 \
-  /tmp/commandcanvas-yolo26-640/models/yolo26_hand_pose_fp16.onnx \
-  services/hand-relay/models/yolo26_hand_pose_640_fp16.onnx
 stat --printf='%s bytes\n' \
   services/hand-relay/models/yolo26_hand_pose_640_fp16.onnx
 sha256sum services/hand-relay/models/yolo26_hand_pose_640_fp16.onnx
 ```
 
 The expected output is `21547949 bytes` and the production SHA-256 in the table
-above. A missing or different file makes the image build fail. Runtime startup
-repeats the full byte, digest, tensor, provider, and warmup checks.
+above. A missing, modified, or substituted file makes the image build fail.
+Runtime startup repeats the full byte, digest, tensor, provider, and warmup
+checks.
 
 ## Container build and start
 
@@ -88,19 +80,20 @@ docker compose build hand-relay-640
 docker compose up -d hand-relay-640
 ```
 
-The default Compose service is only the true-640 candidate and binds it to
-`127.0.0.1:8101`. The existing 320 image remains an explicit rollback profile
-on `127.0.0.1:8100`:
+The default Compose service is the verified true-640 production listener and
+binds it to `127.0.0.1:8100`, matching the installed Caddy route. The existing
+320 image remains an explicit rollback profile on the isolated loopback port
+`127.0.0.1:8102`:
 
 ```bash
 docker compose --profile rollback-320 build hand-relay-320-rollback
 docker compose --profile rollback-320 up -d hand-relay-320-rollback
 ```
 
-The 640 port is intentionally separate so a candidate can be measured before a
-reverse-proxy cutover. Building an image does not change Caddy, DNS, pfSense, or
-the public service. Edge promotion and rollback are explicit operations outside
-this source slice.
+Starting the rollback profile does not move Caddy away from the production
+true-640 listener. A rollback requires an explicit, separately reviewed route
+change after the rollback service is healthy. Building an image does not change
+Caddy, DNS, pfSense, or the public service.
 
 The ONNX Runtime CUDA arena defaults to 768 MiB
 (`PRIVATE_HAND_RELAY_GPU_MEM_LIMIT_BYTES=805306368`), uses heuristic cuDNN
