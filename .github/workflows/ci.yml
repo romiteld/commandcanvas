@@ -9,11 +9,11 @@ permissions:
   contents: read
 
 jobs:
-  relay-contract-gate:
+  deterministic-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Check out repository
+      - name: Check out corresponding source
         uses: actions/checkout@v7
 
       - name: Use Python 3.12
@@ -21,17 +21,28 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: services/hand-relay/requirements*.lock
+          cache-dependency-path: services/hand-relay/requirements-ci.lock
 
-      - name: Install deterministic non-GPU relay test dependencies
-        run: >-
-          python -m pip install
-          --requirement services/hand-relay/requirements-ci.lock
+      - name: Install locked non-GPU test dependencies
+        run: python -m pip install --requirement services/hand-relay/requirements-ci.lock
 
-      - name: Run relay contracts without CUDA
+      - name: Verify tracked model artifacts
+        run: |
+          test "$(stat --printf='%s' services/hand-relay/models/yolo26_hand_pose_640_fp16.onnx)" = "21547949"
+          test "$(stat --printf='%s' public/models/yolo26_hand_pose_320_fp16.onnx)" = "21447188"
+          echo "f85eae141155d4de959051d3c7d44f68f1881dfe6b6e180e33d6c3fc3372c59e  services/hand-relay/models/yolo26_hand_pose_640_fp16.onnx" | sha256sum --check
+          echo "07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc  public/models/yolo26_hand_pose_320_fp16.onnx" | sha256sum --check
+
+      - name: Run deterministic relay tests
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: python -m pytest services/hand-relay/tests -q
 
-      - name: Exercise reversible hand-relay edge operations
+      - name: Validate Compose contract
+        env:
+          PRIVATE_HAND_RELAY_ALLOWED_ORIGINS: https://commandcanvas.vercel.app
+          PRIVATE_HAND_RELAY_SIGNING_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+        run: docker compose -f services/hand-relay/compose.yaml config --quiet
+
+      - name: Exercise reversible Caddy route harness
         run: bash ops/hand-relay/tests/manage-caddy-route.test.sh
