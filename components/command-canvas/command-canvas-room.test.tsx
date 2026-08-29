@@ -294,7 +294,7 @@ async function skipHandCalibration(
 }
 
 describe("CommandCanvasRoom", () => {
-  it("offers the complete AGPL source from the browser-visible system drawer", async () => {
+  it("offers the MIT application source from the browser-visible system drawer", async () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
 
@@ -302,7 +302,7 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Open system status" }));
 
     expect(
-      screen.getByRole("link", { name: "Source · AGPL-3.0" }),
+      screen.getByRole("link", { name: "Source · MIT" }),
     ).toHaveAttribute(
       "href",
       expect.stringMatching(

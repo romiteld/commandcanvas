@@ -2830,7 +2830,7 @@ export function CommandCanvasRoom({
               target="_blank"
               rel="noreferrer"
             >
-              <span>Source · AGPL-3.0</span>
+              <span>Source · MIT</span>
               <span aria-hidden="true">↗</span>
             </a>
         </aside>
