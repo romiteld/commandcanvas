@@ -2217,6 +2217,7 @@ button:focus-visible {
 }
 
 .camera-calibration-readout {
+  flex-basis: 100%;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2237,11 +2238,43 @@ button:focus-visible {
   color: var(--ink);
 }
 
-.camera-calibration-readout .hand-runtime-chip {
+.camera-runtime-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.camera-runtime-details {
+  flex-basis: 100%;
+  display: grid;
+  gap: 6px;
+}
+
+.camera-runtime-summary .hand-runtime-chip {
+  padding: 5px 8px;
   border-color: rgb(28 151 139 / 34%);
+  border-style: solid;
+  border-width: 1px;
+  border-radius: 999px;
   background: rgb(28 151 139 / 10%);
   color: var(--ink);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
   font-weight: 720;
+}
+
+.camera-runtime-disclosure {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 72%);
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  font-weight: 700;
 }
 
 .camera-calibration-actions {

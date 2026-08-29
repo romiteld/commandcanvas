@@ -1333,6 +1333,64 @@ describe("hand tracking controller lifecycle", () => {
     });
   });
 
+  it("ignores an old-engine capture rejection after fallback without tearing down the healthy engine", async () => {
+    const primaryWorker = new FakeWorker();
+    const fallbackWorker = new FakeWorker();
+    let rejectBitmap!: (error: Error) => void;
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    const video = {
+      srcObject: null,
+      readyState: 4,
+      currentTime: 1,
+      play: vi.fn(async () => undefined),
+    } as unknown as HTMLVideoElement;
+    const controller = createHandTrackingController({
+      getUserMedia: vi.fn(async () => ({
+        getTracks: () => [{ stop: vi.fn() }],
+      }) as unknown as MediaStream),
+      createWorkerForEngine: vi.fn((engine: { id: string }) =>
+        engine.id.startsWith("yolo26") ? primaryWorker : fallbackWorker,
+      ),
+      createImageBitmap: vi.fn(
+        () =>
+          new Promise<ImageBitmap>((_resolve, reject) => {
+            rejectBitmap = reject;
+          }),
+      ),
+      requestAnimationFrame: vi.fn((callback) => {
+        frames.set(++frameId, callback);
+        return frameId;
+      }),
+      cancelAnimationFrame: vi.fn((id) => frames.delete(id)),
+      now: () => 1_000,
+    });
+
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(primaryWorker.postMessage).toHaveBeenCalled());
+    primaryWorker.emit({ type: "ready" });
+    await starting;
+    [...frames.values()].at(-1)?.(1_000);
+    primaryWorker.emit({ type: "error", message: "primary stopped" });
+    await vi.waitFor(() => expect(fallbackWorker.postMessage).toHaveBeenCalled());
+    fallbackWorker.emit({ type: "ready" });
+    expect(controller.getStatus()).toEqual({ state: "ready" });
+
+    rejectBitmap(new Error("old YOLO capture failed"));
+    await vi.waitFor(() =>
+      expect(controller.getEngineStatus?.()?.runtimeMetrics).toMatchObject({
+        droppedLateCapture: 1,
+      }),
+    );
+
+    expect(controller.getStatus()).toEqual({ state: "ready" });
+    expect(controller.getEngineStatus?.()).toMatchObject({
+      id: "mediapipe-hand-landmarker-v1",
+      fallback: true,
+    });
+    expect(fallbackWorker.terminate).not.toHaveBeenCalled();
+  });
+
   it("falls back one-way when twelve post-warmup YOLO results miss the delivered-rate threshold", async () => {
     let now = 1_000;
     const primaryWorker = new FakeWorker();

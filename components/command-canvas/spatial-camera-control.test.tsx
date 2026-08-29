@@ -170,6 +170,7 @@ describe("SpatialCameraControl", () => {
   });
 
   it("labels the actual private relay provider, device, processing latency, and transit latency", async () => {
+    const user = userEvent.setup();
     const fake = fakeController();
     render(
       <SpatialCameraControl
@@ -202,6 +203,9 @@ describe("SpatialCameraControl", () => {
     expect(
       await screen.findByText("Hand input ready · private GPU relay"),
     ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Show hand tracking details" }),
+    );
     expect(screen.getByText("Provider CUDA · NVIDIA GeForce RTX 3090 Ti")).toBeVisible();
     expect(
       screen.getByText("24 ms GPU processing · 61 ms capture/result round trip"),
@@ -320,7 +324,7 @@ describe("SpatialCameraControl", () => {
     );
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
 
-    fake.setStatus({ state: "ready" });
+    act(() => fake.setStatus({ state: "ready" }));
     expect(await screen.findByText("Hand input ready · local only")).toBeVisible();
     expect(screen.queryByText(/hand detected/i)).toBeNull();
 
@@ -340,6 +344,7 @@ describe("SpatialCameraControl", () => {
   });
 
   it("visibly identifies YOLO as primary and labels a runtime fallback", async () => {
+    const user = userEvent.setup();
     const fake = fakeController();
     render(<SpatialCameraControl createController={() => fake.controller} />);
 
@@ -358,6 +363,9 @@ describe("SpatialCameraControl", () => {
       });
       fake.setStatus({ state: "ready" });
     });
+    await user.click(
+      screen.getByRole("button", { name: "Show hand tracking details" }),
+    );
     expect(await screen.findByText("Engine YOLO26 Hand Pose")).toBeVisible();
     expect(screen.getByText("Provider WebGPU · NVIDIA GPU")).toBeVisible();
     expect(
@@ -425,7 +433,65 @@ describe("SpatialCameraControl", () => {
     );
   });
 
+  it("keeps technical diagnostics off the default surface and exposes them through an accessible disclosure", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    render(<SpatialCameraControl createController={() => fake.controller} />);
+
+    act(() => {
+      fake.setEngine({
+        id: "yolo26-hand-pose-2abb91",
+        displayName: "YOLO26 Hand Pose",
+        runtime: "onnx-runtime-web",
+        fallback: false,
+        executionProvider: "webgpu",
+        fallbackReason: "Measured fallback detail",
+        runtimeMetrics: {
+          sampleCount: 12,
+          deliveredRateHz: 24.1,
+          captureLatencyMs: { p50: 4, p95: 7 },
+          processingLatencyMs: { p50: 18, p95: 31 },
+          encodeLatencyMs: null,
+          relayLatencyMs: null,
+          captureToReceiveMs: { p50: 55, p95: 71 },
+          captureToRenderMs: null,
+          droppedSuperseded: 0,
+          droppedLateCapture: 0,
+          droppedStale: 0,
+          droppedBeforeEncode: 0,
+          droppedBeforeSend: 0,
+        },
+      });
+      fake.setStatus({ state: "ready" });
+    });
+
+    expect(
+      await screen.findByText("YOLO26 · WebGPU · 24.1 Hz · p95 71 ms · dropped 0"),
+    ).toBeVisible();
+    const disclosure = screen.getByRole("button", {
+      name: "Show hand tracking details",
+    });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Engine YOLO26 Hand Pose")).toBeNull();
+    expect(screen.queryByText("Provider WebGPU")).toBeNull();
+    expect(screen.queryByText(/Measured fallback detail/)).toBeNull();
+    expect(screen.queryByLabelText("Gesture self-check")).toBeNull();
+
+    await user.click(disclosure);
+
+    expect(
+      screen.getByRole("button", { name: "Hide hand tracking details" }),
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Engine YOLO26 Hand Pose")).toBeVisible();
+    expect(screen.getByText("Provider WebGPU")).toBeVisible();
+    expect(
+      screen.getByText("WebGPU fallback · Measured fallback detail"),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Gesture self-check")).toBeVisible();
+  });
+
   it("distinguishes a high-performance WebGPU request from the actual WASM fallback", async () => {
+    const user = userEvent.setup();
     const fake = fakeController();
     render(<SpatialCameraControl createController={() => fake.controller} />);
 
@@ -442,6 +508,9 @@ describe("SpatialCameraControl", () => {
       fake.setStatus({ state: "ready" });
     });
 
+    await user.click(
+      screen.getByRole("button", { name: "Show hand tracking details" }),
+    );
     expect(await screen.findByText("Provider WASM")).toBeVisible();
     expect(
       screen.getByText("High-performance WebGPU adapter requested"),
@@ -475,10 +544,14 @@ describe("SpatialCameraControl", () => {
   });
 
   it("reports point and pinch as separate real-session self-checks", async () => {
+    const user = userEvent.setup();
     const fake = fakeController();
     render(<SpatialCameraControl createController={() => fake.controller} />);
 
-    fake.setStatus({ state: "ready" });
+    act(() => fake.setStatus({ state: "ready" }));
+    await user.click(
+      screen.getByRole("button", { name: "Show hand tracking details" }),
+    );
     expect(await screen.findByText("Gesture self-check · 0/2")).toBeVisible();
     expect(screen.getByText("Point not seen")).toBeVisible();
     expect(screen.getByText("Pinch not seen")).toBeVisible();
@@ -564,6 +637,9 @@ describe("SpatialCameraControl", () => {
     );
     expect(container.querySelectorAll("[data-hand-keypoint]")).toHaveLength(21);
     expect(container.querySelectorAll("[data-hand-connection]")).toHaveLength(21);
+    await user.click(
+      screen.getByRole("button", { name: "Show hand tracking details" }),
+    );
     expect(screen.getByText("Pinch distance 0.120")).toBeVisible();
     expect(screen.getByText("21-point hand landmarks")).toBeVisible();
     expect(screen.getByText("Confidence 91%")).toBeVisible();
@@ -606,9 +682,13 @@ describe("SpatialCameraControl", () => {
   });
 
   it("shows open-palm and bimanual resize feedback without miscounting the pinch self-check", async () => {
+    const user = userEvent.setup();
     const fake = fakeController();
     render(<SpatialCameraControl createController={() => fake.controller} />);
-    fake.setStatus({ state: "ready" });
+    act(() => fake.setStatus({ state: "ready" }));
+    await user.click(
+      screen.getByRole("button", { name: "Show hand tracking details" }),
+    );
 
     act(() =>
       fake.emit({

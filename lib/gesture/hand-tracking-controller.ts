@@ -559,7 +559,17 @@ export function createHandTrackingController(
     } catch (error) {
       run.captureInFlight = false;
       bitmap?.close();
-      if (activeRun !== run || run.cancelled) return;
+      if (
+        activeRun !== run ||
+        run.cancelled ||
+        run.worker !== worker ||
+        run.engineEpoch !== epoch ||
+        status.state !== "ready"
+      ) {
+        if (activeRun === run && !run.cancelled)
+          recordDrop(run, "late-capture");
+        return;
+      }
       failUnavailable(
         run,
         error instanceof Error && error.message.trim()

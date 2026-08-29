@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type {
   HandTrackingController,
@@ -59,6 +59,7 @@ export function SpatialCameraControl({
     pinchConfidence?: number;
   }>({});
   const [internalCalibrationOpen, setInternalCalibrationOpen] = useState(false);
+  const [runtimeDetailsOpen, setRuntimeDetailsOpen] = useState(false);
   const [lastObservation, setLastObservation] =
     useState<HandTrackingObservation | null>(null);
   const [videoAspectRatio, setVideoAspectRatio] = useState(4 / 3);
@@ -68,6 +69,7 @@ export function SpatialCameraControl({
   const calibrationOpenRef = useRef(false);
   const lifecycleStopIssuedRef = useRef(false);
   const lastAcknowledgedCaptureRef = useRef<number | null>(null);
+  const runtimeDetailsId = useId();
   const observationHandlerRef = useRef(onObservation);
   const statusHandlerRef = useRef(onStatusChange);
   const spatialModeStartedHandlerRef = useRef(onSpatialModeStarted);
@@ -116,6 +118,7 @@ export function SpatialCameraControl({
         spatialModeStartedHandlerRef.current?.();
       }
       if (next.state !== "ready") {
+        setRuntimeDetailsOpen(false);
         setDetectedMode(null);
         setSelfCheck({});
         if (next.state === "refused" || next.state === "unavailable")
@@ -174,6 +177,7 @@ export function SpatialCameraControl({
       if (current.state !== "starting" && current.state !== "ready") return;
       lifecycleStopIssuedRef.current = true;
       controller.stop();
+      setRuntimeDetailsOpen(false);
       setStartingTarget(null);
       spatialModeStartedRef.current = false;
       spatialModeRequestedRef.current = false;
@@ -212,6 +216,7 @@ export function SpatialCameraControl({
   function stopTracking() {
     lifecycleStopIssuedRef.current = true;
     controller.stop();
+    setRuntimeDetailsOpen(false);
     setStartingTarget(null);
     spatialModeStartedRef.current = false;
     spatialModeRequestedRef.current = false;
@@ -397,7 +402,7 @@ export function SpatialCameraControl({
         </div>
       </div>
       {status.state === "ready" ? (
-        <div className="camera-calibration-readout" aria-label="Hand calibration readout">
+        <div className="camera-runtime-summary">
           {runtimeChipLabel(engineStatus) ? (
             <output
               className="hand-runtime-chip"
@@ -407,76 +412,139 @@ export function SpatialCameraControl({
               {runtimeChipLabel(engineStatus)}
             </output>
           ) : null}
-          <strong>21-point hand landmarks</strong>
-          {engineStatus ? (
-            <span data-vision-engine={engineStatus.id}>
-              {engineStatus.fallback ? "Fallback" : "Engine"} {engineStatus.displayName}
-            </span>
-          ) : (
-            <span>Engine starting</span>
-          )}
-          {engineStatus?.executionProvider ? (
-            <span data-execution-provider={engineStatus.executionProvider}>
-              Provider {executionProviderLabel(engineStatus.executionProvider)}
-              {adapterLabel(engineStatus.adapter)
-                ? ` · ${adapterLabel(engineStatus.adapter)}`
-                : ""}
-            </span>
+          <button
+            type="button"
+            className="camera-runtime-disclosure"
+            aria-label={
+              runtimeDetailsOpen
+                ? "Hide hand tracking details"
+                : "Show hand tracking details"
+            }
+            aria-expanded={runtimeDetailsOpen}
+            aria-controls={runtimeDetailsId}
+            onClick={() => setRuntimeDetailsOpen((open) => !open)}
+          >
+            Details
+          </button>
+          {runtimeDetailsOpen ? (
+            <div
+              id={runtimeDetailsId}
+              className="camera-runtime-details"
+            >
+              <div
+                className="camera-calibration-readout"
+                aria-label="Hand calibration readout"
+              >
+                <strong>21-point hand landmarks</strong>
+                {engineStatus ? (
+                  <span data-vision-engine={engineStatus.id}>
+                    {engineStatus.fallback ? "Fallback" : "Engine"}{" "}
+                    {engineStatus.displayName}
+                  </span>
+                ) : (
+                  <span>Engine starting</span>
+                )}
+                {engineStatus?.executionProvider ? (
+                  <span data-execution-provider={engineStatus.executionProvider}>
+                    Provider {executionProviderLabel(engineStatus.executionProvider)}
+                    {adapterLabel(engineStatus.adapter)
+                      ? ` · ${adapterLabel(engineStatus.adapter)}`
+                      : ""}
+                  </span>
+                ) : null}
+                {engineStatus?.highPerformanceGpuRequested ? (
+                  <span data-high-performance-gpu-request>
+                    High-performance WebGPU adapter requested
+                  </span>
+                ) : null}
+                {engineStatus?.fallbackReason ? (
+                  <span data-execution-provider-fallback>
+                    {fallbackLabel(engineStatus.fallbackKind)} ·{" "}
+                    {engineStatus.fallbackReason}
+                  </span>
+                ) : null}
+                {engineStatus?.detectorRoundTripMs !== undefined ? (
+                  <span data-hand-runtime-metrics>
+                    {engineStatus.processingLocation === "private-relay" &&
+                    engineStatus.processingLatencyMs !== undefined
+                      ? `${Math.round(engineStatus.processingLatencyMs)} ms GPU processing · ${Math.round(engineStatus.detectorRoundTripMs)} ms capture/result round trip`
+                      : `${Math.round(engineStatus.detectorRoundTripMs)} ms detector/worker round trip${
+                          engineStatus.resultRateFps !== undefined
+                            ? ` · ${engineStatus.resultRateFps.toFixed(1)} results/s`
+                            : ""
+                        }`}
+                  </span>
+                ) : null}
+                {engineStatus?.processingLocation === "private-relay" &&
+                engineStatus.encodeLatencyMs !== undefined &&
+                engineStatus.relayRoundTripMs !== undefined &&
+                engineStatus.droppedBeforeEncode !== undefined &&
+                engineStatus.droppedBeforeSend !== undefined ? (
+                  <span data-hand-relay-pipeline-metrics>
+                    {Math.round(engineStatus.encodeLatencyMs)} ms encode ·{" "}
+                    {Math.round(engineStatus.relayRoundTripMs)} ms relay round trip ·
+                    dropped {engineStatus.droppedBeforeEncode} raw /{" "}
+                    {engineStatus.droppedBeforeSend} encoded
+                  </span>
+                ) : null}
+                <span>
+                  {trackedHands.length > 0
+                    ? `${trackedHands.length} hand${trackedHands.length === 1 ? "" : "s"}`
+                    : "No hand"}
+                </span>
+                <span>
+                  {trackedHands[0]?.pinchRatio !== undefined
+                    ? `Pinch ${trackedHands[0].pinchRatio.toFixed(2)}× palm`
+                    : trackedHands[0]?.pinchDistance !== undefined
+                      ? `Pinch distance ${trackedHands[0].pinchDistance.toFixed(3)}`
+                      : "Pinch -"}
+                </span>
+                <span>
+                  {trackedHands[0]?.handedness
+                    ? `${trackedHands[0].handedness} hand`
+                    : "Handedness -"}
+                </span>
+                <span>
+                  {trackedHands[0]?.confidence !== undefined
+                    ? `Confidence ${confidencePercent(trackedHands[0].confidence)}%`
+                    : "Confidence -"}
+                </span>
+                <span>
+                  {detectedMode
+                    ? `State ${detectedMode.replaceAll("_", " ")}`
+                    : "State READY"}
+                </span>
+                <span>Keep both hands inside frame · use even front light</span>
+              </div>
+              <div className="gesture-self-check" aria-label="Gesture self-check">
+                <strong>
+                  Gesture self-check ·{" "}
+                  {Number(selfCheck.pointConfidence !== undefined) +
+                    Number(selfCheck.pinchConfidence !== undefined)}
+                  /2
+                </strong>
+                <span>
+                  {selfCheck.pointConfidence === undefined
+                    ? "Point not seen"
+                    : `Point seen · ${confidencePercent(selfCheck.pointConfidence)}% confidence`}
+                </span>
+                <span>
+                  {selfCheck.pinchConfidence === undefined
+                    ? "Pinch not seen"
+                    : `Pinch seen · ${confidencePercent(selfCheck.pinchConfidence)}% confidence`}
+                </span>
+                {selfCheck.pointConfidence !== undefined &&
+                selfCheck.pinchConfidence !== undefined ? (
+                  <em role="status">
+                    Point and pinch detected in this camera session. Self-check
+                    complete.
+                  </em>
+                ) : (
+                  <em>Show a clear point, then touch thumb and index finger.</em>
+                )}
+              </div>
+            </div>
           ) : null}
-          {engineStatus?.highPerformanceGpuRequested ? (
-            <span data-high-performance-gpu-request>
-              High-performance WebGPU adapter requested
-            </span>
-          ) : null}
-          {engineStatus?.fallbackReason ? (
-            <span data-execution-provider-fallback>
-              {fallbackLabel(engineStatus.fallbackKind)} · {engineStatus.fallbackReason}
-            </span>
-          ) : null}
-          {engineStatus?.detectorRoundTripMs !== undefined ? (
-            <span data-hand-runtime-metrics>
-              {engineStatus.processingLocation === "private-relay" &&
-              engineStatus.processingLatencyMs !== undefined
-                ? `${Math.round(engineStatus.processingLatencyMs)} ms GPU processing · ${Math.round(engineStatus.detectorRoundTripMs)} ms capture/result round trip`
-                : `${Math.round(engineStatus.detectorRoundTripMs)} ms detector/worker round trip${
-                    engineStatus.resultRateFps !== undefined
-                      ? ` · ${engineStatus.resultRateFps.toFixed(1)} results/s`
-                      : ""
-                  }`}
-            </span>
-          ) : null}
-          {engineStatus?.processingLocation === "private-relay" &&
-          engineStatus.encodeLatencyMs !== undefined &&
-          engineStatus.relayRoundTripMs !== undefined &&
-          engineStatus.droppedBeforeEncode !== undefined &&
-          engineStatus.droppedBeforeSend !== undefined ? (
-            <span data-hand-relay-pipeline-metrics>
-              {Math.round(engineStatus.encodeLatencyMs)} ms encode ·{" "}
-              {Math.round(engineStatus.relayRoundTripMs)} ms relay round trip · dropped{" "}
-              {engineStatus.droppedBeforeEncode} raw / {engineStatus.droppedBeforeSend}{" "}
-              encoded
-            </span>
-          ) : null}
-          <span>{trackedHands.length > 0 ? `${trackedHands.length} hand${trackedHands.length === 1 ? "" : "s"}` : "No hand"}</span>
-          <span>
-            {trackedHands[0]?.pinchRatio !== undefined
-              ? `Pinch ${trackedHands[0].pinchRatio.toFixed(2)}× palm`
-              : trackedHands[0]?.pinchDistance !== undefined
-                ? `Pinch distance ${trackedHands[0].pinchDistance.toFixed(3)}`
-              : "Pinch -"}
-          </span>
-          <span>
-            {trackedHands[0]?.handedness
-              ? `${trackedHands[0].handedness} hand`
-              : "Handedness -"}
-          </span>
-          <span>
-            {trackedHands[0]?.confidence !== undefined
-              ? `Confidence ${confidencePercent(trackedHands[0].confidence)}%`
-              : "Confidence -"}
-          </span>
-          <span>{detectedMode ? `State ${detectedMode.replaceAll("_", " ")}` : "State READY"}</span>
-          <span>Keep both hands inside frame · use even front light</span>
         </div>
       ) : null}
       {previewExpanded ? (
@@ -503,33 +571,6 @@ export function SpatialCameraControl({
           downloads its model in your browser. Only semantic canvas commands are shared.
         </p>
       )}
-      {status.state === "ready" ? (
-        <div className="gesture-self-check" aria-label="Gesture self-check">
-          <strong>
-            Gesture self-check · {Number(selfCheck.pointConfidence !== undefined) +
-              Number(selfCheck.pinchConfidence !== undefined)}
-            /2
-          </strong>
-          <span>
-            {selfCheck.pointConfidence === undefined
-              ? "Point not seen"
-              : `Point seen · ${confidencePercent(selfCheck.pointConfidence)}% confidence`}
-          </span>
-          <span>
-            {selfCheck.pinchConfidence === undefined
-              ? "Pinch not seen"
-              : `Pinch seen · ${confidencePercent(selfCheck.pinchConfidence)}% confidence`}
-          </span>
-          {selfCheck.pointConfidence !== undefined &&
-          selfCheck.pinchConfidence !== undefined ? (
-            <em role="status">
-              Point and pinch detected in this camera session. Self-check complete.
-            </em>
-          ) : (
-            <em>Show a clear point, then touch thumb and index finger.</em>
-          )}
-        </div>
-      ) : null}
       {status.state === "refused" || status.state === "unavailable" ? (
         <p className="camera-error-detail">{status.message}</p>
       ) : null}

@@ -174,3 +174,58 @@ The browser loaded the locally built worker, ONNX Runtime assets, and pinned 320
 ## Evidence boundary
 
 Task 5 verifies deterministic scheduling, metrics, fallback policy, relay encoding, cleanup, and browser worker execution. It does **not** verify or claim physical smoothness, user ergonomics, RTX performance, public deployment, or ChatGPT host behavior.
+
+## Independent review fixes
+
+### RED — old-engine capture rejection after fallback
+
+The controller already closed a bitmap that resolved after an engine-epoch change, but its rejection path checked only the run identity and cancellation flag. A YOLO-era `createImageBitmap` rejection could therefore call `failUnavailable` after MediaPipe had become ready and tear down the healthy fallback.
+
+A focused controller test now starts a YOLO capture, switches to MediaPipe, marks MediaPipe ready, then rejects the old capture. Before the fix, the active engine was destroyed and `runtimeMetrics` disappeared.
+
+### RED — diagnostics remained expanded on the main surface
+
+The compact runtime chip had been added without removing the existing always-visible engine, provider, fallback, latency, hand, pinch, confidence, and state badges. Focused component tests now require those technical details to be absent by default and reachable through a keyboard-accessible button with truthful `aria-expanded` and `aria-controls` state.
+
+Combined review RED:
+
+```text
+Test Files  2 failed (2)
+Tests  6 failed | 46 passed (52)
+```
+
+A second focused regression tightened that surface contract to include the live gesture self-check. The disclosure work initially hid the runtime badges but left the self-check dashboard on the default canvas. The added assertion failed before the production move:
+
+```text
+Test Files  1 failed (1)
+Tests  1 failed | 18 passed (19)
+```
+
+### GREEN — epoch guard and collapsed disclosure
+
+The capture rejection path now verifies the captured worker, engine epoch, active status, run, and cancellation state before treating an error as a current-engine failure. An old capture rejection is counted as `droppedLateCapture` for the still-active run and cannot terminate the healthy fallback. A genuine current-engine capture failure still follows the existing unavailable path.
+
+The default camera surface now shows only the compact runtime chip and a small `Details` disclosure. Technical engine/provider/fallback/location/latency data, live calibration data, and the gesture self-check are conditionally rendered on request. Existing consent and location copy remains truthful and visible; the disclosure resets closed when tracking leaves ready state or is stopped.
+
+Focused review GREEN:
+
+```text
+Test Files  2 passed (2)
+Tests  52 passed (52)
+```
+
+The tightened component contract also passed after the self-check moved into the disclosure:
+
+```text
+Test Files  1 passed (1)
+Tests  19 passed (19)
+```
+
+Final Task 5 focused suite and static gates:
+
+```text
+Test Files  5 passed (5)
+Tests  73 passed (73)
+typecheck exit 0
+lint --quiet exit 0
+```
