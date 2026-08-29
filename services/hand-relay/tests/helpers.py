@@ -11,6 +11,11 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from commandcanvas_hand_relay.model_manifest import (
+    PRODUCTION_MODEL_MANIFEST,
+    ModelManifest,
+)
+
 
 PROTOCOL = "commandcanvas.private-hand-relay.v1"
 ROOM_ID = "0046b81b-5406-4416-8574-8a144647dd7e"
@@ -85,6 +90,11 @@ class FakeBackend:
     warm: bool = True
     unavailable_reason: str | None = None
     device: str = "NVIDIA GeForce RTX 3090 (CUDA device 0)"
+    manifest: ModelManifest = PRODUCTION_MODEL_MANIFEST
+
+    @property
+    def input_size(self) -> int:
+        return self.manifest.input_size
 
     def __post_init__(self) -> None:
         self.calls: list[np.ndarray] = []
@@ -98,16 +108,16 @@ class FakeBackend:
             "ready": self.ready,
             "warm": self.warm,
             "model": {
-                "id": "poptoz/yolo26-hand-pose-face-detection",
-                "revision": "2abb91a7030e1aa5231ec900ccb2c07ab3f03460",
+                "id": self.manifest.repository,
+                "revision": self.manifest.revision,
                 "format": "onnx",
-                "keypoints": 21,
-                "license": "AGPL-3.0",
+                "keypoints": self.manifest.keypoints,
+                "license": self.manifest.release_license,
             },
             "runtime": {
                 "provider": "cuda",
                 "device": self.device,
-                "precision": "fp16",
+                "precision": self.manifest.precision,
             },
             "limits": {
                 "maxFrameBytes": 262_144,

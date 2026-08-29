@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from types import SimpleNamespace
 import numpy as np
@@ -17,6 +19,11 @@ from commandcanvas_hand_relay.inference import (
     decode_frame,
     parse_output,
 )
+from commandcanvas_hand_relay.model_manifest import (
+    MODEL_MANIFESTS,
+    PRODUCTION_MODEL_MANIFEST,
+    ROLLBACK_MODEL_MANIFEST,
+)
 
 
 class FakeTensor:
@@ -27,9 +34,31 @@ class FakeTensor:
 
 
 class FakeSession:
-    def __init__(self, providers: list[str] | None = None):
+    def __init__(
+        self,
+        providers: list[str] | None = None,
+        *,
+        input_shape: list[int] | None = None,
+        input_name: str = "images",
+        input_type: str = "tensor(float)",
+        output_shape: list[int] | None = None,
+        output_name: str = "output0",
+        output_type: str = "tensor(float)",
+        output: np.ndarray | None = None,
+    ):
         self.providers = providers or ["CUDAExecutionProvider"]
         self.runs = 0
+        self.input_shape = input_shape or [1, 3, 640, 640]
+        self.input_name = input_name
+        self.input_type = input_type
+        self.output_shape = output_shape or [1, 300, 69]
+        self.output_name = output_name
+        self.output_type = output_type
+        self.output = (
+            output
+            if output is not None
+            else np.zeros((1, 300, 69), dtype=np.float32)
+        )
 
     def get_providers(self) -> list[str]:
         return self.providers
@@ -38,15 +67,15 @@ class FakeSession:
         return {"CUDAExecutionProvider": {"device_id": "0"}}
 
     def get_inputs(self) -> list[FakeTensor]:
-        return [FakeTensor("images", [1, 3, 320, 320])]
+        return [FakeTensor(self.input_name, self.input_shape, self.input_type)]
 
     def get_outputs(self) -> list[FakeTensor]:
-        return [FakeTensor("output0", [1, 300, 69])]
+        return [FakeTensor(self.output_name, self.output_shape, self.output_type)]
 
     def run(self, _outputs: object, feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
         self.runs += 1
-        assert feeds["images"].shape == (1, 3, 320, 320)
-        return [np.zeros((1, 300, 69), dtype=np.float32)]
+        assert feeds[self.input_name].shape == tuple(self.input_shape)
+        return [self.output]
 
 
 class FakeSessionOptions:
@@ -93,13 +122,21 @@ def pinned_model(tmp_path: Path) -> Path:
     return path
 
 
+def manifest_for(path: Path):
+    return replace(
+        PRODUCTION_MODEL_MANIFEST,
+        byte_size=path.stat().st_size,
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+
+
 def test_refuses_to_start_when_cuda_is_not_available(tmp_path: Path) -> None:
     model = pinned_model(tmp_path)
 
     with pytest.raises(CudaUnavailable, match="CUDAExecutionProvider"):
         YoloCudaBackend.load(
             model,
-            expected_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),
+            manifest=manifest_for(model),
             ort_module=FakeOrt(["CPUExecutionProvider"]),
             device_probe=lambda _device_id: "unused",
         )
@@ -112,16 +149,15 @@ def test_refuses_wrong_model_bytes_or_a_session_that_did_not_activate_cuda(
     with pytest.raises(ModelUnavailable, match="SHA-256"):
         YoloCudaBackend.load(
             model,
-            expected_sha256=MODEL_SHA256,
+            manifest=replace(manifest_for(model), sha256=MODEL_SHA256),
             ort_module=FakeOrt(["CUDAExecutionProvider"]),
             device_probe=lambda _device_id: "NVIDIA GeForce RTX 3090",
         )
 
-    digest = hashlib.sha256(model.read_bytes()).hexdigest()
     with pytest.raises(CudaUnavailable, match="did not activate"):
         YoloCudaBackend.load(
             model,
-            expected_sha256=digest,
+            manifest=manifest_for(model),
             ort_module=FakeOrt(
                 ["CUDAExecutionProvider"], FakeSession(["CPUExecutionProvider"])
             ),
@@ -133,12 +169,11 @@ def test_loads_cuda_only_disables_cpu_fallback_and_warms_the_model(
     tmp_path: Path,
 ) -> None:
     model = pinned_model(tmp_path)
-    digest = hashlib.sha256(model.read_bytes()).hexdigest()
     ort = FakeOrt(["CUDAExecutionProvider", "CPUExecutionProvider"])
 
     backend = YoloCudaBackend.load(
         model,
-        expected_sha256=digest,
+        manifest=manifest_for(model),
         ort_module=ort,
         device_probe=lambda device_id: f"NVIDIA GeForce RTX 3090 (CUDA device {device_id})",
         warmup_runs=2,
@@ -165,6 +200,88 @@ def test_loads_cuda_only_disables_cpu_fallback_and_warms_the_model(
     ]
 
 
+def test_refuses_wrong_model_byte_size_before_session_creation(tmp_path: Path) -> None:
+    model = pinned_model(tmp_path)
+    manifest = replace(manifest_for(model), byte_size=model.stat().st_size + 1)
+    ort = FakeOrt(["CUDAExecutionProvider"])
+
+    with pytest.raises(ModelUnavailable, match="byte size"):
+        YoloCudaBackend.load(
+            model,
+            manifest=manifest,
+            ort_module=ort,
+            device_probe=lambda _device_id: "NVIDIA GeForce RTX 3090",
+        )
+
+    assert ort.options is None
+
+
+@pytest.mark.parametrize(
+    "session",
+    [
+        FakeSession(input_name="input"),
+        FakeSession(input_type="tensor(float16)"),
+        FakeSession(input_shape=[1, 3, 320, 320]),
+        FakeSession(output_name="detections"),
+        FakeSession(output_type="tensor(float16)"),
+        FakeSession(output_shape=[1, 300, 6]),
+    ],
+)
+def test_refuses_any_tensor_contract_that_differs_from_the_manifest(
+    tmp_path: Path,
+    session: FakeSession,
+) -> None:
+    model = pinned_model(tmp_path)
+
+    with pytest.raises(ModelUnavailable, match="selected manifest"):
+        YoloCudaBackend.load(
+            model,
+            manifest=manifest_for(model),
+            ort_module=FakeOrt(["CUDAExecutionProvider"], session),
+            device_probe=lambda _device_id: "NVIDIA GeForce RTX 3090",
+        )
+
+
+def test_refuses_non_finite_warmup_output(tmp_path: Path) -> None:
+    model = pinned_model(tmp_path)
+    output = np.zeros((1, 300, 69), dtype=np.float32)
+    output[0, 0, 0] = np.nan
+
+    with pytest.raises(ModelUnavailable, match="warmup"):
+        YoloCudaBackend.load(
+            model,
+            manifest=manifest_for(model),
+            ort_module=FakeOrt(
+                ["CUDAExecutionProvider"],
+                FakeSession(output=output),
+            ),
+            device_probe=lambda _device_id: "NVIDIA GeForce RTX 3090",
+        )
+
+
+def test_320_rollback_requires_its_own_manifest_and_session_shape(
+    tmp_path: Path,
+) -> None:
+    model = pinned_model(tmp_path)
+    rollback = replace(
+        ROLLBACK_MODEL_MANIFEST,
+        byte_size=model.stat().st_size,
+        sha256=hashlib.sha256(model.read_bytes()).hexdigest(),
+    )
+    session = FakeSession(input_shape=[1, 3, 320, 320])
+
+    backend = YoloCudaBackend.load(
+        model,
+        manifest=rollback,
+        ort_module=FakeOrt(["CUDAExecutionProvider"], session),
+        device_probe=lambda _device_id: "NVIDIA GeForce RTX 3090",
+    )
+
+    assert backend.manifest.variant == "yolo26_hand_pose_320_fp16"
+    assert backend.input_size == 320
+    assert session.runs == 3
+
+
 def test_decodes_bounded_jpeg_or_webp_into_letterboxed_nchw() -> None:
     tensor, transform = decode_frame(
         image_bytes(width=640, height=360),
@@ -172,6 +289,7 @@ def test_decodes_bounded_jpeg_or_webp_into_letterboxed_nchw() -> None:
         max_frame_bytes=262_144,
         max_width=1280,
         max_height=720,
+        input_size=320,
     )
 
     assert tensor.shape == (1, 3, 320, 320)
@@ -186,6 +304,7 @@ def test_decodes_bounded_jpeg_or_webp_into_letterboxed_nchw() -> None:
         max_frame_bytes=262_144,
         max_width=1280,
         max_height=720,
+        input_size=320,
     )
     assert webp.shape == (1, 3, 320, 320)
 
@@ -253,3 +372,78 @@ def test_refuses_an_incompatible_bbox_only_output() -> None:
                 source_height=320,
             ),
         )
+
+
+def test_production_manifest_pins_the_independently_verified_640_artifact() -> None:
+    module = importlib.import_module("commandcanvas_hand_relay.model_manifest")
+    manifest = module.PRODUCTION_MODEL_MANIFEST
+
+    assert manifest.variant == "yolo26_hand_pose_640_fp16"
+    assert manifest.repository == "poptoz/yolo26-hand-pose-face-detection"
+    assert manifest.revision == "2abb91a7030e1aa5231ec900ccb2c07ab3f03460"
+    assert manifest.source_artifact == "models/yolo26_hand_pose_fp16.onnx"
+    assert manifest.byte_size == 21_547_949
+    assert (
+        manifest.sha256
+        == "f85eae141155d4de959051d3c7d44f68f1881dfe6b6e180e33d6c3fc3372c59e"
+    )
+    assert manifest.input_name == "images"
+    assert manifest.input_type == "tensor(float)"
+    assert manifest.input_shape == (1, 3, 640, 640)
+    assert manifest.output_name == "output0"
+    assert manifest.output_type == "tensor(float)"
+    assert manifest.output_shape == (1, 300, 69)
+
+
+def test_model_manifest_and_variant_registry_are_immutable() -> None:
+    with pytest.raises(FrozenInstanceError):
+        PRODUCTION_MODEL_MANIFEST.byte_size = 1  # type: ignore[misc]
+
+    with pytest.raises(TypeError):
+        MODEL_MANIFESTS["mislabeled"] = PRODUCTION_MODEL_MANIFEST  # type: ignore[index]
+
+
+def test_decodes_a_widescreen_frame_into_a_true_640_letterbox() -> None:
+    tensor, transform = decode_frame(
+        image_bytes(width=640, height=360),
+        declared_mime="image/jpeg",
+        max_frame_bytes=262_144,
+        max_width=1280,
+        max_height=720,
+        input_size=640,
+    )
+
+    assert tensor.shape == (1, 3, 640, 640)
+    assert transform.scale == 1
+    assert transform.offset_x == 0
+    assert transform.offset_y == 140
+
+
+def test_parses_a_640_letterbox_back_to_normalized_box_and_landmarks() -> None:
+    output = np.zeros((1, 300, 69), dtype=np.float32)
+    output[0, 0, :6] = [64, 176, 576, 464, 0.9, 0]
+    for keypoint in range(21):
+        offset = 6 + keypoint * 3
+        output[0, 0, offset : offset + 3] = [320, 320, 0.95]
+    transform = SimpleNamespace(
+        offset_x=0,
+        offset_y=140,
+        scale=1,
+        source_width=640,
+        source_height=360,
+    )
+
+    hands = parse_output(output, transform)
+
+    assert hands[0]["boundingBox"] == {
+        "x": 0.1,
+        "y": 0.1,
+        "width": 0.8,
+        "height": 0.8,
+    }
+    assert hands[0]["landmarks"][0] == {
+        "x": 0.5,
+        "y": 0.5,
+        "z": 0.0,
+        "visibility": 0.95,
+    }

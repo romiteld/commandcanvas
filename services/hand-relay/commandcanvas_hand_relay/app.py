@@ -18,10 +18,6 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from .auth import MAX_TOKEN_BYTES, TokenError, verify_capability
 from .config import RelaySettings
 from .inference import (
-    MODEL_ID,
-    MODEL_LICENSE,
-    MODEL_REVISION,
-    MODEL_SHA256,
     CudaUnavailable,
     FrameRejected,
     ModelUnavailable,
@@ -29,6 +25,7 @@ from .inference import (
     YoloCudaBackend,
     decode_frame,
 )
+from .model_manifest import ModelManifest
 from .replay import OneUseReplayCache
 
 
@@ -65,6 +62,8 @@ class Backend(Protocol):
     warm: bool
     unavailable_reason: str | None
     device: str
+    input_size: int
+    manifest: ModelManifest
 
     def infer(self, tensor: Any, transform: Any) -> list[dict[str, Any]]: ...
 
@@ -173,15 +172,24 @@ def create_app(
             try:
                 app.state.backend = YoloCudaBackend.load(
                     settings.model_path,
-                    expected_sha256=MODEL_SHA256,
+                    manifest=settings.model_manifest,
                     gpu_mem_limit_bytes=settings.gpu_mem_limit_bytes,
                 )
             except CudaUnavailable:
-                app.state.backend = UnavailableBackend("gpu_unavailable")
+                app.state.backend = UnavailableBackend(
+                    "gpu_unavailable",
+                    manifest=settings.model_manifest,
+                )
             except ModelUnavailable:
-                app.state.backend = UnavailableBackend("model_unavailable")
+                app.state.backend = UnavailableBackend(
+                    "model_unavailable",
+                    manifest=settings.model_manifest,
+                )
             except Exception:
-                app.state.backend = UnavailableBackend("model_unavailable")
+                app.state.backend = UnavailableBackend(
+                    "model_unavailable",
+                    manifest=settings.model_manifest,
+                )
         else:
             app.state.backend = backend
         try:
@@ -408,6 +416,7 @@ def _capability(
     overloaded: bool,
     runtime_healthy: bool,
 ) -> dict[str, Any]:
+    manifest = backend.manifest
     ready = backend.ready and backend.warm and runtime_healthy and not overloaded
     value: dict[str, Any] = {
         "ok": True,
@@ -416,16 +425,16 @@ def _capability(
         "ready": ready,
         "warm": backend.warm,
         "model": {
-            "id": MODEL_ID,
-            "revision": MODEL_REVISION,
+            "id": manifest.repository,
+            "revision": manifest.revision,
             "format": "onnx",
-            "keypoints": 21,
-            "license": MODEL_LICENSE,
+            "keypoints": manifest.keypoints,
+            "license": manifest.release_license,
         },
         "runtime": {
             "provider": "cuda",
             "device": backend.device,
-            "precision": "fp16",
+            "precision": manifest.precision,
         },
         "limits": {
             "maxFrameBytes": settings.max_frame_bytes,
@@ -466,8 +475,21 @@ def _decode_and_infer(
         max_frame_bytes=settings.max_frame_bytes,
         max_width=settings.max_width,
         max_height=settings.max_height,
+        input_size=backend.input_size,
     )
-    hands = backend.infer(tensor, transform)
+    internal_hands = backend.infer(tensor, transform)
+    # Protocol v1 intentionally remains byte-shape compatible with already
+    # deployed clients. The 640 backend retains normalized detector boxes for
+    # server-side tracking/reacquisition, but only the established semantic
+    # hand fields cross the WebSocket boundary.
+    hands = [
+        {
+            "confidence": hand["confidence"],
+            "handedness": hand["handedness"],
+            "landmarks": hand["landmarks"],
+        }
+        for hand in internal_hands
+    ]
     _validate_hands(hands)
     return hands
 

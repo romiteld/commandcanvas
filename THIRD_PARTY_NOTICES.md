@@ -74,13 +74,15 @@ no-retention claim applies to the CommandCanvas relay process. The reverse
 proxy, firewall, container runtime, and hosting edge remain separate trust
 boundaries and are configured not to log WebSocket bodies or capability tokens.
 
-## YOLO26 Hand Pose runtime model
+## YOLO26 Hand Pose runtime models
 
 CommandCanvas includes a 320 by 320 FP16 ONNX export derived from one pinned
 Hugging Face checkpoint. The browser serves it from the application origin for
-local ONNX Runtime Web inference. The native CUDA relay mounts the identical
-tracked artifact read-only and verifies its digest and tensor shapes before
-warmup. Both uses remain within the same AGPL-3.0-only CommandCanvas release.
+local ONNX Runtime Web inference. The native CUDA production image instead
+copies the pinned repository's original 640 by 640 FP16 ONNX export after exact
+byte and SHA-256 verification. A separately tagged rollback image copies the
+tracked 320 artifact. All uses remain within the same AGPL-3.0-only
+CommandCanvas release.
 
 - Repository: <https://huggingface.co/poptoz/yolo26-hand-pose-face-detection>
 - Revision: `2abb91a7030e1aa5231ec900ccb2c07ab3f03460`
@@ -95,6 +97,11 @@ warmup. Both uses remain within the same AGPL-3.0-only CommandCanvas release.
 - Local artifact: `public/models/yolo26_hand_pose_320_fp16.onnx`
 - Local artifact size: 21,447,188 bytes
 - Local artifact SHA-256: `07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc`
+- Native production source artifact: `models/yolo26_hand_pose_fp16.onnx`
+- Native production source artifact size: 21,547,949 bytes
+- Native production source artifact SHA-256: `f85eae141155d4de959051d3c7d44f68f1881dfe6b6e180e33d6c3fc3372c59e`
+- Native production input: `images tensor(float) [1,3,640,640]`
+- Native production output: `output0 tensor(float) [1,300,69]`
 - Output: 21 hand keypoints, according to the repository model card and the
   inspected ONNX tensor shape `[1,300,69]`
 - Base implementation: <https://github.com/ultralytics/ultralytics>

@@ -12,13 +12,15 @@ from typing import Any, Callable, Protocol
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 
+from .model_manifest import PRODUCTION_MODEL_MANIFEST, ModelManifest
 
-MODEL_ID = "poptoz/yolo26-hand-pose-face-detection"
-MODEL_REVISION = "2abb91a7030e1aa5231ec900ccb2c07ab3f03460"
-MODEL_SHA256 = "07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc"
-MODEL_LICENSE = "AGPL-3.0"
-INPUT_SIZE = 320
-OUTPUT_SHAPE = (1, 300, 69)
+
+MODEL_ID = PRODUCTION_MODEL_MANIFEST.repository
+MODEL_REVISION = PRODUCTION_MODEL_MANIFEST.revision
+MODEL_SHA256 = PRODUCTION_MODEL_MANIFEST.sha256
+MODEL_LICENSE = PRODUCTION_MODEL_MANIFEST.release_license
+INPUT_SIZE = PRODUCTION_MODEL_MANIFEST.input_size
+OUTPUT_SHAPE = PRODUCTION_MODEL_MANIFEST.output_shape
 CONFIDENCE_THRESHOLD = 0.45
 
 
@@ -58,10 +60,19 @@ class YoloCudaBackend:
     warm = True
     unavailable_reason: str | None = None
 
-    def __init__(self, session: SessionLike, *, input_name: str, device: str):
+    def __init__(
+        self,
+        session: SessionLike,
+        *,
+        input_name: str,
+        device: str,
+        manifest: ModelManifest,
+    ):
         self._session = session
         self._input_name = input_name
         self.device = device
+        self.manifest = manifest
+        self.input_size = manifest.input_size
         self._lock = threading.Lock()
 
     @classmethod
@@ -69,7 +80,7 @@ class YoloCudaBackend:
         cls,
         model_path: str | Path,
         *,
-        expected_sha256: str = MODEL_SHA256,
+        manifest: ModelManifest = PRODUCTION_MODEL_MANIFEST,
         ort_module: Any | None = None,
         device_probe: Callable[[int], str] | None = None,
         warmup_runs: int = 3,
@@ -78,7 +89,9 @@ class YoloCudaBackend:
         path = Path(model_path)
         if not path.is_file():
             raise ModelUnavailable("Pinned YOLO hand-pose model is unavailable.")
-        if _sha256(path) != expected_sha256:
+        if path.stat().st_size != manifest.byte_size:
+            raise ModelUnavailable("Pinned YOLO hand-pose model byte size did not match.")
+        if _sha256(path) != manifest.sha256:
             raise ModelUnavailable("Pinned YOLO hand-pose model SHA-256 did not match.")
         if ort_module is None:
             import onnxruntime as ort_module  # type: ignore[no-redef]
@@ -115,12 +128,16 @@ class YoloCudaBackend:
         outputs = session.get_outputs()
         if (
             len(inputs) != 1
-            or list(inputs[0].shape) != [1, 3, INPUT_SIZE, INPUT_SIZE]
+            or inputs[0].name != manifest.input_name
+            or getattr(inputs[0], "type", None) != manifest.input_type
+            or tuple(inputs[0].shape) != manifest.input_shape
             or len(outputs) != 1
-            or list(outputs[0].shape) != list(OUTPUT_SHAPE)
+            or outputs[0].name != manifest.output_name
+            or getattr(outputs[0], "type", None) != manifest.output_type
+            or tuple(outputs[0].shape) != manifest.output_shape
         ):
             raise ModelUnavailable(
-                "CommandCanvas requires model tensors [1,3,320,320] and [1,300,69]."
+                "CommandCanvas model tensors do not match the selected manifest."
             )
         provider_options = session.get_provider_options().get(
             "CUDAExecutionProvider", {}
@@ -137,11 +154,16 @@ class YoloCudaBackend:
         if len(device) < 3:
             raise CudaUnavailable("CUDA device identity is unavailable.")
 
-        warmup = np.zeros((1, 3, INPUT_SIZE, INPUT_SIZE), dtype=np.float32)
+        warmup = np.zeros(manifest.input_shape, dtype=np.float32)
         try:
             for _ in range(max(1, warmup_runs)):
                 result = session.run(None, {inputs[0].name: warmup})
-                if len(result) != 1 or np.asarray(result[0]).shape != OUTPUT_SHAPE:
+                output = np.asarray(result[0]) if len(result) == 1 else None
+                if (
+                    output is None
+                    or output.shape != manifest.output_shape
+                    or not np.all(np.isfinite(output))
+                ):
                     raise ModelUnavailable(
                         "CUDA warmup returned an incompatible model output."
                     )
@@ -149,7 +171,12 @@ class YoloCudaBackend:
             raise
         except Exception as error:
             raise CudaUnavailable("CUDA model warmup failed.") from error
-        return cls(session, input_name=inputs[0].name, device=device)
+        return cls(
+            session,
+            input_name=inputs[0].name,
+            device=device,
+            manifest=manifest,
+        )
 
     def infer(
         self,
@@ -170,9 +197,14 @@ class YoloCudaBackend:
 @dataclass(frozen=True)
 class UnavailableBackend:
     unavailable_reason: str
+    manifest: ModelManifest = PRODUCTION_MODEL_MANIFEST
     device: str = "CUDA device unavailable"
     ready: bool = False
     warm: bool = False
+
+    @property
+    def input_size(self) -> int:
+        return self.manifest.input_size
 
     def infer(self, _tensor: np.ndarray, _transform: object) -> list[dict[str, Any]]:
         raise CudaUnavailable("Relay inference is unavailable.")
@@ -185,6 +217,7 @@ def decode_frame(
     max_frame_bytes: int,
     max_width: int,
     max_height: int,
+    input_size: int = INPUT_SIZE,
 ) -> tuple[np.ndarray, LetterboxTransform]:
     if not data or len(data) > max_frame_bytes:
         raise FrameRejected("Frame bytes exceed the advertised bound.")
@@ -214,13 +247,15 @@ def decode_frame(
     except Image.DecompressionBombWarning:
         raise FrameRejected("Frame dimensions exceed the advertised bound.") from None
 
-    scale = min(INPUT_SIZE / width, INPUT_SIZE / height)
-    rendered_width = max(1, min(INPUT_SIZE, round(width * scale)))
-    rendered_height = max(1, min(INPUT_SIZE, round(height * scale)))
-    offset_x = (INPUT_SIZE - rendered_width) // 2
-    offset_y = (INPUT_SIZE - rendered_height) // 2
+    if input_size not in {320, 640}:
+        raise ValueError("CommandCanvas supports only manifest input sizes.")
+    scale = min(input_size / width, input_size / height)
+    rendered_width = max(1, min(input_size, round(width * scale)))
+    rendered_height = max(1, min(input_size, round(height * scale)))
+    offset_x = (input_size - rendered_width) // 2
+    offset_y = (input_size - rendered_height) // 2
     resized = rgb.resize((rendered_width, rendered_height), Image.Resampling.BILINEAR)
-    canvas = Image.new("RGB", (INPUT_SIZE, INPUT_SIZE), (114, 114, 114))
+    canvas = Image.new("RGB", (input_size, input_size), (114, 114, 114))
     canvas.paste(resized, (offset_x, offset_y))
     pixels = np.asarray(canvas, dtype=np.float32) / np.float32(255.0)
     tensor = np.ascontiguousarray(pixels.transpose(2, 0, 1)[None, ...])
@@ -253,6 +288,30 @@ def parse_output(
     rows.sort(key=lambda item: item[1], reverse=True)
     hands: list[dict[str, Any]] = []
     for row, confidence in rows[: max(1, min(2, max_hands))]:
+        box_values = [float(output[0, row, index]) for index in range(4)]
+        if not all(math.isfinite(value) for value in box_values):
+            raise ModelUnavailable("YOLO hand-pose returned a non-finite box.")
+        x1, y1, x2, y2 = box_values
+        normalized_x1 = _clamp(
+            (min(x1, x2) - transform.offset_x)
+            / transform.scale
+            / transform.source_width
+        )
+        normalized_x2 = _clamp(
+            (max(x1, x2) - transform.offset_x)
+            / transform.scale
+            / transform.source_width
+        )
+        normalized_y1 = _clamp(
+            (min(y1, y2) - transform.offset_y)
+            / transform.scale
+            / transform.source_height
+        )
+        normalized_y2 = _clamp(
+            (max(y1, y2) - transform.offset_y)
+            / transform.scale
+            / transform.source_height
+        )
         landmarks: list[dict[str, float]] = []
         for index in range(21):
             offset = 6 + index * 3
@@ -282,6 +341,12 @@ def parse_output(
             {
                 "confidence": _round(_clamp(confidence)),
                 "handedness": "unknown",
+                "boundingBox": {
+                    "x": _round(normalized_x1),
+                    "y": _round(normalized_y1),
+                    "width": _round(normalized_x2 - normalized_x1),
+                    "height": _round(normalized_y2 - normalized_y1),
+                },
                 "landmarks": landmarks,
             }
         )

@@ -36,6 +36,15 @@ def test_parses_exact_origins_and_an_unpadded_32_byte_key() -> None:
     assert settings.authenticated_session_timeout_seconds == 1_800
     assert settings.inference_timeout_seconds == 2
     assert settings.max_handshakes == 8
+    assert settings.model_variant == "yolo26_hand_pose_640_fp16"
+    assert settings.model_manifest.input_shape == (1, 3, 640, 640)
+
+
+def test_rejects_an_unknown_or_mislabeled_model_variant() -> None:
+    with pytest.raises(SettingsError, match="model variant"):
+        load_settings(
+            environment(PRIVATE_HAND_RELAY_MODEL_VARIANT="yolo26_latest")
+        )
 
 
 @pytest.mark.parametrize(

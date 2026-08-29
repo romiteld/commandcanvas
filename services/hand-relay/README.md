@@ -1,135 +1,152 @@
 # CommandCanvas native CUDA hand relay
 
-This optional service runs the pinned CommandCanvas YOLO hand-pose model through
-ONNX Runtime's native `CUDAExecutionProvider`. It is separate from the browser
-WebGPU/WASM engine and from every other GPU process. It accepts one bounded JPEG
-or WebP frame at a time over the private relay v1 WebSocket and returns only
-semantic 21-point hand landmarks.
+This optional service runs the pinned CommandCanvas YOLO26 hand-pose model
+through ONNX Runtime's native `CUDAExecutionProvider`. It accepts one bounded
+JPEG or WebP frame at a time over the private relay v1 WebSocket and returns
+semantic 21-point hand landmarks. Camera upload requires explicit browser
+consent. The browser falls back to local YOLO and then MediaPipe when this
+service is unavailable.
 
-An instance is installed on the controlled NVIDIA host and exposed through the
-separate `hands.autolensai.com` Caddy virtual host. The public instance remains
-optional: the browser selects it only after explicit camera-upload consent and
-falls back to local YOLO when consent is absent or the service is unavailable.
+The service has no CPU inference mode. Startup fails closed when CUDA, the
+selected artifact, its exact bytes, its tensor contract, device identity, or a
+finite warmup result does not match the immutable manifest. The existing
+`commandcanvas.private-hand-relay.v1` capability and result payloads remain
+unchanged. The 640 parser keeps normalized detector boxes inside the relay for
+future reacquisition work, but v1 clients receive only the established
+confidence, handedness, and 21-landmark fields.
 
-The service deliberately has no CPU inference mode. If CUDA, the exact model,
-the device identity, or warmup fails, `/v1/capabilities` reports a truthful
-`ready: false` state. CommandCanvas then retains its local browser fallback.
+## Model images
 
-## Exact model artifact
+The production and rollback images are separate, tagged artifacts. Both copy
+the model into the image and verify its byte count and SHA-256 during the build.
+Neither service uses a runtime host bind mount.
 
-The service mounts, rather than copies, this regular Git-tracked repository
-blob read-only:
+| Image | Input | Build source | Bytes | SHA-256 | Host port |
+| --- | ---: | --- | ---: | --- | ---: |
+| `commandcanvas-hand-relay:yolo26-640-fp16` | 640 | pinned upstream ONNX staged under ignored `services/hand-relay/models/` | 21,547,949 | `f85eae141155d4de959051d3c7d44f68f1881dfe6b6e180e33d6c3fc3372c59e` | 8101 |
+| `commandcanvas-hand-relay:yolo26-320-fp16-rollback` | 320 | tracked `public/models/yolo26_hand_pose_320_fp16.onnx` | 21,447,188 | `07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc` | 8100 |
+
+Both variants resolve to the same pinned model repository and revision:
 
 ```text
-public/models/yolo26_hand_pose_320_fp16.onnx
-size: 21,447,188 bytes
-sha256: 07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc
-source: poptoz/yolo26-hand-pose-face-detection
-source revision: 2abb91a7030e1aa5231ec900ccb2c07ab3f03460
-input: images float32 [1,3,320,320]
+repository: poptoz/yolo26-hand-pose-face-detection
+revision: 2abb91a7030e1aa5231ec900ccb2c07ab3f03460
 output: output0 float32 [1,300,69]
-license: AGPL-3.0
+keypoints: 21
+release path: AGPL-3.0-only
 ```
 
-Startup verifies the full digest and exact session tensors before warmup. It
-does not download or silently substitute a model.
+The production artifact is the upstream file
+`models/yolo26_hand_pose_fp16.onnx`. It was independently downloaded from the
+pinned revision and inspected with ONNX Runtime 1.23.1: input `images`
+`tensor(float) [1,3,640,640]`; output `output0 tensor(float) [1,300,69]`.
+`onnx.checker` did not pass that upstream graph because it reported a
+topological-sort validation error at `graph_input_cast_0`; this repository does
+not claim otherwise. ONNX Runtime loaded the graph metadata. A real CUDA
+session and finite warmup are still required before the service becomes ready.
 
-## Local container start
+## Stage the true-640 build input
+
+Normal tests never download a model. Before building the production image,
+stage the exact pinned file in the ignored build-input directory:
+
+```bash
+hf download poptoz/yolo26-hand-pose-face-detection \
+  models/yolo26_hand_pose_fp16.onnx \
+  --revision 2abb91a7030e1aa5231ec900ccb2c07ab3f03460 \
+  --local-dir /tmp/commandcanvas-yolo26-640
+```
+
+```bash
+install -D -m 0444 \
+  /tmp/commandcanvas-yolo26-640/models/yolo26_hand_pose_fp16.onnx \
+  services/hand-relay/models/yolo26_hand_pose_640_fp16.onnx
+stat --printf='%s bytes\n' \
+  services/hand-relay/models/yolo26_hand_pose_640_fp16.onnx
+sha256sum services/hand-relay/models/yolo26_hand_pose_640_fp16.onnx
+```
+
+The expected output is `21547949 bytes` and the production SHA-256 in the table
+above. A missing or different file makes the image build fail. Runtime startup
+repeats the full byte, digest, tensor, provider, and warmup checks.
+
+## Container build and start
 
 Prerequisites are Docker with the NVIDIA Container Toolkit and a working
-`docker run --gpus all ... nvidia-smi` probe. Generate a new independent 32-byte
-signing key. Do not reuse a Supabase, Vercel, Resend, pfSense, or other service
+NVIDIA device probe. Generate a new independent 32-byte signing key. Do not
+reuse a Supabase, Vercel, Resend, router, firewall, or another service
 credential.
 
 ```bash
 cd services/hand-relay
 export PRIVATE_HAND_RELAY_SIGNING_KEY='<unpadded base64url 32-byte key>'
 export PRIVATE_HAND_RELAY_ALLOWED_ORIGINS='https://commandcanvas.vercel.app'
-docker compose up --build
+docker compose build hand-relay-640
+docker compose up -d hand-relay-640
 ```
 
-The host binding is exactly `127.0.0.1:8100`. The installed TLS reverse proxy
-exposes only `/v1/capabilities` and `/v1/hand-pose`; `/healthz` stays private to
-the host/container health probe. The installation reused the existing WAN TCP
-443 path and required no pfSense mutation. The reversible edge operation is
-documented in [`ops/hand-relay`](../../ops/hand-relay/README.md).
+The default Compose service is only the true-640 candidate and binds it to
+`127.0.0.1:8101`. The existing 320 image remains an explicit rollback profile
+on `127.0.0.1:8100`:
+
+```bash
+docker compose --profile rollback-320 build hand-relay-320-rollback
+docker compose --profile rollback-320 up -d hand-relay-320-rollback
+```
+
+The 640 port is intentionally separate so a candidate can be measured before a
+reverse-proxy cutover. Building an image does not change Caddy, DNS, pfSense, or
+the public service. Edge promotion and rollback are explicit operations outside
+this source slice.
 
 The ONNX Runtime CUDA arena defaults to 768 MiB
 (`PRIVATE_HAND_RELAY_GPU_MEM_LIMIT_BYTES=805306368`), uses heuristic cuDNN
-algorithm selection, and disables CPU execution-provider fallback. This is a
-conservative coexistence default, not an assertion that all GPU memory use is
-hard-capped by the arena. Compose requests only the configured NVIDIA device,
-two CPU cores, a 2 GiB RAM limit, and a 512 MiB RAM reservation. It does not
-enable exclusive GPU process mode. Tune only after measuring the actual shared
-host workload.
+algorithm selection, and disables CPU execution-provider fallback. Compose
+requests one configured NVIDIA device, two CPU cores, a 2 GiB RAM limit, and a
+512 MiB RAM reservation. It does not enable exclusive GPU process mode.
 
-## Capability and privacy properties
+## Capability, scheduling, and privacy properties
 
-- exact `Origin` allowlist; no wildcard origins;
-- HMAC-SHA256 issuer/audience/room/actor/session/JTI/expiry validation during
-  the WebSocket handshake;
-- one-use, process-local, TTL-bounded handshake replay cache; run one service
-  process, or replace it with a shared atomic replay store before running
-  multiple replicas;
-- a five-second authentication deadline and five-second frame-idle deadline by
-  default;
-- a separate authenticated-session lifetime, defaulting to 1,800 seconds and
-  bounded to 60-7,200 seconds. Capability expiry does not terminate an already
-  authenticated connection; the one-use capability authorizes only its opening
-  handshake;
-- immediate client-side socket shutdown when camera-upload consent is revoked,
-  the page becomes hidden, or hand tracking is stopped. The longer server
-  session lifetime does not weaken those browser lifecycle controls;
-- a larger, timed handshake pool that cannot consume the smaller authenticated
-  inference pool until HMAC and claim verification succeeds;
-- atomically reserved inference capacity and server-side pacing at the
-  advertised frame-rate ceiling;
-- JPEG/WebP decode and synchronous ORT CUDA execution on one dedicated worker;
-  the submission gate permits only one executor job, so its internal queue does
-  not accumulate frames;
-- a two-second inference deadline by default; a non-cancellable native stall
-  trips an unhealthy circuit, makes private `/healthz` fail, closes the active
-  request, and exits the service process so Compose's `restart: unless-stopped`
-  policy can replace the non-cancellable CUDA worker;
-- one inference in flight; each client retains only its newest waiting frame;
-- 262,144-byte default frame cap and 1280x720 decompressed dimension cap;
+- exact `Origin` allowlist with no wildcard origins;
+- HMAC-SHA256 issuer, audience, room, actor, session, JTI, and expiry checks;
+- one-use, process-local, TTL-bounded handshake replay cache;
+- separate bounded handshake and authenticated inference capacity;
+- one global native inference worker and one submitted GPU job at a time;
+- one frame in flight per client, newest waiting frame retained client-side;
+- server-side pacing at the advertised frame-rate ceiling;
+- two-second inference deadline by default;
+- unhealthy circuit and process restart request after a native timeout or
+  cancellation because Python cannot cancel a running CUDA call safely;
+- 262,144-byte default frame cap and 1280 by 720 decompressed dimension cap;
 - JPEG/WebP signature and declared-MIME agreement;
 - at most two results with exactly 21 normalized landmarks;
 - no application access logging, token logging, frame logging, raw-frame
   persistence, or response caching;
-- policy close on invalid origin/auth/message order/frame, and honest local
-  fallback at the application layer.
+- immediate local browser fallback when private tracking is unavailable.
 
-The model exposes x/y and per-keypoint visibility, not metric depth or
-handedness. The relay preserves normalized `visibility`, reports `z: 0`, and
-reports `handedness: "unknown"` rather than dropping confidence, mislabeling
-visibility as depth, or inventing handedness.
-
-The no-logging property covers this application process. The TLS reverse proxy,
-firewall, container runtime, and hosting edge are separate trust boundaries.
-They must not log WebSocket headers or bodies, capability tokens, binary frame
-payloads, or request samples. Minimal path/status/aggregate latency logs may be
-enabled at the edge only after redaction has been verified. The application
-never puts a capability token in a URL or query string.
+The model exposes x/y and keypoint visibility, not metric depth or handedness.
+The relay reports `z: 0` and `handedness: "unknown"` instead of inventing those
+values. The no-retention claim covers this relay process. Reverse-proxy,
+firewall, container-runtime, and hosting-edge logs are separate trust
+boundaries and must not record WebSocket headers, bodies, capability tokens, or
+binary frames.
 
 ## Tests
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest services/hand-relay/tests -q
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+  python3 -m pytest services/hand-relay/tests -q
 ```
 
-The explicit plugin-disable flag isolates this test suite from unrelated
-globally installed pytest plugins. In a clean environment, install
-`requirements-dev.lock` first. GitHub Actions instead installs the exact
-non-GPU subset in `requirements-ci.lock`; tests inject the CUDA session boundary
-and never claim that CI exercised a GPU. Native deployment still installs the
-full `requirements.lock`.
+CI installs `requirements-ci.lock` and injects the CUDA session boundary. The
+tests prove manifest, preprocessing, parser, protocol, admission, and packaging
+behavior. They do not prove that a CUDA provider, physical camera, or public
+relay is working.
 
 ## Native CUDA benchmark
 
-Use a real, consented hand image that already satisfies the advertised byte and
-dimension limits. The script reports device identity, model revision, p50, p95,
-results per second, and detected-hand range.
+After the exact candidate image reports ready on the actual NVIDIA host, use a
+real consented hand image:
 
 ```bash
 cd services/hand-relay
@@ -139,13 +156,13 @@ python3 -m commandcanvas_hand_relay.benchmark \
   --iterations 200
 ```
 
-An actual CUDA benchmark is not produced by unit tests or CPU emulation. Record
-results only from the native host/container after `/v1/capabilities` identifies
-the active CUDA provider and device.
+The script reports the selected manifest, artifact SHA-256, input size, device,
+p50, p95, result rate, and detected-hand range. True-640 CUDA latency, live
+camera smoothness, shared-GPU behavior, and public edge behavior remain
+unverified until this exact image is exercised.
 
-The 2026-08-28 installed run identified
-`NVIDIA GeForce RTX 3090 (CUDA device 0)`. A CC0 static bare-hand image returned
-one hand at confidence `0.934082` and 21 finite landmarks. Two hundred warmed
-native repeats measured p50 `7.652 ms`, p95 `11.016 ms`, and `122.013` results
-per second. This is static-image CUDA evidence, not a live-camera, network, or
-physical-hand ergonomics result.
+For historical context only, the prior 320 relay identified an actual
+`NVIDIA GeForce RTX 3090` and measured 200 warmed repeats of one static CC0
+bare-hand image at p50 `7.652 ms`, p95 `11.016 ms`, and `122.013` results per
+second. That is 320 static-image evidence, not true-640, live-camera, network,
+or physical-gesture evidence.

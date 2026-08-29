@@ -17,7 +17,8 @@ without publishing secret values.
 
 ## Embedded hand-pose model source
 
-The browser's primary hand-pose engine uses this artifact:
+The browser's primary hand-pose engine and the explicit native-relay rollback
+image use this repository-distributed artifact:
 
 - Distributed artifact: `public/models/yolo26_hand_pose_320_fp16.onnx`
 - Size: 21,447,188 bytes
@@ -44,6 +45,25 @@ Enterprise License. It does not identify the trained checkpoint as MIT.
 Ultralytics' published open-source path says projects using its trained models
 must release the whole project under AGPL-3.0. CommandCanvas selects that
 open-source path and licenses this release as `AGPL-3.0-only`.
+
+The native CUDA production image uses the pinned repository's original 640
+FP16 ONNX export rather than relabeling the 320 browser export:
+
+- Build-input artifact: `models/yolo26_hand_pose_fp16.onnx`
+- Pinned download: <https://huggingface.co/poptoz/yolo26-hand-pose-face-detection/resolve/2abb91a7030e1aa5231ec900ccb2c07ab3f03460/models/yolo26_hand_pose_fp16.onnx>
+- Size: 21,547,949 bytes
+- SHA-256: `f85eae141155d4de959051d3c7d44f68f1881dfe6b6e180e33d6c3fc3372c59e`
+- Input: `images tensor(float) [1,3,640,640]`
+- Output: `output0 tensor(float) [1,300,69]`
+- ONNX IR version: 8
+- ONNX opset: 17
+
+Those facts were verified against the downloaded bytes from the pinned
+revision and ONNX Runtime 1.23.1 metadata. `onnx.checker` did not pass the
+upstream graph; it reported a topological-sort validation error at
+`graph_input_cast_0`. This release does not represent that check as passing.
+The file is staged under ignored `services/hand-relay/models/` only for an
+explicit image build. It is not downloaded by normal tests.
 
 ## Export recipe
 
@@ -115,11 +135,14 @@ Corresponding Source:
 - `ops/hand-relay/manage-caddy-route.sh`
 - `ops/hand-relay/tests/manage-caddy-route.test.sh`
 
-The native service mounts the same tracked ONNX artifact read-only and verifies
-its complete SHA-256 plus exact input and output tensor shapes before warmup. It
-does not download or substitute another model. The runtime dependency versions
-are exactly pinned in `services/hand-relay/requirements.lock`. The public CI
-lane uses the exact non-GPU subset in `requirements-ci.lock`; developer test
+The native production image copies the exact staged 640 artifact into an
+immutable image after build-time byte-count and SHA-256 checks. The separately
+tagged rollback image copies the tracked 320 artifact. Neither image uses a
+runtime model bind mount. Startup repeats full byte, digest, input/output name,
+type, shape, active CUDA-provider, and finite-warmup checks. It does not
+download or substitute another model. The runtime dependency versions are
+exactly pinned in `services/hand-relay/requirements.lock`. The public CI lane
+uses the exact non-GPU subset in `requirements-ci.lock`; developer test
 dependencies are pinned in `requirements-dev.lock`.
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party package

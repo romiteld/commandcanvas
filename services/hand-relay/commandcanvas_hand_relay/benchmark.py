@@ -43,9 +43,11 @@ async def run_benchmark(
         max_frame_bytes=settings.max_frame_bytes,
         max_width=settings.max_width,
         max_height=settings.max_height,
+        input_size=settings.model_manifest.input_size,
     )
     backend = YoloCudaBackend.load(
         settings.model_path,
+        manifest=settings.model_manifest,
         warmup_runs=warmup,
     )
     latencies: list[float] = []
@@ -58,7 +60,10 @@ async def run_benchmark(
     return {
         "provider": "CUDAExecutionProvider",
         "device": backend.device,
-        "modelRevision": "2abb91a7030e1aa5231ec900ccb2c07ab3f03460",
+        "modelRevision": backend.manifest.revision,
+        "modelVariant": backend.manifest.variant,
+        "inputSize": backend.input_size,
+        "artifactSha256": backend.manifest.sha256,
         **summarize_latencies(latencies),
         "minimumHands": min(hand_counts),
         "maximumHands": max(hand_counts),

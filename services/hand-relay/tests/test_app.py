@@ -16,8 +16,10 @@ from starlette.websockets import WebSocketState
 
 from helpers import PROTOCOL, SIGNING_KEY, FakeBackend, image_bytes, make_token
 
+from commandcanvas_hand_relay import app as app_module
 from commandcanvas_hand_relay.app import create_app
 from commandcanvas_hand_relay.config import RelaySettings
+from commandcanvas_hand_relay.inference import CudaUnavailable, ModelUnavailable
 
 
 NOW = 1_800_000_000
@@ -172,6 +174,47 @@ def test_capabilities_expose_an_honest_not_ready_state() -> None:
     assert payload["unavailableReason"] == "gpu_unavailable"
 
 
+@pytest.mark.parametrize(
+    ("startup_error", "expected_reason"),
+    [
+        (CudaUnavailable("CPU-only runtime"), "gpu_unavailable"),
+        (ModelUnavailable("wrong bytes, tensors, or warmup"), "model_unavailable"),
+    ],
+)
+def test_startup_failure_keeps_health_and_capabilities_not_ready(
+    monkeypatch,
+    startup_error: Exception,
+    expected_reason: str,
+) -> None:
+    def refuse_startup(*_args: object, **_kwargs: object) -> object:
+        raise startup_error
+
+    monkeypatch.setattr(app_module.YoloCudaBackend, "load", refuse_startup)
+    app = create_app(
+        settings=settings(),
+        now_seconds=lambda: NOW,
+        restart_process=lambda: None,
+    )
+
+    async def exercise_startup() -> tuple[dict[str, Any], dict[str, Any]]:
+        async with app.router.lifespan_context(app):
+            health = await route_endpoint(app, "/healthz")()
+            capability = await route_endpoint(app, "/v1/capabilities")()
+            return json.loads(health.body), json.loads(capability.body)
+
+    health, capability = asyncio.run(exercise_startup())
+
+    assert health == {
+        "ok": False,
+        "service": "commandcanvas-private-hand-relay",
+        "ready": False,
+        "reason": expected_reason,
+    }
+    assert capability["ready"] is False
+    assert capability["warm"] is False
+    assert capability["unavailableReason"] == expected_reason
+
+
 def test_private_health_is_independent_of_busy_availability() -> None:
     app = create_app(
         settings=settings(), backend=FakeBackend(), now_seconds=lambda: NOW
@@ -230,6 +273,42 @@ def test_accepts_one_bounded_frame_and_returns_semantic_landmarks_only() -> None
     assert result["processedAtMs"] - result["capturedAtMs"] == pytest.approx(25)
     assert result["hands"] == backend.results
     assert len(backend.calls) == 1
+
+
+def test_v1_wire_projection_does_not_expose_internal_detector_boxes() -> None:
+    backend = FakeBackend()
+    backend.results = [
+        {
+            **backend.results[0],
+            "boundingBox": {
+                "x": 0.1,
+                "y": 0.2,
+                "width": 0.7,
+                "height": 0.6,
+            },
+        }
+    ]
+    app = create_app(
+        settings=settings(), backend=backend, now_seconds=lambda: NOW
+    )
+    frame = image_bytes()
+    socket = FakeWebSocket(
+        [
+            text_message(hello()),
+            text_message(header(frame)),
+            binary_message(frame),
+        ]
+    )
+
+    run_socket(app, socket)
+
+    assert socket.sent[1]["hands"] == [
+        {
+            "confidence": 0.9,
+            "handedness": "unknown",
+            "landmarks": backend.results[0]["landmarks"],
+        }
+    ]
 
 
 def test_times_out_an_unauthenticated_socket_that_never_sends_hello() -> None:

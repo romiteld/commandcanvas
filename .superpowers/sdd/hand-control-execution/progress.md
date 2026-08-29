@@ -58,7 +58,7 @@
 - Task 3: pending
 - Task 4: pending
 - Task 5: COMPLETE in the Task 5 implementation and independent-review-fix commits. Verified: focused RED/GREEN contract; bounded runtime metrics and startup fallback; rVFC/rAF scheduler and first-plus-newest bitmap queue; epoch-safe handling of late capture resolution and rejection; stale-result boundary; worker timing; adaptive 640 browser relay source without relabeling the 320 server model; default-collapsed accessible diagnostics and gesture self-check; final 5 files / 73 focused tests; typecheck/lint; 97 files / 960 tests before the two review regressions; production webpack build; and one real system-Chrome YOLO worker inference. Physical hand smoothness, RTX behavior, fake-camera runtime, public deployment, and ChatGPT/WebKit target-host behavior remain explicitly unverified.
-- Task 6: pending
+- Task 6: SOURCE IMPLEMENTED, awaiting independent review. Verified in source/tests: immutable exact true-640 and rollback manifests; default true-640 configuration; exact byte/SHA/tensor/CUDA-first/no-CPU-fallback/device/finite-warmup refusal; 640 preprocessing and inverse letterbox; internal normalized boxes plus 21 landmarks; strict legacy v1 projection; checksum-gated in-image model `COPY` with no runtime bind mount; separately tagged 640 candidate on loopback 8101 and 320 rollback profile on loopback 8100; 84 Python tests, 55 focused strict TS/release tests, 97 files / 964 full TS tests, typecheck/lint/compileall, and Compose config green. No RTMPose production artifact or reference was added. Docker image build, CUDA warmup, public restoration/cutover, physical smoothness, and ChatGPT behavior remain explicitly unverified.
 - Task 7: pending
 
 ## ChatGPT built-in browser WebMCP source audit (2026-08-28)

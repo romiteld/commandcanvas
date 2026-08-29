@@ -7,6 +7,12 @@ from dataclasses import dataclass, field
 from typing import Mapping
 from urllib.parse import urlsplit
 
+from .model_manifest import (
+    PRODUCTION_MODEL_MANIFEST,
+    ModelManifest,
+    model_manifest,
+)
+
 
 BASE64URL = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -20,6 +26,7 @@ class RelaySettings:
     signing_key: bytes = field(repr=False)
     allowed_origins: frozenset[str]
     model_path: str
+    model_manifest: ModelManifest = PRODUCTION_MODEL_MANIFEST
     bind_host: str = "127.0.0.1"
     bind_port: int = 8100
     max_frame_bytes: int = 262_144
@@ -34,6 +41,10 @@ class RelaySettings:
     authenticated_session_timeout_seconds: int | float = 1_800
     inference_timeout_seconds: int | float = 2
 
+    @property
+    def model_variant(self) -> str:
+        return self.model_manifest.variant
+
 
 def load_settings(environment: Mapping[str, str] | None = None) -> RelaySettings:
     env = environment if environment is not None else os.environ
@@ -47,6 +58,15 @@ def load_settings(environment: Mapping[str, str] | None = None) -> RelaySettings
     model_path = env.get("PRIVATE_HAND_RELAY_MODEL_PATH", "").strip()
     if not model_path:
         raise SettingsError("Private relay model path is required.")
+    try:
+        selected_manifest = model_manifest(
+            env.get(
+                "PRIVATE_HAND_RELAY_MODEL_VARIANT",
+                PRODUCTION_MODEL_MANIFEST.variant,
+            ).strip()
+        )
+    except ValueError as error:
+        raise SettingsError(str(error)) from None
     max_connections = _integer(env, "PRIVATE_HAND_RELAY_MAX_CONNECTIONS", 4, 1, 32)
     max_handshakes = _integer(env, "PRIVATE_HAND_RELAY_MAX_HANDSHAKES", 8, 1, 32)
     if max_handshakes < max_connections:
@@ -57,6 +77,7 @@ def load_settings(environment: Mapping[str, str] | None = None) -> RelaySettings
         signing_key=signing_key,
         allowed_origins=origins,
         model_path=model_path,
+        model_manifest=selected_manifest,
         bind_host=env.get("PRIVATE_HAND_RELAY_BIND_HOST", "127.0.0.1").strip()
         or "127.0.0.1",
         bind_port=_integer(env, "PRIVATE_HAND_RELAY_BIND_PORT", 8100, 1, 65535),
