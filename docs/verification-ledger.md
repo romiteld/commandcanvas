@@ -1157,3 +1157,68 @@ rewriting their historical evidence:
   scale; broad office-suite integrations; enterprise identity; billing; native
   applications; headset support; marketplaces; and desktop automation remain
   outside this release.
+
+## Checkpoint 27: raw-landmark interaction hardening
+
+### WORKING
+
+- Deliberate index pointing now fails closed unless the wrist, full index chain,
+  and the middle, ring, and pinky fold evidence are reliable. A naturally
+  extended thumb remains valid. This prevents a loose palm, a palm with one
+  unreliable finger, or a noisy fist from falling through to point/draw.
+- Calibrated pinch voting remains two-of-three with the same confidence guards
+  and engage/release hysteresis. Its temporal window now follows observed frame
+  cadence within a bounded 100 to 360 milliseconds, so slow mobile inference
+  does not make a deliberate pinch impossible. Vote history clears after each
+  engage or release so old evidence cannot cause an immediate re-grab.
+- A production-shaped test-only frame source now exercises the complete seam:
+  21 landmarks, controller interpretation, calibrated room input, spatial
+  reduction, canonical command, mutation, and receipt. It is contained in a
+  `*.test.tsx` module and adds no production debug surface.
+- Three index-finger strokes through that seam remain one sketch, open zero
+  drawers, and create one gesture receipt when finished. A landmark pinch,
+  movement, and release creates one object transform and one gesture receipt.
+
+### VERIFIED
+
+- The deliberate-point regressions were observed failing before the production
+  correction: three negative 21-landmark poses were incorrectly accepted as
+  point while the real index-point fixture already passed.
+- The cadence regressions were observed failing before the production
+  correction at approximately 8, 12, 15, 24, and 30 results per second. They
+  reproduced missed acquisition, lost release evidence, and stale-history
+  re-grab respectively.
+- The landmark-to-room test first failed with its worker result disconnected,
+  then passed through the real controller. Bending the index-tip fixture caused
+  both end-to-end actions to fail, confirming the test depends on actual pose
+  interpretation rather than a mocked semantic gesture.
+- The exact combined candidate passed Node 22.17.0 ESLint, TypeScript, 115
+  Vitest files with 1,193 of 1,193 tests, the generated MediaPipe worker, the
+  optimized Next.js webpack build, all 13 generated routes, and
+  `git diff --check`.
+- An earlier full-gate attempt inherited an invalid Windows temporary-directory
+  path and used Node 20. It created no Vitest workers and is not treated as
+  product evidence. The successful result above is the clean rerun with the
+  project runtime and `/tmp`.
+
+### ENVIRONMENT AND RELEASE BOUNDARIES
+
+- The application repository, real OTP/invitation/packet delivery, and
+  canonical public origin remain verified at the preceding release checkpoint.
+  This interaction-hardening candidate is not a public deployment until its
+  commits are pushed and Vercel reaches `READY` on the exact source revision.
+- The protected host signing key was supplied to the existing Vercel secret
+  definition without printing its value. Equality is not claimed from secret
+  metadata; the authoritative proof remains a successful signed, one-use
+  WebSocket handshake after the relay starts.
+- The relay remains correctly disabled: its public corresponding-source
+  repository has not been created, production port 8100 is not listening, the
+  public capability route returns 502, and the application renders the private
+  GPU feature as disabled. No pfSense, DNS, firewall, or Caddy change is needed.
+- CodeRabbit configuration is present, but the GitHub App has not produced a
+  CodeRabbit review. The existing automated review is GitHub Copilot and is not
+  attributed to CodeRabbit.
+- Physical phone drawing, pinch, two-hand transform, open-palm pan, edge throw,
+  lighting, occlusion, thermal behavior, and private-relay fallback remain
+  unverified. These deterministic corrections address proven state-machine
+  defects but do not substitute for a physical rehearsal.
