@@ -20,7 +20,7 @@ set
     pg_catalog.least(
       168,
       pg_catalog.ceil(
-        pg_catalog.extract(epoch from invitation.expires_at - invitation.created_at)
+        extract(epoch from invitation.expires_at - invitation.created_at)
         / 3600.0
       )::integer
     )
