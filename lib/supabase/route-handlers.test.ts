@@ -617,6 +617,39 @@ describe("canvas command route", () => {
     expect(JSON.stringify(body)).not.toContain("provider-specific");
   });
 
+  it("preserves an allowlisted terminal command code without exposing provider details", async () => {
+    const { dependencies } = createDependencies({
+      commandResult: {
+        ok: false,
+        error: {
+          code: "invalid_command",
+          commandCode: "NOTE_TEXT_LIMIT",
+          message: "provider-specific internal detail",
+        },
+      },
+    });
+
+    const response = await handleCommandRequest(
+      jsonRequest(
+        `https://commandcanvas.test/api/rooms/${ROOM_ID}/commands`,
+        commandInput,
+      ),
+      ROOM_ID,
+      dependencies,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await expectJson(response)).toEqual({
+      ok: false,
+      error: {
+        code: "invalid_command",
+        commandCode: "NOTE_TEXT_LIMIT",
+        message:
+          "That thought card reached its 4,000-character limit. Finish it and start another thought.",
+      },
+    });
+  });
+
   it("returns an honest reset path for a demo storage-cap refusal", async () => {
     const { dependencies } = createDependencies({
       commandResult: {

@@ -106,40 +106,236 @@
   list-style: none;
 }
 
-.contentObjects li {
-  display: grid;
-  gap: 5px;
+.contentObjects > li {
   padding: 9px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 10px;
   background: white;
 }
 
-.contentObjects li > div {
+.contentObject {
+  display: grid;
+  gap: 11px;
+}
+
+.contentObjectHeader {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
 }
 
-.contentObjects strong {
-  font-size: 11px;
+.contentObjectHeader h4 {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: -0.015em;
 }
 
-.contentObjects span {
+.contentObjectHeader > span {
   color: var(--muted);
   font-family: var(--font-geist-mono), monospace;
   font-size: 8px;
   text-transform: uppercase;
 }
 
-.contentObjects code {
-  overflow-wrap: anywhere;
+.packetBody,
+.packetMeta,
+.packetEmpty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.packetMeta,
+.packetEmpty {
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+}
+
+.packetBoard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.packetBoard > section,
+.packetSchedule > section {
+  padding: 9px;
+  border: 1px solid rgb(99 102 241 / 14%);
+  border-radius: 8px;
+  background: rgb(99 102 241 / 4%);
+}
+
+.packetBoard h5,
+.packetSchedule h5 {
+  margin: 0 0 7px;
+  font-size: 9px;
+}
+
+.packetSchedule {
+  display: grid;
+  gap: 8px;
+}
+
+.packetSchedule h5 time {
+  margin-left: 5px;
   color: var(--muted);
   font-family: var(--font-geist-mono), monospace;
   font-size: 8px;
-  line-height: 1.45;
-  white-space: pre-wrap;
+  font-weight: 500;
+}
+
+.packetList,
+.packetConnections {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.packetList li,
+.packetConnections li {
+  display: grid;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.packetList li > span,
+.packetConnections {
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+}
+
+.packetDiagram,
+.packetChart,
+.packetReference,
+.packetMeetingCard {
+  display: grid;
+  gap: 10px;
+}
+
+.packetNodes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.packetNodes > span {
+  display: grid;
+  gap: 2px;
+  min-width: 88px;
+  padding: 7px 9px;
+  border: 1px solid rgb(99 102 241 / 24%);
+  border-radius: 8px;
+  background: rgb(99 102 241 / 6%);
+}
+
+.packetNodes strong {
+  font-size: 9px;
+}
+
+.packetNodes small {
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 7px;
+  text-transform: uppercase;
+}
+
+.packetTableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.packetTable {
+  width: 100%;
+  min-width: 320px;
+  border-collapse: collapse;
+  background: white;
+  font-size: 9px;
+}
+
+.packetTable th,
+.packetTable td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.packetTable th {
+  background: rgb(99 102 241 / 6%);
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 7px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.packetTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.packetReference blockquote {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid rgb(99 102 241 / 45%);
+  background: rgb(99 102 241 / 5%);
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.packetReference a {
+  justify-self: start;
+  color: var(--cobalt);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.packetDetails {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 16px;
+  margin: 0;
+}
+
+.packetDetails div {
+  display: grid;
+  gap: 1px;
+}
+
+.packetDetails dt {
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 7px;
+  text-transform: uppercase;
+}
+
+.packetDetails dd {
+  margin: 0;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.packetFallback {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgb(245 158 11 / 22%);
+  border-radius: 8px;
+  background: rgb(245 158 11 / 7%);
+  color: #854d0e;
+  font-size: 9px;
+  line-height: 1.5;
 }
 
 .summary h3,

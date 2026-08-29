@@ -118,10 +118,13 @@ export class WebMcpRegistry {
   async sync(): Promise<void> {
     if (this.#disposed) return;
 
+    const context = this.#getContext();
     const desiredNames =
       this.#mode === "static"
         ? [...WEBMCP_TOOL_NAMES]
-        : getPhaseAvailableToolNames(this.#getContext().phase);
+        : getPhaseAvailableToolNames(context.phase).filter(
+            (toolName) => evaluateToolGuard(toolName, context).ok,
+          );
     const desired = new Set(desiredNames);
 
     for (const [toolName, registration] of this.#registrations) {

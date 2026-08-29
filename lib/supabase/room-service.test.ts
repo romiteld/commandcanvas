@@ -849,13 +849,12 @@ describe("CommandCanvas room service", () => {
     expect(harness.rawClient.from).toHaveBeenCalledOnce();
   });
 
-  it("refuses participant WebMCP authority before invoking the mutation RPC", async () => {
-    const harness = createClient({
-      tableResults: {
-        room_members: [
-          { data: memberRow("participant", "Sarah"), error: null },
-        ],
-      },
+  it("allows a room participant to commit an ordinary WebMCP canvas mutation", async () => {
+    const harness = successfulCommitClient({
+      member: memberRow("participant", "Sarah"),
+      actorUserId: PARTICIPANT_ID,
+      actorType: "agent",
+      actorDisplayName: "CommandCanvas agent",
     });
 
     const result = await createRoomService(
@@ -863,14 +862,28 @@ describe("CommandCanvas room service", () => {
       dependencies,
     ).commitCommand(PARTICIPANT_ID, createNoteRequest("webmcp"));
 
-    expect(result).toEqual({
-      ok: false,
-      error: {
-        code: "host_required",
-        message: "Only the room host can authorize WebMCP mutations.",
-      },
-    });
-    expect(harness.rawClient.rpc).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(harness.rawClient.rpc).toHaveBeenCalledWith(
+      "commit_canvas_mutation_at_revision",
+      expect.objectContaining({
+        p_expected_room_revision: 0,
+        p_actor_user_id: PARTICIPANT_ID,
+        p_actor_type: "agent",
+        p_source: "webmcp",
+        p_description: "CommandCanvas agent created “Launch decision”.",
+      }),
+    );
+    if (!result.ok) throw new Error("Expected participant WebMCP commit.");
+    expect(result.value.state.receipts.at(-1)).toEqual(
+      expect.objectContaining({
+        source: "webmcp",
+        actor: {
+          id: PARTICIPANT_ID,
+          displayName: "CommandCanvas agent",
+          type: "agent",
+        },
+      }),
+    );
   });
 
   it("requires the client base revision to equal authoritative room revision", async () => {
@@ -963,6 +976,7 @@ describe("CommandCanvas room service", () => {
       ok: false,
       error: {
         code: "object_pinned",
+        commandCode: "OBJECT_PINNED",
         message: "Unpin the object before moving or resizing it.",
       },
     });
@@ -1013,6 +1027,7 @@ describe("CommandCanvas room service", () => {
       ok: false,
       error: {
         code: "command_conflict",
+        commandCode: "STALE_OBJECT_VERSION",
         message: "That thought card changed. Continue from its latest text.",
       },
     });
@@ -1168,6 +1183,7 @@ describe("CommandCanvas room service", () => {
       ok: false,
       error: {
         code: "nothing_to_redo",
+        commandCode: "NOTHING_TO_REDO",
         message: "There is nothing left to redo.",
       },
     });

@@ -83,13 +83,13 @@ export function reduceSpatialRoomObservation(
     const mappedHands = observation.hands.map((hand, index) => {
       const mappedPointer = mapPointer(
         options.calibration,
-        hand.measurements?.indexTip ?? hand.pointer,
+        hand.pointer,
         options.canvas,
         "two_hand",
       );
       const mappedMotion = mapPointer(
         options.calibration,
-        hand.measurements?.palmMcpCentroid ?? hand.pointer,
+        hand.motionPointer ?? hand.pointer,
         options.canvas,
         "two_hand",
       );
@@ -138,13 +138,13 @@ export function reduceSpatialRoomObservation(
 
   const pointer = mapPointer(
     options.calibration,
-    observation.measurements?.indexTip ?? observation.pointer,
+    observation.pointer,
     options.canvas,
     options.gainState,
   );
   const motionPointer = mapPointer(
     options.calibration,
-    observation.measurements?.palmMcpCentroid ?? observation.pointer,
+    observation.motionPointer ?? observation.pointer,
     options.canvas,
     options.gainState,
   );
@@ -318,9 +318,8 @@ export function spatialInputFromHandObservation(
   }
   return {
     mode: observation.mode,
-    pointer: observation.measurements?.indexTip ?? observation.pointer,
-    motionPointer:
-      observation.measurements?.palmMcpCentroid ?? observation.pointer,
+    pointer: observation.pointer,
+    motionPointer: observation.motionPointer ?? observation.pointer,
     timestamp: observation.timestamp,
     reliability: reliabilityFromPointer(observation, 0),
     edgePreviewVisible,
@@ -332,8 +331,8 @@ function spatialBimanualHand(
   index: number,
 ): SpatialBimanualHand {
   return {
-    pointer: hand.measurements?.indexTip ?? hand.pointer,
-    motionPointer: hand.measurements?.palmMcpCentroid ?? hand.pointer,
+    pointer: hand.pointer,
+    motionPointer: hand.motionPointer ?? hand.pointer,
     ...reliabilityFromPointer(hand, index),
   };
 }

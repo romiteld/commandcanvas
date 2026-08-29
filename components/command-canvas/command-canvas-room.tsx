@@ -47,6 +47,7 @@ import type {
   CanvasCommand,
   CanvasCommandSource,
   CanvasObject,
+  CommandErrorCode,
   CommandResult,
 } from "@/lib/canvas/command-engine";
 import {
@@ -164,6 +165,19 @@ const FULL_CANVAS_HAND_ZONE = Object.freeze({
 
 type ServiceTone = "idle" | "working" | "ready";
 
+interface VoiceThoughtDraft {
+  objectId: string;
+  text: string;
+}
+
+type ConfirmedRealtimeCommandResult =
+  | { ok: true; message: string }
+  | {
+      ok: false;
+      message: string;
+      failureKind: "retryable" | "terminal";
+    };
+
 export interface CommandCanvasServiceStatus {
   webMcp?: { value: string; tone: ServiceTone };
   collaboration?: { value: string; tone: ServiceTone };
@@ -225,6 +239,8 @@ export function CommandCanvasRoom({
     useState<HandCalibrationProfile | null>(null);
   const [typedFallbackOpen, setTypedFallbackOpen] = useState(false);
   const [realtimeVoiceActive, setRealtimeVoiceActive] = useState(false);
+  const [voiceThoughtDraft, setVoiceThoughtDraft] =
+    useState<VoiceThoughtDraft | null>(null);
   const [commandExecution, setCommandExecution] =
     useState<CommandExecutionState>({ status: "idle" });
   const [sketchTransformExecution, setSketchTransformExecution] =
@@ -326,6 +342,18 @@ export function CommandCanvasRoom({
     handTrackingStatus,
     serviceStatus?.spatialInput,
   );
+
+  useEffect(() => {
+    const objectId = activeVoiceThoughtIdRef.current;
+    if (!objectId) return;
+    const object = canvas.objects[objectId];
+    if (object && !object.deletedAt && object.type === "note") return;
+    activeVoiceThoughtIdRef.current = null;
+    setVoiceThoughtDraft((current) =>
+      current?.objectId === objectId ? null : current,
+    );
+    realtimeVoiceControlRef.current?.cancelThoughtCapture();
+  }, [canvas.objects]);
 
   useEffect(() => {
     if (!commandDrawerRequestKey) return;
@@ -478,17 +506,22 @@ export function CommandCanvasRoom({
 
   async function submitConfirmedRealtimeCommand(
     command: CanvasCommand,
-  ): Promise<HumanCommandResult> {
+  ): Promise<ConfirmedRealtimeCommandResult> {
     if (interactionPending)
       return {
         ok: false,
         message: "Wait for the current canvas action to finish.",
+        failureKind: "retryable",
       };
     if (!onCommand) {
       const result = dispatch(command, "voice");
       return result.ok
         ? { ok: true, message: "Canvas action confirmed." }
-        : { ok: false, message: result.error.message };
+        : {
+            ok: false,
+            message: result.error.message,
+            failureKind: realtimeCommandFailureKind(result.error.code),
+          };
     }
 
     setCommandExecution({ status: "pending" });
@@ -499,19 +532,27 @@ export function CommandCanvasRoom({
           status: "refused",
           message: result.error.message,
         });
-        return { ok: false, message: result.error.message };
+        return {
+          ok: false,
+          message: result.error.message,
+          failureKind: realtimeCommandFailureKind(result.error.code),
+        };
       }
       if (result?.ok && !store.getState().confirmCanvas(result.state)) {
         const message = "The shared canvas did not confirm that voice action.";
         setCommandExecution({ status: "refused", message });
-        return { ok: false, message };
+        return { ok: false, message, failureKind: "retryable" };
       }
       setCommandExecution({ status: "idle" });
       return { ok: true, message: "Canvas action confirmed." };
     } catch (error) {
       const refusal = commandRefusal(error);
       setCommandExecution(refusal);
-      return { ok: false, message: refusal.message };
+      return {
+        ok: false,
+        message: refusal.message,
+        failureKind: "retryable",
+      };
     }
   }
 
@@ -1020,6 +1061,7 @@ export function CommandCanvasRoom({
     const objectId = createClientId("note");
     const anchor = creationAnchor(160, 130);
     activeVoiceThoughtIdRef.current = null;
+    setVoiceThoughtDraft(null);
     const result = await submitConfirmedRealtimeCommand({
       type: "object.create",
       object: {
@@ -1034,7 +1076,7 @@ export function CommandCanvasRoom({
         payload: { text: "", tone: "coral" },
       },
     });
-    if (!result.ok) return result;
+    if (!result.ok) return { ok: false, message: result.message };
 
     const object = store.getState().canvas.objects[objectId];
     if (!object || object.deletedAt || object.type !== "note")
@@ -1077,7 +1119,10 @@ export function CommandCanvasRoom({
       expectedVersion: current.version,
       text,
     });
-    if (!result.ok) return abortVoiceThoughtCapture(result.message);
+    if (!result.ok)
+      return result.failureKind === "terminal"
+        ? abortVoiceThoughtCapture(result.message)
+        : { ok: false, message: result.message };
 
     const updated = store.getState().canvas.objects[objectId];
     if (
@@ -1103,12 +1148,32 @@ export function CommandCanvasRoom({
         thoughtCapture: "aborted",
       };
     activeVoiceThoughtIdRef.current = null;
+    setVoiceThoughtDraft(null);
     return { ok: true, message: "Thought capture finished." };
   }
 
   function abortVoiceThoughtCapture(message: string): RealtimeVoiceIntentResult {
     activeVoiceThoughtIdRef.current = null;
+    setVoiceThoughtDraft(null);
     return { ok: false, message, thoughtCapture: "aborted" };
+  }
+
+  function handleVoiceThoughtDraftChange(text: string | null) {
+    realtimeVoice?.onThoughtDraftChange?.(text);
+    if (!text) {
+      setVoiceThoughtDraft(null);
+      return;
+    }
+    const objectId = activeVoiceThoughtIdRef.current;
+    if (!objectId) return;
+    const object = store.getState().canvas.objects[objectId];
+    if (!object || object.deletedAt || object.type !== "note") {
+      activeVoiceThoughtIdRef.current = null;
+      setVoiceThoughtDraft(null);
+      realtimeVoiceControlRef.current?.cancelThoughtCapture();
+      return;
+    }
+    setVoiceThoughtDraft({ objectId, text });
   }
 
   function realtimeConfirmationFailure(message: string): HumanCommandResult {
@@ -2319,6 +2384,11 @@ export function CommandCanvasRoom({
                 <CanvasObjectCard
                   key={object.id}
                   object={object}
+                  thoughtDraft={
+                    voiceThoughtDraft?.objectId === object.id
+                      ? voiceThoughtDraft.text
+                      : undefined
+                  }
                   preview={objectPreviews[object.id]}
                   isSelected={selectedObjectIds.includes(object.id)}
                   isPrimary={selectedObjectId === object.id}
@@ -2711,6 +2781,7 @@ export function CommandCanvasRoom({
                   ) as unknown as JsonValue;
                 }}
                 onActiveChange={setRealtimeVoiceActive}
+                onThoughtDraftChange={handleVoiceThoughtDraftChange}
               />
             ) : undefined
           }
@@ -2876,6 +2947,7 @@ export function CommandCanvasRoom({
 
 interface CanvasObjectCardProps {
   object: CanvasObject;
+  thoughtDraft?: string;
   preview?: ObjectTransformPreview;
   isSelected: boolean;
   isPrimary: boolean;
@@ -2906,6 +2978,7 @@ interface CanvasObjectCardProps {
 
 function CanvasObjectCard({
   object,
+  thoughtDraft,
   preview,
   isSelected,
   isPrimary,
@@ -3063,7 +3136,11 @@ function CanvasObjectCard({
           ) : null}
         </span>
         {!object.minimized ? (
-          <CanvasObjectContent object={object} childCount={childCount} />
+          <CanvasObjectContent
+            object={object}
+            childCount={childCount}
+            thoughtDraft={thoughtDraft}
+          />
         ) : null}
       </button>
       {isPrimary && !object.minimized && !object.pinned ? (
@@ -3093,13 +3170,35 @@ function CanvasObjectCard({
 function CanvasObjectContent({
   object,
   childCount,
+  thoughtDraft,
 }: {
   object: CanvasObject;
   childCount: number;
+  thoughtDraft?: string;
 }) {
   switch (object.type) {
-    case "note":
-      return <p>{object.payload.text}</p>;
+    case "note": {
+      const provisionalText = visibleThoughtDraft(
+        object.payload.text,
+        thoughtDraft,
+      );
+      return (
+        <span className="note-live-copy">
+          <span className="note-committed-copy">{object.payload.text}</span>
+          {provisionalText ? (
+            <span
+              className="thought-live-draft"
+              role="status"
+              aria-label={`Live transcription for ${object.title}`}
+              aria-live="polite"
+            >
+              <span className="thought-live-indicator" aria-hidden="true" />
+              <span>{provisionalText}</span>
+            </span>
+          ) : null}
+        </span>
+      );
+    }
     case "task_board":
       return (
         <div className="task-board-preview">
@@ -3424,6 +3523,35 @@ function distanceToStroke(
     );
   }
   return minimum;
+}
+
+function visibleThoughtDraft(
+  committedText: string,
+  draftText: string | undefined,
+) {
+  const draft = draftText?.replace(/\s+/g, " ").trim();
+  if (!draft) return undefined;
+  const committedTail = committedText
+    .split("\n")
+    .at(-1)
+    ?.replace(/\s+/g, " ")
+    .trim();
+  return committedTail === draft ? undefined : draft;
+}
+
+function realtimeCommandFailureKind(
+  code: CommandErrorCode,
+): "retryable" | "terminal" {
+  switch (code) {
+    case "OBJECT_NOT_FOUND":
+    case "OBJECT_NOT_EDITABLE":
+    case "NOTE_TEXT_LIMIT":
+    case "INVALID_COMMAND":
+    case "ROOM_MISMATCH":
+      return "terminal";
+    default:
+      return "retryable";
+  }
 }
 
 type CommandExecutionState =

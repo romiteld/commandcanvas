@@ -40,7 +40,7 @@ export const privateHandRelayCapabilitySchema = z
         revision: z.string().regex(/^[A-Za-z0-9._-]{7,80}$/),
         format: z.literal("onnx"),
         keypoints: z.literal(21),
-        license: z.literal("AGPL-3.0"),
+        license: z.enum(["AGPL-3.0", "Apache-2.0"]),
       })
       .strict(),
     runtime: z

@@ -3,6 +3,10 @@
 import { useId, useRef, useState } from "react";
 
 import type { PacketContentSnapshot } from "@/lib/packets/contracts";
+import {
+  createPacketPresentation,
+  type PacketPresentationSection,
+} from "@/lib/packets/presentation";
 
 import styles from "./meeting-packet-panel.module.css";
 
@@ -478,6 +482,7 @@ function PacketContentSnapshotView({
 }: {
   snapshot: PacketContentSnapshot;
 }) {
+  const presentation = createPacketPresentation(snapshot);
   return (
     <section
       className={styles.contentSnapshot}
@@ -486,23 +491,281 @@ function PacketContentSnapshotView({
       <div className={styles.contentSnapshotHeading}>
         <div>
           <p className={styles.eyebrow}>Exact approval content</p>
-          <h3>{snapshot.content.roomName}</h3>
+          <h3>{presentation.roomName}</h3>
         </div>
-        <span>Canvas revision {snapshot.content.sourceRevision}</span>
+        <span>Canvas revision {presentation.sourceRevision}</span>
       </div>
       <ol className={styles.contentObjects}>
-        {snapshot.content.objects.map((object) => (
-          <li key={object.objectId}>
-            <div>
-              <strong>{object.title}</strong>
-              <span>{object.objectType.replaceAll("_", " ")}</span>
-            </div>
-            <code>{JSON.stringify(object.payload)}</code>
+        {presentation.sections.map((section) => (
+          <li key={section.objectId}>
+            <article className={styles.contentObject}>
+              <header className={styles.contentObjectHeader}>
+                <h4>{section.title}</h4>
+                <span>{packetSectionLabel(section)}</span>
+              </header>
+              <PacketPresentationSectionView section={section} />
+            </article>
           </li>
         ))}
       </ol>
     </section>
   );
+}
+
+function PacketPresentationSectionView({
+  section,
+}: {
+  section: PacketPresentationSection;
+}) {
+  switch (section.kind) {
+    case "note":
+      return <p className={styles.packetBody}>{section.text}</p>;
+    case "task_board":
+      return (
+        <div className={styles.packetBoard}>
+          {section.columns.map((column, columnIndex) => (
+            <section key={`${column.title}:${columnIndex}`}>
+              <h5>{column.title}</h5>
+              {column.tasks.length ? (
+                <ul className={styles.packetList}>
+                  {column.tasks.map((task, taskIndex) => (
+                    <li key={`${task.title}:${taskIndex}`}>
+                      <strong>{task.title}</strong>
+                      <span>
+                        {[
+                          task.owner,
+                          task.dueDate,
+                          task.priority ? `${task.priority} priority` : undefined,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className={styles.packetEmpty}>No tasks</p>
+              )}
+            </section>
+          ))}
+        </div>
+      );
+    case "schedule":
+      return (
+        <div className={styles.packetSchedule}>
+          <p className={styles.packetMeta}>Timezone: {section.timezone}</p>
+          {section.days.map((day) => (
+            <section key={day.date}>
+              <h5>
+                {day.label} <time dateTime={day.date}>{day.date}</time>
+              </h5>
+              {day.entries.length ? (
+                <ul className={styles.packetList}>
+                  {day.entries.map((entry, entryIndex) => (
+                    <li key={`${entry.time}:${entry.title}:${entryIndex}`}>
+                      <time dateTime={`${day.date}T${entry.time}`}>{entry.time}</time>
+                      <span>
+                        {entry.title}
+                        {entry.owner ? ` · ${entry.owner}` : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className={styles.packetEmpty}>No scheduled items</p>
+              )}
+            </section>
+          ))}
+        </div>
+      );
+    case "node_diagram":
+      return (
+        <div className={styles.packetDiagram}>
+          <p className={styles.packetBody}>{section.summary}</p>
+          <div className={styles.packetNodes}>
+            {section.nodes.map((node, index) => (
+              <span key={`${node.label}:${index}`}>
+                <strong>{node.label}</strong>
+                <small>{humanizePacketLabel(node.nodeKind)}</small>
+              </span>
+            ))}
+          </div>
+          {section.edges.length ? (
+            <ul className={styles.packetConnections} aria-label="Connections">
+              {section.edges.map((edge, index) => (
+                <li key={`${edge.from}:${edge.to}:${index}`}>
+                  {edge.from} -&gt; {edge.to}
+                  {edge.label ? ` - ${edge.label}` : ""}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className={styles.packetEmpty}>No connections</p>
+          )}
+        </div>
+      );
+    case "chart":
+      return (
+        <div className={styles.packetChart}>
+          <p className={styles.packetBody}>{section.summary}</p>
+          {section.yAxisLabel ? (
+            <p className={styles.packetMeta}>
+              Value axis: {section.yAxisLabel}
+            </p>
+          ) : null}
+          <PacketChartTable section={section} />
+        </div>
+      );
+    case "data_table":
+      return (
+        <PacketDataTable
+          label={section.title}
+          headers={section.columns.map((column) => column.label)}
+          rows={section.rows}
+        />
+      );
+    case "reference_card":
+      return (
+        <div className={styles.packetReference}>
+          <p className={styles.packetBody}>{section.summary}</p>
+          {section.excerpt ? <blockquote>{section.excerpt}</blockquote> : null}
+          {section.sourceUrl ? (
+            <a href={section.sourceUrl} target="_blank" rel="noreferrer">
+              Open source
+            </a>
+          ) : null}
+        </div>
+      );
+    case "meeting_card":
+      return (
+        <div className={styles.packetMeetingCard}>
+          <p className={styles.packetBody}>{section.body}</p>
+          {section.bullets.length ? (
+            <ul className={styles.packetList}>
+              {section.bullets.map((bullet, index) => (
+                <li key={`${bullet}:${index}`}>{bullet}</li>
+              ))}
+            </ul>
+          ) : null}
+          <dl className={styles.packetDetails}>
+            <div>
+              <dt>Status</dt>
+              <dd>{titleCasePacketLabel(section.status)}</dd>
+            </div>
+            {section.owner ? (
+              <div>
+                <dt>Owner</dt>
+                <dd>{section.owner}</dd>
+              </div>
+            ) : null}
+            {section.dueDate ? (
+              <div>
+                <dt>Due</dt>
+                <dd>{section.dueDate}</dd>
+              </div>
+            ) : null}
+          </dl>
+        </div>
+      );
+    case "fallback":
+      return (
+        <p className={styles.packetFallback} role="note">
+          {section.message}
+        </p>
+      );
+  }
+}
+
+function PacketChartTable({
+  section,
+}: {
+  section: Extract<PacketPresentationSection, { kind: "chart" }>;
+}) {
+  const categories = section.series[0]?.points.map((point) => point.label) ?? [];
+  return (
+    <PacketDataTable
+      label={section.chartTitle}
+      headers={[
+        section.xAxisLabel ?? "Category",
+        ...section.series.map((series) =>
+          section.yAxisLabel
+            ? `${series.label} (${section.yAxisLabel})`
+            : series.label,
+        ),
+      ]}
+      rows={categories.map((category, index) => [
+        category,
+        ...section.series.map((series) => series.points[index]?.value ?? null),
+      ])}
+    />
+  );
+}
+
+function PacketDataTable({
+  label,
+  headers,
+  rows,
+}: {
+  label: string;
+  headers: readonly string[];
+  rows: readonly (readonly (string | number | boolean | null)[])[];
+}) {
+  return (
+    <div className={styles.packetTableWrap}>
+      <table className={styles.packetTable} aria-label={label}>
+        <thead>
+          <tr>
+            {headers.map((header, index) => (
+              <th key={`${header}:${index}`} scope="col">
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, rowIndex) => (
+            <tr key={rowIndex}>
+              {row.map((cell, cellIndex) => (
+                <td key={cellIndex}>{formatPacketCell(cell)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function packetSectionLabel(section: PacketPresentationSection) {
+  switch (section.kind) {
+    case "node_diagram":
+      return humanizePacketLabel(section.diagramKind);
+    case "chart":
+      return humanizePacketLabel(section.chartKind);
+    case "reference_card":
+      return humanizePacketLabel(section.referenceKind);
+    case "meeting_card":
+      return humanizePacketLabel(section.cardKind);
+    case "fallback":
+      return humanizePacketLabel(section.objectType);
+    default:
+      return humanizePacketLabel(section.kind);
+  }
+}
+
+function humanizePacketLabel(value: string) {
+  return value.replaceAll("_", " ");
+}
+
+function titleCasePacketLabel(value: string) {
+  const label = humanizePacketLabel(value);
+  return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
+}
+
+function formatPacketCell(value: string | number | boolean | null) {
+  if (value === null) return "-";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return String(value);
 }
 
 function RecipientList({

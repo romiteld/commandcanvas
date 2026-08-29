@@ -142,7 +142,7 @@ function localWebMcpContext(state: CanvasStoreState): WebMcpExecutionContext {
       packet: "none",
     },
     actor: { participantId: "participant-local-host", role: "host" },
-    canMutate: true,
+    canMutateCanvas: true,
   };
 }
 

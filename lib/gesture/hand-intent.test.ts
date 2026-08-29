@@ -107,6 +107,7 @@ describe("hand intent validation", () => {
       accepted: true,
       mode: "point",
       pointer: { x: 0.62, y: 0.28 },
+      motionPointer: { x: 0.59, y: 0.718 },
       confidence: 0.96,
       timestamp: 1_000,
       pinchDistance: 0.474131,
@@ -186,7 +187,7 @@ describe("hand intent validation", () => {
     });
   });
 
-  it("keeps an adequate relaxed index fingertip available as the visible pointer", () => {
+  it("refuses a relaxed index pose instead of treating a fist as drawing", () => {
     const base = frame();
     const landmarks = [...base.landmarks] as HandLandmark[];
     landmarks[6] = { x: 0.5, y: 0.7, z: 0, visibility: 0.95 };
@@ -203,9 +204,29 @@ describe("hand intent validation", () => {
     );
 
     expect(transition.output).toMatchObject({
+      accepted: false,
+      mode: "idle",
+      pointer: null,
+      reason: "no_deliberate_gesture",
+    });
+  });
+
+  it("keeps pinch authoritative even when the index is curled", () => {
+    const base = frame({ thumb: { x: 0.5, y: 0.72 } });
+    const landmarks = [...base.landmarks] as HandLandmark[];
+    landmarks[6] = { x: 0.5, y: 0.7, z: 0, visibility: 0.95 };
+    landmarks[8] = { x: 0.5, y: 0.72, z: 0, visibility: 0.95 };
+    landmarks[4] = { x: 0.505, y: 0.72, z: 0, visibility: 0.95 };
+
+    const transition = interpretHandFrame(
+      createInitialHandIntentState(),
+      { ...base, landmarks: landmarks as unknown as HandLandmarks },
+      1_000,
+    );
+
+    expect(transition.output).toMatchObject({
       accepted: true,
-      mode: "point",
-      pointer: { x: 0.5, y: 0.72 },
+      mode: "pinch",
     });
   });
 
@@ -568,9 +589,10 @@ describe("pinch hysteresis", () => {
     );
 
     expect(transition.output).toMatchObject({
-      accepted: true,
-      mode: "point",
-      pointer: { x: 0.5, y: 0.25 },
+      accepted: false,
+      mode: "idle",
+      pointer: null,
+      reason: "no_deliberate_gesture",
     });
   });
 

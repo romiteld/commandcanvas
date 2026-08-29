@@ -278,6 +278,81 @@ describe("meeting invitation lifecycle and Site Tools", () => {
     );
   });
 
+  it("lets an authenticated participant create an ordinary canvas object through their own Site Tools", async () => {
+    const roomId = "11111111-1111-4111-8111-111111111111";
+    const store = createCanvasStore(roomId, {
+      actor: { id: "participant", displayName: "Sarah", type: "participant" },
+      createId: (prefix) => `${prefix}-test`,
+      now: () => "2026-08-28T12:00:00.000Z",
+    });
+    const tools = new Map<string, RegisteredWebMcpTool>();
+    const submitCommand = vi.fn(async (command, source) => {
+      const result = store.getState().dispatch(command, source, {
+        id: "agent-chatgpt",
+        displayName: "ChatGPT",
+        type: "agent",
+      });
+      return result.ok
+        ? { ok: true as const, state: result.state }
+        : {
+            ok: false as const,
+            code: result.error.code,
+            message: result.error.message,
+          };
+    });
+    const registry = createStandardMeetingWebMcpRegistry({
+      mode: "static",
+      target: {
+        registerTool: vi.fn(async (tool) => {
+          tools.set(tool.name, tool);
+        }),
+      },
+      store,
+      session: { submitCommand },
+      getSnapshot: () =>
+        ({
+          roomId,
+          membership: {
+            roomId,
+            userId: "44444444-4444-4444-8444-444444444444",
+            displayName: "Sarah",
+            color: "#A855F7",
+            role: "participant",
+          },
+          presence: [],
+        }) as unknown as DemoRoomSnapshot,
+      transformSketch: vi.fn(),
+    });
+
+    await registry.sync();
+    const result = await tools.get("create_object")!.execute(
+      {
+        object: {
+          id: "note-participant-agent",
+          type: "note",
+          title: "Participant agent note",
+          x: 120,
+          y: 160,
+          width: 260,
+          height: 180,
+          zIndex: 4,
+          payload: { text: "Created through Sarah's ChatGPT.", tone: "sky" },
+        },
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: "completed",
+      receiptId: "receipt-test",
+    });
+    expect(store.getState().canvas.objects["note-participant-agent"]).toMatchObject({
+      title: "Participant agent note",
+      createdBy: "agent-chatgpt",
+    });
+  });
+
   it("refuses participant packet effects before shared packet operations run", async () => {
     const roomId = "11111111-1111-4111-8111-111111111111";
     const store = createCanvasStore(roomId, {

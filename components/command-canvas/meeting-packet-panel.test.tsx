@@ -18,13 +18,159 @@ const contentSnapshot = {
         objectId: "note-launch",
         objectType: "note" as const,
         title: "Launch decision",
-        payload: { text: "Ship the shared spatial workflow." },
+        payload: { text: "Ship the shared spatial workflow.", tone: "sky" },
       },
       {
         objectId: "diagram-system",
         objectType: "diagram" as const,
         title: "System architecture",
-        payload: { nodes: [{ id: "browser", label: "Browser" }] },
+        payload: {
+          kind: "architecture",
+          interpretationSummary: "The browser connects to the API.",
+          nodes: [
+            {
+              id: "node-browser",
+              label: "Browser",
+              kind: "client",
+              x: 0,
+              y: 0,
+              width: 160,
+              height: 80,
+            },
+            {
+              id: "node-api",
+              label: "API",
+              kind: "service",
+              x: 240,
+              y: 0,
+              width: 160,
+              height: 80,
+            },
+          ],
+          edges: [
+            {
+              id: "edge-browser-api",
+              from: "node-browser",
+              to: "node-api",
+              label: "HTTPS",
+            },
+          ],
+        },
+      },
+    ],
+  },
+};
+
+const typedContentSnapshot = {
+  title: "Typed packet",
+  content: {
+    schemaVersion: 1 as const,
+    roomName: "Planning room",
+    sourceRevision: 18,
+    objects: [
+      {
+        objectId: "board-launch",
+        objectType: "task_board" as const,
+        title: "Launch board",
+        payload: {
+          columns: [
+            {
+              id: "column-todo",
+              title: "To do",
+              tasks: [
+                {
+                  id: "task-demo",
+                  title: "Verify demo",
+                  owner: "Danny",
+                  dueDate: "2026-09-01",
+                  priority: "high",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        objectId: "schedule-launch",
+        objectType: "schedule" as const,
+        title: "Launch schedule",
+        payload: {
+          timezone: "America/New_York",
+          days: [
+            {
+              date: "2026-09-01",
+              label: "Tuesday",
+              entries: [
+                {
+                  id: "entry-record",
+                  time: "14:30",
+                  title: "Record demo",
+                  owner: "Sarah",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        objectId: "chart-readiness",
+        objectType: "diagram" as const,
+        title: "Readiness chart",
+        payload: {
+          kind: "bar_chart",
+          interpretationSummary: "Readiness is increasing.",
+          chart: {
+            title: "Readiness by day",
+            xAxisLabel: "Day",
+            yAxisLabel: "Percent",
+            series: [
+              {
+                id: "series-ready",
+                label: "Ready",
+                points: [
+                  { label: "Monday", value: 60 },
+                  { label: "Tuesday", value: 85 },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        objectId: "table-risks",
+        objectType: "data_table" as const,
+        title: "Risk register",
+        payload: {
+          columns: [
+            { id: "column-risk", label: "Risk", kind: "text" },
+            { id: "column-score", label: "Score", kind: "number" },
+          ],
+          rows: [{ id: "row-camera", cells: ["Camera", 3] }],
+        },
+      },
+      {
+        objectId: "reference-spec",
+        objectType: "reference_card" as const,
+        title: "WebMCP specification",
+        payload: {
+          kind: "article",
+          sourceUrl: "https://example.com/spec",
+          summary: "Semantic tools operate on the live page.",
+          excerpt: "The agent and human share one session.",
+        },
+      },
+      {
+        objectId: "decision-stack",
+        objectType: "meeting_card" as const,
+        title: "Stack decision",
+        payload: {
+          kind: "decision",
+          body: "Use Supabase Realtime.",
+          bullets: ["Presence for people", "Broadcast for cursors"],
+          owner: "Danny",
+          dueDate: "2026-09-01",
+          status: "confirmed",
+        },
       },
     ],
   },
@@ -142,10 +288,15 @@ describe("MeetingPacketPanel", () => {
     expect(within(snapshot).getByText("Launch decision")).toBeVisible();
     expect(within(snapshot).getByText("System architecture")).toBeVisible();
     expect(
-      within(snapshot).getByText(
-        '{"text":"Ship the shared spatial workflow."}',
-      ),
+      within(snapshot).getByText("Ship the shared spatial workflow."),
     ).toBeVisible();
+    expect(
+      within(snapshot).getByText("The browser connects to the API."),
+    ).toBeVisible();
+    expect(within(snapshot).getByText("Browser")).toBeVisible();
+    expect(within(snapshot).getByText("API")).toBeVisible();
+    expect(within(snapshot).getByText("Browser -> API - HTTPS")).toBeVisible();
+    expect(within(snapshot).queryByText(/\{"text":/)).toBeNull();
     expect(
       screen.getByText(
         "Decision: ship the shared canvas. Action: Daniel verifies the public demo.",
@@ -193,6 +344,41 @@ describe("MeetingPacketPanel", () => {
       packetId: "packet-launch",
       version: 3,
     });
+  });
+
+  it("renders task, schedule, chart, table, reference, and meeting content as readable semantic structures", () => {
+    renderPanel({
+      packet: {
+        ...draftPacket,
+        title: typedContentSnapshot.title,
+        contentSnapshot: typedContentSnapshot,
+      },
+    });
+
+    const snapshot = screen.getByRole("region", {
+      name: "Packet content snapshot",
+    });
+    expect(within(snapshot).getByRole("heading", { name: "Launch board" })).toBeVisible();
+    expect(within(snapshot).getByText("Verify demo")).toBeVisible();
+    expect(within(snapshot).getByText(/Danny.*2026-09-01.*high priority/i)).toBeVisible();
+    expect(within(snapshot).getByRole("heading", { name: "Launch schedule" })).toBeVisible();
+    expect(within(snapshot).getByText("14:30")).toBeVisible();
+    expect(within(snapshot).getByText(/Record demo.*Sarah/i)).toBeVisible();
+    expect(within(snapshot).getByRole("table", { name: "Readiness by day" })).toBeVisible();
+    expect(within(snapshot).getByText("Value axis: Percent")).toBeVisible();
+    expect(
+      within(snapshot).getByRole("columnheader", { name: "Ready (Percent)" }),
+    ).toBeVisible();
+    expect(within(snapshot).getByRole("table", { name: "Risk register" })).toBeVisible();
+    expect(within(snapshot).getByRole("cell", { name: "Camera" })).toBeVisible();
+    expect(within(snapshot).getByRole("link", { name: "Open source" })).toHaveAttribute(
+      "href",
+      "https://example.com/spec",
+    );
+    expect(within(snapshot).getByText("Use Supabase Realtime.")).toBeVisible();
+    expect(within(snapshot).getByText("Presence for people")).toBeVisible();
+    expect(within(snapshot).getByText("Confirmed")).toBeVisible();
+    expect(within(snapshot).queryByRole("code")).toBeNull();
   });
 
   it("supports removing recipients but never permits more than ten", async () => {

@@ -3,6 +3,7 @@ import { z } from "zod";
 import type {
   CanvasCommandSource,
   CanvasState,
+  CommandErrorCode,
 } from "@/lib/canvas/command-engine";
 import {
   canvasCommandSchema,
@@ -122,6 +123,7 @@ export type DemoRealtimeStatus =
 export interface DemoRoomSessionError {
   code: string;
   message: string;
+  commandCode?: CommandErrorCode;
 }
 
 export interface DemoRoomSnapshot {
@@ -686,6 +688,9 @@ export function createDemoRoomSession(
         const error = {
           code: result.error.code,
           message: result.error.message || "Canvas change was not committed.",
+          ...(result.error.commandCode
+            ? { commandCode: result.error.commandCode }
+            : {}),
         };
         update({ lastError: error });
         return { ok: false, ...error };

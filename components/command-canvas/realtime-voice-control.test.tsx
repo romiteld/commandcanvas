@@ -78,6 +78,51 @@ describe("RealtimeVoiceControl", () => {
     expect(drafts.at(-1)).toBeNull();
   });
 
+  it("keeps provisional thought text visible after a non-aborting append refusal", async () => {
+    let callbacks: RealtimeVoiceControllerOptions | undefined;
+    const setup = controllerHarness();
+    const drafts: Array<string | null> = [];
+    const onIntent = vi.fn<RealtimeVoiceControllerOptions["onIntent"]>(
+      (intent) =>
+        intent.type === "append_thought"
+          ? {
+              ok: false,
+              message: "The room is reconnecting. Your words remain visible.",
+            }
+          : { ok: true, message: "Submitted." },
+    );
+    render(
+      <RealtimeVoiceControl
+        roomId={ROOM_ID}
+        getAccessToken={() => "header.payload.signature"}
+        onIntent={onIntent}
+        onThoughtDraftChange={(text) => drafts.push(text)}
+        createController={(options) => {
+          callbacks = options;
+          return setup.controller;
+        }}
+      />,
+    );
+
+    await callbacks?.onIntent({ type: "start_thought" }, "voice");
+    callbacks?.onUserSpeechStarted?.("thought-transient-refusal");
+    callbacks?.onTranscriptDelta?.(
+      "Keep these unconfirmed words.",
+      "thought-transient-refusal",
+    );
+    callbacks?.onTranscript?.(
+      "Keep these unconfirmed words.",
+      "thought-transient-refusal",
+    );
+    await callbacks?.onResponseSettled?.(
+      "completed",
+      "thought-transient-refusal",
+    );
+
+    await vi.waitFor(() => expect(onIntent).toHaveBeenCalledTimes(2));
+    expect(drafts.at(-1)).toBe("Keep these unconfirmed words.");
+  });
+
   it("starts a persistent automatic voice session without a manual Run control", async () => {
     const user = userEvent.setup();
     const setup = controllerHarness();

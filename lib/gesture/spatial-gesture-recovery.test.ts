@@ -223,6 +223,20 @@ function beginLeftThrow(
   );
 }
 
+function beginLeftThrowAtFrameRate(framesPerSecond: number) {
+  const frameInterval = 1_000 / framesPerSecond;
+  const firstAt = 1_200;
+  const acquired = held();
+  const first = step(acquired.state, pinch(0.25, 0.4, firstAt));
+  const middle = step(
+    first.state,
+    pinch(0.16, 0.4, firstAt + frameInterval),
+  );
+  const finalAt = firstAt + frameInterval * 2;
+  const final = step(middle.state, pinch(0.05, 0.4, finalAt));
+  return { final, finalAt };
+}
+
 function acknowledgeEdge(
   state: SpatialGestureState,
   timestamp = 1_310,
@@ -569,6 +583,37 @@ describe("authoritative spatial gesture reducer", () => {
       .toHaveLength(1);
     const nextHover = step(released.state, point(0.12, 0.35, 1_200));
     expect(nextHover.state.phase).toBe("hover");
+  });
+
+  it("commits a held transform on visible neutral before a new pinch reacquires within loss grace", () => {
+    const acquired = held();
+    const moved = step(acquired.state, pinch(0.3, 0.4, 1_150));
+    const neutral = step(moved.state, {
+      mode: "idle",
+      timestamp: 1_160,
+      reason: "release",
+    });
+
+    expect(neutral.state.phase).toBe("idle");
+    expect(neutral.effects).toContainEqual({
+      type: "object.complete_transform",
+      objectId: "note-a",
+      transform: { x: 250, y: 180, width: 200, height: 120, rotation: 10 },
+    });
+    expect(neutral.state.phase).not.toBe("lost_grace");
+
+    const entered = step(neutral.state, point(0.3, 0.4, 1_165));
+    const stable = step(entered.state, point(0.3, 0.4, 1_265));
+    const reacquired = step(stable.state, pinch(0.3, 0.4, 1_270));
+
+    expect(reacquired.state).toMatchObject({
+      phase: "held_one",
+      held: { objectId: "note-a", ownerTrackId: "hand-a" },
+    });
+    expect(reacquired.effects).not.toContainEqual(
+      expect.objectContaining({ type: "object.complete_transform" }),
+    );
+    expect(1_270 - 1_160).toBeLessThan(180);
   });
 
   it("gives drawing precedence and treats open palm as pen-up without palm ink or pan", () => {
@@ -1031,8 +1076,8 @@ describe("authoritative spatial gesture reducer", () => {
   it.each([
     ["zone", () => beginLeftThrow({ zoneX: 0.065 })],
     ["velocity", () => beginLeftThrow({ firstX: 0.13 })],
-    ["80-120ms window", () => beginLeftThrow({ firstSampleAt: 1_230, finalAt: 1_300 })],
-    ["maximum time window", () => beginLeftThrow({ firstSampleAt: 1_179, finalAt: 1_300 })],
+    ["minimum time window", () => beginLeftThrow({ firstSampleAt: 1_241, finalAt: 1_300 })],
+    ["maximum time window", () => beginLeftThrow({ firstSampleAt: 937, finalAt: 1_300 })],
     ["direction cosine", () => beginLeftThrow({ firstX: 0.15, firstY: 0.1, finalY: 0.5 })],
     ["confidence history", () => beginLeftThrow({ middleConfidence: 0.79 })],
   ])("refuses a side throw when its %s gate fails", (_gate, run) => {
@@ -1052,6 +1097,29 @@ describe("authoritative spatial gesture reducer", () => {
       }),
     );
   });
+
+  it.each([12, 15, 18, 24, 30])(
+    "recognizes a safe outward throw at an irregular %i fps detector cadence",
+    (framesPerSecond) => {
+      const { final, finalAt } = beginLeftThrowAtFrameRate(framesPerSecond);
+      expect(final.effects).toContainEqual(
+        expect.objectContaining({
+          type: "object.preview_edge_action",
+          action: "discard",
+          edge: "left",
+          armed: true,
+        }),
+      );
+      const visible = acknowledgeEdge(final.state, finalAt + 10);
+      const released = step(visible.state, point(0.04, 0.4, finalAt + 20));
+      expect(released.effects).toContainEqual({
+        type: "object.complete_edge_action",
+        objectId: "note-a",
+        action: "discard",
+        edge: "left",
+      });
+    },
+  );
 
   it("requires visible preview, release within 120 ms, and a tracked release", () => {
     expect(beginLeftThrow({ middleConfidence: 0.8 }).effects).toContainEqual(

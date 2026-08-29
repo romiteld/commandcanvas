@@ -28,7 +28,7 @@ function hostContext(phase: WebMcpPhaseState = emptyRoom): WebMcpExecutionContex
   return {
     phase,
     actor: { participantId: "participant-host", role: "host" },
-    canMutate: true,
+    canMutateCanvas: true,
   };
 }
 
@@ -166,6 +166,42 @@ describe("WebMcpRegistry registration", () => {
     context = hostContext({ ...emptyRoom, hasContent: true });
     await registry.sync();
     expect(target.latest("create_object")).toBe(firstCreateDescriptor);
+  });
+
+  it("keeps host-only packet tools out of a participant's dynamic registration while retaining ordinary canvas tools", async () => {
+    const target = new RecordingRegistrationTarget();
+    const participantContext: WebMcpExecutionContext = {
+      phase: {
+        ...emptyRoom,
+        hasContent: true,
+        selection: "sketch",
+        packet: "approved",
+      },
+      actor: {
+        participantId: "participant-sarah",
+        role: "participant",
+      },
+      canMutateCanvas: true,
+    };
+    const registry = new WebMcpRegistry({
+      mode: "dynamic",
+      target,
+      getContext: () => participantContext,
+      adapters: adapters(),
+    });
+
+    await registry.sync();
+
+    expect(registry.registeredToolNames()).toEqual([
+      "get_canvas_state",
+      "create_object",
+      "transform_object",
+      "set_object_state",
+      "discard_object",
+      "organize_objects",
+      "history_action",
+      "transform_sketch",
+    ]);
   });
 
   it("aborts every active registration when disposed", async () => {
@@ -755,7 +791,7 @@ describe("WebMcpRegistry execution boundary", () => {
         packet: "none",
       },
       actor: null,
-      canMutate: false,
+      canMutateCanvas: false,
     };
     await registry.sync();
 

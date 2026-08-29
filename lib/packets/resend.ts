@@ -6,6 +6,11 @@ import type {
   PacketContentSnapshot,
   PacketRecipient,
 } from "@/lib/packets/contracts";
+import {
+  createPacketPresentation,
+  renderPacketPresentationHtml,
+  renderPacketPresentationText,
+} from "@/lib/packets/presentation";
 
 export type ResendPacketErrorCode =
   | "resend_ambiguous"
@@ -96,29 +101,9 @@ function formatRecipient(recipient: PacketRecipient) {
 }
 
 function renderApprovedPacket(snapshot: PacketContentSnapshot) {
-  const content = JSON.stringify(snapshot.content, null, 2);
+  const presentation = createPacketPresentation(snapshot);
   return {
-    text: `${snapshot.title}\n\n${content}`,
-    html: [
-      '<main style="font-family:ui-sans-serif,system-ui,sans-serif;line-height:1.5;color:#102235">',
-      `<h1>${escapeHtml(snapshot.title)}</h1>`,
-      '<p>This meeting packet was reviewed and approved in CommandCanvas.</p>',
-      `<pre style="white-space:pre-wrap;background:#f4f7fa;padding:16px;border-radius:12px">${escapeHtml(content)}</pre>`,
-      "</main>",
-    ].join(""),
+    text: renderPacketPresentationText(presentation),
+    html: renderPacketPresentationHtml(presentation),
   };
-}
-
-function escapeHtml(value: string) {
-  return value.replace(
-    /[&<>"']/g,
-    (character) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;",
-      })[character] ?? character,
-  );
 }

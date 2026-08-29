@@ -73,6 +73,10 @@ export function ChatGptCommandSurface({
   }, [awaitingApproval, drawerOpen, onOpenDrawer]);
 
   function useVoice() {
+    if (realtimeActive) {
+      onToggleRealtimeVoice();
+      return;
+    }
     if (siteToolsRegistered) {
       onOpenDrawer();
       return;
@@ -107,9 +111,24 @@ export function ChatGptCommandSurface({
         <button
           type="button"
           className="chatgpt-voice-segment"
-          aria-label="Use voice with ChatGPT"
+          aria-label={
+            realtimeActive
+              ? "Stop CommandCanvas Live Voice"
+              : siteToolsRegistered
+              ? "Open ChatGPT voice guidance"
+              : "Start CommandCanvas Live Voice"
+          }
+          title={
+            realtimeActive
+              ? "Stop CommandCanvas Live Voice"
+              : siteToolsRegistered
+              ? "Open instructions for using ChatGPT Voice with this page"
+              : "Start CommandCanvas Live Voice"
+          }
           aria-pressed={realtimeActive || undefined}
-          disabled={!siteToolsRegistered && !realtimeAvailable}
+          disabled={
+            !realtimeActive && !siteToolsRegistered && !realtimeAvailable
+          }
           onClick={useVoice}
         >
           <span aria-hidden="true">●</span>

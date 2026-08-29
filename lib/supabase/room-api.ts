@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import type { CommandErrorCode } from "@/lib/canvas/command-engine";
 import {
   newCanvasObjectSchema,
   type CanvasObject,
@@ -42,6 +43,7 @@ export type RoomApiResult<T> =
         code: string;
         message: string;
         status?: number;
+        commandCode?: CommandErrorCode;
       };
     };
 
@@ -379,6 +381,22 @@ const commandResponseSchema = z
       });
   });
 
+const commandErrorCodeSchema = z.enum([
+  "INVALID_COMMAND",
+  "ROOM_MISMATCH",
+  "STALE_REVISION",
+  "OBJECT_EXISTS",
+  "OBJECT_NOT_FOUND",
+  "OBJECT_PINNED",
+  "INVALID_HIERARCHY",
+  "FRAME_NOT_EMPTY",
+  "OBJECT_NOT_EDITABLE",
+  "STALE_OBJECT_VERSION",
+  "NOTE_TEXT_LIMIT",
+  "NOTHING_TO_UNDO",
+  "NOTHING_TO_REDO",
+]);
+
 const errorResponseSchema = z
   .object({
     ok: z.literal(false),
@@ -416,6 +434,7 @@ const errorResponseSchema = z
           "service_unavailable",
         ]),
         message: z.string().trim().min(1).max(280),
+        commandCode: commandErrorCodeSchema.optional(),
       })
       .strict(),
   })
@@ -605,13 +624,19 @@ export function createBrowserRoomApi({
   };
 }
 
-function failure(code: string, message: string, status?: number) {
+function failure(
+  code: string,
+  message: string,
+  status?: number,
+  commandCode?: CommandErrorCode,
+) {
   return {
     ok: false as const,
     error: {
       code,
       message,
       ...(status === undefined ? {} : { status }),
+      ...(commandCode ? { commandCode } : {}),
     },
   };
 }
@@ -649,7 +674,12 @@ function parseErrorResponse(
     )
   )
     return failure("invalid_response", fallbackMessage, status);
-  return failure(parsed.data.error.code, parsed.data.error.message, status);
+  return failure(
+    parsed.data.error.code,
+    parsed.data.error.message,
+    status,
+    parsed.data.error.commandCode,
+  );
 }
 
 async function readJsonResponse(

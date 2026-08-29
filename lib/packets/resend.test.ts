@@ -21,7 +21,17 @@ describe("Resend packet transport", () => {
         schemaVersion: 1 as const,
         roomName: "Launch room",
         sourceRevision: 8,
-        objects: [],
+        objects: [
+          {
+            objectId: "note-launch",
+            objectType: "note" as const,
+            title: "Launch decision",
+            payload: {
+              text: "Ship the shared spatial workflow.",
+              tone: "sky",
+            },
+          },
+        ],
       },
     };
 
@@ -64,7 +74,12 @@ describe("Resend packet transport", () => {
       subject: "Launch packet",
     });
     expect(body.text).toContain("Launch room");
+    expect(body.text).toContain("Launch decision");
+    expect(body.text).toContain("Ship the shared spatial workflow.");
     expect(body.html).toContain("Launch packet");
+    expect(body.html).toContain("Launch decision");
+    expect(body.html).not.toContain("<pre");
+    expect(body.html).not.toContain('"text"');
   });
 
   it("returns a compact error without reflecting provider response content", async () => {
@@ -181,7 +196,10 @@ describe("Resend packet transport", () => {
                 objectId: "note-launch",
                 objectType: "note",
                 title: "Untrusted note",
-                payload: { note: "<script>alert('canvas')</script>" },
+                payload: {
+                  text: "<script>alert('canvas')</script>",
+                  tone: "sky",
+                },
               },
             ],
           },

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import {
   MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL,
@@ -11,6 +11,7 @@ import {
   captureCreatedRoom,
   deleteHostedRoom,
 } from "./support/hosted-room";
+import { requireProductionApiProxyOrigin } from "../lib/testing/live-probe-guards";
 
 const fakeCameraPath = process.env.COMMANDCANVAS_FAKE_CAMERA_PATH;
 
@@ -46,6 +47,7 @@ test("starts the local hand detector from a real browser camera stream and relea
     );
 
   const roomCapture = captureCreatedRoom(page);
+  await installApiProxyIfConfigured(page);
   const pageErrors: string[] = [];
   const cameraResponses: Array<{ url: string; status: number }> = [];
   let roomId: string | null = null;
@@ -171,9 +173,15 @@ test("starts the local hand detector from a real browser camera stream and relea
       page.getByRole("region", { name: "Hand interaction controls" }),
     ).toBeVisible();
 
-    await handInput
-      .getByRole("button", { name: "Disable hand input" })
-      .click();
+    const disableHandInput = handInput.getByRole("button", {
+      name: "Disable hand input",
+    });
+    if (!(await disableHandInput.isVisible())) {
+      await handInput
+        .getByRole("button", { name: "Show hand sensor preview" })
+        .click();
+    }
+    await disableHandInput.click();
     await expect(
       handInput.getByRole("button", { name: "Enable hand input" }),
     ).toBeVisible();
@@ -229,6 +237,7 @@ test("starts the in-page MediaPipe recovery with classic WASM assets", async ({
     });
   });
   const roomCapture = captureCreatedRoom(page);
+  await installApiProxyIfConfigured(page);
   const pageErrors: string[] = [];
   const wasmScripts: string[] = [];
   let roomId: string | null = null;
@@ -284,5 +293,29 @@ function isMediaPipeHandEngineAsset(url: string) {
     url.includes("/workers/hand-landmarker.js") ||
     url.includes("/mediapipe/wasm/") ||
     url.startsWith(MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL)
+  );
+}
+
+async function installApiProxyIfConfigured(page: Page) {
+  const proxyOrigin = process.env.COMMANDCANVAS_API_PROXY_ORIGIN;
+  if (!proxyOrigin) return;
+  const targetOrigin = requireProductionApiProxyOrigin(proxyOrigin);
+  await page.route("**/api/**", async (route) => {
+    const source = new URL(route.request().url());
+    if (!isCameraProbeApiPath(source.pathname)) {
+      await route.abort("blockedbyclient");
+      return;
+    }
+    const response = await route.fetch({
+      url: `${targetOrigin}${source.pathname}${source.search}`,
+    });
+    await route.fulfill({ response });
+  });
+}
+
+function isCameraProbeApiPath(pathname: string) {
+  return (
+    pathname === "/api/rooms" ||
+    /^\/api\/rooms\/[0-9a-f-]{36}(?:\/commands)?$/.test(pathname)
   );
 }

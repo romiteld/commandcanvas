@@ -45,6 +45,7 @@ export interface RealtimeVoiceControlHandle {
   stop: () => void;
   toggle: () => void;
   isActive: () => boolean;
+  cancelThoughtCapture: () => void;
 }
 
 interface VoiceActivity {
@@ -403,7 +404,8 @@ class LatestVoiceHandlers {
       }
       if (!outcome.ok && outcome.thoughtCapture === "aborted")
         this.thoughtCaptureActive = false;
-      this.clearDraftForTurn(turnKey);
+      if (outcome.ok || outcome.thoughtCapture === "aborted")
+        this.clearDraftForTurn(turnKey);
       return outcome;
     });
     this.thoughtAppendQueue = result.then(
@@ -427,6 +429,17 @@ class LatestVoiceHandlers {
     this.orderedTurnKeys = [];
     this.ignoredLateTurnIds.clear();
     this.ignoredLateTurnOrder = [];
+    this.legacyTurn = this.createTurn(LEGACY_TURN_KEY);
+    this.activeSessionSignal = undefined;
+  }
+
+  cancelThoughtCapture() {
+    this.sessionGeneration += 1;
+    this.clearThoughtDraft();
+    this.thoughtCaptureActive = false;
+    this.currentTurnKey = LEGACY_TURN_KEY;
+    this.turns.clear();
+    this.orderedTurnKeys = [];
     this.legacyTurn = this.createTurn(LEGACY_TURN_KEY);
     this.activeSessionSignal = undefined;
   }
@@ -629,8 +642,9 @@ export const RealtimeVoiceControl = forwardRef<
       stop: stopVoice,
       toggle: active ? stopVoice : startVoice,
       isActive: () => active,
+      cancelThoughtCapture: () => latestHandlers.cancelThoughtCapture(),
     }),
-    [active, startVoice, stopVoice],
+    [active, latestHandlers, startVoice, stopVoice],
   );
 
   return (

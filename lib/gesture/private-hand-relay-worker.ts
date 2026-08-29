@@ -40,7 +40,7 @@ export interface PrivateHandRelayWorkerLike extends HandTrackingWorkerLike {
   readonly frameQueueMode: "newest-only";
 }
 
-export const PRIVATE_HAND_RELAY_ENGINE_ID = "private-yolo-hand-relay-v1";
+export const PRIVATE_HAND_RELAY_ENGINE_ID = "private-gpu-hand-relay-v1";
 const PRIVATE_HAND_RELAY_USEFUL_WIDTH = 640;
 const PRIVATE_HAND_RELAY_USEFUL_HEIGHT = 480;
 const PRIVATE_HAND_RELAY_TARGET_BYTES = 131_072;

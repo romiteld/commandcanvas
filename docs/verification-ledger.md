@@ -489,7 +489,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 - The optional Live voice control creates a regular `gpt-realtime-2.1` WebRTC session after an explicit user start. Its narrower tool catalog can create safe canvas objects, manipulate selected objects, focus locally, group, ungroup, rotate, undo, redo, and transform a selected sketch. It cannot discard objects, operate rooms, approve packets, stage email, or send email. Except for local-only focus, submitted tool output is not represented as completed until the shared mutation receipt arrives.
 - Paid voice admission is server-only, restricted to demo-room members, durably rate-limited, and bounded to a ten-minute client session. The separately budgeted provider key never reaches the browser.
 - Modifier and touch-friendly multi-selection, nested semantic grouping and ungrouping, 15-degree rotation, and shared undo/redo use the canonical command, revision, receipt, persistence, and collaboration paths. Moving or rotating an outer frame transforms its descendants in the same mutation and receipt.
-- The spatial gesture engine maps index pointing to drawing, one-hand pinch to grab and move, two-hand pinch span to resize, and open-palm dwell to focus or restore. Fast held-object motion through either side edge commits recoverable trash after a visible exit animation without a drawer; the blue bottom dock minimizes. Universal Undo reverses either command.
+- The spatial gesture engine maps deliberate index pointing to drawing, one-hand pinch to grab and move, and two-hand pinch span to resize. An open palm lifts the pen in drawing mode or pans blank canvas in move mode; it does not focus an object. Fast held-object motion through either side edge commits recoverable trash after a visible exit animation without a drawer; the blue bottom dock minimizes. Universal Undo reverses either command.
 - Optional meeting media uses a dedicated private `room-media:<uuid>` Broadcast topic, separate from the Presence/cursor channel. Media starts only after explicit camera-and-microphone consent and travels peer-to-peer. SDP and ICE inputs are schema- and size-bounded, pending ICE is capped and deduplicated, local teardown is synchronous, and signaling cleanup is best effort and bounded.
 - Camera frames for hand tracking stay local. Live voice microphone audio reaches OpenAI only while Live voice is on. Meeting audio and video travel only between connected peers. Public Vercel remains preview-only for packet delivery, while a separately controlled local provider run used an allowlisted author address.
 - The integrated Node 22 gate completed 693 of 693 unit tests and an optimized production build with zero failures.
@@ -875,3 +875,115 @@ rewriting their historical evidence:
   integrations; enterprise identity; broad office-suite integrations; billing;
   native apps; headset support; marketplaces; and desktop automation remain
   outside this release.
+
+## Checkpoint 24: hand-state recovery, shared agent authority, and release candidate
+
+### WORKING
+
+- The hand reducer now keeps its safe filter and pinch-release transition when a
+  current, well-formed visible hand has no deliberate gesture. It still refuses
+  malformed, stale, predicted, future, out-of-order, and low-confidence frames.
+  A regression covers pinch, neutral visible hand, threshold-gap point, and a
+  fresh pinch so a previous hold cannot remain latched into the next gesture.
+  A neutral frame from the active pinch owner also takes release precedence over
+  a simultaneous accepted gesture from a second hand, while a neutral bystander
+  cannot release an owner that is temporarily inside tracking-loss grace.
+- Index-point filtering drives targeting and drawing, while the filtered palm
+  drives movement after an object is held. Open-palm and neutral states no
+  longer create strokes. The full canvas remains the control plane; calibration
+  is temporary and the mobile sensor preview can collapse to a 44-pixel control.
+- Provisional GPT Realtime speech now appears inside the active thought card.
+  Partial words do not persist or create receipts. Retryable transport,
+  confirmation, busy, and stale-version failures preserve the visible draft so
+  the next spoken turn can retry; deletion, type changes, text-limit failures,
+  invalid commands, room mismatch, cancellation, and explicit interruption end
+  the capture.
+- The real standard-room adapter preserves an allowlisted command error code
+  through the room service, HTTP response, browser API, and room session.
+  Terminal refusals therefore end thought capture in production, while untyped
+  transport, authentication, and connectivity failures remain retryable.
+- Authenticated participants may use their own ChatGPT/WebMCP session for
+  ordinary canvas mutations. The durable actor remains the participant user,
+  with actor type `agent` and source `webmcp`. Packet preparation, approval,
+  recipients, staged delivery, final SEND, invitations, and room lifecycle stay
+  host-only at both registration and execute time.
+- Packet presentation is a typed semantic projection rather than raw JSON.
+  Notes, boards, schedules, node diagrams, charts, tables, reference cards, and
+  meeting cards share one validated presentation model for the browser preview,
+  plain text, and escaped email HTML. Chart axis units remain visible in all
+  three outputs.
+- Invitation delivery outcomes are visible and exhaustive: preview-only,
+  reconciling, submitted, delivered, bounced, complained, failed, and
+  suppressed. Provider or session failures are not collapsed into success.
+- The in-page voice control gives a registered Site Tools host the distinct
+  label **Open ChatGPT voice guidance**. An active local voice session always
+  exposes **Stop CommandCanvas Live Voice**, including if Site Tools register
+  after the local session begins.
+- Root `.coderabbit.yaml` contains repository-specific review instructions with
+  no credential. GitHub App installation and an actual review event remain a
+  separate provider step.
+- The exact Node 22.17.0 candidate passed ESLint, TypeScript, 112 Vitest files
+  with 1,175 of 1,175 tests, the MediaPipe worker build, the optimized Next.js
+  webpack build, all 13 generated routes, and `git diff --check`.
+- Supabase migration `allow_participant_webmcp_canvas_mutations` is deployed.
+  Catalog read-back confirms that the private mutation core no longer contains
+  the agent-host restriction and remains unavailable to the authenticated role.
+  A service-role transactional probe created a participant-authorized WebMCP
+  note and agent receipt, asserted exact actor attribution, rolled back, and
+  left no fixture room.
+- The separately licensed native relay has an opt-in hybrid RTMDet-nano plus
+  RTMPose-m Distill backend with pinned model revisions and hashes. Its clean
+  CUDA image reported the RTX 3090, 21 landmarks, warm readiness, no raw-frame
+  persistence, and semantic-only results. Controlled open-hand and pinch crops
+  each returned 20 of 20 landmark results. This backend is not yet enabled on
+  the public application.
+
+### VERIFIED IN BROWSER
+
+- The exact local production candidate passed the 74-scenario ordinary release
+  matrix with 28 applicable scenarios passed, 46 explicit hardware, provider,
+  credential, or project gates skipped, and zero failures. Covered targets were
+  Chromium desktop, Chromium mobile, iPhone-profile WebKit, and native Chrome
+  153 WebMCP registration against the current ten-tool catalog.
+- A separate controlled-camera matrix passed the MediaPipe lifecycle on desktop
+  and mobile plus classic-WASM recovery on desktop: 5 passed, 3 deliberate
+  project skips, zero failures. It exercised camera permission, worker, WASM and
+  model loading, live attachment, calibration layout, preview reopening,
+  detachment, shutdown, and ended-track behavior.
+- The first controlled-camera attempt could not launch Chromium inside the
+  execution sandbox. The same command passed outside that sandbox against the
+  exact production build. This was an environment boundary, not treated as app
+  evidence until the outside-sandbox rerun succeeded.
+
+### UNVERIFIED
+
+- This candidate is not yet committed, pushed, deployed to Vercel, or exercised
+  at the canonical public origin. The browser evidence above names the exact
+  local production candidate only.
+- A person still needs to exercise the final phone path. Controlled media and
+  reducer tests do not prove physical index drawing, pinch acquisition and
+  release, full-edge reach, one-hand movement, two-hand resize and zoom,
+  open-palm pan, recoverable throw, minimize docking, mirrored-camera
+  ergonomics, lighting, occlusion, latency, thermals, or relay-to-local fallback.
+- The ChatGPT built-in browser remains unverified. Native Chrome 153 proves the
+  current WebMCP API contract, not ChatGPT rollout, confirmation, or invocation.
+- Real public Resend invitation and packet delivery remain disabled until the
+  owner places a dedicated Resend key and webhook signing secret directly into
+  Vercel and completes sender, allowlist, webhook, and Supabase SMTP setup. The
+  no-signup demo remains preview-only by design.
+- The relay repository is not public yet, the production listener is not
+  running on port 8100, and the Vercel relay feature flag remains off. The
+  hybrid CUDA measurements are controlled-crop evidence, not live phone-hand
+  accuracy or network-latency evidence.
+- CodeRabbit configuration is source-complete, but the GitHub App is not
+  installed and no authenticated CodeRabbit review has run for this candidate.
+
+### CURRENT SCOPE
+
+- No approved hand-control, voice, canvas, collaboration, invitation, packet,
+  or WebMCP capability was removed. Physical arbitrary-object tracking,
+  permanent unrecoverable gesture deletion, TURN or SFU infrastructure,
+  recording, screen sharing, production conferencing scale, enterprise
+  identity, broad document-suite integrations, billing, native applications,
+  headset support, marketplaces, and desktop automation remain outside this
+  release.

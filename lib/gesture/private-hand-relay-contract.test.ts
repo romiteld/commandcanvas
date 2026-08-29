@@ -18,11 +18,11 @@ function capability() {
     ready: true,
     warm: true,
     model: {
-      id: "poptoz/yolo26-hand-pose-face-detection",
+      id: "openmmlab/rtmdet-rtmpose-hand",
       revision: "1234567890abcdef1234567890abcdef12345678",
       format: "onnx",
       keypoints: 21,
-      license: "AGPL-3.0",
+      license: "Apache-2.0",
     },
     runtime: {
       provider: "cuda",
@@ -73,6 +73,12 @@ describe("private hand relay contract", () => {
       privateHandRelayCapabilitySchema.safeParse({
         ...capability(),
         limits: { ...capability().limits, maxInFlight: 2 },
+      }).success,
+    ).toBe(false);
+    expect(
+      privateHandRelayCapabilitySchema.safeParse({
+        ...capability(),
+        model: { ...capability().model, license: "MIT" },
       }).success,
     ).toBe(false);
   });

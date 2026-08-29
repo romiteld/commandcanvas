@@ -36,7 +36,7 @@ export interface WebMcpExecutionContext {
     participantId: string;
     role: "host" | "participant";
   } | null;
-  canMutate: boolean;
+  canMutateCanvas: boolean;
 }
 
 export type WebMcpGuardResult =
@@ -115,11 +115,27 @@ export function evaluateToolGuard(
       message: "authorization required: join the room before using canvas tools",
     };
 
-  if (toolName !== "get_canvas_state" && !context.canMutate)
+  if (
+    toolName !== "get_canvas_state" &&
+    toolName !== "prepare_meeting_packet" &&
+    toolName !== "request_packet_send" &&
+    !context.canMutateCanvas
+  )
     return {
       ok: false,
       code: "forbidden",
       message: "mutation not authorized: this participant can only view the room",
+    };
+
+  if (
+    toolName === "prepare_meeting_packet" &&
+    context.actor.role !== "host"
+  )
+    return {
+      ok: false,
+      code: "forbidden",
+      message:
+        "host authorization required: only the host can prepare a meeting packet",
     };
 
   if (toolName === "request_packet_send" && context.actor.role !== "host")

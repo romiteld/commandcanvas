@@ -11,6 +11,7 @@ const fakes = vi.hoisted(() => {
   const order: string[] = [];
   const webMcpSignals: AbortSignal[] = [];
   const disposeSession = vi.fn(async () => undefined);
+  const submitCommand = vi.fn();
   const unsubscribeSession = vi.fn();
   const subscribeSession = vi.fn((listener: () => void) => {
     roomListener = listener;
@@ -28,6 +29,20 @@ const fakes = vi.hoisted(() => {
   let roomListener: (() => void) | null = null;
   let role: "host" | "participant" = "participant";
   let accessToken = "bootstrap.header.signature";
+  let invitationStatus:
+    | "preview_only"
+    | "reconciling"
+    | "submitted"
+    | "delivered"
+    | "bounced"
+    | "complained"
+    | "failed"
+    | "suppressed" = "preview_only";
+  let invitationFailure: { code: string; message: string } | null = null;
+  let sessionError: { message: string } | null = null;
+  let roomOnCommand:
+    | ((command: unknown, source: unknown) => unknown)
+    | null = null;
   const acceptInvitation = vi.fn(async () => ({
     ok: true as const,
     value: { roomId: ROOM_ID, role: "participant" as const, joined: true },
@@ -37,20 +52,24 @@ const fakes = vi.hoisted(() => {
       requestAccessToken: string,
       roomId: string,
       input: { email: string; displayName: string },
-    ) => ({
-      ok: true as const,
-      value: {
-        invitationId: "33333333-3333-4333-8333-333333333333",
-        roomId,
-        expiresAt: "2026-08-29T12:00:00.000Z",
-        joinUrl: `https://commandcanvas.example/meet#invite=${TOKEN}`,
-        delivery: {
-          status: "preview_only" as const,
-          message: `${input.displayName} can use the secure link.`,
+    ) => {
+      if (invitationFailure)
+        return { ok: false as const, error: invitationFailure };
+      return {
+        ok: true as const,
+        value: {
+          invitationId: "33333333-3333-4333-8333-333333333333",
+          roomId,
+          expiresAt: "2026-08-29T12:00:00.000Z",
+          joinUrl: `https://commandcanvas.example/meet#invite=${TOKEN}`,
+          delivery: {
+            status: invitationStatus,
+            message: `${input.displayName} can use the secure link.`,
+          },
+          requestAccessToken,
         },
-        requestAccessToken,
-      },
-    }),
+      };
+    },
   );
   const getSession = vi.fn(async () => ({
     data: {
@@ -64,7 +83,7 @@ const fakes = vi.hoisted(() => {
         },
       },
     },
-    error: null,
+    error: sessionError,
   }));
   const client = {
     auth: {
@@ -82,6 +101,7 @@ const fakes = vi.hoisted(() => {
     client,
     webMcpSignals,
     disposeSession,
+    submitCommand,
     getSession,
     startSession,
     subscribeSession,
@@ -97,6 +117,23 @@ const fakes = vi.hoisted(() => {
     },
     setAccessToken(nextAccessToken: string) {
       accessToken = nextAccessToken;
+    },
+    setInvitationStatus(nextStatus: typeof invitationStatus) {
+      invitationStatus = nextStatus;
+    },
+    setInvitationFailure(nextFailure: typeof invitationFailure) {
+      invitationFailure = nextFailure;
+    },
+    setSessionError(nextError: typeof sessionError) {
+      sessionError = nextError;
+    },
+    setRoomOnCommand(
+      nextOnCommand: ((command: unknown, source: unknown) => unknown) | null,
+    ) {
+      roomOnCommand = nextOnCommand;
+    },
+    get roomOnCommand() {
+      return roomOnCommand;
     },
     get role() {
       return role;
@@ -157,7 +194,7 @@ vi.mock("@/lib/demo/room-session", () => ({
       getAccessToken: () => "header.payload.signature",
       subscribe: fakes.subscribeSession,
       dispose: fakes.disposeSession,
-      submitCommand: vi.fn(),
+      submitCommand: fakes.submitCommand,
       publishCursor: vi.fn(),
       loadLatestPacketWorkflow: vi.fn(async () => ({
         ok: true as const,
@@ -174,12 +211,21 @@ vi.mock("@/lib/demo/room-session", () => ({
 }));
 
 vi.mock("@/components/command-canvas/command-canvas-room", () => ({
-  CommandCanvasRoom: ({ meetingPacketPanel }: { meetingPacketPanel?: React.ReactNode }) => (
-    <div data-testid="meeting-room">
-      Shared canvas
-      {meetingPacketPanel}
-    </div>
-  ),
+  CommandCanvasRoom: ({
+    meetingPacketPanel,
+    onCommand,
+  }: {
+    meetingPacketPanel?: React.ReactNode;
+    onCommand?: (command: unknown, source: unknown) => unknown;
+  }) => {
+    fakes.setRoomOnCommand(onCommand ?? null);
+    return (
+      <div data-testid="meeting-room">
+        Shared canvas
+        {meetingPacketPanel}
+      </div>
+    );
+  },
 }));
 vi.mock("@/components/command-canvas/meeting-filmstrip", () => ({
   MeetingFilmstrip: () => <div>Filmstrip</div>,
@@ -202,6 +248,8 @@ describe("meeting invitation StrictMode handshake", () => {
     fakes.order.length = 0;
     fakes.webMcpSignals.length = 0;
     fakes.disposeSession.mockClear();
+    fakes.submitCommand.mockReset();
+    fakes.setRoomOnCommand(null);
     fakes.acceptInvitation.mockClear();
     fakes.createInvitation.mockClear();
     fakes.getSession.mockClear();
@@ -210,6 +258,9 @@ describe("meeting invitation StrictMode handshake", () => {
     fakes.unsubscribeSession.mockClear();
     fakes.setRole("participant");
     fakes.setAccessToken("bootstrap.header.signature");
+    fakes.setInvitationStatus("preview_only");
+    fakes.setInvitationFailure(null);
+    fakes.setSessionError(null);
     window.history.replaceState(null, "", `/meet#invite=${TOKEN}`);
   });
 
@@ -272,6 +323,40 @@ describe("meeting invitation StrictMode handshake", () => {
     ).toBeVisible();
   });
 
+  it("preserves an authoritative terminal command code through the real meeting adapter", async () => {
+    fakes.submitCommand.mockResolvedValueOnce({
+      ok: false,
+      code: "invalid_command",
+      commandCode: "NOTE_TEXT_LIMIT",
+      message:
+        "That thought card reached its 4,000-character limit. Finish it and start another thought.",
+    });
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    if (!fakes.roomOnCommand)
+      throw new Error("Meeting canvas command adapter was not captured.");
+
+    await expect(
+      fakes.roomOnCommand(
+        {
+          type: "object.append_note_text",
+          objectId: "note-thought",
+          expectedVersion: 4,
+          text: "This terminal refusal must stop thought capture.",
+        },
+        "voice",
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "NOTE_TEXT_LIMIT",
+        message:
+          "That thought card reached its 4,000-character limit. Finish it and start another thought.",
+      },
+    });
+  });
+
   it("refreshes the Supabase access token immediately before an invitation request", async () => {
     const user = userEvent.setup();
     fakes.setRole("host");
@@ -286,12 +371,112 @@ describe("meeting invitation StrictMode handshake", () => {
     fakes.setAccessToken("fresh.one.signature");
     await user.click(screen.getByRole("button", { name: "Create invitation" }));
     await waitFor(() => expect(fakes.createInvitation).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText("Preview only")).toBeVisible();
+    expect(
+      await screen.findByText("Preview only: email not sent"),
+    ).toBeVisible();
 
     expect(fakes.getSession).toHaveBeenCalledTimes(bootstrapSessionReads + 1);
     expect(fakes.createInvitation.mock.calls.map(([token]) => token)).toEqual([
       "fresh.one.signature",
     ]);
+  });
+
+  it.each([
+    ["preview_only", "Preview only: email not sent"],
+    ["reconciling", "Email submission being reconciled"],
+    ["submitted", "Email submitted: delivery pending"],
+    ["delivered", "Email delivered"],
+    ["bounced", "Email bounced"],
+    ["complained", "Recipient reported this email"],
+    ["failed", "Email delivery failed"],
+    ["suppressed", "Email suppressed"],
+  ] as const)(
+    "renders the %s invitation state without collapsing it into a preview label",
+    async (status, label) => {
+      const user = userEvent.setup();
+      fakes.setRole("host");
+      fakes.setInvitationStatus(status);
+      render(<MeetingCommandCanvas />);
+
+      expect(await screen.findByTestId("meeting-room")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Invite" }));
+      await user.type(screen.getByLabelText("Display name"), "Mike");
+      await user.type(screen.getByLabelText("Email"), "mike@example.com");
+      await user.click(
+        screen.getByRole("button", { name: "Create invitation" }),
+      );
+
+      expect(await screen.findByText(label)).toBeVisible();
+      expect(
+        screen.getByRole("button", { name: "Copy secure link" }),
+      ).toBeVisible();
+    },
+  );
+
+  it("renders an invitation request failure inside the open dialog", async () => {
+    const user = userEvent.setup();
+    fakes.setRole("host");
+    fakes.setInvitationFailure({
+      code: "request_failed",
+      message: "Invitation service is temporarily unavailable.",
+    });
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Invite" }));
+    await user.type(screen.getByLabelText("Display name"), "Mike");
+    await user.type(screen.getByLabelText("Email"), "mike@example.com");
+    await user.click(
+      screen.getByRole("button", { name: "Create invitation" }),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Invitation not created");
+    expect(alert).toHaveTextContent(
+      "Invitation service is temporarily unavailable.",
+    );
+  });
+
+  it("renders an expired invitation session inside the open dialog", async () => {
+    const user = userEvent.setup();
+    fakes.setRole("host");
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Invite" }));
+    await user.type(screen.getByLabelText("Display name"), "Mike");
+    await user.type(screen.getByLabelText("Email"), "mike@example.com");
+    fakes.setSessionError({ message: "Session refresh failed." });
+    await user.click(
+      screen.getByRole("button", { name: "Create invitation" }),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Invitation not created");
+    expect(alert).toHaveTextContent(
+      "Your session could not be refreshed. Try again.",
+    );
+  });
+
+  it("renders a rejected session refresh inside the open dialog", async () => {
+    const user = userEvent.setup();
+    fakes.setRole("host");
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Invite" }));
+    await user.type(screen.getByLabelText("Display name"), "Mike");
+    await user.type(screen.getByLabelText("Email"), "mike@example.com");
+    fakes.getSession.mockRejectedValueOnce(new Error("network unavailable"));
+    await user.click(
+      screen.getByRole("button", { name: "Create invitation" }),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Invitation not created");
+    expect(alert).toHaveTextContent(
+      "Your session could not be refreshed. Try again.",
+    );
   });
 
   it("does not enter a room after invitation acceptance resolves post-unmount", async () => {

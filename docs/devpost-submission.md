@@ -129,7 +129,7 @@ An additional browser constraint was experimental WebMCP lifecycle behavior. Com
 - Reversible, attributable canvas mutations
 - Modifier and touch-friendly multi-selection, semantic grouping and ungrouping, 15-degree rotation, and shared undo/redo
 - Nested semantic frames whose descendants move and rotate through one canonical mutation
-- MediaPipe index-fingertip drawing, one-hand pinch grab, two-hand pinch resize, open-palm focus or restore, side-edge recoverable trash, and bottom-dock minimize
+- MediaPipe deliberate index-finger drawing, one-hand pinch grab, two-hand pinch resize, open-palm pen-up and blank-canvas pan, side-edge recoverable trash, and bottom-dock minimize
 - A full-canvas hand control plane that maps a comfortable central camera region across the workspace, with the camera preview reduced to a sensor check
 - Local open-palm canvas pan, two-hand canvas zoom, and visible target, open, pinch, held, resizing, panning, and zoom feedback
 - Consent-gated application contracts for an optional separately operated CUDA hand-pose relay, with bounded newest-frame transport, semantic-only results, no raw retention, and automatic local fallback; the relay source is not public at this checkpoint and the public path must remain disabled until its exact AGPL source commit is published and linked

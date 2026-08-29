@@ -50,6 +50,7 @@ export type HandTrackingObservation =
   | {
       mode: "point" | "pinch" | "open_palm";
       pointer: { x: number; y: number };
+      motionPointer?: { x: number; y: number };
       confidence: number;
       handedness?: TrackedHandedness;
       landmarks?: HandLandmarks;
@@ -77,6 +78,7 @@ export type HandTrackingObservation =
 export interface HandTrackingPointer {
   handedness: TrackedHandedness;
   pointer: { x: number; y: number };
+  motionPointer?: { x: number; y: number };
   confidence: number;
   landmarks?: HandLandmarks;
   /** Additive provenance for two-hand Task 2 reliability consumers. */
@@ -719,13 +721,30 @@ export function createHandTrackingController(
         dependencies.now(),
         { mirrorX: true },
       );
-      if (transition.output.accepted)
+      if (
+        transition.output.accepted ||
+        transition.output.reason === "no_deliberate_gesture"
+      )
         run.intentStates.set(key, transition.state);
       return { hand, trackId: key, transition };
     });
     for (const key of run.intentStates.keys()) {
       if (!activeKeys.has(key) && !run.handTracks.has(key))
         run.intentStates.delete(key);
+    }
+    const previous = run.lastSingleObservation;
+    const visibleHeldOwnerNeutral =
+      previous?.mode === "pinch" &&
+      interpreted.some(
+        ({ trackId, transition }) =>
+          trackId === previous.trackId &&
+          !transition.output.accepted &&
+          transition.output.reason === "no_deliberate_gesture",
+      );
+    if (visibleHeldOwnerNeutral) {
+      run.lastSingleObservation = null;
+      emit({ mode: "idle", timestamp: message.timestamp });
+      return;
     }
     const accepted = interpreted.filter(
       (entry) => entry.transition.output.accepted,
@@ -754,6 +773,7 @@ export function createHandTrackingController(
       }) => ({
         handedness: hand.handedness,
         pointer: output.pointer,
+        motionPointer: output.motionPointer,
         confidence: output.confidence,
         landmarks: hand.landmarks,
         trackId,
@@ -788,6 +808,18 @@ export function createHandTrackingController(
         handModePriority(left.transition.output.mode),
     )[0];
     if (!primary || !primary.transition.output.accepted) {
+      const ownerTrackId = previous?.trackId;
+      const visibleNeutral = interpreted.some(
+        ({ trackId, transition }) =>
+          !transition.output.accepted &&
+          transition.output.reason === "no_deliberate_gesture" &&
+          (ownerTrackId === undefined || trackId === ownerTrackId),
+      );
+      if (visibleNeutral) {
+        run.lastSingleObservation = null;
+        emit({ mode: "idle", timestamp: message.timestamp });
+        return;
+      }
       emitLossOrGrace(run, message.timestamp);
       return;
     }
@@ -798,6 +830,7 @@ export function createHandTrackingController(
     > = {
       mode: output.mode,
       pointer: output.pointer,
+      motionPointer: output.motionPointer,
       confidence: output.confidence,
       handedness: primary.hand.handedness,
       landmarks: primary.hand.landmarks,

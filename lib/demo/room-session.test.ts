@@ -880,6 +880,36 @@ describe("canonical command submission and lifecycle", () => {
     );
   });
 
+  it("preserves an authoritative terminal command code for the meeting adapter", async () => {
+    const harness = createHarness();
+    harness.commitCommand.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: "invalid_command",
+        commandCode: "NOTE_TEXT_LIMIT",
+        message:
+          "That thought card reached its 4,000-character limit. Finish it and start another thought.",
+        status: 400,
+      },
+    });
+    await harness.session.start({
+      kind: "host",
+      roomName: "Architecture review",
+      displayName: "Danny",
+      color: "#0ea5e9",
+    });
+
+    await expect(
+      harness.session.submitCommand(command, "voice"),
+    ).resolves.toEqual({
+      ok: false,
+      code: "invalid_command",
+      commandCode: "NOTE_TEXT_LIMIT",
+      message:
+        "That thought card reached its 4,000-character limit. Finish it and start another thought.",
+    });
+  });
+
   it("refuses an already-cancelled command without API work", async () => {
     const harness = createHarness();
     await harness.session.start({

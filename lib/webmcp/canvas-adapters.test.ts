@@ -18,7 +18,7 @@ const context: WebMcpExecutionContext = {
     packet: "none",
   },
   actor: { participantId: "participant-host", role: "host" },
-  canMutate: true,
+  canMutateCanvas: true,
 };
 
 function fixture() {

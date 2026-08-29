@@ -78,7 +78,7 @@ describe("ChatGptCommandSurface", () => {
       screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Use voice with ChatGPT" }),
+      screen.getByRole("button", { name: "Open ChatGPT voice guidance" }),
     ).toHaveClass("chatgpt-voice-segment");
   });
 
@@ -87,7 +87,7 @@ describe("ChatGptCommandSurface", () => {
     const callbacks = renderSurface();
 
     await user.click(
-      screen.getByRole("button", { name: "Use voice with ChatGPT" }),
+      screen.getByRole("button", { name: "Open ChatGPT voice guidance" }),
     );
 
     expect(callbacks.onOpenDrawer).toHaveBeenCalledOnce();
@@ -109,10 +109,28 @@ describe("ChatGptCommandSurface", () => {
     });
 
     await user.click(
-      screen.getByRole("button", { name: "Use voice with ChatGPT" }),
+      screen.getByRole("button", { name: "Start CommandCanvas Live Voice" }),
     );
 
     expect(callOrder).toEqual(["voice", "drawer"]);
+  });
+
+  it("keeps the active local microphone stoppable when Site Tools register later", async () => {
+    const user = userEvent.setup();
+    const callbacks = renderSurface({
+      surfaceState: { status: "registered_to_page", registeredToolCount: 10 },
+      realtimeActive: true,
+      drawerOpen: false,
+    });
+
+    const stopVoice = screen.getByRole("button", {
+      name: "Stop CommandCanvas Live Voice",
+    });
+    expect(stopVoice).toHaveAttribute("aria-pressed", "true");
+    await user.click(stopVoice);
+
+    expect(callbacks.onToggleRealtimeVoice).toHaveBeenCalledOnce();
+    expect(callbacks.onOpenDrawer).not.toHaveBeenCalled();
   });
 
   it("keeps explicit CommandCanvas Live Voice opt-in available without autostarting it", async () => {
@@ -151,7 +169,7 @@ describe("ChatGptCommandSurface", () => {
       />,
     );
     await user.click(
-      screen.getByRole("button", { name: "Use voice with ChatGPT" }),
+      screen.getByRole("button", { name: "Open ChatGPT voice guidance" }),
     );
     expect(screen.getByText(/surrounding app/i)).toBeInTheDocument();
 
@@ -223,7 +241,9 @@ describe("ChatGptCommandSurface", () => {
       drawingActive: true,
     });
 
-    const mic = screen.getByRole("button", { name: "Use voice with ChatGPT" });
+    const mic = screen.getByRole("button", {
+      name: "Start CommandCanvas Live Voice",
+    });
     expect(mic).toBeEnabled();
     await user.click(mic);
 

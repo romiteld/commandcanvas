@@ -64,6 +64,20 @@ interface MeetingRuntime {
   snapshot: DemoRoomSnapshot;
 }
 
+type InvitationDeliveryStatus =
+  BrowserMeetingInvitationValue["delivery"]["status"];
+
+const INVITATION_DELIVERY_LABELS: Record<InvitationDeliveryStatus, string> = {
+  preview_only: "Preview only: email not sent",
+  reconciling: "Email submission being reconciled",
+  submitted: "Email submitted: delivery pending",
+  delivered: "Email delivered",
+  bounced: "Email bounced",
+  complained: "Recipient reported this email",
+  failed: "Email delivery failed",
+  suppressed: "Email suppressed",
+};
+
 export function MeetingCommandCanvas({
   privateGpuRelayEnabled = false,
 }: {
@@ -75,6 +89,7 @@ export function MeetingCommandCanvas({
   const [inviteResult, setInviteResult] =
     useState<BrowserMeetingInvitationValue | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
   const [copyLabel, setCopyLabel] = useState("Copy secure link");
   const clientRef = useRef<BrowserClient | null>(null);
   const inviteTokenRef = useRef<string | null>(null);
@@ -348,12 +363,26 @@ export function MeetingCommandCanvas({
     if (!signal || signal.aborted) return;
     setInviteBusy(true);
     setInviteResult(null);
-    const current = await runtime.client.auth.getSession();
+    setInviteError(null);
+    let current: Awaited<ReturnType<typeof runtime.client.auth.getSession>>;
+    try {
+      current = await runtime.client.auth.getSession();
+    } catch {
+      if (signal.aborted) return;
+      setInviteBusy(false);
+      setInviteError("Your session could not be refreshed. Try again.");
+      return;
+    }
     if (signal.aborted) return;
     const accessToken = current.data.session?.access_token;
-    if (current.error || !accessToken) {
+    if (current.error) {
       setInviteBusy(false);
-      setCopyLabel("Your verified session expired.");
+      setInviteError("Your session could not be refreshed. Try again.");
+      return;
+    }
+    if (!accessToken) {
+      setInviteBusy(false);
+      setInviteError("Your verified session expired.");
       return;
     }
     const api = createBrowserMeetingApi({ accessToken });
@@ -366,7 +395,7 @@ export function MeetingCommandCanvas({
     if (signal.aborted) return;
     setInviteBusy(false);
     if (!result.ok) {
-      setCopyLabel(result.error.message);
+      setInviteError(result.error.message);
       return;
     }
     setInviteResult(result.value);
@@ -584,7 +613,15 @@ export function MeetingCommandCanvas({
       <div className="meeting-room-float">
         <strong>{snapshot.membership?.role === "host" ? "HOST" : "PARTICIPANT"}</strong>
         {snapshot.membership?.role === "host" ? (
-          <button type="button" onClick={() => setInviteOpen(true)}>Invite</button>
+          <button
+            type="button"
+            onClick={() => {
+              setInviteOpen(true);
+              setInviteError(null);
+            }}
+          >
+            Invite
+          </button>
         ) : null}
         <button
           type="button"
@@ -618,7 +655,18 @@ export function MeetingCommandCanvas({
         webMcpExecutionActivity={webMcpExecutionActivity}
         onCommand={async (command, source) => {
           const result = await runtime.session.submitCommand(command, source);
-          if (!result.ok) throw new Error(result.message);
+          if (!result.ok) {
+            if (result.commandCode)
+              return {
+                ok: false as const,
+                state: runtime.store.getState().canvas,
+                error: {
+                  code: result.commandCode,
+                  message: result.message,
+                },
+              };
+            throw new Error(result.message);
+          }
         }}
         onTransformSketch={sketchTransformer?.transform}
         onCanvasPointerWorldMove={(point: CanvasPoint) => {
@@ -665,9 +713,20 @@ export function MeetingCommandCanvas({
               <label>Email<input name="email" type="email" required maxLength={254} autoComplete="email" /></label>
               <button type="submit" disabled={inviteBusy}>{inviteBusy ? "Creating…" : "Create invitation"}</button>
             </form>
+            {inviteError ? (
+              <div
+                className="meeting-delivery meeting-delivery-failed"
+                role="alert"
+              >
+                <strong>Invitation not created</strong>
+                <p>{inviteError}</p>
+              </div>
+            ) : null}
             {inviteResult ? (
               <div className={`meeting-delivery meeting-delivery-${inviteResult.delivery.status}`} aria-live="polite">
-                <strong>{inviteResult.delivery.status === "submitted" ? "Email submitted" : inviteResult.delivery.status === "failed" ? "Email failed" : "Preview only"}</strong>
+                <strong>
+                  {INVITATION_DELIVERY_LABELS[inviteResult.delivery.status]}
+                </strong>
                 <p>{inviteResult.delivery.message}</p>
                 <button
                   type="button"
@@ -870,7 +929,7 @@ function standardMeetingWebMcpContext(
           role: snapshot.membership.role,
         }
       : null,
-    canMutate: snapshot.membership?.role === "host",
+    canMutateCanvas: Boolean(snapshot.membership),
   };
 }
 

@@ -464,6 +464,39 @@ describe("browser room API", () => {
     });
   });
 
+  it("preserves an allowlisted authoritative command code on a refusal", async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json(
+        {
+          ok: false,
+          error: {
+            code: "invalid_command",
+            commandCode: "NOTE_TEXT_LIMIT",
+            message:
+              "That thought card reached its 4,000-character limit. Finish it and start another thought.",
+          },
+        },
+        { status: 400 },
+      ),
+    );
+
+    const result = await createBrowserRoomApi({
+      accessToken: JWT,
+      fetcher,
+    }).commitCommand(commandInput);
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "invalid_command",
+        commandCode: "NOTE_TEXT_LIMIT",
+        message:
+          "That thought card reached its 4,000-character limit. Finish it and start another thought.",
+        status: 400,
+      },
+    });
+  });
+
   it("preserves a compact server error without leaking transport internals", async () => {
     const fetcher = vi.fn(async () =>
       Response.json(

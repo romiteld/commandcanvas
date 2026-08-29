@@ -63,6 +63,8 @@ export type HandIntentOutput =
       readonly accepted: true;
       readonly mode: "point" | "pinch" | "open_palm";
       readonly pointer: NormalizedHandPointer;
+      /** Filtered palm center used for stable held-object motion. */
+      readonly motionPointer: NormalizedHandPointer;
       readonly confidence: number;
       readonly timestamp: number;
       readonly pinchDistance: number;
@@ -293,31 +295,42 @@ export function interpretHandFrame(
     x: rounded(filteredIndexTip.x),
     y: rounded(filteredIndexTip.y),
   };
+  const motionPointer = roundedPoint(filteredPalmCenter);
+  const nextState: HandIntentState = {
+    filteredIndexTip: roundedPoint(filteredIndexTip),
+    filteredThumbTip: roundedPoint(filteredThumbTip),
+    filteredPalmCenter: motionPointer,
+    rawIndexTip: roundedPoint(rawIndexTip),
+    rawThumbTip: roundedPoint(rawThumbTip),
+    rawPalmCenter: roundedPoint(rawPalmCenter),
+    indexTipFilter: indexFilter.state,
+    thumbTipFilter: thumbFilter.state,
+    palmCenterFilter: palmCenterFilter.state,
+    pinchLatched,
+    lastAcceptedTimestamp: frame.timestamp,
+  };
+  const deliberatePoint =
+    hasReliableIndexPointLandmarks(
+      frame.landmarks,
+      config.minKeypointVisibility,
+    ) && isIndexExtended(frame.landmarks);
+  if (!pinchLatched && !openPalm && !deliberatePoint)
+    return refuse(
+      "no_deliberate_gesture",
+      now,
+      frame.timestamp,
+      frame.confidence,
+      { predicted: false },
+      nextState,
+    );
 
   return {
-    state: {
-      filteredIndexTip: roundedPoint(filteredIndexTip),
-      filteredThumbTip: {
-        x: rounded(filteredThumbTip.x),
-        y: rounded(filteredThumbTip.y),
-      },
-      filteredPalmCenter: {
-        x: rounded(filteredPalmCenter.x),
-        y: rounded(filteredPalmCenter.y),
-      },
-      rawIndexTip: roundedPoint(rawIndexTip),
-      rawThumbTip: roundedPoint(rawThumbTip),
-      rawPalmCenter: roundedPoint(rawPalmCenter),
-      indexTipFilter: indexFilter.state,
-      thumbTipFilter: thumbFilter.state,
-      palmCenterFilter: palmCenterFilter.state,
-      pinchLatched,
-      lastAcceptedTimestamp: frame.timestamp,
-    },
+    state: nextState,
     output: {
       accepted: true,
       mode: pinchLatched ? "pinch" : openPalm ? "open_palm" : "point",
       pointer,
+      motionPointer,
       confidence: frame.confidence,
       timestamp: frame.timestamp,
       pinchDistance,
@@ -326,6 +339,24 @@ export function interpretHandFrame(
     measurements: roundedMeasurements(physical),
     prediction: { predicted: false },
   };
+}
+
+function isIndexExtended(landmarks: HandLandmarks) {
+  const wrist = landmarks[WRIST_INDEX];
+  const pipDistance = distance(wrist, landmarks[INDEX_PIP_INDEX]);
+  return (
+    pipDistance >= 0.02 &&
+    distance(wrist, landmarks[INDEX_TIP_INDEX]) >= pipDistance * 1.15
+  );
+}
+
+function hasReliableIndexPointLandmarks(
+  landmarks: HandLandmarks,
+  minimumVisibility: number,
+) {
+  return [WRIST_INDEX, INDEX_PIP_INDEX, INDEX_TIP_INDEX].every(
+    (index) => landmarkVisibility(landmarks[index]) >= minimumVisibility,
+  );
 }
 
 function isOpenPalm(landmarks: HandLandmarks) {

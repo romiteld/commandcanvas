@@ -375,7 +375,7 @@ describe("CommandCanvasRoom", () => {
     expect(within(chatGptControls).getAllByRole("button")).toHaveLength(2);
     expect(
       within(chatGptControls).getByRole("button", {
-        name: "Use voice with ChatGPT",
+        name: "Start CommandCanvas Live Voice",
       }),
     ).toBeEnabled();
     expect(
@@ -445,7 +445,7 @@ describe("CommandCanvasRoom", () => {
     );
 
     await user.click(
-      screen.getByRole("button", { name: "Use voice with ChatGPT" }),
+      screen.getByRole("button", { name: "Open ChatGPT voice guidance" }),
     );
 
     expect(controller.start).not.toHaveBeenCalled();
@@ -483,7 +483,9 @@ describe("CommandCanvasRoom", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Create sketch" }));
-    const mic = screen.getByRole("button", { name: "Use voice with ChatGPT" });
+    const mic = screen.getByRole("button", {
+      name: "Start CommandCanvas Live Voice",
+    });
     expect(mic).toBeEnabled();
     await user.click(mic);
 
@@ -1777,7 +1779,9 @@ describe("CommandCanvasRoom", () => {
         .getAllByRole("button")
         .every((button) => button.hasAttribute("disabled")),
     ).toBe(true);
-    expect(screen.getByRole("button", { name: "Use voice with ChatGPT" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Start CommandCanvas Live Voice" }),
+    ).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Create task board" }));
     expect(Object.values(store.getState().canvas.objects)).toHaveLength(0);
   });
@@ -1851,7 +1855,8 @@ describe("CommandCanvasRoom", () => {
     act(() => {
       hand.emit({
         mode: "point",
-        pointer: { x: 0.78, y: 0.76 },
+        pointer: { x: 0.22, y: 0.3 },
+        motionPointer: { x: 0.78, y: 0.76 },
         measurements: measurements(
           { x: 0.22, y: 0.3 },
           { x: 0.78, y: 0.76 },
@@ -1861,7 +1866,8 @@ describe("CommandCanvasRoom", () => {
       });
       hand.emit({
         mode: "point",
-        pointer: { x: 0.79, y: 0.75 },
+        pointer: { x: 0.31, y: 0.39 },
+        motionPointer: { x: 0.79, y: 0.75 },
         measurements: measurements(
           { x: 0.31, y: 0.39 },
           { x: 0.79, y: 0.75 },

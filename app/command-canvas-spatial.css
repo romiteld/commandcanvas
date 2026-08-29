@@ -409,6 +409,43 @@
   box-shadow: 0 14px 34px rgb(0 0 0 / 32%);
 }
 
+.command-canvas-shell .note-live-copy {
+  display: grid;
+  width: 100%;
+  gap: 9px;
+}
+
+.command-canvas-shell .note-committed-copy {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.command-canvas-shell .thought-live-draft {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid rgb(0 124 107 / 22%);
+  border-radius: 10px;
+  background: rgb(0 168 143 / 8%);
+  color: #075f55;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.command-canvas-shell .thought-live-indicator {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--space-cyan);
+  box-shadow: 0 0 0 4px rgb(89 234 213 / 16%);
+}
+
 .command-canvas-shell .data-table-object::before {
   background: #4878dc;
 }

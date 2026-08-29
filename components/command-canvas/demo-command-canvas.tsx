@@ -694,6 +694,6 @@ function demoWebMcpContext(
           role: snapshot.membership.role,
         }
       : null,
-    canMutate: snapshot.membership?.role === "host",
+    canMutateCanvas: snapshot.membership?.role === "host",
   };
 }

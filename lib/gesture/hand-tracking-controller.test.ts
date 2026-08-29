@@ -43,6 +43,13 @@ function shiftedHand(offsetX: number, thumbX: number) {
   })) as unknown as HandLandmarks;
 }
 
+function neutralShiftedHand(offsetX: number) {
+  return hand({ x: 0.2, y: 0.58 }, { x: 0.1, y: 0.4 }).map((point) => ({
+    ...point,
+    x: point.x + offsetX,
+  })) as unknown as HandLandmarks;
+}
+
 class FakeWorker implements HandTrackingWorkerLike {
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: ErrorEvent) => void) | null = null;
@@ -854,6 +861,201 @@ describe("hand tracking controller lifecycle", () => {
     });
   });
 
+  it("emits a current visible neutral frame as an immediate release instead of pinch-loss grace", async () => {
+    let now = 1_000;
+    const { controller, worker, video } = harness(() => now);
+    const observations: HandTrackingObservation[] = [];
+    controller.subscribeObservations((observation) => observations.push(observation));
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    worker.emit({
+      type: "result",
+      timestamp: now,
+      hands: [
+        {
+          handedness: "unknown",
+          confidence: 0.96,
+          landmarks: hand({ x: 0.3, y: 0.4 }, { x: 0.33, y: 0.4 }),
+        },
+      ],
+    });
+    now = 1_016;
+    worker.emit({
+      type: "result",
+      timestamp: now,
+      hands: [
+        {
+          handedness: "unknown",
+          confidence: 0.96,
+          landmarks: hand({ x: 0.2, y: 0.58 }, { x: 0.1, y: 0.4 }),
+        },
+      ],
+    });
+    now = 1_032;
+    worker.emit({
+      type: "result",
+      timestamp: now,
+      hands: [
+        {
+          handedness: "unknown",
+          confidence: 0.96,
+          landmarks: hand({ x: 0.1, y: 0.4 }, { x: 0.19, y: 0.4 }),
+        },
+      ],
+    });
+    now = 1_048;
+    worker.emit({
+      type: "result",
+      timestamp: now,
+      hands: [
+        {
+          handedness: "unknown",
+          confidence: 0.96,
+          landmarks: hand({ x: 0.1, y: 0.4 }, { x: 0.13, y: 0.4 }),
+        },
+      ],
+    });
+
+    expect(observations).toHaveLength(4);
+    expect(observations[0]).toMatchObject({
+      mode: "pinch",
+      trackingState: "tracked",
+    });
+    expect(observations[1]).toEqual({ mode: "idle", timestamp: 1_016 });
+    expect(observations[2]).toMatchObject({
+      mode: "point",
+      pointer: { x: expect.closeTo(0.726778, 5), y: expect.any(Number) },
+      trackingState: "tracked",
+    });
+    expect(observations[3]).toMatchObject({
+      mode: "pinch",
+      trackingState: "tracked",
+    });
+  });
+
+  it("keeps owner pinch grace through an unreliable owner plus neutral bystander, then releases for owner neutral", async () => {
+    let now = 1_000;
+    const { controller, worker, video } = harness(() => now);
+    const observations: HandTrackingObservation[] = [];
+    controller.subscribeObservations((observation) => observations.push(observation));
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    worker.emit({
+      type: "result",
+      timestamp: now,
+      hands: [
+        {
+          handedness: "unknown",
+          confidence: 0.96,
+          landmarks: shiftedHand(0, 0.33),
+        },
+      ],
+    });
+    const ownerTrackId =
+      observations[0]?.mode === "pinch" ? observations[0].trackId : undefined;
+    expect(ownerTrackId).toBeDefined();
+
+    now = 1_016;
+    worker.emit({
+      type: "result",
+      timestamp: now,
+      hands: [
+        {
+          handedness: "unknown",
+          confidence: 0.2,
+          landmarks: shiftedHand(0, 0.33),
+        },
+        {
+          handedness: "unknown",
+          confidence: 0.96,
+          landmarks: neutralShiftedHand(0.4),
+        },
+      ],
+    });
+
+    expect(observations[1]).toMatchObject({
+      mode: "pinch",
+      trackId: ownerTrackId,
+      trackingState: "grace",
+    });
+
+    now = 1_032;
+    worker.emit({
+      type: "result",
+      timestamp: now,
+      hands: [
+        {
+          handedness: "unknown",
+          confidence: 0.96,
+          landmarks: neutralShiftedHand(0),
+        },
+      ],
+    });
+
+    expect(observations[2]).toEqual({ mode: "idle", timestamp: 1_032 });
+  });
+
+  it("gives owner neutral release precedence over an accepted bystander pinch in the same frame", async () => {
+    let now = 1_000;
+    const { controller, worker, video } = harness(() => now);
+    const observations: HandTrackingObservation[] = [];
+    controller.subscribeObservations((observation) => observations.push(observation));
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    worker.emit({
+      type: "result",
+      timestamp: now,
+      hands: [
+        {
+          handedness: "unknown",
+          confidence: 0.96,
+          landmarks: shiftedHand(0, 0.33),
+        },
+      ],
+    });
+    expect(observations[0]).toMatchObject({
+      mode: "pinch",
+      trackId: "hand-track-1",
+      trackingState: "tracked",
+    });
+
+    now = 1_016;
+    worker.emit({
+      type: "result",
+      timestamp: now,
+      hands: [
+        {
+          handedness: "unknown",
+          confidence: 0.96,
+          landmarks: neutralShiftedHand(0),
+        },
+        {
+          handedness: "unknown",
+          confidence: 0.96,
+          landmarks: shiftedHand(0.4, 0.33),
+        },
+      ],
+    });
+
+    expect(observations).toEqual([
+      expect.objectContaining({
+        mode: "pinch",
+        trackId: "hand-track-1",
+        trackingState: "tracked",
+      }),
+      { mode: "idle", timestamp: 1_016 },
+    ]);
+  });
+
   it("produces one spatially continuous track for a rapid label flip and reordered second-hand entrance", async () => {
     let now = 1_000;
     const { controller, worker, video } = harness(() => now);
@@ -1589,8 +1791,8 @@ describe("hand tracking controller lifecycle", () => {
       ...basePlan.primary,
       descriptor: {
         ...basePlan.primary.descriptor,
-        id: "private-yolo-test",
-        displayName: "Private YOLO test relay",
+        id: "private-gpu-test",
+        displayName: "Private GPU test relay",
         role: "candidate" as const,
         runtime: "private-hand-relay",
       },
@@ -1610,7 +1812,7 @@ describe("hand tracking controller lifecycle", () => {
         getTracks: () => [{ stop: vi.fn() }],
       }) as unknown as MediaStream),
       createWorkerForEngine: vi.fn((engine: { id: string }) =>
-        engine.id === "private-yolo-test" ? candidateWorker : fallbackWorker,
+        engine.id === "private-gpu-test" ? candidateWorker : fallbackWorker,
       ),
       createImageBitmap: vi.fn(async () => ({ close: vi.fn() }) as unknown as ImageBitmap),
       requestAnimationFrame: vi.fn(() => 1),

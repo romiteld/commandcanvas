@@ -156,7 +156,7 @@ export function SpatialCameraControl({
     spatialModeStartedRef.current = true;
     spatialModeRequestedRef.current = false;
     setPreviewExpanded(false);
-    setSensorPreviewVisible(true);
+    setSensorPreviewVisible(!prefersCollapsedSensorPreview());
     spatialModeStartedHandlerRef.current?.();
   }, [setPreviewExpanded]);
 
@@ -647,9 +647,9 @@ export function SpatialCameraControl({
             {detectedMode === "pinch"
               ? "PINCH · ready to hold"
               : detectedMode === "bimanual_pinch"
-                ? "TWO HANDS · spread to resize"
+                ? "TWO HANDS · resize object or zoom canvas"
                 : detectedMode === "open_palm"
-                  ? "OPEN · hold steady to focus"
+                  ? "OPEN · pen up or pan blank canvas"
               : detectedMode === "point"
                 ? "POINT · move over an object, then pinch"
                 : status.state === "ready"
@@ -950,6 +950,14 @@ export function SpatialCameraControl({
   }
 }
 
+function prefersCollapsedSensorPreview() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(max-width: 720px)").matches
+  );
+}
+
 function sensorPipSafeBounds(
   workspace: DOMRect,
   dock: DOMRect | undefined,
@@ -1082,7 +1090,7 @@ function runtimeChipLabel(engineStatus: HandTrackingEngineStatus | null) {
   const engine = engineStatus.id.startsWith("yolo26")
     ? "YOLO26"
     : engineStatus.processingLocation === "private-relay"
-      ? "Private YOLO"
+      ? "Private GPU"
       : engineStatus.displayName;
   const provider = engineStatus.executionProvider
     ? executionProviderLabel(engineStatus.executionProvider)

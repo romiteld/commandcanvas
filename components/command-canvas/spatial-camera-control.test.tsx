@@ -159,7 +159,7 @@ describe("SpatialCameraControl", () => {
 
     act(() => {
       fake.setEngine({
-        id: "private-yolo-hand-relay-v1",
+        id: "private-gpu-hand-relay-v1",
         displayName: "Private GPU Hand Relay",
         runtime: "private-hand-relay",
         fallback: false,
@@ -213,7 +213,7 @@ describe("SpatialCameraControl", () => {
 
     act(() => {
       fake.setEngine({
-        id: "private-yolo-hand-relay-v1",
+        id: "private-gpu-hand-relay-v1",
         displayName: "Private GPU Hand Relay",
         runtime: "private-hand-relay",
         fallback: false,
@@ -228,12 +228,30 @@ describe("SpatialCameraControl", () => {
         droppedBeforeEncode: 2,
         droppedBeforeSend: 0,
         runtimeSamples: 4,
+        runtimeMetrics: {
+          sampleCount: 12,
+          deliveredRateHz: 18.4,
+          captureLatencyMs: { p50: 4, p95: 7 },
+          processingLatencyMs: { p50: 18, p95: 24 },
+          encodeLatencyMs: { p50: 6, p95: 8 },
+          relayLatencyMs: { p50: 31, p95: 42 },
+          captureToReceiveMs: { p50: 54, p95: 61 },
+          captureToRenderMs: null,
+          droppedSuperseded: 0,
+          droppedLateCapture: 0,
+          droppedStale: 0,
+          droppedBeforeEncode: 2,
+          droppedBeforeSend: 0,
+        },
       });
       fake.setStatus({ state: "ready" });
     });
 
     expect(
       await screen.findByText("Hand input ready · private GPU relay"),
+    ).toBeVisible();
+    expect(
+      screen.getByText("Private GPU · CUDA · 18.4 Hz · p95 61 ms · dropped 2"),
     ).toBeVisible();
     await user.click(
       screen.getByRole("button", { name: "Show hand tracking details" }),
@@ -766,6 +784,41 @@ describe("SpatialCameraControl", () => {
     expect(screen.getByRole("button", { name: "Show hand sensor preview" })).toBeVisible();
   });
 
+  it("starts the mobile sensor PiP collapsed after calibration", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(max-width: 720px)",
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(() => true),
+      })),
+    );
+    try {
+      const user = userEvent.setup();
+      const fake = fakeController();
+      const { container } = render(
+        <SpatialCameraControl createController={() => fake.controller} />,
+      );
+
+      await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+      act(() => fake.setStatus({ state: "ready" }));
+
+      expect(container.querySelector(".spatial-camera-control")).toHaveClass(
+        "is-sensor-pip-hidden",
+      );
+      expect(
+        screen.getByRole("button", { name: "Show hand sensor preview" }),
+      ).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("collects reach and open/closed pinch evidence into a retained device profile", async () => {
     const user = userEvent.setup();
     const fake = fakeController();
@@ -973,7 +1026,7 @@ describe("SpatialCameraControl", () => {
       }),
     );
     expect(
-      await screen.findByText("OPEN · hold steady to focus"),
+      await screen.findByText("OPEN · pen up or pan blank canvas"),
     ).toBeVisible();
     expect(screen.getByText("Gesture self-check · 0/2")).toBeVisible();
 
@@ -998,7 +1051,7 @@ describe("SpatialCameraControl", () => {
       }),
     );
     expect(
-      await screen.findByText("TWO HANDS · spread to resize"),
+      await screen.findByText("TWO HANDS · resize object or zoom canvas"),
     ).toBeVisible();
   });
 

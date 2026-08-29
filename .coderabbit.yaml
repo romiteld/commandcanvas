@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: en-US
+early_access: false
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "lib/webmcp/**"
+      instructions: >-
+        Treat execute-time authorization, phase guards, strict schemas,
+        cancellation, and human approval for consequential actions as release
+        contracts. Flag any path that lets natural-language input bypass the
+        canonical command and receipt pipeline.
+    - path: "lib/gesture/**"
+      instructions: >-
+        Prioritize tracking-loss safety, deterministic gesture transitions,
+        index-fingertip drawing, sticky pinch acquisition, two-hand identity,
+        and recoverable edge actions. Predicted or low-confidence frames must
+        never trigger a destructive or consequential action.
+    - path: "lib/packets/**"
+      instructions: >-
+        Preserve immutable content and recipient snapshots, explicit host
+        approval, safe HTML escaping, idempotency, and honest Resend outcomes.
+    - path: "supabase/migrations/**"
+      instructions: >-
+        Flag destructive SQL, weakened row-level security, mutable receipts,
+        authorization bypasses, or policies that expose one room to another.
+
+chat:
+  auto_reply: true

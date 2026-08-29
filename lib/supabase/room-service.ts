@@ -6,6 +6,7 @@ import type {
   CanvasActor,
   CanvasCommandSource,
   CanvasState,
+  CommandErrorCode,
 } from "@/lib/canvas/command-engine";
 import {
   buildCanvasMutationPlan,
@@ -76,6 +77,7 @@ export type RoomServiceErrorCode =
 export interface RoomServiceError {
   code: RoomServiceErrorCode;
   message: string;
+  commandCode?: CommandErrorCode;
 }
 
 export type RoomServiceResult<T> =
@@ -535,8 +537,16 @@ function providerErrorMessage(error: unknown): string | null {
 function failure<C extends RoomServiceErrorCode>(
   code: C,
   message: string,
-): { ok: false; error: { code: C; message: string } } {
-  return { ok: false, error: { code, message } };
+  commandCode?: CommandErrorCode,
+): { ok: false; error: RoomServiceError & { code: C } } {
+  return {
+    ok: false,
+    error: {
+      code,
+      message,
+      ...(commandCode ? { commandCode } : {}),
+    },
+  };
 }
 
 function joinUnavailable(): RoomServiceResult<never> {
@@ -580,11 +590,6 @@ function deriveActor(
   requestedSource: CanvasCommandSource,
 ): RoomServiceResult<{ actor: CanvasActor; source: CanvasCommandSource }> {
   if (requestedSource === "webmcp") {
-    if (member.role !== "host")
-      return failure(
-        "host_required",
-        "Only the room host can authorize WebMCP mutations.",
-      );
     return {
       ok: true,
       value: {
@@ -635,33 +640,50 @@ function mapPlanError(
       return failure(
         "object_pinned",
         "Unpin the object before moving or resizing it.",
+        code,
       );
     case "STALE_REVISION":
-      return failure("stale_revision", "Canvas changed. Reload and try again.");
+      return failure(
+        "stale_revision",
+        "Canvas changed. Reload and try again.",
+        code,
+      );
     case "OBJECT_EXISTS":
     case "OBJECT_NOT_FOUND":
       return failure(
         "command_conflict",
         "Canvas changed before the command could be committed.",
+        code,
       );
     case "STALE_OBJECT_VERSION":
       return failure(
         "command_conflict",
         "That thought card changed. Continue from its latest text.",
+        code,
       );
     case "NOTHING_TO_UNDO":
-      return failure("nothing_to_undo", "There is nothing left to undo.");
+      return failure(
+        "nothing_to_undo",
+        "There is nothing left to undo.",
+        code,
+      );
     case "NOTHING_TO_REDO":
-      return failure("nothing_to_redo", "There is nothing left to redo.");
+      return failure(
+        "nothing_to_redo",
+        "There is nothing left to redo.",
+        code,
+      );
     case "INVALID_HIERARCHY":
       return failure(
         "invalid_hierarchy",
         "That frame or group hierarchy is no longer valid.",
+        code,
       );
     case "FRAME_NOT_EMPTY":
       return failure(
         "frame_not_empty",
         "Ungroup the frame before moving it to trash.",
+        code,
       );
     case "INVALID_STATE":
       return failure(
@@ -670,16 +692,18 @@ function mapPlanError(
       );
     case "INVALID_COMMAND":
     case "ROOM_MISMATCH":
-      return failure("invalid_command", "Canvas command is invalid.");
+      return failure("invalid_command", "Canvas command is invalid.", code);
     case "OBJECT_NOT_EDITABLE":
       return failure(
         "invalid_command",
         "Only an active note can receive dictated text.",
+        code,
       );
     case "NOTE_TEXT_LIMIT":
       return failure(
         "invalid_command",
         "That thought card reached its 4,000-character limit. Finish it and start another thought.",
+        code,
       );
   }
 }

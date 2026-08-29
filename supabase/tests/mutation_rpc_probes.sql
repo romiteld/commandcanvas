@@ -22,9 +22,10 @@ select
   gen_random_uuid() as undo_one_receipt_id,
   gen_random_uuid() as pin_receipt_id,
   gen_random_uuid() as rejected_pin_receipt_id,
-  gen_random_uuid() as rejected_agent_receipt_id,
+  gen_random_uuid() as participant_agent_receipt_id,
   gen_random_uuid() as rejected_inverse_receipt_id,
-  'note-' || gen_random_uuid()::text as object_id
+  'note-' || gen_random_uuid()::text as object_id,
+  'note-' || gen_random_uuid()::text as participant_agent_object_id
 \gset cc_
 
 select
@@ -57,8 +58,13 @@ select
     true
   ),
   set_config(
-    'commandcanvas.test_rejected_agent_receipt_id',
-    :'cc_rejected_agent_receipt_id',
+    'commandcanvas.test_participant_agent_receipt_id',
+    :'cc_participant_agent_receipt_id',
+    true
+  ),
+  set_config(
+    'commandcanvas.test_participant_agent_object_id',
+    :'cc_participant_agent_object_id',
     true
   ),
   set_config(
@@ -537,50 +543,76 @@ begin
       end if;
   end;
 
-  begin
-    perform public.commit_canvas_mutation(
-      p_room_id => current_setting('commandcanvas.test_room_id')::uuid,
-      p_actor_user_id => current_setting(
-        'commandcanvas.test_participant_user_id'
-      )::uuid,
-      p_actor_type => 'agent',
-      p_source => 'webmcp',
-      p_action => 'transform',
-      p_description => 'Participant-authorized agent mutation must fail.',
-      p_changes => jsonb_build_array(
-        jsonb_build_object(
-          'objectId', current_setting('commandcanvas.test_object_id'),
-          'expectedVersion', 6,
-          'after', jsonb_build_object(
-            'type', 'note',
-            'title', 'Mutation probe note',
-            'x', 40,
-            'y', 60,
-            'width', 300,
-            'height', 180,
-            'zIndex', 1,
-            'minimized', false,
-            'pinned', true,
-            'deletedAt', null,
-            'metadata', '{}'::jsonb,
-            'payload', '{"text":"Atomic mutation probe","tone":"sky"}'::jsonb
-          )
+  perform public.commit_canvas_mutation(
+    p_room_id => current_setting('commandcanvas.test_room_id')::uuid,
+    p_actor_user_id => current_setting(
+      'commandcanvas.test_participant_user_id'
+    )::uuid,
+    p_actor_type => 'agent',
+    p_source => 'webmcp',
+    p_action => 'create',
+    p_description => 'CommandCanvas agent created a participant note.',
+    p_changes => jsonb_build_array(
+      jsonb_build_object(
+        'objectId', current_setting(
+          'commandcanvas.test_participant_agent_object_id'
+        ),
+        'expectedVersion', null,
+        'after', jsonb_build_object(
+          'type', 'note',
+          'title', 'Participant agent note',
+          'x', 380,
+          'y', 60,
+          'width', 300,
+          'height', 180,
+          'zIndex', 2,
+          'minimized', false,
+          'pinned', false,
+          'deletedAt', null,
+          'metadata', '{}'::jsonb,
+          'payload', '{"text":"Participant WebMCP probe","tone":"sky"}'::jsonb
         )
-      ),
-      p_inverse_command => null,
-      p_reversible => true,
-      p_undoes_receipt_id => null,
-      p_receipt_id => current_setting(
-        'commandcanvas.test_rejected_agent_receipt_id'
+      )
+    ),
+    p_inverse_command => null,
+    p_reversible => true,
+    p_undoes_receipt_id => null,
+    p_receipt_id => current_setting(
+      'commandcanvas.test_participant_agent_receipt_id'
+    )::uuid
+  );
+
+  if not exists (
+    select 1
+    from public.canvas_objects object_row
+    where object_row.room_id = current_setting(
+      'commandcanvas.test_room_id'
+    )::uuid
+      and object_row.id = current_setting(
+        'commandcanvas.test_participant_agent_object_id'
+      )
+      and object_row.created_by = current_setting(
+        'commandcanvas.test_participant_user_id'
       )::uuid
-    );
-    raise exception 'mutation_participant_agent_authority_was_accepted';
-  exception
-    when raise_exception then
-      if sqlerrm <> 'canvas_agent_requires_host' then
-        raise;
-      end if;
-  end;
+  ) then
+    raise exception 'mutation_participant_agent_object_missing';
+  end if;
+
+  if not exists (
+    select 1
+    from public.receipts receipt
+    where receipt.id = current_setting(
+      'commandcanvas.test_participant_agent_receipt_id'
+    )::uuid
+      and receipt.actor_user_id = current_setting(
+        'commandcanvas.test_participant_user_id'
+      )::uuid
+      and receipt.actor_type = 'agent'
+      and receipt.source = 'webmcp'
+      and receipt.actor_display_name = 'CommandCanvas agent'
+  ) then
+    raise exception 'mutation_participant_agent_receipt_invalid';
+  end if;
 
   begin
     perform public.commit_canvas_mutation(

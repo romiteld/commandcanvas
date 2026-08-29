@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createPrivateHandRelaySpatialVisionEngine,
   createAdaptivePrivateHandRelayFrameEncoder,
   createPrivateHandRelayWorker,
   type PrivateHandRelayFrameEncoder,
@@ -76,6 +77,14 @@ async function flush() {
 }
 
 describe("private hand relay worker endpoint", () => {
+  it("uses a model-neutral engine identity while retaining the AGPL relay-source review", () => {
+    expect(createPrivateHandRelaySpatialVisionEngine().descriptor).toMatchObject({
+      id: "private-gpu-hand-relay-v1",
+      displayName: "Private GPU Hand Relay",
+      evidence: { licenseReview: "agpl-3.0-source-release" },
+    });
+  });
+
   it("does not request a session without current explicit camera-upload consent", async () => {
     const requestSession = vi.fn();
     const worker = createPrivateHandRelayWorker({

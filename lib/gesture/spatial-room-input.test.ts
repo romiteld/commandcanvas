@@ -10,6 +10,11 @@ import {
 } from "@/lib/gesture/spatial-room-input";
 import type { HandCalibrationProfile } from "@/lib/gesture/hand-calibration";
 
+type SingleHandObservation = Exclude<
+  HandTrackingObservation,
+  { mode: "idle" | "bimanual_pinch" }
+>;
+
 function calibration(
   overrides: Partial<HandCalibrationProfile>,
 ): HandCalibrationProfile {
@@ -25,10 +30,13 @@ function calibration(
   };
 }
 
-function measuredObservation(timestamp: number): HandTrackingObservation {
+function measuredObservation(
+  timestamp: number,
+): SingleHandObservation {
   return {
     mode: "point",
-    pointer: { x: 0.95, y: 0.95 },
+    pointer: { x: 0.4, y: 0.4 },
+    motionPointer: { x: 0.46, y: 0.5 },
     confidence: 0.97,
     trackId: "track-a",
     prediction: { predicted: false },
@@ -51,10 +59,11 @@ function measuredObservation(timestamp: number): HandTrackingObservation {
 }
 
 describe("spatial room input adapter", () => {
-  it("uses landmark 8 for targeting and palm geometry only for held motion", () => {
+  it("uses filtered intent pointers while retaining raw measurements only as evidence", () => {
     const observation: HandTrackingObservation = {
       mode: "pinch",
       pointer: { x: 0.9, y: 0.8 },
+      motionPointer: { x: 0.7, y: 0.6 },
       confidence: 0.97,
       trackId: "track-a",
       prediction: { predicted: false },
@@ -76,8 +85,8 @@ describe("spatial room input adapter", () => {
 
     expect(spatialInputFromHandObservation(observation, true)).toEqual({
       mode: "pinch",
-      pointer: { x: 0.21, y: 0.31 },
-      motionPointer: { x: 0.42, y: 0.52 },
+      pointer: { x: 0.9, y: 0.8 },
+      motionPointer: { x: 0.7, y: 0.6 },
       timestamp: 1_000,
       reliability: {
         trackId: "track-a",
@@ -87,6 +96,50 @@ describe("spatial room input adapter", () => {
         trackingState: "tracked",
       },
       edgePreviewVisible: true,
+    });
+  });
+
+  it("does not let raw landmark jitter override stable filtered intent points", () => {
+    const stableFiltered = {
+      mode: "pinch" as const,
+      pointer: { x: 0.4, y: 0.4 },
+      motionPointer: { x: 0.46, y: 0.5 },
+      confidence: 0.97,
+      trackId: "track-a",
+      prediction: { predicted: false as const },
+      trackingState: "tracked" as const,
+      pinchRatio: 0.1,
+    };
+    const first: SingleHandObservation = {
+      ...stableFiltered,
+      measurements: {
+        ...measuredObservation(1_000).measurements!,
+        indexTip: { x: 0.4, y: 0.4 },
+        palmMcpCentroid: { x: 0.46, y: 0.5 },
+        pinchRatio: 0.1,
+      },
+      timestamp: 1_000,
+    };
+    const jittered: SingleHandObservation = {
+      ...stableFiltered,
+      measurements: {
+        ...first.measurements!,
+        indexTip: { x: 0.8, y: 0.2 },
+        palmMcpCentroid: { x: 0.9, y: 0.15 },
+      },
+      timestamp: 1_016,
+    };
+
+    const firstInput = spatialInputFromHandObservation(first, false);
+    const jitteredInput = spatialInputFromHandObservation(jittered, false);
+
+    expect(firstInput).toMatchObject({
+      pointer: { x: 0.4, y: 0.4 },
+      motionPointer: { x: 0.46, y: 0.5 },
+    });
+    expect(jitteredInput).toMatchObject({
+      pointer: { x: 0.4, y: 0.4 },
+      motionPointer: { x: 0.46, y: 0.5 },
     });
   });
 
@@ -180,7 +233,7 @@ describe("spatial room input adapter", () => {
     if (narrow.input.mode === "idle" || narrow.input.mode === "bimanual_pinch")
       throw new Error("Expected a calibrated single-hand input.");
     expect(wide.input.pointer).not.toEqual(narrow.input.pointer);
-    expect(wide.input.pointer).not.toEqual({ x: 0.95, y: 0.95 });
+    expect(wide.input.pointer).not.toEqual({ x: 0.4, y: 0.4 });
   });
 
   it("uses Task 2 calibrated thresholds and two-of-three voting for semantic pinch", () => {

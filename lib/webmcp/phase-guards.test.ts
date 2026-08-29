@@ -31,7 +31,7 @@ function context(
   return {
     phase,
     actor: { participantId: "participant-host", role: "host" },
-    canMutate: true,
+    canMutateCanvas: true,
     ...overrides,
   };
 }
@@ -98,7 +98,7 @@ describe("evaluateToolGuard", () => {
     expect(
       evaluateToolGuard(
         "get_canvas_state",
-        context(activeRoom, { actor: null, canMutate: false }),
+        context(activeRoom, { actor: null, canMutateCanvas: false }),
       ),
     ).toEqual({
       ok: false,
@@ -116,6 +116,28 @@ describe("evaluateToolGuard", () => {
         }),
       ),
     ).toEqual({ ok: true });
+  });
+
+  it("keeps packet preparation host-only even when a participant may mutate the canvas", () => {
+    const contentRoom: WebMcpPhaseState = {
+      ...activeRoom,
+      hasContent: true,
+    };
+
+    expect(
+      evaluateToolGuard(
+        "prepare_meeting_packet",
+        context(contentRoom, {
+          actor: { participantId: "participant-2", role: "participant" },
+          canMutateCanvas: true,
+        }),
+      ),
+    ).toEqual({
+      ok: false,
+      code: "forbidden",
+      message:
+        "host authorization required: only the host can prepare a meeting packet",
+    });
   });
 
   it("keeps object and sketch operations behind their exact content prerequisites", () => {
@@ -151,7 +173,7 @@ describe("evaluateToolGuard", () => {
     expect(
       evaluateToolGuard(
         "create_object",
-        context(activeRoom, { canMutate: false }),
+        context(activeRoom, { canMutateCanvas: false }),
       ),
     ).toEqual({
       ok: false,

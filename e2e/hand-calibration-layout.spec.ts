@@ -67,12 +67,22 @@ test("keeps mobile calibration in a bounded sensor sheet then returns to a hidea
   await page.getByRole("button", { name: "Skip hand calibration" }).click();
   const sensor = page.locator(".spatial-camera-control");
   await expect(sensor).toHaveClass(/is-sensor-pip/);
+  await expect(sensor).toHaveClass(/is-sensor-pip-hidden/);
   const sensorBox = await sensor.boundingBox();
   if (!sensorBox) throw new Error("The hand sensor PiP geometry is unavailable.");
   expect(sensorBox.width).toBeLessThanOrEqual(300);
   expect(sensorBox.height).toBeLessThan(viewport.height * 0.55);
   await expect(page.getByRole("region", { name: "Hand interaction controls" })).toBeVisible();
 
+  const showControl = await sensor
+    .getByRole("button", { name: "Show hand sensor preview" })
+    .boundingBox();
+  if (!showControl) throw new Error("Show hand sensor preview geometry is unavailable.");
+  expect(showControl.width).toBeGreaterThanOrEqual(44);
+  expect(showControl.height).toBeGreaterThanOrEqual(44);
+
+  await page.getByRole("button", { name: "Show hand sensor preview" }).click();
+  await expect(sensor).not.toHaveClass(/is-sensor-pip-hidden/);
   for (const accessibleName of [
     "Move hand sensor preview",
     "Hide hand sensor preview",
@@ -89,7 +99,6 @@ test("keeps mobile calibration in a bounded sensor sheet then returns to a hidea
 
   await page.getByRole("button", { name: "Hide hand sensor preview" }).click();
   await expect(sensor).toHaveClass(/is-sensor-pip-hidden/);
-  await expect(page.getByLabel("Local hand tracking preview")).toBeHidden();
 });
 
 test("keeps desktop calibration bounded over a visible canvas", async ({

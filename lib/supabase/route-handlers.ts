@@ -7,6 +7,7 @@ import {
   createRoomRequestSchema,
   joinRoomRequestSchema,
 } from "@/lib/supabase/room-contracts";
+import type { CommandErrorCode } from "@/lib/canvas/command-engine";
 import {
   authenticateRequestActor,
   type SupabaseUserVerifier,
@@ -18,7 +19,7 @@ import {
 } from "@/lib/supabase/server-client";
 import type {
   CommandCanvasRoomService,
-  RoomServiceErrorCode,
+  RoomServiceError,
   RoomServiceClient,
 } from "@/lib/supabase/room-service";
 import { createRoomService } from "@/lib/supabase/room-service";
@@ -59,6 +60,7 @@ export function createServerRoomRouteDependencies(): ServerRoomRouteDependencies
 interface RouteError {
   code: string;
   message: string;
+  commandCode?: CommandErrorCode;
 }
 
 type ParsedRequest<T> =
@@ -185,7 +187,7 @@ export async function handleCommandRequest(
       actor.actorUserId,
       input.value,
     );
-    if (!result.ok) return commandServiceError(result.error.code);
+    if (!result.ok) return commandServiceError(result.error);
 
     return jsonResponse(200, { ok: true, mutation: result.value });
   } catch {
@@ -292,81 +294,108 @@ function isApplicationJson(contentType: string | null) {
   return contentType?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
 }
 
-function commandServiceError(code: RoomServiceErrorCode): Response {
+function commandServiceError(error: RoomServiceError): Response {
+  const { code, commandCode } = error;
+  const safeError = (message: string): RouteError => ({
+    code,
+    message: commandCode ? commandErrorMessage(commandCode) : message,
+    ...(commandCode ? { commandCode } : {}),
+  });
   switch (code) {
     case "member_required":
-      return errorResponse(403, {
-        code,
-        message: "Join this room before changing its canvas.",
-      });
+      return errorResponse(
+        403,
+        safeError("Join this room before changing its canvas."),
+      );
     case "host_required":
-      return errorResponse(403, {
-        code,
-        message: "Only the room host can authorize this action.",
-      });
+      return errorResponse(
+        403,
+        safeError("Only the room host can authorize this action."),
+      );
     case "permission_denied":
-      return errorResponse(403, {
-        code,
-        message: "This participant cannot perform that command.",
-      });
+      return errorResponse(
+        403,
+        safeError("This participant cannot perform that command."),
+      );
     case "room_unavailable":
-      return errorResponse(404, { code, message: "Room is unavailable." });
+      return errorResponse(404, safeError("Room is unavailable."));
     case "stale_revision":
-      return errorResponse(409, {
-        code,
-        message: "Canvas changed. Reload and try again.",
-      });
+      return errorResponse(
+        409,
+        safeError("Canvas changed. Reload and try again."),
+      );
     case "object_pinned":
-      return errorResponse(409, {
-        code,
-        message: "Unpin the object before moving or resizing it.",
-      });
+      return errorResponse(
+        409,
+        safeError("Unpin the object before moving or resizing it."),
+      );
     case "invalid_hierarchy":
-      return errorResponse(409, {
-        code,
-        message: "That frame or group hierarchy is no longer valid.",
-      });
+      return errorResponse(
+        409,
+        safeError("That frame or group hierarchy is no longer valid."),
+      );
     case "frame_not_empty":
-      return errorResponse(409, {
-        code,
-        message: "Ungroup the frame before moving it to trash.",
-      });
+      return errorResponse(
+        409,
+        safeError("Ungroup the frame before moving it to trash."),
+      );
     case "command_conflict":
-      return errorResponse(409, {
-        code,
-        message: "Canvas changed before the command could be committed.",
-      });
+      return errorResponse(
+        409,
+        safeError("Canvas changed before the command could be committed."),
+      );
     case "demo_room_storage_limit_reached":
-      return errorResponse(409, {
-        code,
-        message:
+      return errorResponse(
+        409,
+        safeError(
           "This demo room reached its storage limit. Reset the demo to continue.",
-      });
+        ),
+      );
     case "nothing_to_undo":
-      return errorResponse(409, {
-        code,
-        message: "There is nothing left to undo.",
-      });
+      return errorResponse(409, safeError("There is nothing left to undo."));
     case "nothing_to_redo":
-      return errorResponse(409, {
-        code,
-        message: "There is nothing left to redo.",
-      });
+      return errorResponse(409, safeError("There is nothing left to redo."));
     case "invalid_command":
-      return errorResponse(400, {
-        code,
-        message: "Canvas command is invalid.",
-      });
+      return errorResponse(400, safeError("Canvas command is invalid."));
     case "create_unavailable":
     case "demo_room_limit_reached":
     case "delete_unavailable":
     case "join_unavailable":
     case "invalid_persisted_state":
     case "mutation_unavailable":
-      return errorResponse(503, {
-        code,
-        message: "Canvas state is temporarily unavailable.",
-      });
+      return errorResponse(
+        503,
+        safeError("Canvas state is temporarily unavailable."),
+      );
+  }
+}
+
+function commandErrorMessage(code: CommandErrorCode): string {
+  switch (code) {
+    case "OBJECT_NOT_EDITABLE":
+      return "Only an active note can receive dictated text.";
+    case "NOTE_TEXT_LIMIT":
+      return "That thought card reached its 4,000-character limit. Finish it and start another thought.";
+    case "STALE_OBJECT_VERSION":
+      return "That thought card changed. Continue from its latest text.";
+    case "OBJECT_PINNED":
+      return "Unpin the object before moving or resizing it.";
+    case "STALE_REVISION":
+      return "Canvas changed. Reload and try again.";
+    case "OBJECT_EXISTS":
+    case "OBJECT_NOT_FOUND":
+      return "Canvas changed before the command could be committed.";
+    case "INVALID_HIERARCHY":
+      return "That frame or group hierarchy is no longer valid.";
+    case "FRAME_NOT_EMPTY":
+      return "Ungroup the frame before moving it to trash.";
+    case "NOTHING_TO_UNDO":
+      return "There is nothing left to undo.";
+    case "NOTHING_TO_REDO":
+      return "There is nothing left to redo.";
+    case "INVALID_COMMAND":
+    case "ROOM_MISMATCH":
+      return "Canvas command is invalid.";
   }
 }
 
