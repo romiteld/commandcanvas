@@ -1,6 +1,7 @@
 import type { DirectCanvasIntent } from "@/lib/canvas/direct-command";
 import {
   executeRealtimeVoiceTool,
+  type RealtimeVoiceCanvasInspector,
   type RealtimeVoiceIntentResult,
 } from "@/lib/realtime-voice/tools";
 
@@ -19,14 +20,15 @@ export type RealtimeVoiceState =
 export interface RealtimeVoiceToolAction {
   callId: string;
   name: string;
-  status: "running" | "submitted" | "refused";
+  status: "running" | "observed" | "submitted" | "refused" | "cancelled";
   message?: string;
 }
 
 export type RealtimeVoiceResponseOutcome = "completed" | "interrupted";
 
 export interface RealtimeVoiceTurnContext {
-  itemId: string;
+  itemId?: string;
+  signal: AbortSignal;
 }
 
 export interface RealtimeVoiceMediaTrack {
@@ -94,6 +96,7 @@ export interface RealtimeVoiceControllerOptions {
     | Promise<RealtimeVoiceIntentResult>;
   onStatusChange?: (status: RealtimeVoiceStatus) => void;
   onTranscript?: (text: string, itemId?: string) => void;
+  onTranscriptDelta?: (delta: string, itemId?: string) => void;
   onAssistantTranscript?: (text: string) => void;
   onUserSpeechStarted?: (itemId?: string) => void;
   onResponseSettled?: (
@@ -101,6 +104,7 @@ export interface RealtimeVoiceControllerOptions {
     itemId?: string,
   ) => void;
   onToolAction?: (action: RealtimeVoiceToolAction) => void;
+  inspectCanvas?: RealtimeVoiceCanvasInspector;
   onPlaybackBlocked?: () => void;
   platform?: RealtimeVoicePlatform;
 }
@@ -118,6 +122,7 @@ const MAX_SDP_ANSWER_LENGTH = 1_048_576;
 const MAX_SESSION_MILLISECONDS = 10 * 60 * 1_000;
 const MAX_SETUP_MILLISECONDS = 20 * 1_000;
 const MAX_TRACKED_INPUT_TURNS = 16;
+const MAX_TRANSCRIPT_DELTA_CHARS = 2_000;
 
 export function createRealtimeVoiceController(
   options: RealtimeVoiceControllerOptions,
@@ -131,6 +136,7 @@ export function createRealtimeVoiceController(
   let microphone: RealtimeVoiceMediaStream | null = null;
   let remoteAudio: RealtimeVoiceRemoteAudio | null = null;
   let sessionRequest: AbortController | null = null;
+  let intentSession: AbortController | null = null;
   let sessionLimitTimer: ReturnType<typeof setTimeout> | null = null;
   let setupTimer: ReturnType<typeof setTimeout> | null = null;
   let sessionReady = false;
@@ -172,6 +178,8 @@ export function createRealtimeVoiceController(
       return;
     releaseResources();
     const activeGeneration = ++generation;
+    const activeIntentSession = new AbortController();
+    intentSession = activeIntentSession;
     handledCallIds.clear();
     remoteStreams.clear();
     pendingInputItemIds.length = 0;
@@ -231,6 +239,7 @@ export function createRealtimeVoiceController(
           nextChannel,
           activeGeneration,
           options.onIntent,
+          activeIntentSession.signal,
         );
       });
       nextChannel.addEventListener("close", () => {
@@ -344,6 +353,10 @@ export function createRealtimeVoiceController(
     sessionLimitTimer = null;
     sessionRequest?.abort();
     sessionRequest = null;
+    intentSession?.abort(
+      new DOMException("Voice session stopped", "AbortError"),
+    );
+    intentSession = null;
     if (peer) peer.ontrack = null;
     const tracks = new Set<RealtimeVoiceMediaTrack>();
     microphone?.getTracks().forEach((track) => tracks.add(track));
@@ -408,6 +421,7 @@ export function createRealtimeVoiceController(
     activeChannel: RealtimeVoiceDataChannel,
     activeGeneration: number,
     onIntent: RealtimeVoiceControllerOptions["onIntent"],
+    intentSignal: AbortSignal,
   ) {
     const event = parseServerEvent(raw);
     if (!event) return;
@@ -446,6 +460,13 @@ export function createRealtimeVoiceController(
         if (transcript) options.onTranscript?.(transcript, itemId);
         return;
       }
+      case "conversation.item.input_audio_transcription.delta": {
+        const delta = cleanTranscriptDelta(event.delta);
+        const itemId = readEventId(event.item_id);
+        rememberPendingInputItem(itemId);
+        if (delta) options.onTranscriptDelta?.(delta, itemId);
+        return;
+      }
       case "response.output_audio_transcript.done": {
         const transcript = cleanTranscript(event.transcript);
         if (transcript) options.onAssistantTranscript?.(transcript);
@@ -459,6 +480,7 @@ export function createRealtimeVoiceController(
           activeChannel,
           activeGeneration,
           onIntent,
+          intentSignal,
           itemId ?? undefined,
         );
       }
@@ -471,6 +493,7 @@ export function createRealtimeVoiceController(
           activeChannel,
           activeGeneration,
           onIntent,
+          intentSignal,
           itemId ?? undefined,
         );
       }
@@ -484,6 +507,7 @@ export function createRealtimeVoiceController(
             activeChannel,
             activeGeneration,
             onIntent,
+            intentSignal,
             responseBinding.itemId ?? undefined,
           );
         if (calls.length > 0) await toolQueue;
@@ -519,6 +543,7 @@ export function createRealtimeVoiceController(
     activeChannel: RealtimeVoiceDataChannel,
     activeGeneration: number,
     onIntent: RealtimeVoiceControllerOptions["onIntent"],
+    intentSignal: AbortSignal,
     itemId?: string,
   ) {
     const call = parseFunctionCall(rawItem);
@@ -531,6 +556,7 @@ export function createRealtimeVoiceController(
           activeChannel,
           activeGeneration,
           onIntent,
+          intentSignal,
           itemId,
         ),
       )
@@ -548,6 +574,7 @@ export function createRealtimeVoiceController(
     activeChannel: RealtimeVoiceDataChannel,
     activeGeneration: number,
     onIntent: RealtimeVoiceControllerOptions["onIntent"],
+    intentSignal: AbortSignal,
     itemId?: string,
   ) {
     if (generation !== activeGeneration) return;
@@ -559,21 +586,40 @@ export function createRealtimeVoiceController(
     });
     const result = await executeRealtimeVoiceTool(
       { name: call.name, arguments: call.arguments },
-      itemId
-        ? (intent, source) => onIntent(intent, source, { itemId })
-        : onIntent,
+      (intent, source) =>
+        onIntent(intent, source, {
+          ...(itemId ? { itemId } : {}),
+          signal: intentSignal,
+        }),
+      {
+        signal: intentSignal,
+        inspectCanvas: options.inspectCanvas,
+      },
     );
+    if (result.outcome === "cancelled")
+      options.onToolAction?.({
+        callId: call.callId,
+        name: call.name,
+        status: "cancelled",
+        message: result.message,
+      });
+    else
+      options.onToolAction?.({
+        callId: call.callId,
+        name: call.name,
+        status:
+          result.outcome === "observed"
+            ? "observed"
+            : result.ok
+              ? "submitted"
+              : "refused",
+        message: result.message,
+      });
     if (
       generation !== activeGeneration ||
       activeChannel.readyState !== "open"
     )
       return;
-    options.onToolAction?.({
-      callId: call.callId,
-      name: call.name,
-      status: result.ok ? "submitted" : "refused",
-      message: result.message,
-    });
     if (!send(activeChannel, {
       type: "conversation.item.create",
       item: {
@@ -752,6 +798,13 @@ function cleanTranscript(raw: unknown) {
   if (typeof raw !== "string") return null;
   const transcript = raw.replace(/\s+/g, " ").trim();
   return transcript.length > 0 ? transcript.slice(0, 2_000) : null;
+}
+
+function cleanTranscriptDelta(raw: unknown) {
+  if (typeof raw !== "string") return "";
+  return raw
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .slice(0, MAX_TRANSCRIPT_DELTA_CHARS);
 }
 
 async function readSessionFailure(response: Response) {

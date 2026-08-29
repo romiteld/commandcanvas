@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useState,
   useSyncExternalStore,
@@ -29,15 +31,19 @@ export interface RealtimeVoiceControlProps {
   roomId: string;
   getAccessToken: () => string | null;
   disabled?: boolean;
-  onIntent: (
-    intent: DirectCanvasIntent,
-    source: "voice",
-  ) =>
-    | RealtimeVoiceIntentResult
-    | Promise<RealtimeVoiceIntentResult>;
+  onIntent: RealtimeVoiceControllerOptions["onIntent"];
+  inspectCanvas?: RealtimeVoiceControllerOptions["inspectCanvas"];
+  onThoughtDraftChange?: (text: string | null) => void;
   createController?: (
     options: RealtimeVoiceControllerOptions,
   ) => RealtimeVoiceControlController;
+}
+
+export interface RealtimeVoiceControlHandle {
+  start: () => void;
+  stop: () => void;
+  toggle: () => void;
+  isActive: () => boolean;
 }
 
 interface VoiceActivity {
@@ -72,6 +78,7 @@ interface BufferedVoiceTurn {
   pendingNarrationTranscripts: string[];
   commandTranscriptCount: number;
   suppressUpcomingTranscriptCount: number;
+  provisionalText: string;
   responseOutcome?: RealtimeVoiceResponseOutcome;
 }
 
@@ -85,10 +92,15 @@ class LatestVoiceHandlers {
   private orderedTurnKeys: string[] = [];
   private ignoredLateTurnIds = new Set<string>();
   private ignoredLateTurnOrder: string[] = [];
+  private sessionGeneration = 0;
+  private activeSessionSignal: AbortSignal | undefined;
+  private draftTurnKey: string | null = null;
 
   constructor(
     private readToken: () => string | null,
     private submitIntent: RealtimeVoiceControllerOptions["onIntent"],
+    private inspectSemanticCanvas: RealtimeVoiceControllerOptions["inspectCanvas"],
+    private publishThoughtDraft: (text: string | null) => void,
   ) {
     this.legacyTurn = this.createTurn(LEGACY_TURN_KEY);
   }
@@ -96,13 +108,26 @@ class LatestVoiceHandlers {
   update(
     readToken: () => string | null,
     submitIntent: RealtimeVoiceControllerOptions["onIntent"],
+    inspectSemanticCanvas: RealtimeVoiceControllerOptions["inspectCanvas"],
+    publishThoughtDraft: (text: string | null) => void,
   ) {
     this.readToken = readToken;
     this.submitIntent = submitIntent;
+    this.inspectSemanticCanvas = inspectSemanticCanvas;
+    this.publishThoughtDraft = publishThoughtDraft;
   }
 
   getAccessToken() {
     return this.readToken();
+  }
+
+  inspectCanvas(
+    input: Parameters<NonNullable<RealtimeVoiceControllerOptions["inspectCanvas"]>>[0],
+    signal: AbortSignal,
+  ) {
+    if (!this.inspectSemanticCanvas)
+      throw new Error("Canvas inspection is unavailable.");
+    return this.inspectSemanticCanvas(input, signal);
   }
 
   async onIntent(
@@ -116,18 +141,23 @@ class LatestVoiceHandlers {
     if (intent.type === "start_thought") {
       await this.thoughtAppendQueue;
       this.resetSpokenContext();
-      const result = await this.submitIntent(intent, source);
-      if (result.ok) this.thoughtCaptureActive = true;
+      const result = await this.submit(intent, source, turnContext);
+      if (result.ok) {
+        this.thoughtCaptureActive = true;
+        this.activeSessionSignal = turnContext?.signal;
+      }
       return result;
     }
     if (intent.type === "finish_thought") {
       await this.thoughtAppendQueue;
-      const result = await this.submitIntent(intent, source);
+      const result = await this.submit(intent, source, turnContext);
       if (
         result.ok ||
         (!result.ok && result.thoughtCapture === "aborted")
       )
         this.thoughtCaptureActive = false;
+      this.clearThoughtDraft();
+      this.activeSessionSignal = undefined;
       return result;
     }
     if (this.thoughtCaptureActive && intent.type !== "append_thought") {
@@ -141,17 +171,38 @@ class LatestVoiceHandlers {
     await this.thoughtAppendQueue;
     if (intent.type === "open_sketch") {
       this.resetSpokenContext();
-      return this.submitIntent(intent, source);
+      return this.submit(intent, source, turnContext);
     }
     if (intent.type !== "transform_selected_sketch")
-      return this.submitIntent(intent, source);
+      return this.submit(intent, source, turnContext);
 
     const narration = spokenNarration(this.recentSpokenContext);
     this.resetSpokenContext();
-    return this.submitIntent(
+    return this.submit(
       narration ? { ...intent, narration } : intent,
       source,
+      turnContext,
     );
+  }
+
+  rememberTranscriptDelta(rawDelta: string, itemId?: string) {
+    if (itemId && this.ignoredLateTurnIds.has(itemId)) return;
+    const turn = this.turnForItem(itemId);
+    const capturingThought =
+      turn.key === LEGACY_TURN_KEY
+        ? this.thoughtCaptureActive
+        : turn.thoughtCaptureActiveAtStart;
+    if (!capturingThought) return;
+    turn.provisionalText = `${turn.provisionalText}${boundedDraftDelta(rawDelta)}`.slice(
+      0,
+      1_000,
+    );
+    if (isThoughtBoundaryDraft(turn.provisionalText)) {
+      this.clearDraftForTurn(turn.key);
+      return;
+    }
+    this.draftTurnKey = turn.key;
+    this.publishThoughtDraft(turn.provisionalText || null);
   }
 
   rememberUserTranscript(rawText: string, itemId?: string) {
@@ -170,8 +221,15 @@ class LatestVoiceHandlers {
         : turn.thoughtCaptureActiveAtStart;
     turn.transcriptAvailableForTool = true;
     if (capturingThought) {
-      if (isThoughtBoundaryTranscript(text)) turn.commandTranscriptCount += 1;
-      else turn.pendingThoughtTranscripts.push(text);
+      if (isThoughtBoundaryTranscript(text)) {
+        turn.commandTranscriptCount += 1;
+        this.clearDraftForTurn(turn.key);
+      } else {
+        turn.pendingThoughtTranscripts.push(text);
+        turn.provisionalText = text;
+        this.draftTurnKey = turn.key;
+        this.publishThoughtDraft(text);
+      }
       return this.drainReadyTurns(turn);
     }
     if (isCanvasCommandTranscript(text)) {
@@ -250,6 +308,7 @@ class LatestVoiceHandlers {
       pendingNarrationTranscripts: [],
       commandTranscriptCount: 0,
       suppressUpcomingTranscriptCount: 0,
+      provisionalText: "",
     };
   }
 
@@ -286,7 +345,10 @@ class LatestVoiceHandlers {
   }
 
   private commitTurn(turn: BufferedVoiceTurn) {
-    if (turn.responseOutcome === "interrupted") return [];
+    if (turn.responseOutcome === "interrupted") {
+      this.clearDraftForTurn(turn.key);
+      return [];
+    }
     turn.pendingNarrationTranscripts.forEach((text) => {
       this.recentSpokenContext = appendSpokenContext(
         this.recentSpokenContext,
@@ -294,7 +356,7 @@ class LatestVoiceHandlers {
       );
     });
     return turn.pendingThoughtTranscripts.map((text) =>
-      this.queueThoughtAppend(text),
+      this.queueThoughtAppend(text, turn.key),
     );
   }
 
@@ -308,13 +370,28 @@ class LatestVoiceHandlers {
     }
   }
 
-  private queueThoughtAppend(text: string) {
+  private queueThoughtAppend(text: string, turnKey: string) {
+    const generation = this.sessionGeneration;
     const result = this.thoughtAppendQueue.then(async () => {
       let outcome: RealtimeVoiceIntentResult;
+      if (
+        generation !== this.sessionGeneration ||
+        this.activeSessionSignal?.aborted
+      ) {
+        this.clearDraftForTurn(turnKey);
+        return {
+          ok: false as const,
+          message: "Voice session ended before that thought was confirmed.",
+          thoughtCapture: "aborted" as const,
+        };
+      }
       try {
-        outcome = await this.submitIntent(
+        outcome = await this.submit(
           { type: "append_thought", text },
           "voice",
+          this.activeSessionSignal
+            ? { signal: this.activeSessionSignal }
+            : undefined,
         );
       } catch {
         outcome = {
@@ -325,6 +402,7 @@ class LatestVoiceHandlers {
       }
       if (!outcome.ok && outcome.thoughtCapture === "aborted")
         this.thoughtCaptureActive = false;
+      this.clearDraftForTurn(turnKey);
       return outcome;
     });
     this.thoughtAppendQueue = result.then(
@@ -339,6 +417,8 @@ class LatestVoiceHandlers {
   }
 
   resetSessionContext() {
+    this.sessionGeneration += 1;
+    this.clearThoughtDraft();
     this.resetSpokenContext();
     this.thoughtCaptureActive = false;
     this.currentTurnKey = LEGACY_TURN_KEY;
@@ -347,25 +427,63 @@ class LatestVoiceHandlers {
     this.ignoredLateTurnIds.clear();
     this.ignoredLateTurnOrder = [];
     this.legacyTurn = this.createTurn(LEGACY_TURN_KEY);
+    this.activeSessionSignal = undefined;
+  }
+
+  private submit(
+    intent: DirectCanvasIntent,
+    source: "voice",
+    context?: RealtimeVoiceTurnContext,
+  ) {
+    return context
+      ? this.submitIntent(intent, source, context)
+      : this.submitIntent(intent, source);
+  }
+
+  private clearDraftForTurn(turnKey: string) {
+    if (this.draftTurnKey !== turnKey) return;
+    this.clearThoughtDraft();
+  }
+
+  private clearThoughtDraft() {
+    if (this.draftTurnKey === null) return;
+    this.draftTurnKey = null;
+    this.publishThoughtDraft(null);
   }
 }
 
-export function RealtimeVoiceControl({
+export const RealtimeVoiceControl = forwardRef<
+  RealtimeVoiceControlHandle,
+  RealtimeVoiceControlProps
+>(function RealtimeVoiceControl({
   roomId,
   getAccessToken,
   disabled = false,
   onIntent,
+  inspectCanvas,
+  onThoughtDraftChange = () => undefined,
   createController = createRealtimeVoiceController,
-}: RealtimeVoiceControlProps) {
+}, ref) {
   const [activity, setActivity] = useState<VoiceActivity[]>([]);
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
   const [latestHandlers] = useState(
-    () => new LatestVoiceHandlers(getAccessToken, onIntent),
+    () =>
+      new LatestVoiceHandlers(
+        getAccessToken,
+        onIntent,
+        inspectCanvas,
+        onThoughtDraftChange,
+      ),
   );
 
   useEffect(() => {
-    latestHandlers.update(getAccessToken, onIntent);
-  }, [getAccessToken, latestHandlers, onIntent]);
+    latestHandlers.update(
+      getAccessToken,
+      onIntent,
+      inspectCanvas,
+      onThoughtDraftChange,
+    );
+  }, [getAccessToken, inspectCanvas, latestHandlers, onIntent, onThoughtDraftChange]);
 
   const appendActivity = useCallback((entry: Omit<VoiceActivity, "id">) => {
     setActivity((current) =>
@@ -384,6 +502,12 @@ export function RealtimeVoiceControl({
     RealtimeVoiceControllerOptions["onIntent"]
   >(
     (intent, source, turn) => latestHandlers.onIntent(intent, source, turn),
+    [latestHandlers],
+  );
+  const inspectLatestCanvas = useCallback<
+    NonNullable<RealtimeVoiceControllerOptions["inspectCanvas"]>
+  >(
+    (input, signal) => latestHandlers.inspectCanvas(input, signal),
     [latestHandlers],
   );
 
@@ -413,6 +537,9 @@ export function RealtimeVoiceControl({
             .rememberUserTranscript(text, itemId)
             .then(reportThoughtResults);
         },
+        onTranscriptDelta(delta, itemId) {
+          latestHandlers.rememberTranscriptDelta(delta, itemId);
+        },
         onUserSpeechStarted(itemId) {
           latestHandlers.beginUserTurn(itemId);
         },
@@ -432,6 +559,10 @@ export function RealtimeVoiceControl({
           const entry = toolActivity(action);
           if (entry) appendActivity(entry);
         },
+        onStatusChange(status) {
+          if (status === "error") latestHandlers.resetSessionContext();
+        },
+        inspectCanvas: inspectLatestCanvas,
         onPlaybackBlocked() {
           setPlaybackBlocked(true);
         },
@@ -444,6 +575,7 @@ export function RealtimeVoiceControl({
       reportThoughtResults,
       roomId,
       submitLatestIntent,
+      inspectLatestCanvas,
     ],
   );
   const state = useSyncExternalStore(
@@ -452,14 +584,47 @@ export function RealtimeVoiceControl({
     controller.getState,
   );
 
-  useEffect(() => () => controller.stop(), [controller]);
+  useEffect(
+    () => () => {
+      latestHandlers.resetSessionContext();
+      controller.stop();
+    },
+    [controller, latestHandlers],
+  );
 
   useEffect(() => {
-    if (disabled && state.status !== "idle") controller.stop();
-  }, [controller, disabled, state.status]);
+    if (disabled && state.status !== "idle") {
+      latestHandlers.resetSessionContext();
+      controller.stop();
+    }
+  }, [controller, disabled, latestHandlers, state.status]);
 
   const active = ["connecting", "listening", "thinking", "speaking"].includes(
     state.status,
+  );
+
+  const startVoice = useCallback(() => {
+    if (disabled || active) return;
+    latestHandlers.resetSessionContext();
+    setPlaybackBlocked(false);
+    void controller.start();
+  }, [active, controller, disabled, latestHandlers]);
+
+  const stopVoice = useCallback(() => {
+    if (!active) return;
+    latestHandlers.resetSessionContext();
+    controller.stop();
+  }, [active, controller, latestHandlers]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      start: startVoice,
+      stop: stopVoice,
+      toggle: active ? stopVoice : startVoice,
+      isActive: () => active,
+    }),
+    [active, startVoice, stopVoice],
   );
 
   return (
@@ -474,15 +639,8 @@ export function RealtimeVoiceControl({
           aria-label={active ? "Stop live voice" : "Start live voice"}
           disabled={!active && disabled}
           onClick={() => {
-            if (active) {
-              latestHandlers.resetSessionContext();
-              controller.stop();
-            }
-            else {
-              latestHandlers.resetSessionContext();
-              setPlaybackBlocked(false);
-              void controller.start();
-            }
+            if (active) stopVoice();
+            else startVoice();
           }}
         >
           {active ? "Stop" : "Start"}
@@ -541,7 +699,7 @@ export function RealtimeVoiceControl({
       </p>
     </section>
   );
-}
+});
 
 function appendSpokenContext(
   current: readonly string[],
@@ -560,6 +718,18 @@ function appendSpokenContext(
 
 function normalizeCompletedTranscript(rawText: string) {
   return rawText.replace(/\s+/g, " ").trim();
+}
+
+function boundedDraftDelta(rawDelta: string) {
+  return rawDelta
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .slice(0, 1_000);
+}
+
+function isThoughtBoundaryDraft(text: string) {
+  return /^(finish|finish thought|stop|stop thought|end|end thought)(?:\s|[.!?]|$)/i.test(
+    text.trim(),
+  );
 }
 
 function isCanvasCommandTranscript(text: string) {
@@ -596,8 +766,15 @@ function toolActivity(
       action.message ??
       (action.status === "submitted"
         ? `${humanizeToolName(action.name)} submitted; waiting for the shared receipt.`
+        : action.status === "observed"
+          ? `${humanizeToolName(action.name)} observed the current canvas.`
+          : action.status === "cancelled"
+            ? `${humanizeToolName(action.name)} was cancelled.`
         : `${humanizeToolName(action.name)} was refused.`),
-    tone: action.status === "submitted" ? "neutral" : "error",
+    tone:
+      action.status === "submitted" || action.status === "observed"
+        ? "neutral"
+        : "error",
   };
 }
 

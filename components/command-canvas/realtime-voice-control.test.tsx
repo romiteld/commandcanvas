@@ -42,6 +42,42 @@ function successfulIntentSpy() {
 }
 
 describe("RealtimeVoiceControl", () => {
+  it("publishes thought transcription deltas provisionally and clears them after one final append", async () => {
+    let callbacks: RealtimeVoiceControllerOptions | undefined;
+    const setup = controllerHarness();
+    const drafts: Array<string | null> = [];
+    const onIntent = successfulIntentSpy();
+    render(
+      <RealtimeVoiceControl
+        roomId={ROOM_ID}
+        getAccessToken={() => "header.payload.signature"}
+        onIntent={onIntent}
+        onThoughtDraftChange={(text) => drafts.push(text)}
+        createController={(options) => {
+          callbacks = options;
+          return setup.controller;
+        }}
+      />,
+    );
+
+    await callbacks?.onIntent({ type: "start_thought" }, "voice");
+    callbacks?.onUserSpeechStarted?.("thought-item-1");
+    callbacks?.onTranscriptDelta?.("The launch ", "thought-item-1");
+    callbacks?.onTranscriptDelta?.("risk is timing.", "thought-item-1");
+    expect(drafts.at(-1)).toBe("The launch risk is timing.");
+    expect(onIntent).toHaveBeenCalledTimes(1);
+
+    callbacks?.onTranscript?.("The launch risk is timing.", "thought-item-1");
+    await callbacks?.onResponseSettled?.("completed", "thought-item-1");
+
+    await vi.waitFor(() => expect(onIntent).toHaveBeenCalledTimes(2));
+    expect(onIntent).toHaveBeenLastCalledWith(
+      { type: "append_thought", text: "The launch risk is timing." },
+      "voice",
+    );
+    expect(drafts.at(-1)).toBeNull();
+  });
+
   it("starts a persistent automatic voice session without a manual Run control", async () => {
     const user = userEvent.setup();
     const setup = controllerHarness();
@@ -675,7 +711,10 @@ describe("RealtimeVoiceControl", () => {
       await callbacks?.onIntent(
         { type: "discard_selected" },
         "voice",
-        { itemId: "item-command" },
+        {
+          itemId: "item-command",
+          signal: new AbortController().signal,
+        },
       ),
     ).toEqual({
       ok: false,
@@ -795,22 +834,34 @@ describe("RealtimeVoiceControl", () => {
     expect(screen.queryByRole("button", { name: "Tap to hear responses" })).toBeNull();
   });
 
-  it("stops the media session on unmount", () => {
+  it("stops the media session and clears provisional thought text on unmount", async () => {
+    let callbacks: RealtimeVoiceControllerOptions | undefined;
     const setup = controllerHarness();
+    const drafts: Array<string | null> = [];
     const view = render(
       <RealtimeVoiceControl
         roomId={ROOM_ID}
         getAccessToken={() => "header.payload.signature"}
         onIntent={() => ({ ok: true, message: "Submitted." })}
-        createController={() => setup.controller}
+        onThoughtDraftChange={(text) => drafts.push(text)}
+        createController={(options) => {
+          callbacks = options;
+          return setup.controller;
+        }}
       />,
     );
 
+    await callbacks?.onIntent({ type: "start_thought" }, "voice");
+    callbacks?.onUserSpeechStarted?.("thought-before-unmount");
+    callbacks?.onTranscriptDelta?.("Uncommitted words", "thought-before-unmount");
+    expect(drafts.at(-1)).toBe("Uncommitted words");
+
     view.unmount();
     expect(setup.controller.stop).toHaveBeenCalledOnce();
+    expect(drafts.at(-1)).toBeNull();
   });
 
-  it("keeps one live controller while callback and token function identities change", async () => {
+  it("keeps one live controller while callback, token, and canvas inspector identities change", async () => {
     const setup = controllerHarness();
     let controllerOptions: RealtimeVoiceControllerOptions | undefined;
     const createController = vi.fn((options: RealtimeVoiceControllerOptions) => {
@@ -821,11 +872,14 @@ describe("RealtimeVoiceControl", () => {
     const secondIntent = vi.fn(() => ({ ok: true as const, message: "Second." }));
     const firstToken = vi.fn(() => "first.token.value");
     const secondToken = vi.fn(() => "second.token.value");
+    const firstInspector = vi.fn(() => ({ revision: 1 }));
+    const secondInspector = vi.fn(() => ({ revision: 2 }));
     const view = render(
       <RealtimeVoiceControl
         roomId={ROOM_ID}
         getAccessToken={firstToken}
         onIntent={firstIntent}
+        inspectCanvas={firstInspector}
         createController={createController}
       />,
     );
@@ -834,6 +888,7 @@ describe("RealtimeVoiceControl", () => {
         roomId={ROOM_ID}
         getAccessToken={secondToken}
         onIntent={secondIntent}
+        inspectCanvas={secondInspector}
         createController={createController}
       />,
     );
@@ -847,7 +902,17 @@ describe("RealtimeVoiceControl", () => {
         controllerOptions.onIntent({ type: "create_board" }, "voice"),
       ),
     ).resolves.toEqual({ ok: true, message: "Second." });
+    await expect(
+      Promise.resolve(
+        controllerOptions.inspectCanvas?.(
+          { scope: "all", includeReceipts: false },
+          new AbortController().signal,
+        ),
+      ),
+    ).resolves.toEqual({ revision: 2 });
     expect(firstIntent).not.toHaveBeenCalled();
     expect(secondIntent).toHaveBeenCalledOnce();
+    expect(firstInspector).not.toHaveBeenCalled();
+    expect(secondInspector).toHaveBeenCalledOnce();
   });
 });

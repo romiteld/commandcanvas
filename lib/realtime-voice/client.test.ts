@@ -11,6 +11,17 @@ import {
 
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const AUTHORIZATION = "header.payload.signature";
+const SEMANTIC_NOTE_OBJECT = {
+  id: "note-voice-client",
+  type: "note",
+  title: "Launch thought",
+  x: 120,
+  y: 160,
+  width: 320,
+  height: 220,
+  zIndex: 8,
+  payload: { text: "Confirm the launch date.", tone: "sky" },
+} as const;
 
 class FakeDataChannel extends EventTarget implements RealtimeVoiceDataChannel {
   readyState: RTCDataChannelState = "connecting";
@@ -64,6 +75,7 @@ class FakePeerConnection extends EventTarget implements RealtimeVoicePeerConnect
 function harness(options?: {
   fetchResponse?: Response;
   onIntent?: RealtimeVoiceControllerOptions["onIntent"];
+  inspectCanvas?: RealtimeVoiceControllerOptions["inspectCanvas"];
   onPlaybackBlocked?: () => void;
 }) {
   const channel = new FakeDataChannel();
@@ -94,6 +106,7 @@ function harness(options?: {
   );
   const statuses: string[] = [];
   const transcripts: string[] = [];
+  const transcriptDeltas: Array<{ delta: string; itemId?: string }> = [];
   const transcriptEvents: Array<{ text: string; itemId?: string }> = [];
   const assistantTranscripts: string[] = [];
   const speechStarts: number[] = [];
@@ -113,6 +126,9 @@ function harness(options?: {
       transcripts.push(text);
       transcriptEvents.push({ text, ...(itemId ? { itemId } : {}) });
     },
+    onTranscriptDelta: (delta, itemId) => {
+      transcriptDeltas.push({ delta, ...(itemId ? { itemId } : {}) });
+    },
     onAssistantTranscript: (text) => assistantTranscripts.push(text),
     onUserSpeechStarted: (itemId) => {
       speechStarts.push(speechStarts.length + 1);
@@ -123,6 +139,7 @@ function harness(options?: {
       responseEvents.push({ outcome, ...(itemId ? { itemId } : {}) });
     },
     onToolAction: (action) => toolActions.push(action),
+    inspectCanvas: options?.inspectCanvas,
     onPlaybackBlocked: options?.onPlaybackBlocked,
     platform: {
       createPeerConnection: () => peer,
@@ -144,6 +161,7 @@ function harness(options?: {
     fetcher,
     statuses,
     transcripts,
+    transcriptDeltas,
     transcriptEvents,
     assistantTranscripts,
     speechStarts,
@@ -157,6 +175,126 @@ function harness(options?: {
 }
 
 describe("Realtime voice WebRTC controller", () => {
+  it("streams bounded item-correlated input transcription deltas separately from completion", async () => {
+    const setup = harness();
+    await setup.controller.start();
+    setup.channel.open();
+    setup.channel.message({ type: "session.created", session: { type: "realtime" } });
+
+    setup.channel.message({
+      type: "conversation.item.input_audio_transcription.delta",
+      item_id: "item-thought-1",
+      delta: "The launch ",
+    });
+    setup.channel.message({
+      type: "conversation.item.input_audio_transcription.delta",
+      item_id: "item-thought-1",
+      delta: "risk is timing.",
+    });
+    setup.channel.message({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item-thought-1",
+      transcript: "The launch risk is timing.",
+    });
+
+    expect(setup.transcriptDeltas).toEqual([
+      { delta: "The launch ", itemId: "item-thought-1" },
+      { delta: "risk is timing.", itemId: "item-thought-1" },
+    ]);
+    expect(setup.transcriptEvents).toEqual([
+      { text: "The launch risk is timing.", itemId: "item-thought-1" },
+    ]);
+  });
+
+  it("passes one session cancellation signal through an unresolved intent and reports cancellation", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const onIntent = vi.fn<RealtimeVoiceControllerOptions["onIntent"]>(
+      async (_intent, _source, turn) => {
+        observedSignal = turn?.signal;
+        return await new Promise((resolve, reject) => {
+          turn?.signal.addEventListener(
+            "abort",
+            () => reject(turn.signal.reason),
+            { once: true },
+          );
+          void resolve;
+        });
+      },
+    );
+    const setup = harness({ onIntent });
+    await setup.controller.start();
+    setup.channel.open();
+    setup.channel.message({ type: "session.created", session: { type: "realtime" } });
+    setup.channel.message({
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        call_id: "call-cancelled-1",
+        name: "undo",
+        arguments: "{}",
+      },
+    });
+    await vi.waitFor(() => expect(onIntent).toHaveBeenCalledOnce());
+
+    setup.controller.stop();
+
+    expect(observedSignal?.aborted).toBe(true);
+    await vi.waitFor(() =>
+      expect(setup.toolActions).toEqual([
+        { callId: "call-cancelled-1", name: "undo", status: "running" },
+        {
+          callId: "call-cancelled-1",
+          name: "undo",
+          status: "cancelled",
+          message: "Voice action cancelled before the canvas confirmed it.",
+        },
+      ]),
+    );
+    expect(setup.channel.sent).toEqual([]);
+  });
+
+  it("keeps an already-committed canvas outcome visible when Stop suppresses the provider follow-up", async () => {
+    let resolveIntent:
+      | ((value: { ok: true; message: string }) => void)
+      | undefined;
+    const onIntent = vi.fn(
+      () =>
+        new Promise<{ ok: true; message: string }>((resolve) => {
+          resolveIntent = resolve;
+        }),
+    );
+    const setup = harness({ onIntent });
+    await setup.controller.start();
+    setup.channel.open();
+    setup.channel.message({ type: "session.created", session: { type: "realtime" } });
+    setup.channel.message({
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        call_id: "call-committed-1",
+        name: "undo",
+        arguments: "{}",
+      },
+    });
+    await vi.waitFor(() => expect(onIntent).toHaveBeenCalledOnce());
+
+    resolveIntent?.({ ok: true, message: "Board committed with a receipt." });
+    setup.controller.stop();
+
+    await vi.waitFor(() =>
+      expect(setup.toolActions).toEqual([
+        { callId: "call-committed-1", name: "undo", status: "running" },
+        {
+          callId: "call-committed-1",
+          name: "undo",
+          status: "submitted",
+          message: "Canvas action submitted; check the canvas receipt for the result.",
+        },
+      ]),
+    );
+    expect(setup.channel.sent).toEqual([]);
+  });
+
   it("posts browser SDP through the authenticated server boundary and waits for the configured session acknowledgement", async () => {
     const setup = harness();
 
@@ -315,7 +453,7 @@ describe("Realtime voice WebRTC controller", () => {
     });
   });
 
-  it("executes a validated function, returns function_call_output, then asks the model to respond", async () => {
+  it("executes a validated semantic creation, returns function_call_output, then asks the model to respond", async () => {
     const setup = harness();
     await setup.controller.start();
     setup.channel.open();
@@ -326,23 +464,29 @@ describe("Realtime voice WebRTC controller", () => {
       type: "response.output_item.done",
       item: {
         type: "function_call",
-        call_id: "call-board-1",
-        name: "create_board",
-        arguments: "{}",
+        call_id: "call-object-1",
+        name: "create_semantic_object",
+        arguments: JSON.stringify({ object: SEMANTIC_NOTE_OBJECT }),
       },
     });
     await vi.waitFor(() => expect(setup.channel.sent).toHaveLength(2));
 
-    expect(setup.onIntent).toHaveBeenCalledWith({ type: "create_board" }, "voice");
+    expect(vi.mocked(setup.onIntent).mock.calls[0]?.slice(0, 2)).toEqual([
+      { type: "create_semantic_object", object: SEMANTIC_NOTE_OBJECT },
+      "voice",
+    ]);
+    expect(vi.mocked(setup.onIntent).mock.calls[0]?.[2]?.signal).toBeInstanceOf(
+      AbortSignal,
+    );
     expect(JSON.parse(setup.channel.sent[0]!)).toEqual({
       type: "conversation.item.create",
       item: {
         type: "function_call_output",
-        call_id: "call-board-1",
+        call_id: "call-object-1",
         output: JSON.stringify({
           ok: true,
           outcome: "submitted",
-          action: "create_board",
+          action: "create_semantic_object",
           message:
             "Canvas action submitted; check the canvas receipt for the result.",
         }),
@@ -352,10 +496,14 @@ describe("Realtime voice WebRTC controller", () => {
       type: "response.create",
     });
     expect(setup.toolActions).toEqual([
-      { callId: "call-board-1", name: "create_board", status: "running" },
       {
-        callId: "call-board-1",
-        name: "create_board",
+        callId: "call-object-1",
+        name: "create_semantic_object",
+        status: "running",
+      },
+      {
+        callId: "call-object-1",
+        name: "create_semantic_object",
         status: "submitted",
         message:
           "Canvas action submitted; check the canvas receipt for the result.",
@@ -389,10 +537,15 @@ describe("Realtime voice WebRTC controller", () => {
     });
 
     await vi.waitFor(() => expect(setup.onIntent).toHaveBeenCalledOnce());
-    expect(setup.onIntent).toHaveBeenCalledWith(
+    expect(vi.mocked(setup.onIntent).mock.calls[0]?.slice(0, 2)).toEqual([
       { type: "discard_selected" },
       "voice",
-      { itemId: "item-tool-turn" },
+    ]);
+    expect(vi.mocked(setup.onIntent).mock.calls[0]?.[2]).toMatchObject({
+      itemId: "item-tool-turn",
+    });
+    expect(vi.mocked(setup.onIntent).mock.calls[0]?.[2]?.signal).toBeInstanceOf(
+      AbortSignal,
     );
   });
 
@@ -413,7 +566,7 @@ describe("Realtime voice WebRTC controller", () => {
     const functionItem = {
       type: "function_call",
       call_id: "call-barge-in",
-      name: "create_board",
+      name: "undo",
       arguments: "{}",
     };
     setup.channel.message({
@@ -487,7 +640,7 @@ describe("Realtime voice WebRTC controller", () => {
     const functionItem = {
       type: "function_call",
       call_id: "call-order-1",
-      name: "create_board",
+      name: "undo",
       arguments: "{}",
     };
     setup.channel.message({ type: "response.output_item.done", item: functionItem });
@@ -516,8 +669,8 @@ describe("Realtime voice WebRTC controller", () => {
       item: {
         type: "function_call",
         call_id: "call-bad-1",
-        name: "create_board",
-        arguments: '{"discard":true}',
+        name: "create_semantic_object",
+        arguments: '{"object":{"type":"note"}}',
       },
     });
     await vi.waitFor(() => expect(setup.channel.sent).toHaveLength(2));
@@ -527,7 +680,7 @@ describe("Realtime voice WebRTC controller", () => {
     expect(output).toEqual({
       ok: false,
       outcome: "refused",
-      action: "create_board",
+      action: "create_semantic_object",
       message: "Voice action arguments were invalid.",
     });
   });
@@ -670,7 +823,7 @@ describe("Realtime voice WebRTC controller", () => {
       item: {
         type: "function_call",
         call_id: "call-first",
-        name: "create_board",
+        name: "undo",
         arguments: "{}",
       },
     });
@@ -679,7 +832,7 @@ describe("Realtime voice WebRTC controller", () => {
       item: {
         type: "function_call",
         call_id: "call-second",
-        name: "create_schedule",
+        name: "redo",
         arguments: "{}",
       },
     });
@@ -688,8 +841,8 @@ describe("Realtime voice WebRTC controller", () => {
     releaseFirst({ ok: true, message: "First submitted." });
     await vi.waitFor(() => expect(onIntent).toHaveBeenCalledTimes(2));
     expect(onIntent.mock.calls.map(([intent]) => intent.type)).toEqual([
-      "create_board",
-      "create_schedule",
+      "undo",
+      "redo",
     ]);
   });
 
@@ -722,7 +875,7 @@ describe("Realtime voice WebRTC controller", () => {
       item: {
         type: "function_call",
         call_id: "call-send-failure",
-        name: "create_board",
+        name: "undo",
         arguments: "{}",
       },
     });

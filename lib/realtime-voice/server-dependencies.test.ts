@@ -158,7 +158,7 @@ describe("OpenAI Realtime unified-interface boundary", () => {
       type: "realtime",
       model: "gpt-realtime-2.1",
       output_modalities: ["audio"],
-      max_output_tokens: 256,
+      max_output_tokens: 4_096,
       parallel_tool_calls: false,
       audio: {
         input: {
@@ -177,8 +177,7 @@ describe("OpenAI Realtime unified-interface boundary", () => {
     const session = JSON.parse(String(body.get("session")));
     expect(session.tools.map((tool: { name: string }) => tool.name)).toEqual(
       expect.arrayContaining([
-        "create_note",
-        "create_board",
+        "create_semantic_object",
         "transform_selected_sketch",
         "undo",
       ]),

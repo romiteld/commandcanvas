@@ -1,7 +1,10 @@
+import type { NewCanvasObject } from "@/lib/canvas/object-model";
+
 export const DIRECT_COMMAND_MAX_LENGTH = 280;
 
 export type DirectCanvasIntent =
   | { type: "create_note"; text?: string }
+  | { type: "create_semantic_object"; object: NewCanvasObject }
   | { type: "start_thought" }
   | { type: "append_thought"; text: string }
   | { type: "finish_thought" }

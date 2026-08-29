@@ -7,6 +7,7 @@ import {
 import {
   WebMcpRegistry,
   type RegisteredWebMcpTool,
+  type WebMcpExecutionEvent,
   type WebMcpRegistrationTarget,
   type WebMcpToolAdapters,
 } from "@/lib/webmcp/registry";
@@ -238,6 +239,280 @@ describe("WebMcpRegistry registration", () => {
 });
 
 describe("WebMcpRegistry execution boundary", () => {
+  it("reports one privacy-minimal invocation lifecycle for a guard refusal", async () => {
+    const target = new RecordingRegistrationTarget();
+    const events: WebMcpExecutionEvent[] = [];
+    let adapterCalls = 0;
+    const registry = new WebMcpRegistry({
+      mode: "static",
+      target,
+      getContext: () => hostContext(),
+      adapters: adapters({
+        executeTool: async () => {
+          adapterCalls += 1;
+          return completed("should not execute");
+        },
+      }),
+      onExecutionEvent: (event) => events.push(event),
+    });
+    await registry.sync();
+
+    const result = await target.latest("transform_object").execute(
+      { objectId: "note-secret", transform: { x: 400 } },
+      { signal: new AbortController().signal },
+    );
+
+    expect(result).toMatchObject({ ok: false, code: "not_available" });
+    expect(adapterCalls).toBe(0);
+    expect(events).toHaveLength(2);
+    expect(events.map(({ invocationId, toolName, status }) => ({
+      invocationId,
+      toolName,
+      status,
+    }))).toEqual([
+      {
+        invocationId: events[0]?.invocationId,
+        toolName: "transform_object",
+        status: "running",
+      },
+      {
+        invocationId: events[0]?.invocationId,
+        toolName: "transform_object",
+        status: "refused",
+      },
+    ]);
+    expect(Object.keys(events[1] ?? {}).sort()).toEqual([
+      "invocationId",
+      "message",
+      "status",
+      "toolName",
+    ]);
+    expect(JSON.stringify(events)).not.toContain("note-secret");
+  });
+
+  it("reports schema refusal without exposing rejected input", async () => {
+    const target = new RecordingRegistrationTarget();
+    const events: WebMcpExecutionEvent[] = [];
+    const registry = new WebMcpRegistry({
+      mode: "static",
+      target,
+      getContext: () =>
+        hostContext({ ...emptyRoom, hasContent: true, selection: "object" }),
+      adapters: adapters(),
+      onExecutionEvent: (event) => events.push(event),
+    });
+    await registry.sync();
+
+    await target.latest("transform_object").execute(
+      {
+        objectId: "note-1",
+        transform: { x: 400 },
+        recipientEmail: "private@example.com",
+      },
+      { signal: new AbortController().signal },
+    );
+
+    expect(events.map((event) => event.status)).toEqual([
+      "running",
+      "refused",
+    ]);
+    expect(JSON.stringify(events)).not.toContain("private@example.com");
+  });
+
+  it("reports completed receipt and staged human approval outcomes", async () => {
+    const target = new RecordingRegistrationTarget();
+    const events: WebMcpExecutionEvent[] = [];
+    const registry = new WebMcpRegistry({
+      mode: "static",
+      target,
+      getContext: () =>
+        hostContext({ ...emptyRoom, hasContent: true, packet: "approved" }),
+      adapters: adapters({
+        executeTool: async () => ({
+          ok: true,
+          status: "completed",
+          message: "Canvas mutation completed.",
+          receiptId: "receipt-42",
+        }),
+      }),
+      onExecutionEvent: (event) => events.push(event),
+    });
+    await registry.sync();
+
+    await target.latest("create_object").execute(
+      {
+        object: {
+          id: "note-agent",
+          type: "note",
+          title: "Agent note",
+          x: 40,
+          y: 80,
+          width: 260,
+          height: 180,
+          zIndex: 4,
+          payload: { text: "Validated first.", tone: "sky" },
+        },
+      },
+      { signal: new AbortController().signal },
+    );
+    await target.latest("request_packet_send").execute(
+      { packetId: "packet-v2" },
+      { signal: new AbortController().signal },
+    );
+
+    expect(events.filter((event) => event.status !== "running")).toEqual([
+      expect.objectContaining({
+        toolName: "create_object",
+        status: "completed",
+        receiptId: "receipt-42",
+      }),
+      expect.objectContaining({
+        toolName: "request_packet_send",
+        status: "awaiting_human_approval",
+      }),
+    ]);
+  });
+
+  it("does not copy adapter result content into the page execution observer", async () => {
+    const target = new RecordingRegistrationTarget();
+    const events: WebMcpExecutionEvent[] = [];
+    const registry = new WebMcpRegistry({
+      mode: "static",
+      target,
+      getContext: () => hostContext(),
+      adapters: adapters({
+        executeTool: async () => ({
+          ok: true,
+          status: "completed",
+          message:
+            "Created private note for recipient@example.com with confidential text.",
+          receiptId: "receipt-safe-reference",
+          data: { private: "raw-result-content" },
+        }),
+      }),
+      onExecutionEvent: (event) => events.push(event),
+    });
+    await registry.sync();
+
+    await target.latest("get_canvas_state").execute(
+      {},
+      { signal: new AbortController().signal },
+    );
+
+    expect(events.at(-1)).toMatchObject({
+      status: "completed",
+      receiptId: "receipt-safe-reference",
+    });
+    expect(JSON.stringify(events)).not.toMatch(
+      /recipient@example\.com|confidential text|raw-result-content/,
+    );
+  });
+
+  it("reports pre-start and in-flight cancellation without changing AbortError identity", async () => {
+    const target = new RecordingRegistrationTarget();
+    const events: WebMcpExecutionEvent[] = [];
+    const registry = new WebMcpRegistry({
+      mode: "static",
+      target,
+      getContext: () => hostContext(),
+      adapters: adapters({
+        executeTool: async (request) =>
+          await new Promise<WebMcpToolResult>((_resolve, reject) => {
+            request.signal.addEventListener(
+              "abort",
+              () => reject(request.signal.reason),
+              { once: true },
+            );
+          }),
+      }),
+      onExecutionEvent: (event) => events.push(event),
+    });
+    await registry.sync();
+
+    const preAborted = new AbortController();
+    const preReason = new DOMException("Already cancelled", "AbortError");
+    preAborted.abort(preReason);
+    await expect(
+      target.latest("get_canvas_state").execute(
+        {},
+        { signal: preAborted.signal },
+      ),
+    ).rejects.toBe(preReason);
+
+    const inFlight = new AbortController();
+    const inFlightReason = new DOMException("Cancelled now", "AbortError");
+    const execution = target.latest("get_canvas_state").execute(
+      {},
+      { signal: inFlight.signal },
+    );
+    await Promise.resolve();
+    inFlight.abort(inFlightReason);
+    await expect(execution).rejects.toBe(inFlightReason);
+
+    const invocationIds = [...new Set(events.map((event) => event.invocationId))];
+    expect(invocationIds).toHaveLength(2);
+    expect(events.filter((event) => event.invocationId === invocationIds[0])).toEqual([
+      expect.objectContaining({ status: "cancelled" }),
+    ]);
+    expect(
+      events
+        .filter((event) => event.invocationId === invocationIds[1])
+        .map((event) => event.status),
+    ).toEqual(["running", "cancelled"]);
+  });
+
+  it("does not let a failing observer alter the tool result", async () => {
+    const target = new RecordingRegistrationTarget();
+    const registry = new WebMcpRegistry({
+      mode: "static",
+      target,
+      getContext: () => hostContext(),
+      adapters: adapters({
+        executeTool: async () => completed("Observer-independent result."),
+      }),
+      onExecutionEvent: () => {
+        throw new Error("observer failed");
+      },
+    });
+    await registry.sync();
+
+    await expect(
+      target.latest("get_canvas_state").execute(
+        {},
+        { signal: new AbortController().signal },
+      ),
+    ).resolves.toEqual(completed("Observer-independent result."));
+  });
+
+  it("keeps invocation IDs unique when a page replaces its registry lifecycle", async () => {
+    const events: WebMcpExecutionEvent[] = [];
+    const runOnce = async () => {
+      const target = new RecordingRegistrationTarget();
+      const registry = new WebMcpRegistry({
+        mode: "static",
+        target,
+        getContext: () => hostContext(),
+        adapters: adapters(),
+        onExecutionEvent: (event) => events.push(event),
+      });
+      await registry.sync();
+      await target.latest("get_canvas_state").execute(
+        {},
+        { signal: new AbortController().signal },
+      );
+      registry.dispose();
+    };
+
+    await runOnce();
+    await runOnce();
+
+    const runningIds = events
+      .filter((event) => event.status === "running")
+      .map((event) => event.invocationId);
+    expect(runningIds).toHaveLength(2);
+    expect(new Set(runningIds).size).toBe(2);
+  });
+
   it("applies the authoritative phase guard even when static mode registered every tool", async () => {
     const target = new RecordingRegistrationTarget();
     let adapterCalls = 0;

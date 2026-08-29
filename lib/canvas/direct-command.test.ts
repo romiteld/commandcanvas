@@ -1,8 +1,39 @@
 import { describe, expect, it } from "vitest";
 
-import { parseDirectCanvasCommand } from "@/lib/canvas/direct-command";
+import {
+  parseDirectCanvasCommand,
+  type DirectCanvasIntent,
+} from "@/lib/canvas/direct-command";
 
 describe("parseDirectCanvasCommand", () => {
+  it("carries one validated semantic object draft without persistence identity", () => {
+    const intent: DirectCanvasIntent = {
+      type: "create_semantic_object",
+      object: {
+        id: "decision-voice",
+        type: "meeting_card",
+        title: "Launch decision",
+        x: 120,
+        y: 180,
+        width: 360,
+        height: 260,
+        zIndex: 12,
+        payload: {
+          kind: "decision",
+          body: "Ship the public demo on September 1.",
+          bullets: [],
+          owner: null,
+          dueDate: null,
+          status: "confirmed",
+        },
+      },
+    };
+
+    expect(intent.object).not.toHaveProperty("roomId");
+    expect(intent.object).not.toHaveProperty("createdBy");
+    expect(intent.object).not.toHaveProperty("version");
+  });
+
   it.each([
     ["Bring in our project board", { type: "create_board" }],
     ["Put next week's schedule over here", { type: "create_schedule" }],

@@ -65,19 +65,40 @@ export interface WebMcpRegistryOptions {
   target: WebMcpRegistrationTarget;
   getContext: () => WebMcpExecutionContext;
   adapters: WebMcpToolAdapters;
+  onExecutionEvent?: (event: WebMcpExecutionEvent) => void;
+}
+
+export type WebMcpExecutionStatus =
+  | "running"
+  | "completed"
+  | "awaiting_human_approval"
+  | "refused"
+  | "cancelled";
+
+export interface WebMcpExecutionEvent {
+  invocationId: string;
+  toolName: WebMcpToolName;
+  status: WebMcpExecutionStatus;
+  message: string;
+  receiptId?: string;
 }
 
 interface ActiveRegistration {
   controller: AbortController;
 }
 
+let registryExecutionScopeSequence = 0;
+
 export class WebMcpRegistry {
   readonly #mode: "static" | "dynamic";
   readonly #target: WebMcpRegistrationTarget;
   readonly #getContext: () => WebMcpExecutionContext;
   readonly #adapters: WebMcpToolAdapters;
+  readonly #onExecutionEvent?: (event: WebMcpExecutionEvent) => void;
   readonly #descriptors: Record<WebMcpToolName, RegisteredWebMcpTool>;
   readonly #registrations = new Map<WebMcpToolName, ActiveRegistration>();
+  readonly #executionScope = ++registryExecutionScopeSequence;
+  #invocationSequence = 0;
   #disposed = false;
 
   constructor(options: WebMcpRegistryOptions) {
@@ -85,6 +106,7 @@ export class WebMcpRegistry {
     this.#target = options.target;
     this.#getContext = options.getContext;
     this.#adapters = options.adapters;
+    this.#onExecutionEvent = options.onExecutionEvent;
     this.#descriptors = Object.fromEntries(
       WEBMCP_TOOL_NAMES.map((toolName) => [
         toolName,
@@ -160,44 +182,119 @@ export class WebMcpRegistry {
     input: unknown,
     signal: AbortSignal,
   ): Promise<WebMcpToolResult> {
-    signal.throwIfAborted();
+    const invocationId = `registry-${this.#executionScope}-${toolName}-${++this.#invocationSequence}`;
+    if (signal.aborted) {
+      this.#emitExecution({
+        invocationId,
+        toolName,
+        status: "cancelled",
+        message: "Invocation cancelled.",
+      });
+      signal.throwIfAborted();
+    }
+
+    this.#emitExecution({
+      invocationId,
+      toolName,
+      status: "running",
+      message: `${toolName.replaceAll("_", " ")} is running.`,
+    });
 
     const context = this.#getContext();
     const guard = evaluateToolGuard(toolName, context);
-    if (!guard.ok) return guard;
+    if (!guard.ok) {
+      this.#emitExecution({
+        invocationId,
+        toolName,
+        status: "refused",
+        message: guard.message,
+      });
+      return guard;
+    }
 
     const parsed = WEBMCP_TOOL_CATALOG[toolName].inputSchema.safeParse(input);
-    if (!parsed.success)
-      return {
+    if (!parsed.success) {
+      const failure: WebMcpToolFailure = {
         ok: false,
         code: "invalid_input",
         message: "invalid tool input: check the documented schema",
       };
+      this.#emitExecution({
+        invocationId,
+        toolName,
+        status: "refused",
+        message: failure.message,
+      });
+      return failure;
+    }
 
-    signal.throwIfAborted();
+    if (signal.aborted) {
+      this.#emitExecution({
+        invocationId,
+        toolName,
+        status: "cancelled",
+        message: "Invocation cancelled.",
+      });
+      signal.throwIfAborted();
+    }
 
     try {
       if (toolName === "request_packet_send") {
-        const result = await this.#adapters.stagePacketSendRequest({
+        let result = await this.#adapters.stagePacketSendRequest({
           input: parsed.data as WebMcpToolInput<"request_packet_send">,
           signal,
           context,
         });
         if (result.ok && result.status !== "awaiting_human_approval")
-          return executionFailure();
+          result = executionFailure();
+        this.#emitTerminalExecution(invocationId, toolName, result);
         return result;
       }
 
-      return await this.#adapters.executeTool({
+      const result = await this.#adapters.executeTool({
         toolName,
         input: parsed.data,
         signal,
         context,
       } as WebMcpAdapterRequest);
+      this.#emitTerminalExecution(invocationId, toolName, result);
+      return result;
     } catch (error) {
-      if (signal.aborted) signal.throwIfAborted();
-      if (isAbortError(error)) throw error;
-      return executionFailure();
+      if (signal.aborted || isAbortError(error)) {
+        this.#emitExecution({
+          invocationId,
+          toolName,
+          status: "cancelled",
+          message: "Invocation cancelled.",
+        });
+        if (signal.aborted) signal.throwIfAborted();
+        throw error;
+      }
+      const failure = executionFailure();
+      this.#emitTerminalExecution(invocationId, toolName, failure);
+      return failure;
+    }
+  }
+
+  #emitTerminalExecution(
+    invocationId: string,
+    toolName: WebMcpToolName,
+    result: WebMcpToolResult,
+  ) {
+    this.#emitExecution({
+      invocationId,
+      toolName,
+      status: result.ok ? result.status : "refused",
+      message: executionObserverMessage(toolName, result),
+      ...(result.ok && result.receiptId ? { receiptId: result.receiptId } : {}),
+    });
+  }
+
+  #emitExecution(event: WebMcpExecutionEvent) {
+    try {
+      this.#onExecutionEvent?.(event);
+    } catch {
+      // The page observer is diagnostics only and cannot alter tool execution.
     }
   }
 }
@@ -209,6 +306,17 @@ function isAbortError(error: unknown): boolean {
     "name" in error &&
     error.name === "AbortError"
   );
+}
+
+function executionObserverMessage(
+  toolName: WebMcpToolName,
+  result: WebMcpToolResult,
+) {
+  const label = toolName.replaceAll("_", " ");
+  if (!result.ok) return `${label} was refused.`;
+  return result.status === "awaiting_human_approval"
+    ? `${label} is awaiting human approval.`
+    : `${label} completed.`;
 }
 
 function executionFailure(): WebMcpToolFailure {
