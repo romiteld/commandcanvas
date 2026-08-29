@@ -68,12 +68,63 @@ repository does not represent that separate check as passing. Container startup
 still verifies exact bytes, digest, tensor names/shapes, active CUDA provider,
 and finite warmup output before reporting ready.
 
+## Opt-in RTMDet + RTMPose candidate provenance
+
+The optional `hybrid_rtmpose` backend is not part of normal Compose startup and
+does not replace the pinned YOLO production default. Its two Apache-2.0 model
+artifacts are intentionally not committed to this repository. Their acquisition
+contract is tracked in
+`services/hand-relay/models/hybrid-models.lock.json`; the standard-library-only
+`services/hand-relay/scripts/acquire_hybrid_models.py` tool verifies that lock
+and the exact local bytes.
+
+### RTMDet-nano hand detector
+
+- Provenance repository: <https://huggingface.co/Tau-J/RTMPose>
+- Repository revision: `cd4d7095f5cfc9cfc4f46289bee91ea4a1e1d9fd`
+- Pinned repository tree: <https://huggingface.co/Tau-J/RTMPose/tree/cd4d7095f5cfc9cfc4f46289bee91ea4a1e1d9fd/rtmposev1/onnx_sdk>
+- Source archive: `rtmdet_nano_8xb32-300e_hand-267f9c8f.zip`
+- Source download: <https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmdet_nano_8xb32-300e_hand-267f9c8f.zip>
+- Source archive size: 3,840,129 bytes
+- Source archive SHA-256: `9c0370a43c02b2fe42b4382aba7383d97cfa3ed35623b655cac4f0c25cfde402`
+- Exact archive member: `20230831/rtmdet_onnx/rtmdet_nano_8xb32-300e_hand-267f9c8f/end2end.onnx`
+- Local artifact: `services/hand-relay/models/rtmdet_nano_8xb32-300e_hand-267f9c8f.onnx`
+- Local artifact size: 4,010,667 bytes
+- Local artifact SHA-256: `568d3ea97a5b142488366b67e036b6a5cb0a1fef9087a710cb8e66b6979fbac2`
+- License: Apache-2.0
+
+The OpenMMLab download path does not embed a repository commit. Determinism is
+therefore enforced by both the named repository revision recorded for
+provenance and the exact source archive byte count and SHA-256. The extractor
+accepts only the named archive member and separately gates its output bytes.
+
+### RTMPose-m distilled hand refiner
+
+- Repository: <https://huggingface.co/tasmulaev/rtmpose-m-distill>
+- Revision: `ec0d56fdf55a350106671e763338a4a76372a888`
+- Pinned repository tree: <https://huggingface.co/tasmulaev/rtmpose-m-distill/tree/ec0d56fdf55a350106671e763338a4a76372a888>
+- Source artifact: `onnx/rtmpose-m-distill-256x256.onnx`
+- Pinned download: <https://huggingface.co/tasmulaev/rtmpose-m-distill/resolve/ec0d56fdf55a350106671e763338a4a76372a888/onnx/rtmpose-m-distill-256x256.onnx>
+- Local artifact: `services/hand-relay/models/rtmpose-m-distill-256x256.onnx`
+- Size: 55,118,513 bytes
+- SHA-256: `6d50664e566fffee41a090c98f75e893b50846a753b802dbf5e2072a8dfd7784`
+- License: Apache-2.0
+
+`check-lock` and `verify` are offline operations. Only an operator's explicit
+`acquire` command opens either source URL. Acquisition downloads into a
+temporary directory, validates both source contracts and both output contracts,
+and only then replaces the ignored local files. CI never downloads these model
+bytes. The candidate container build also performs exact local output size and
+SHA-256 checks and does not download or mount a model at runtime.
+
 ## Runtime and operations source
 
 - `services/hand-relay/commandcanvas_hand_relay/`
 - `services/hand-relay/tests/`
 - `services/hand-relay/Dockerfile`
 - `services/hand-relay/compose.yaml`
+- `services/hand-relay/models/hybrid-models.lock.json`
+- `services/hand-relay/scripts/acquire_hybrid_models.py`
 - `services/hand-relay/requirements.lock`
 - `services/hand-relay/requirements-ci.lock`
 - `services/hand-relay/requirements-dev.lock`
@@ -84,8 +135,9 @@ and finite warmup output before reporting ready.
 
 The production image copies the exact tracked 640 artifact into an immutable
 image after build-time size and SHA-256 checks. The separately tagged rollback
-image does the same for the tracked 320 artifact. Neither image downloads or
-substitutes a model at runtime.
+image does the same for the tracked 320 artifact. The profile-only hybrid image
+copies its two locally acquired, lock-verified artifacts and repeats their
+output checks. No image downloads or substitutes a model at runtime.
 
 The MIT-licensed CommandCanvas web application is deliberately not part of
 this corresponding-source repository. Its separately distributed relay client

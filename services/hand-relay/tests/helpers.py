@@ -15,6 +15,7 @@ from commandcanvas_hand_relay.model_manifest import (
     PRODUCTION_MODEL_MANIFEST,
     ModelManifest,
 )
+from commandcanvas_hand_relay.inference import BackendInputKind
 
 
 PROTOCOL = "commandcanvas.private-hand-relay.v1"
@@ -91,6 +92,7 @@ class FakeBackend:
     unavailable_reason: str | None = None
     device: str = "NVIDIA GeForce RTX 3090 (CUDA device 0)"
     manifest: ModelManifest = PRODUCTION_MODEL_MANIFEST
+    input_kind: BackendInputKind = BackendInputKind.LETTERBOXED_TENSOR
 
     @property
     def input_size(self) -> int:

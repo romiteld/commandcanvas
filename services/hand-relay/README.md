@@ -1,25 +1,31 @@
 # CommandCanvas native CUDA hand relay
 
-This optional service runs the pinned CommandCanvas YOLO26 hand-pose model
-through ONNX Runtime's native `CUDAExecutionProvider`. It accepts one bounded
-JPEG or WebP frame at a time over the private relay v1 WebSocket and returns
-semantic 21-point hand landmarks. Camera upload requires explicit browser
-consent. The browser falls back to local YOLO and then MediaPipe when this
-service is unavailable.
+This optional service runs hand-pose models through ONNX Runtime's native
+`CUDAExecutionProvider`. The pinned CommandCanvas YOLO26 model remains the
+default. An RTMDet-nano plus RTMPose-m backend is available only through the
+explicit `hybrid-rtmpose` candidate profile. The relay accepts one bounded JPEG
+or WebP frame at a time over the private relay v1 WebSocket and returns semantic
+21-point hand landmarks. Camera upload requires explicit browser consent. The
+browser falls back to its local MediaPipe landmark path when this service is
+unavailable or consent is revoked.
 
-The service has no CPU inference mode. Startup fails closed when CUDA, the
-selected artifact, its exact bytes, its tensor contract, device identity, or a
-finite warmup result does not match the immutable manifest. The existing
+The service has no CPU-only inference mode. Startup fails closed when CUDA,
+every selected artifact, its exact bytes, its tensor contract, device identity,
+or a finite warmup result does not match the immutable manifest. The hybrid
+graphs permit ONNX Runtime to place unsupported bookkeeping/control nodes on
+CPU, but both sessions must report CUDA as their primary provider on the same
+device and complete their strict warmups. The existing
 `commandcanvas.private-hand-relay.v1` capability and result payloads remain
-unchanged. The 640 parser keeps normalized detector boxes inside the relay for
-future reacquisition work, but v1 clients receive only the established
-confidence, handedness, and 21-landmark fields.
+unchanged. The default 640 YOLO parser keeps normalized detector boxes inside
+the relay for future reacquisition work, but v1 clients receive only the
+established confidence, handedness, and 21-landmark fields.
 
 ## Model images
 
-The production and rollback images are separate, tagged artifacts. Both copy
-the model into the image and verify its byte count and SHA-256 during the build.
-Neither service uses a runtime host bind mount.
+The production and rollback images are separate, tagged YOLO artifacts. Both
+copy the model into the image and verify its byte count and SHA-256 during the
+build. A plain Docker build still resolves to the production YOLO stage. Neither
+service uses a runtime host bind mount.
 
 | Image | Input | Build source | Bytes | SHA-256 | Host port |
 | --- | ---: | --- | ---: | --- | ---: |
@@ -47,6 +53,42 @@ session and finite warmup are required before the service becomes ready. One
 local true-640 run has now exercised those checks on an RTX 3090; the dated
 evidence and its limits are recorded in
 [`../../docs/local-cuda-verification-2026-08-29.md`](../../docs/local-cuda-verification-2026-08-29.md).
+
+## Opt-in hybrid candidate artifacts
+
+The hybrid image is excluded from normal Compose startup. It is selected only
+by the `hybrid-rtmpose` profile and contains two model files, with no YOLO model
+or runtime model mount:
+
+| Role | Local filename | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| RTMDet-nano hand detector | `rtmdet_nano_8xb32-300e_hand-267f9c8f.onnx` | 4,010,667 | `568d3ea97a5b142488366b67e036b6a5cb0a1fef9087a710cb8e66b6979fbac2` |
+| RTMPose-m distilled hand refiner | `rtmpose-m-distill-256x256.onnx` | 55,118,513 | `6d50664e566fffee41a090c98f75e893b50846a753b802dbf5e2072a8dfd7784` |
+
+The candidate bytes are intentionally ignored by Git. The tracked
+`models/hybrid-models.lock.json` records each repository revision, exact source
+URL, source size and SHA-256, archive member where applicable, output filename,
+output size and SHA-256, and license. The acquisition tool has three explicit
+commands:
+
+```bash
+# Offline: validate lock structure and pins only.
+python3 services/hand-relay/scripts/acquire_hybrid_models.py check-lock
+
+# Offline: fail unless both local output files match the lock.
+python3 services/hand-relay/scripts/acquire_hybrid_models.py verify
+
+# Networked and operator-initiated: fetch to temporary files, validate every
+# source and output, then replace the local output files.
+python3 services/hand-relay/scripts/acquire_hybrid_models.py acquire
+```
+
+`check-lock` and `verify` never open a source URL. `acquire` is the only
+networked mode. It prevalidates both candidates before replacing either output,
+extracts only the exact locked RTMDet ZIP member, and fails closed on a missing
+file, byte-count mismatch, SHA-256 mismatch, malformed archive, or changed
+member path. CI runs the lock and offline fixture tests but does not download
+these models.
 
 ## Verify the tracked true-640 build input
 
@@ -95,11 +137,31 @@ true-640 listener. A rollback requires an explicit, separately reviewed route
 change after the rollback service is healthy. Building an image does not change
 Caddy, DNS, pfSense, or the public service.
 
+After the two hybrid files pass `verify`, its separate candidate image and
+loopback listener can be selected explicitly:
+
+```bash
+docker compose --profile hybrid-rtmpose build hand-relay-hybrid-rtmpose
+docker compose --profile hybrid-rtmpose up -d hand-relay-hybrid-rtmpose
+```
+
+That service hardcodes `PRIVATE_HAND_RELAY_BACKEND=hybrid_rtmpose`, the two
+immutable in-image paths, and isolated host port `127.0.0.1:8104`. It is not
+started by a normal Compose invocation and it does not change the production
+route on port 8100. The profile has been started and exercised in an isolated
+RTX 3090 proof container; the dated evidence is recorded in
+[`../../docs/hybrid-cuda-verification-2026-08-29.md`](../../docs/hybrid-cuda-verification-2026-08-29.md).
+That static-fixture result is not evidence of live-camera quality, WAN latency,
+phone ergonomics, or public readiness.
+
 The ONNX Runtime CUDA arena defaults to 768 MiB
-(`PRIVATE_HAND_RELAY_GPU_MEM_LIMIT_BYTES=805306368`), uses heuristic cuDNN
-algorithm selection, and disables CPU execution-provider fallback. Compose
-requests one configured NVIDIA device, two CPU cores, a 2 GiB RAM limit, and a
-512 MiB RAM reservation. It does not enable exclusive GPU process mode.
+(`PRIVATE_HAND_RELAY_GPU_MEM_LIMIT_BYTES=805306368`) and uses heuristic cuDNN
+algorithm selection. The YOLO backend disables CPU execution-provider fallback.
+The hybrid backend explicitly requests CUDA first and CPU second because its
+exported graphs contain unsupported bookkeeping nodes; it refuses startup if
+CUDA is absent or demoted. Compose requests one configured NVIDIA device, two
+CPU cores, a 2 GiB RAM limit, and a 512 MiB RAM reservation. It does not enable
+exclusive GPU process mode.
 
 ## Capability, scheduling, and privacy properties
 

@@ -40,6 +40,8 @@ production dependencies:
 | Candidate | Relevant capability | Current blocker |
 | --- | --- | --- |
 | [poptoz/yolo26-hand-pose-face-detection](https://huggingface.co/poptoz/yolo26-hand-pose-face-detection) | The production relay pins the upstream FP16 ONNX artifact at `[1,3,640,640]`; output is `[1,300,69]`. A historical 320 export was also benchmarked in a browser candidate. The release selects the model vendor's AGPL open-source path; exact provenance and Corresponding Source are recorded in `SOURCE.md`. | Live iPhone interaction quality is unverified. The exact public source commit is linked from `SOURCE.md`. |
+| [tasmulaev/rtmpose-m-distill](https://huggingface.co/tasmulaev/rtmpose-m-distill/tree/ec0d56fdf55a350106671e763338a4a76372a888) | Apache-2.0, motion-blur-tuned 21-landmark ONNX challenger. The pinned 55,118,513-byte artifact has SHA-256 `6d50664e566fffee41a090c98f75e893b50846a753b802dbf5e2072a8dfd7784` and accepts a batch of 256-pixel hand crops. | Top-down pose model, so it requires a separately verified detector and crop transform. Published jitter gains are self-reported against pseudo-labels rather than an independent CommandCanvas capture set. |
+| [Tau-J/RTMPose RTMDet-nano hand detector](https://huggingface.co/Tau-J/RTMPose/tree/cd4d7095f5cfc9cfc4f46289bee91ea4a1e1d9fd/rtmposev1/onnx_sdk) | Apache-2.0 detector challenger. The pinned archive is 3,840,129 bytes with SHA-256 `9c0370a43c02b2fe42b4382aba7383d97cfa3ed35623b655cac4f0c25cfde402`; its ONNX input is `[1,3,320,320]` and outputs bounded boxes plus labels. | It is a detector, not a gesture model. It must be paired with a 21-landmark model, stable track IDs, ROI reuse, and measured end-to-end latency. |
 | [opencv/handpose_estimation_mediapipe](https://huggingface.co/opencv/handpose_estimation_mediapipe) | 21-keypoint ONNX hand-pose model | Requires a separate palm detector and is derived from the same MediaPipe path, so it is not yet evidence of an interaction improvement. |
 | [STMicroelectronics/hand_landmarks](https://huggingface.co/STMicroelectronics/hand_landmarks) | Quantized TFLite landmarks | Targeted at an embedded NPU workflow; no browser/iPhone adapter or target evidence is present. |
 
@@ -126,6 +128,35 @@ behavior.
 - No candidate-versus-MediaPipe iPhone benchmark artifact has been recorded in
   this repository yet. Until that happens, physical accuracy, latency,
   occlusion behavior, and ergonomics remain unverified.
+- Two user-supplied iPhone screenshots were used only as a harsh smoke test.
+  They contain the existing UI and MediaPipe overlay and therefore are not raw
+  ground truth. The current one-stage YOLO checkpoint returned no hand at the
+  production `0.45` threshold on either cropped camera tile; its highest raw
+  scores were `0.039337` for the open-hand image and `0.028061` for the pinch
+  image. Lowering the threshold to those values would not be a defensible fix.
+- On the same two contaminated tiles, pinned RTMDet-nano acquired the open hand
+  at `0.481` and the pinched hand at `0.760`. Feeding the resulting padded ROI
+  into pinned RTMPose-m Distill produced all 21 landmarks. The open-hand
+  thumb-to-index distance normalized by palm length was `1.039`; the pinched
+  state measured `0.369`. Twenty warmed detector-plus-pose runs on the RTX 3090
+  measured `8.554 ms` p50 and `10.055 ms` p95 for open, and `8.228 ms` p50 and
+  `9.667 ms` p95 for pinch. These values are candidate feasibility evidence,
+  not physical-device accuracy or interaction proof.
+- The packaged hybrid relay subsequently passed actual RTX 3090 startup and an
+  authenticated v1 WebSocket smoke test against those same two crops. Twenty
+  open frames and twenty pinch frames each returned at least one hand with
+  exactly 21 landmarks. Warm service latency measured `19.660 ms` p50 and
+  `30.119 ms` p95 for open, and `14.297 ms` p50 and `15.830 ms` p95 for pinch;
+  authenticated in-container round trip measured approximately `33 ms` p50.
+  The median normalized thumb/index ratio separated the two fixtures at
+  `1.125` versus `0.311`. This confirms the packaged CUDA and protocol path,
+  not live-camera continuity or physical interaction quality.
+- The available 52.224-second, 1668-by-988 phone-session recording is a 30 FPS
+  screen capture with the camera already downscaled, composited, H.264 encoded,
+  and partly covered by landmark UI. It is unsuitable as raw model ground
+  truth. A replacement decision requires a consented pre-overlay `getUserMedia`
+  clip covering point, draw, pinch/release, edge reach, motion blur, occlusion,
+  and two-hand crossing against identical decoded frames.
 - The installed native relay reported a warmed
   `CUDAExecutionProvider` on `NVIDIA GeForce RTX 3090 (CUDA device 0)` using
   the exact same pinned model. A CC0 static hand image produced one hand at

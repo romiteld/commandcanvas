@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from functools import partial
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, cast
 
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import JSONResponse
@@ -18,14 +18,19 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from .auth import MAX_TOKEN_BYTES, TokenError, verify_capability
 from .config import RelaySettings
 from .inference import (
+    BackendInputKind,
     CudaUnavailable,
     FrameRejected,
     ModelUnavailable,
     UnavailableBackend,
     YoloCudaBackend,
     decode_frame,
+    decode_rgb_frame,
 )
-from .model_manifest import ModelManifest
+from .hybrid_backend import (
+    HYBRID_RUNTIME_MANIFEST,
+    HybridCudaBackend,
+)
 from .replay import OneUseReplayCache
 
 
@@ -57,15 +62,30 @@ class CircuitUnhealthy(Exception):
     pass
 
 
+class CapabilityManifest(Protocol):
+    repository: str
+    revision: str
+    keypoints: int
+    release_license: str
+    precision: str
+
+
 class Backend(Protocol):
     ready: bool
     warm: bool
     unavailable_reason: str | None
     device: str
     input_size: int
-    manifest: ModelManifest
+    input_kind: BackendInputKind
+    manifest: CapabilityManifest
 
+
+class TensorBackend(Backend, Protocol):
     def infer(self, tensor: Any, transform: Any) -> list[dict[str, Any]]: ...
+
+
+class RgbFrameBackend(Backend, Protocol):
+    def infer_rgb(self, frame_rgb: Any) -> list[dict[str, Any]]: ...
 
 
 class InferenceRuntime:
@@ -169,26 +189,47 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if backend is None:
+            selected_manifest: CapabilityManifest = (
+                HYBRID_RUNTIME_MANIFEST
+                if settings.backend_variant == "hybrid_rtmpose"
+                else settings.model_manifest
+            )
             try:
-                app.state.backend = YoloCudaBackend.load(
-                    settings.model_path,
-                    manifest=settings.model_manifest,
-                    gpu_mem_limit_bytes=settings.gpu_mem_limit_bytes,
-                )
+                if settings.backend_variant == "hybrid_rtmpose":
+                    if (
+                        settings.hybrid_detector_model_path is None
+                        or settings.hybrid_pose_model_path is None
+                    ):
+                        raise ModelUnavailable(
+                            "Hybrid model paths were not configured."
+                        )
+                    app.state.backend = HybridCudaBackend.load(
+                        settings.hybrid_detector_model_path,
+                        settings.hybrid_pose_model_path,
+                        gpu_mem_limit_bytes=settings.gpu_mem_limit_bytes,
+                    )
+                else:
+                    if settings.model_path is None:
+                        raise ModelUnavailable("YOLO model path was not configured.")
+                    app.state.backend = YoloCudaBackend.load(
+                        settings.model_path,
+                        manifest=settings.model_manifest,
+                        gpu_mem_limit_bytes=settings.gpu_mem_limit_bytes,
+                    )
             except CudaUnavailable:
                 app.state.backend = UnavailableBackend(
                     "gpu_unavailable",
-                    manifest=settings.model_manifest,
+                    manifest=selected_manifest,
                 )
             except ModelUnavailable:
                 app.state.backend = UnavailableBackend(
                     "model_unavailable",
-                    manifest=settings.model_manifest,
+                    manifest=selected_manifest,
                 )
             except Exception:
                 app.state.backend = UnavailableBackend(
                     "model_unavailable",
-                    manifest=settings.model_manifest,
+                    manifest=selected_manifest,
                 )
         else:
             app.state.backend = backend
@@ -469,15 +510,27 @@ def _decode_and_infer(
     frame_header: dict[str, Any],
     settings: RelaySettings,
 ) -> list[dict[str, Any]]:
-    tensor, transform = decode_frame(
-        frame_bytes,
-        declared_mime=frame_header["mimeType"],
-        max_frame_bytes=settings.max_frame_bytes,
-        max_width=settings.max_width,
-        max_height=settings.max_height,
-        input_size=backend.input_size,
-    )
-    internal_hands = backend.infer(tensor, transform)
+    if backend.input_kind == BackendInputKind.RGB_FRAME:
+        frame_rgb = decode_rgb_frame(
+            frame_bytes,
+            declared_mime=frame_header["mimeType"],
+            max_frame_bytes=settings.max_frame_bytes,
+            max_width=settings.max_width,
+            max_height=settings.max_height,
+        )
+        internal_hands = cast(RgbFrameBackend, backend).infer_rgb(frame_rgb)
+    elif backend.input_kind == BackendInputKind.LETTERBOXED_TENSOR:
+        tensor, transform = decode_frame(
+            frame_bytes,
+            declared_mime=frame_header["mimeType"],
+            max_frame_bytes=settings.max_frame_bytes,
+            max_width=settings.max_width,
+            max_height=settings.max_height,
+            input_size=backend.input_size,
+        )
+        internal_hands = cast(TensorBackend, backend).infer(tensor, transform)
+    else:
+        raise ModelUnavailable("Relay backend input contract is not recognized.")
     # Protocol v1 intentionally remains byte-shape compatible with already
     # deployed clients. The 640 backend retains normalized detector boxes for
     # server-side tracking/reacquisition, but only the established semantic

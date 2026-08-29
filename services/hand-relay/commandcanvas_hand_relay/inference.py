@@ -5,6 +5,7 @@ import math
 import threading
 import warnings
 from dataclasses import dataclass
+from enum import Enum
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -22,6 +23,11 @@ MODEL_LICENSE = PRODUCTION_MODEL_MANIFEST.release_license
 INPUT_SIZE = PRODUCTION_MODEL_MANIFEST.input_size
 OUTPUT_SHAPE = PRODUCTION_MODEL_MANIFEST.output_shape
 CONFIDENCE_THRESHOLD = 0.45
+
+
+class BackendInputKind(str, Enum):
+    LETTERBOXED_TENSOR = "letterboxed_tensor"
+    RGB_FRAME = "rgb_frame"
 
 
 class CudaUnavailable(RuntimeError):
@@ -59,6 +65,7 @@ class YoloCudaBackend:
     ready = True
     warm = True
     unavailable_reason: str | None = None
+    input_kind = BackendInputKind.LETTERBOXED_TENSOR
 
     def __init__(
         self,
@@ -201,6 +208,7 @@ class UnavailableBackend:
     device: str = "CUDA device unavailable"
     ready: bool = False
     warm: bool = False
+    input_kind: BackendInputKind = BackendInputKind.LETTERBOXED_TENSOR
 
     @property
     def input_size(self) -> int:
@@ -219,6 +227,47 @@ def decode_frame(
     max_height: int,
     input_size: int = INPUT_SIZE,
 ) -> tuple[np.ndarray, LetterboxTransform]:
+    pixels = decode_rgb_frame(
+        data,
+        declared_mime=declared_mime,
+        max_frame_bytes=max_frame_bytes,
+        max_width=max_width,
+        max_height=max_height,
+    )
+    height, width = pixels.shape[:2]
+    rgb = Image.fromarray(pixels)
+
+    if input_size not in {320, 640}:
+        raise ValueError("CommandCanvas supports only manifest input sizes.")
+    scale = min(input_size / width, input_size / height)
+    rendered_width = max(1, min(input_size, round(width * scale)))
+    rendered_height = max(1, min(input_size, round(height * scale)))
+    offset_x = (input_size - rendered_width) // 2
+    offset_y = (input_size - rendered_height) // 2
+    resized = rgb.resize((rendered_width, rendered_height), Image.Resampling.BILINEAR)
+    canvas = Image.new("RGB", (input_size, input_size), (114, 114, 114))
+    canvas.paste(resized, (offset_x, offset_y))
+    normalized = np.asarray(canvas, dtype=np.float32) / np.float32(255.0)
+    tensor = np.ascontiguousarray(normalized.transpose(2, 0, 1)[None, ...])
+    return tensor, LetterboxTransform(
+        source_width=width,
+        source_height=height,
+        scale=scale,
+        offset_x=offset_x,
+        offset_y=offset_y,
+    )
+
+
+def decode_rgb_frame(
+    data: bytes,
+    *,
+    declared_mime: str,
+    max_frame_bytes: int,
+    max_width: int,
+    max_height: int,
+) -> np.ndarray:
+    """Decode one bounded browser frame without retaining encoded bytes."""
+
     if not data or len(data) > max_frame_bytes:
         raise FrameRejected("Frame bytes exceed the advertised bound.")
     expected_format = {"image/jpeg": "JPEG", "image/webp": "WEBP"}.get(declared_mime)
@@ -239,33 +288,17 @@ def decode_frame(
                 ):
                     raise FrameRejected("Frame dimensions exceed the advertised bound.")
                 image.load()
-                rgb = image.convert("RGB")
+                # Copy before leaving Pillow's context. The returned uint8
+                # array is the only raw-frame representation retained during
+                # the synchronous inference call.
+                rgb = np.asarray(image.convert("RGB"), dtype=np.uint8).copy()
     except FrameRejected:
         raise
     except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError):
         raise FrameRejected("Frame decode failed.") from None
     except Image.DecompressionBombWarning:
         raise FrameRejected("Frame dimensions exceed the advertised bound.") from None
-
-    if input_size not in {320, 640}:
-        raise ValueError("CommandCanvas supports only manifest input sizes.")
-    scale = min(input_size / width, input_size / height)
-    rendered_width = max(1, min(input_size, round(width * scale)))
-    rendered_height = max(1, min(input_size, round(height * scale)))
-    offset_x = (input_size - rendered_width) // 2
-    offset_y = (input_size - rendered_height) // 2
-    resized = rgb.resize((rendered_width, rendered_height), Image.Resampling.BILINEAR)
-    canvas = Image.new("RGB", (input_size, input_size), (114, 114, 114))
-    canvas.paste(resized, (offset_x, offset_y))
-    pixels = np.asarray(canvas, dtype=np.float32) / np.float32(255.0)
-    tensor = np.ascontiguousarray(pixels.transpose(2, 0, 1)[None, ...])
-    return tensor, LetterboxTransform(
-        source_width=width,
-        source_height=height,
-        scale=scale,
-        offset_x=offset_x,
-        offset_y=offset_y,
-    )
+    return np.ascontiguousarray(rgb)
 
 
 def parse_output(

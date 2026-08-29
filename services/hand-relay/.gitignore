@@ -1,3 +1,5 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+models/rtmdet_nano_8xb32-300e_hand-267f9c8f.onnx
+models/rtmpose-m-distill-256x256.onnx

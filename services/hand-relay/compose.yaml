@@ -45,6 +45,7 @@ services:
     build:
       context: ../..
       dockerfile: services/hand-relay/Dockerfile
+      target: relay-yolo
       args:
         PRIVATE_HAND_RELAY_MODEL_SOURCE: services/hand-relay/models/yolo26_hand_pose_640_fp16.onnx
         PRIVATE_HAND_RELAY_MODEL_FILENAME: yolo26_hand_pose_640_fp16.onnx
@@ -54,6 +55,7 @@ services:
       - "127.0.0.1:8100:8100"
     environment:
       <<: *relay-environment
+      PRIVATE_HAND_RELAY_BACKEND: yolo
       PRIVATE_HAND_RELAY_MODEL_PATH: /models/yolo26_hand_pose_640_fp16.onnx
       PRIVATE_HAND_RELAY_MODEL_VARIANT: yolo26_hand_pose_640_fp16
 
@@ -65,6 +67,7 @@ services:
     build:
       context: ../..
       dockerfile: services/hand-relay/Dockerfile
+      target: relay-yolo
       args:
         PRIVATE_HAND_RELAY_MODEL_SOURCE: public/models/yolo26_hand_pose_320_fp16.onnx
         PRIVATE_HAND_RELAY_MODEL_FILENAME: yolo26_hand_pose_320_fp16.onnx
@@ -74,5 +77,32 @@ services:
       - "127.0.0.1:8102:8100"
     environment:
       <<: *relay-environment
+      PRIVATE_HAND_RELAY_BACKEND: yolo
       PRIVATE_HAND_RELAY_MODEL_PATH: /models/yolo26_hand_pose_320_fp16.onnx
       PRIVATE_HAND_RELAY_MODEL_VARIANT: yolo26_hand_pose_320_fp16
+
+  hand-relay-hybrid-rtmpose:
+    <<: *relay-runtime
+    profiles:
+      - hybrid-rtmpose
+    image: commandcanvas-hand-relay:hybrid-rtmpose-candidate
+    build:
+      context: ../..
+      dockerfile: services/hand-relay/Dockerfile
+      target: relay-hybrid-rtmpose
+      args:
+        PRIVATE_HAND_RELAY_RTMDET_MODEL_SOURCE: services/hand-relay/models/rtmdet_nano_8xb32-300e_hand-267f9c8f.onnx
+        PRIVATE_HAND_RELAY_RTMDET_MODEL_FILENAME: rtmdet_nano_8xb32-300e_hand-267f9c8f.onnx
+        PRIVATE_HAND_RELAY_RTMDET_MODEL_SHA256: 568d3ea97a5b142488366b67e036b6a5cb0a1fef9087a710cb8e66b6979fbac2
+        PRIVATE_HAND_RELAY_RTMDET_MODEL_BYTES: "4010667"
+        PRIVATE_HAND_RELAY_RTMPOSE_MODEL_SOURCE: services/hand-relay/models/rtmpose-m-distill-256x256.onnx
+        PRIVATE_HAND_RELAY_RTMPOSE_MODEL_FILENAME: rtmpose-m-distill-256x256.onnx
+        PRIVATE_HAND_RELAY_RTMPOSE_MODEL_SHA256: 6d50664e566fffee41a090c98f75e893b50846a753b802dbf5e2072a8dfd7784
+        PRIVATE_HAND_RELAY_RTMPOSE_MODEL_BYTES: "55118513"
+    ports:
+      - "127.0.0.1:8104:8100"
+    environment:
+      <<: *relay-environment
+      PRIVATE_HAND_RELAY_BACKEND: hybrid_rtmpose
+      PRIVATE_HAND_RELAY_RTMDET_MODEL_PATH: /models/rtmdet_nano_8xb32-300e_hand-267f9c8f.onnx
+      PRIVATE_HAND_RELAY_RTMPOSE_MODEL_PATH: /models/rtmpose-m-distill-256x256.onnx

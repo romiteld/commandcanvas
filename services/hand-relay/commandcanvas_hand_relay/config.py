@@ -15,6 +15,7 @@ from .model_manifest import (
 
 
 BASE64URL = re.compile(r"^[A-Za-z0-9_-]+$")
+BACKEND_VARIANTS = frozenset({"yolo", "hybrid_rtmpose"})
 
 
 class SettingsError(ValueError):
@@ -25,8 +26,11 @@ class SettingsError(ValueError):
 class RelaySettings:
     signing_key: bytes = field(repr=False)
     allowed_origins: frozenset[str]
-    model_path: str
+    model_path: str | None
     model_manifest: ModelManifest = PRODUCTION_MODEL_MANIFEST
+    backend_variant: str = "yolo"
+    hybrid_detector_model_path: str | None = None
+    hybrid_pose_model_path: str | None = None
     bind_host: str = "127.0.0.1"
     bind_port: int = 8100
     max_frame_bytes: int = 262_144
@@ -55,9 +59,22 @@ def load_settings(environment: Mapping[str, str] | None = None) -> RelaySettings
     )
     if not origins:
         raise SettingsError("Private relay origin allowlist is required.")
-    model_path = env.get("PRIVATE_HAND_RELAY_MODEL_PATH", "").strip()
-    if not model_path:
+    backend_variant = env.get("PRIVATE_HAND_RELAY_BACKEND", "yolo").strip()
+    if backend_variant not in BACKEND_VARIANTS:
+        raise SettingsError("Private relay backend is not recognized.")
+    model_path = env.get("PRIVATE_HAND_RELAY_MODEL_PATH", "").strip() or None
+    if backend_variant == "yolo" and model_path is None:
         raise SettingsError("Private relay model path is required.")
+    hybrid_detector_model_path = (
+        env.get("PRIVATE_HAND_RELAY_RTMDET_MODEL_PATH", "").strip() or None
+    )
+    hybrid_pose_model_path = (
+        env.get("PRIVATE_HAND_RELAY_RTMPOSE_MODEL_PATH", "").strip() or None
+    )
+    if backend_variant == "hybrid_rtmpose" and hybrid_detector_model_path is None:
+        raise SettingsError("Private relay RTMDet model path is required.")
+    if backend_variant == "hybrid_rtmpose" and hybrid_pose_model_path is None:
+        raise SettingsError("Private relay RTMPose model path is required.")
     try:
         selected_manifest = model_manifest(
             env.get(
@@ -78,6 +95,9 @@ def load_settings(environment: Mapping[str, str] | None = None) -> RelaySettings
         allowed_origins=origins,
         model_path=model_path,
         model_manifest=selected_manifest,
+        backend_variant=backend_variant,
+        hybrid_detector_model_path=hybrid_detector_model_path,
+        hybrid_pose_model_path=hybrid_pose_model_path,
         bind_host=env.get("PRIVATE_HAND_RELAY_BIND_HOST", "127.0.0.1").strip()
         or "127.0.0.1",
         bind_port=_integer(env, "PRIVATE_HAND_RELAY_BIND_PORT", 8100, 1, 65535),
