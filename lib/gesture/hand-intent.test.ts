@@ -556,6 +556,24 @@ describe("pinch hysteresis", () => {
     });
   });
 
+  it("requires reliable wrist, MCP, and PIP geometry before classifying an open palm", () => {
+    const base = openPalmFrame();
+    const landmarks = [...base.landmarks] as HandLandmark[];
+    landmarks[6] = { ...landmarks[6]!, visibility: 0.2 };
+
+    const transition = interpretHandFrame(
+      createInitialHandIntentState(),
+      { ...base, landmarks: landmarks as unknown as HandLandmarks },
+      1_000,
+    );
+
+    expect(transition.output).toMatchObject({
+      accepted: true,
+      mode: "point",
+      pointer: { x: 0.5, y: 0.25 },
+    });
+  });
+
   it("engages below the close threshold, stays latched in the gap, and releases above the far threshold", () => {
     const unlatchedGap = interpretHandFrame(
       createInitialHandIntentState(),

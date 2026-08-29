@@ -147,6 +147,19 @@ const OTHER_FINGER_JOINTS = [
   { pip: 14, tip: 16 },
   { pip: 18, tip: 20 },
 ] as const;
+const OPEN_PALM_LANDMARK_INDICES = [
+  WRIST_INDEX,
+  5,
+  INDEX_PIP_INDEX,
+  INDEX_TIP_INDEX,
+  10,
+  12,
+  14,
+  16,
+  17,
+  18,
+  20,
+] as const;
 
 export function createInitialHandIntentState(): HandIntentState {
   return {
@@ -264,7 +277,7 @@ export function interpretHandFrame(
       : state.pinchLatched;
   const openPalm =
     indexReliable &&
-    hasReliableOpenPalmFingertips(
+    hasReliableOpenPalmLandmarks(
       frame.landmarks,
       config.minKeypointVisibility,
     ) &&
@@ -330,11 +343,11 @@ function isOpenPalm(landmarks: HandLandmarks) {
   );
 }
 
-function hasReliableOpenPalmFingertips(
+function hasReliableOpenPalmLandmarks(
   landmarks: HandLandmarks,
   minimumVisibility: number,
 ) {
-  return [INDEX_TIP_INDEX, 12, 16, 20].every(
+  return OPEN_PALM_LANDMARK_INDICES.every(
     (index) => landmarkVisibility(landmarks[index]) >= minimumVisibility,
   );
 }

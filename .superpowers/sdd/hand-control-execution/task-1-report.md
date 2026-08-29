@@ -136,6 +136,40 @@ The committed multi-step vector uses values `0 → 1 → 0.5` at `0/16/32ms` wit
 
 ## Verification
 
+### RED — complete open-palm geometry confidence gate
+
+Command:
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test -- lib/gesture/hand-intent.test.ts
+```
+
+Expected failure observed before the final classifier gate change:
+
+```text
+Test Files  1 failed (1)
+Tests  1 failed | 27 passed (28)
+```
+
+The new fixture kept every fingertip reliable but marked index PIP landmark `6` at `0.2` confidence. The existing classifier incorrectly emitted `open_palm` because it did not gate every landmark it consumed.
+
+### GREEN — complete open-palm geometry confidence gate
+
+Command:
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test -- lib/gesture/hand-intent.test.ts lib/gesture/one-euro-filter.test.ts
+```
+
+Output:
+
+```text
+Test Files  2 passed (2)
+Tests  29 passed (29)
+```
+
+`open_palm` now requires adequate confidence for every classifier-consumed landmark: `0, 5, 6, 8, 10, 12, 14, 16, 17, 18, 20`. An adequate index tip remains a visible `point` pointer when this semantic gate refuses the open-palm classification.
+
 Focused detector-adapter verification:
 
 ```bash
@@ -164,7 +198,7 @@ PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tm
 
 ```text
 Test Files  96 passed (96)
-Tests  942 passed (942)
+Tests  943 passed (943)
 ```
 
 ## Self-review
@@ -172,7 +206,7 @@ Tests  942 passed (942)
 - The index coordinate is selected independently of semantic mode; open palm is classified but never changes `pointer` away from landmark 8.
 - Pinch geometry remains raw-current geometry, so One Euro filtering does not alter engage/release hysteresis inputs.
 - Predicted samples are carried as marked contract data and rejected without mutating prior state/filter data; they cannot participate in semantic transitions.
-- A low-confidence thumb cannot release an existing pinch latch, while an adequate index remains renderable. `open_palm` requires reliable extended finger tips rather than geometry alone.
+- A low-confidence thumb cannot release an existing pinch latch, while an adequate index remains renderable. `open_palm` requires reliable confidence for every wrist, MCP, PIP, and fingertip landmark that its geometry classifier consumes.
 - The One Euro implementation tracks values, derivative, and timestamps as reducer state. Its filtered-previous derivative recurrence is covered by a reference vector matching the paper appendix and maintained canonical source.
 - Existing MediaPipe and YOLO detector result shapes are unchanged. Added controller observation fields are optional and additive.
 - `git diff --check`, lint, typecheck, focused tests, detector-adapter tests, and the full unit suite are clean.
