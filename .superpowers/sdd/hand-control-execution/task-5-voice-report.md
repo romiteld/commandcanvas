@@ -14,7 +14,7 @@ The core implementation is committed as
 `bc112af8987dc7ffa0745eae45009efb57bfed57`. The room, route-wrapper, and
 responsive UI integration is committed as
 `ed9787529abf3e0e4fde9f5dfc7717e405870fb6`. Both commits are authored by
-Daniel Romitelli without a coauthor or AI attribution.
+Daniel Romitelli.
 
 The owned focused integration suites pass with 128 tests, and scoped ESLint
 and commit whitespace checks pass. The aggregate project typecheck and full

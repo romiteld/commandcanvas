@@ -14,8 +14,8 @@ are now separate local repositories with separate license boundaries.
 - Relay repository:
   `/home/romiteld/Development/AI_ML/commandcanvas-hand-relay`
 
-Both commits are authored by Daniel Romitelli without a coauthor. Neither
-repository was pushed, deployed, or given a remote by this checkpoint.
+Both commits are authored by Daniel Romitelli. Neither repository was pushed,
+deployed, or given a remote by this checkpoint.
 
 ## Test-driven boundary
 

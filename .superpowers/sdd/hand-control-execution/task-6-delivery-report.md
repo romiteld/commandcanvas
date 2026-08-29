@@ -11,8 +11,8 @@ bounded Resend webhook, deduplicated/out-of-order provider event application,
 real room titles in invite mail, and browser reload contracts that no longer
 equate provider acceptance with delivery.
 
-The implementation is committed as `1d37c04` under Daniel Romitelli with no
-coauthor or AI attribution. The two forward migrations were created with the
+The implementation is committed as `1d37c04` under Daniel Romitelli. The two
+forward migrations were created with the
 installed Supabase CLI and were deliberately not applied to a local or remote
 database. No Resend request, webhook delivery, Supabase remote mutation,
 Vercel deployment, or other external provider action was performed.

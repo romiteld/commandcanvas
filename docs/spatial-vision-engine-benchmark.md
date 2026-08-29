@@ -61,8 +61,10 @@ observable, and device-heating notes. Do not collapse these into one score.
 - Generated browser assets contain the MediaPipe worker and WASM runtime only.
 - Earlier local YOLO and native CUDA measurements belong to a superseded
   combined AGPL build and do not prove the current MIT browser release.
-- No current MediaPipe physical-iPhone benchmark or exact public-production
-  camera lifecycle has been recorded yet.
+- Exact-release desktop and mobile browser runs exercised camera permission,
+  MediaPipe worker/model/WASM loading, labeled desktop recovery, detachment, and
+  track shutdown with controlled media.
+- No current MediaPipe physical-iPhone human-hand benchmark has been recorded.
 - Pointer, touch, and stylus remain explicit always-available fallbacks.
 
 Until the target-device protocol is recorded against the exact release,

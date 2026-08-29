@@ -786,3 +786,92 @@ rewriting their historical evidence:
 - WebMCP Site Tools are exposed to supported agent hosts. Native Chrome,
   ChatGPT's built-in browser, and in-page Realtime voice remain separate
   verification boundaries.
+
+## Checkpoint 23: exact MIT production and bounded provider verification
+
+### WORKING
+
+- Public application source commit
+  `d331ccf565560fffdafb7ba0d5cdab8f97bddf2e` passed ESLint, TypeScript, 109
+  Vitest files with 1,128 of 1,128 tests, the generated MediaPipe worker, and
+  the optimized Next.js webpack build with all 13 routes generated.
+- Vercel production deployment `dpl_7X5NA2H6tJaYeLn4Lkxs7QJhpvz9` is READY
+  from that exact source commit. The canonical alias is
+  <https://commandcanvas.vercel.app>.
+- The source, runtime, and evidence changes preserve the MIT browser boundary:
+  local hand input uses MediaPipe, while the optional private-GPU protocol
+  remains disabled until its separate source-publication and service gates are
+  complete.
+
+### VERIFIED IN BROWSER
+
+- The exact public deployment passed 23 applicable ordinary-browser scenarios
+  with 16 deliberate provider, hardware, or target-surface skips and zero
+  failures. The matrix covered fluid landing layouts, the ordinary Chromium
+  canvas, deterministic transport recovery, trusted touch and pen input,
+  iPhone-profile WebKit fallbacks, and genuine two-browser Supabase Presence,
+  cursor Broadcast, durable mutation, and revision convergence. A separate
+  reset probe deleted the exact prior demo room, created a distinct replacement,
+  and cleaned up the replacement.
+- Controlled-media production runs passed the MediaPipe worker path on desktop
+  and mobile plus the visibly labeled same-model in-page recovery path on
+  desktop. They exercised permission, exact model/worker/WASM loading,
+  detachment, shutdown, and ended-track behavior. These runs used controlled
+  media and do not establish physical-camera or human-hand accuracy.
+- A paid `gpt-realtime-2.1` WebRTC run used controlled browser audio, heard
+  **Bring in our project board**, created **Project Board** through the narrow
+  voice tool, produced the canonical `R4 · voice` receipt, and cleaned up the
+  exact room.
+- The first exact-production vision run reached the authenticated
+  `transform-sketch` route but returned HTTP 502; its exact temporary room was
+  still cleaned up. One bounded retry then returned HTTP 200, preserved the
+  selected rough sketch, created a separate schema-validated structured visual,
+  and cleaned up its exact room. The passing retry is current OpenAI vision
+  evidence for this deployed application. It is not evidence that ChatGPT's
+  built-in browser discovered or invoked Site Tools.
+- Official Chrome for Testing 153 exercised current static and feature-flagged
+  dynamic production bundles with the current `document.modelContext` surface,
+  absence of the deprecated navigator surface, the ten-tool phase catalog,
+  execution, cancellation, registration lifecycle behavior, visible receipts,
+  and cleanup. The canonical public deployment remains in static-registration
+  mode; this does not establish a separate public dynamic HTTPS deployment.
+
+### UNVERIFIED
+
+- ChatGPT built-in-browser Site Tools discovery, confirmation UI, and tool
+  invocation remain unverified. Native Chrome 153 and in-page Realtime voice are
+  separate boundaries.
+- The microphone provider path is verified with controlled audio, not a
+  physical microphone. Speech recognition accuracy, interruption behavior,
+  latency, and room ergonomics with a person speaking into a device remain
+  unverified.
+- Controlled media verifies the camera runtime lifecycle, not a person's hand.
+  Physical index drawing, pinch acquisition and release, one-hand movement,
+  two-hand resize and zoom, open-palm pan, edge throw, minimize docking,
+  lighting, occlusion, latency, thermals, mirrored-camera behavior, and
+  relay-to-local ergonomics remain unverified.
+- Physical touch and stylus pressure, tilt, palm rejection, and device
+  ergonomics remain unverified. Trusted browser events and device profiles are
+  automated evidence only.
+- Public dynamic WebMCP registration remains unverified at a distinct public
+  dynamic HTTPS deployment. Execute-time guards remain authoritative in static
+  and dynamic modes.
+- Real public Resend delivery remains disabled. The no-signup demo is always
+  preview-only and never calls Resend. Earlier controlled allowlisted delivery
+  does not establish current public invitation or packet delivery.
+- The separate private-GPU relay source publication and production listener are
+  still pending. Its public edge currently cannot establish readiness while no
+  true-640 service is listening, so the application path remains disabled and
+  local MediaPipe remains the fallback.
+- Cross-network restrictive-NAT meeting media remains unverified; there is no
+  TURN relay or SFU.
+
+### CUT
+
+- No approved hand-control or canvas capability was cut in this checkpoint.
+  Physical pencil, marker, or arbitrary-object tracking; permanent
+  unrecoverable gesture deletion; TURN or SFU infrastructure; recording;
+  screen sharing; production conferencing scale; conferencing-platform
+  integrations; enterprise identity; broad office-suite integrations; billing;
+  native apps; headset support; marketplaces; and desktop automation remain
+  outside this release.
