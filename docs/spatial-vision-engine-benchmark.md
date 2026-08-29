@@ -131,6 +131,14 @@ behavior.
   repeats, p50 was `7.652 ms`, p95 was `11.016 ms`, and throughput was
   `122.013` results per second. These values exclude live capture, encode,
   network, decode scheduling, and physical interaction.
+- The separately packaged true-640 relay was then rebuilt and exercised on the
+  same RTX 3090. A bounded CC0 static hand fixture produced one hand in every
+  one of 200 warmed repeats; p50 was `6.874 ms`, p95 was `9.272 ms`, and mean
+  throughput was `140.376` results per second. An authenticated ten-frame v1
+  WebSocket session returned one hand with 21 landmarks for every frame and
+  reported p50 service latency of `22.181 ms`. The complete dated evidence and
+  remaining boundaries are in
+  [`local-cuda-verification-2026-08-29.md`](local-cuda-verification-2026-08-29.md).
 - A real rendered-UI recording recognized open-palm state and displayed pinch
   ratios between 0.22 and 0.28. The recording also demonstrated that the old
   preview-shaped movement boundary was a usability failure. The current source

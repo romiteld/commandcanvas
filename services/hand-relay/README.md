@@ -43,7 +43,10 @@ pinned revision and inspected with ONNX Runtime 1.23.1: input `images`
 `onnx.checker` did not pass that upstream graph because it reported a
 topological-sort validation error at `graph_input_cast_0`; this repository does
 not claim otherwise. ONNX Runtime loaded the graph metadata. A real CUDA
-session and finite warmup are still required before the service becomes ready.
+session and finite warmup are required before the service becomes ready. One
+local true-640 run has now exercised those checks on an RTX 3090; the dated
+evidence and its limits are recorded in
+[`../../docs/local-cuda-verification-2026-08-29.md`](../../docs/local-cuda-verification-2026-08-29.md).
 
 ## Stage the true-640 build input
 
@@ -157,9 +160,13 @@ python3 -m commandcanvas_hand_relay.benchmark \
 ```
 
 The script reports the selected manifest, artifact SHA-256, input size, device,
-p50, p95, result rate, and detected-hand range. True-640 CUDA latency, live
-camera smoothness, shared-GPU behavior, and public edge behavior remain
-unverified until this exact image is exercised.
+p50, p95, result rate, and detected-hand range. The exact true-640 image was
+exercised locally on 2026-08-29. Across 200 warmed repeats of one static CC0
+bare-hand fixture it measured p50 `6.874 ms`, p95 `9.272 ms`, and `140.376`
+results per second, with one detected hand in every repeat. This is
+static-image CUDA evidence. Live-camera smoothness, active shared-GPU
+contention, private-network latency, and public edge behavior remain
+unverified.
 
 For historical context only, the prior 320 relay identified an actual
 `NVIDIA GeForce RTX 3090` and measured 200 warmed repeats of one static CC0
