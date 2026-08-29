@@ -822,6 +822,40 @@ describe("SpatialCameraControl", () => {
     expect(screen.getByText(/calibrated for this camera session/i)).toBeVisible();
   });
 
+  it("bounds camera-rate calibration evidence after the retained profile is statistically useful", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    render(
+      <SpatialCameraControl
+        createController={() => fake.controller}
+        onCalibrationResult={() => undefined}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => fake.setStatus({ state: "ready" }));
+
+    act(() => {
+      for (let sample = 0; sample < 300; sample += 1) {
+        const pointer = {
+          x: 0.16 + (sample % 20) * 0.034,
+          y: 0.14 + (sample % 18) * 0.04,
+        };
+        fake.emit(calibrationObservation("point", pointer, 0.72, 6_000 + sample * 16));
+      }
+      for (let sample = 0; sample < 300; sample += 1) {
+        const pointer = {
+          x: 0.16 + (sample % 20) * 0.034,
+          y: 0.14 + (sample % 18) * 0.04,
+        };
+        fake.emit(calibrationObservation("pinch", pointer, 0.22, 12_000 + sample * 16));
+      }
+    });
+
+    expect(screen.getByText(/240 reach samples/i)).toBeVisible();
+    expect(screen.getByText(/120 open · 120 closed/i)).toBeVisible();
+  });
+
   it("clamps extreme PiP drags to the mobile workspace and dock on every side", async () => {
     const fake = fakeController();
     const { container } = render(

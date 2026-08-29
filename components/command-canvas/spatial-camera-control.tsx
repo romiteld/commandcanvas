@@ -25,6 +25,9 @@ import {
   type HandCalibrationSamples,
 } from "@/lib/gesture/hand-calibration";
 
+const MAX_CALIBRATION_REACH_SAMPLES = 240;
+const MAX_CALIBRATION_PINCH_SAMPLES = 120;
+
 export type SpatialCalibrationResult =
   | HandCalibrationResult
   | {
@@ -183,15 +186,27 @@ export function SpatialCameraControl({
     )
       return;
     const current = calibrationSamplesRef.current;
-    const reachSamples = [...current.reachSamples, pointer];
+    const reachSamples = appendRecentCalibrationSample(
+      current.reachSamples,
+      pointer,
+      MAX_CALIBRATION_REACH_SAMPLES,
+    );
     const openPinchRatios =
       (observation.mode === "point" || observation.mode === "open_palm") &&
       Number.isFinite(pinchRatio)
-        ? [...current.openPinchRatios, pinchRatio as number]
+        ? appendRecentCalibrationSample(
+            current.openPinchRatios,
+            pinchRatio as number,
+            MAX_CALIBRATION_PINCH_SAMPLES,
+          )
         : current.openPinchRatios;
     const closedPinchRatios =
       observation.mode === "pinch" && Number.isFinite(pinchRatio)
-        ? [...current.closedPinchRatios, pinchRatio as number]
+        ? appendRecentCalibrationSample(
+            current.closedPinchRatios,
+            pinchRatio as number,
+            MAX_CALIBRATION_PINCH_SAMPLES,
+          )
         : current.closedPinchRatios;
     calibrationSamplesRef.current = {
       ...current,
@@ -199,10 +214,17 @@ export function SpatialCameraControl({
       openPinchRatios,
       closedPinchRatios,
     };
-    setCalibrationCounts({
-      reach: reachSamples.length,
-      open: openPinchRatios.length,
-      closed: closedPinchRatios.length,
+    setCalibrationCounts((counts) => {
+      const next = {
+        reach: reachSamples.length,
+        open: openPinchRatios.length,
+        closed: closedPinchRatios.length,
+      };
+      return counts.reach === next.reach &&
+        counts.open === next.open &&
+        counts.closed === next.closed
+        ? counts
+        : next;
     });
   }, []);
 
@@ -954,6 +976,16 @@ function emptyCalibrationSamples(deviceKey: string): HandCalibrationSamples {
     closedPinchRatios: [],
     openPinchRatios: [],
   };
+}
+
+function appendRecentCalibrationSample<T>(
+  samples: readonly T[],
+  sample: T,
+  limit: number,
+) {
+  return samples.length < limit
+    ? [...samples, sample]
+    : [...samples.slice(samples.length - limit + 1), sample];
 }
 
 const HAND_CONNECTIONS = [
