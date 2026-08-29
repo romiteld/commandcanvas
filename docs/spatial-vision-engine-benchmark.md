@@ -40,7 +40,7 @@ production dependencies:
 
 | Candidate | Relevant capability | Current blocker |
 | --- | --- | --- |
-| [poptoz/yolo26-hand-pose-face-detection](https://huggingface.co/poptoz/yolo26-hand-pose-face-detection) | The pinned checkpoint was exported as FP16 ONNX at `[1,3,320,320]`; output remains `[1,300,69]`. Real Chromium inference returned 21 keypoints for a CC0 bare-hand image. The release selects the model vendor's AGPL open-source path; exact provenance and Corresponding Source are recorded in `SOURCE.md`. | Live iPhone interaction quality is unverified. The release must expose a browser-visible link to the exact public source commit before deployment. |
+| [poptoz/yolo26-hand-pose-face-detection](https://huggingface.co/poptoz/yolo26-hand-pose-face-detection) | The pinned checkpoint was exported as FP16 ONNX at `[1,3,320,320]`; output remains `[1,300,69]`. Real Chromium inference returned 21 keypoints for a CC0 bare-hand image. The release selects the model vendor's AGPL open-source path; exact provenance and Corresponding Source are recorded in `SOURCE.md`. | Live iPhone interaction quality is unverified. The exact public source commit is linked from `SOURCE.md`. |
 | [opencv/handpose_estimation_mediapipe](https://huggingface.co/opencv/handpose_estimation_mediapipe) | 21-keypoint ONNX hand-pose model | Requires a separate palm detector and is derived from the same MediaPipe path, so it is not yet evidence of an interaction improvement. |
 | [STMicroelectronics/hand_landmarks](https://huggingface.co/STMicroelectronics/hand_landmarks) | Quantized TFLite landmarks | Targeted at an embedded NPU workflow; no browser/iPhone adapter or target evidence is present. |
 

@@ -43,11 +43,13 @@ NVIDIA host and are separate from deterministic CI.
 
 ## Publication boundary
 
-This checkpoint creates the repository locally only. It does not publish a
-remote repository, deploy the service, mutate the existing route, or run a
-billable provider. Before another release is distributed or promoted, replace
-the source-link follow-up in `SOURCE.md` with the exact public commit containing
-the deployed service and model source record.
+The public corresponding-source repository is
+<https://github.com/romiteld/commandcanvas-hand-relay>. The verified CUDA image
+was built from service source commit
+[`9f652a67dbe2c824ee68f7985ab13bb0af56ae6f`](https://github.com/romiteld/commandcanvas-hand-relay/commit/9f652a67dbe2c824ee68f7985ab13bb0af56ae6f),
+with the dated host evidence recorded by the next documentation commit. Runtime
+credentials, host configuration, and deployment state are intentionally not
+stored in this repository.
 
 ## License
 

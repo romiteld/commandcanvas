@@ -5,13 +5,16 @@ License, version 3 only. This local repository contains the relay's service,
 container configuration, operations, tests, pinned model artifacts, dependency
 locks, and source manifest.
 
-## Source-link follow-up
+## Public corresponding source
 
-This checkpoint intentionally creates no remote repository. Before this relay
-is distributed, deployed as a new release, or publicly promoted, publish this
-repository and replace this section with the exact public commit or tag that
-matches the deployed bytes. A newer or older branch is not a substitute for the
-source of a running release.
+- Repository: <https://github.com/romiteld/commandcanvas-hand-relay>
+- Verified CUDA image source:
+  <https://github.com/romiteld/commandcanvas-hand-relay/commit/9f652a67dbe2c824ee68f7985ab13bb0af56ae6f>
+- Dated local CUDA evidence:
+  <https://github.com/romiteld/commandcanvas-hand-relay/blob/main/docs/local-cuda-verification-2026-08-29.md>
+
+The verified image was built from the exact source commit above. A newer or
+older branch is not a substitute for the source of running relay bytes.
 
 Private credentials, host configuration, firewall state, and deployment data
 are not source artifacts. `services/hand-relay/.env.example` records only the
