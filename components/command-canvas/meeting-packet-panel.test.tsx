@@ -410,6 +410,8 @@ describe("MeetingPacketPanel", () => {
   it.each([
     ["preview_only", "Preview only: not sent"],
     ["submitted", "Submitted to Resend; delivery pending"],
+    ["reconciling", "Submission status is being reconciled; delivery is not confirmed"],
+    ["delivered", "Resend confirmed delivery"],
   ] as const)("reports the honest %s outcome", (kind, message) => {
     renderPanel({
       packet: approvedPacket,

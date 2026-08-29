@@ -9,9 +9,10 @@ import {
 
 const inputSchema = z
   .object({
+    idempotencyKey: z.string().trim().min(1).max(256).regex(/^[\x21-\x7e]+$/),
     recipientEmail: normalizedEmailSchema,
     recipientName: z.string().trim().min(1).max(64),
-    roomName: z.string().trim().min(1).max(120),
+    roomName: z.string().trim().min(1).max(120).regex(/^[^\r\n]+$/),
     joinUrl: z.url().refine(isSafeInvitationJoinUrl),
     expiresAt: z.iso.datetime({ offset: true }),
   })
@@ -40,12 +41,16 @@ export type InvitationEmailInput = z.input<typeof inputSchema>;
 export interface InvitationEmailEnvironment {
   RESEND_API_KEY?: string;
   RESEND_FROM?: string;
-  COMMANDCANVAS_INVITE_EMAIL_ALLOWLIST?: string;
 }
 
 export type InvitationDeliveryResult =
   | { status: "preview_only"; message: string }
   | { status: "submitted"; message: string; providerId: string }
+  | {
+      status: "reconciling";
+      message: string;
+      errorCode: "resend_ambiguous";
+    }
   | { status: "failed"; message: string };
 
 export async function deliverMeetingInvitation(
@@ -62,28 +67,19 @@ export async function deliverMeetingInvitation(
 
   const key = environment.RESEND_API_KEY?.trim() ?? "";
   const from = environment.RESEND_FROM?.trim() ?? "";
-  const allowlist = parseAllowlist(
-    environment.COMMANDCANVAS_INVITE_EMAIL_ALLOWLIST,
-  );
-  if (!key || !from || allowlist.size === 0)
+  if (!key || !from || /[\r\n]/.test(from))
     return {
       status: "preview_only",
       message:
         "Invite created. Email delivery is not configured; copy the link instead.",
     };
-  if (!allowlist.has(input.data.recipientEmail))
-    return {
-      status: "preview_only",
-      message:
-        "Invite created. This recipient is not allowlisted; copy the link instead.",
-    };
-
   try {
     const response = await fetcher("https://api.resend.com/emails", {
       method: "POST",
       headers: {
         authorization: `Bearer ${key}`,
         "content-type": "application/json",
+        "idempotency-key": input.data.idempotencyKey,
       },
       body: JSON.stringify({
         from,
@@ -92,30 +88,23 @@ export async function deliverMeetingInvitation(
         html: invitationHtml(input.data),
       }),
     });
-    if (!response.ok) return deliveryFailed();
+    if (!response.ok)
+      return response.status === 429 || response.status >= 500 || response.status === 409
+        ? deliveryReconciling()
+        : deliveryFailed();
     const parsed = z
       .object({ id: z.string().trim().min(1).max(256) })
       .passthrough()
       .safeParse(await response.json());
-    if (!parsed.success) return deliveryFailed();
+    if (!parsed.success) return deliveryReconciling();
     return {
       status: "submitted",
       message: "Invitation accepted by the email provider.",
       providerId: parsed.data.id,
     };
   } catch {
-    return deliveryFailed();
+    return deliveryReconciling();
   }
-}
-
-function parseAllowlist(raw: string | undefined) {
-  return new Set(
-    (raw ?? "")
-      .split(",")
-      .map((candidate) => normalizedEmailSchema.safeParse(candidate))
-      .filter((candidate) => candidate.success)
-      .map((candidate) => candidate.data),
-  );
 }
 
 function invitationHtml(input: z.output<typeof inputSchema>) {
@@ -143,5 +132,14 @@ function deliveryFailed(): InvitationDeliveryResult {
   return {
     status: "failed",
     message: "Invite created, but email delivery failed. Copy the link instead.",
+  };
+}
+
+function deliveryReconciling(): InvitationDeliveryResult {
+  return {
+    status: "reconciling",
+    message:
+      "Invitation submission is being reconciled; copy the link if needed.",
+    errorCode: "resend_ambiguous",
   };
 }

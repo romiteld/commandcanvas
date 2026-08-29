@@ -167,9 +167,21 @@ export interface SubmittedPacketSendValue {
     | "This packet was already submitted to Resend.";
 }
 
+export interface ReconcilingPacketSendValue {
+  mode: "resend";
+  status: "reconciling";
+  sendRequestId: string;
+  outboundShareId: string;
+  providerMessageId: string | null;
+  recipientCount: number;
+  subject: string;
+  message: "Submission is being reconciled; delivery is not confirmed.";
+}
+
 export type ExecutedPacketSendValue =
   | PreviewOnlyPacketSendValue
-  | SubmittedPacketSendValue;
+  | SubmittedPacketSendValue
+  | ReconcilingPacketSendValue;
 
 export const packetActivityActionSchema = z.enum([
   "packet_prepared",
@@ -181,7 +193,13 @@ export const packetActivityActionSchema = z.enum([
   "packet_send_authorized",
   "packet_send_expired",
   "packet_send_submitted",
+  "packet_send_reconciling",
   "packet_send_failed",
+  "packet_email_delivered",
+  "packet_email_bounced",
+  "packet_email_complained",
+  "packet_email_failed",
+  "packet_email_suppressed",
 ]);
 
 export interface PacketActivityValue {
@@ -223,11 +241,24 @@ export interface PersistedPacketSendValue {
   status:
     | "awaiting_human_approval"
     | "sending"
-    | "sent"
+    | "reconciling"
+    | "submitted"
     | "cancelled"
     | "failed"
     | "preview_only"
     | "expired";
+  providerMessageId: string | null;
+  deliveryStatus:
+    | "pending"
+    | "reconciling"
+    | "submitted"
+    | "delivered"
+    | "bounced"
+    | "complained"
+    | "failed"
+    | "suppressed"
+    | "preview_only"
+    | null;
 }
 
 export interface PersistedPacketWorkflowValue {
@@ -344,7 +375,8 @@ const stagedSendRowSchema = z
     status: z.enum([
       "awaiting_human_approval",
       "sending",
-      "sent",
+      "reconciling",
+      "submitted",
       "failed",
       "preview_only",
       "expired",
@@ -357,11 +389,18 @@ const authorizedSendSchema = z
     sendRequestId: z.uuid(),
     outboundShareId: z.uuid(),
     provider: z.enum(["preview", "resend"]),
-    status: z.enum(["preview_only", "sending", "sent", "failed"]),
+    status: z.enum([
+      "preview_only",
+      "sending",
+      "reconciling",
+      "submitted",
+      "failed",
+    ]),
     subject: packetTitleSchema,
     contentSnapshot: packetContentSnapshotSchema,
     recipientSnapshot: nonEmptyRecipientsSchema,
     idempotencyKey: idempotencyKeySchema,
+    providerMessageId: z.string().trim().min(1).max(240).nullable(),
     changed: z.boolean(),
   })
   .strict();
@@ -378,7 +417,7 @@ const completedSendSchema = z
   .object({
     sendRequestId: z.uuid(),
     outboundShareId: z.uuid(),
-    status: z.enum(["sent", "failed"]),
+    status: z.enum(["reconciling", "submitted", "failed"]),
     provider: z.literal("resend"),
     providerMessageId: z.string().trim().min(1).max(240).nullable(),
     changed: z.boolean(),
@@ -412,11 +451,28 @@ const persistedSendRowSchema = z
     status: z.enum([
       "awaiting_human_approval",
       "sending",
-      "sent",
+      "reconciling",
+      "submitted",
       "cancelled",
       "failed",
       "preview_only",
       "expired",
+    ]),
+  })
+  .strict();
+const persistedOutboundRowSchema = z
+  .object({
+    provider_message_id: z.string().trim().min(1).max(240).nullable(),
+    status: z.enum([
+      "pending",
+      "reconciling",
+      "submitted",
+      "delivered",
+      "bounced",
+      "complained",
+      "failed",
+      "suppressed",
+      "preview_only",
     ]),
   })
   .strict();
@@ -507,6 +563,19 @@ export function createPacketService(
             parsedSend.data.packet_id !== parsedPacket.data.id
           )
             return packetUnavailable();
+          const outboundResponse = await client
+            .from("outbound_shares")
+            .select("provider_message_id,status")
+            .eq("room_id", roomId)
+            .eq("send_request_id", parsedSend.data.id)
+            .maybeSingle();
+          if (hasError(outboundResponse)) return packetUnavailable();
+          const parsedOutbound =
+            outboundResponse.data === null
+              ? null
+              : persistedOutboundRowSchema.safeParse(outboundResponse.data);
+          if (parsedOutbound && !parsedOutbound.success)
+            return packetUnavailable();
           latestSend = {
             sendRequestId: parsedSend.data.id,
             packetId: parsedSend.data.packet_id,
@@ -515,6 +584,12 @@ export function createPacketService(
             recipientHash: parsedSend.data.recipient_snapshot_hash,
             recipients: parsedSend.data.recipient_snapshot,
             status: parsedSend.data.status,
+            providerMessageId: parsedOutbound?.success
+              ? parsedOutbound.data.provider_message_id
+              : null,
+            deliveryStatus: parsedOutbound?.success
+              ? parsedOutbound.data.status
+              : null,
           };
         }
       }
@@ -777,16 +852,18 @@ export function createPacketService(
         decision.allowedRecipients,
       )
     ) {
-      await completeFailedSend(
+      await completeSendAttempt(
         client,
         actorUserId,
         input.data,
+        "failed",
+        null,
         "approved_snapshot_mismatch",
       );
       return packetUnavailable();
     }
 
-    if (authorized.data.status === "sent")
+    if (authorized.data.status === "submitted")
       return {
         ok: true,
         value: {
@@ -794,17 +871,22 @@ export function createPacketService(
           status: "submitted",
           sendRequestId: authorized.data.sendRequestId,
           outboundShareId: authorized.data.outboundShareId,
-          providerMessageId: null,
+          providerMessageId: authorized.data.providerMessageId,
           recipientCount: authorized.data.recipientSnapshot.length,
           subject: authorized.data.subject,
           message: "This packet was already submitted to Resend.",
         },
       };
-    if (authorized.data.status !== "sending")
+    if (authorized.data.status === "failed")
       return failure(
         "email_submission_failed",
         "Resend did not accept the packet.",
       );
+    if (
+      authorized.data.status !== "sending" &&
+      authorized.data.status !== "reconciling"
+    )
+      return packetUnavailable();
 
     const submitted = await dependencies.submitResendEmail({
       apiKey: decision.apiKey,
@@ -816,57 +898,155 @@ export function createPacketService(
       signal,
     });
     if (!submitted.ok) {
-      const completed = await completeFailedSend(
+      const outcome =
+        submitted.errorCode === "resend_ambiguous" &&
+        "reconciling" in submitted &&
+        submitted.reconciling
+          ? "reconciling"
+          : "failed";
+      const completed = await completeSendAttempt(
         client,
         actorUserId,
         input.data,
+        outcome,
+        null,
         submitted.errorCode,
       );
       if (!completed.ok)
         return failure(
           "email_recording_failed",
-          "CommandCanvas could not record the failed email attempt.",
+          "CommandCanvas could not record the email submission result.",
         );
+      if (outcome === "reconciling")
+        return {
+          ok: true,
+          value: {
+            mode: "resend",
+            status: "reconciling",
+            sendRequestId: completed.value.sendRequestId,
+            outboundShareId: completed.value.outboundShareId,
+            providerMessageId: completed.value.providerMessageId,
+            recipientCount: authorized.data.recipientSnapshot.length,
+            subject: authorized.data.subject,
+            message:
+              "Submission is being reconciled; delivery is not confirmed.",
+          },
+        };
       return failure(
         "email_submission_failed",
         "Resend did not accept the packet.",
       );
     }
 
-    const completion = await callRpc(client, "complete_meeting_packet_send", {
-      p_room_id: input.data.roomId,
-      p_send_request_id: input.data.sendRequestId,
-      p_host_user_id: actorUserId,
-      p_outcome: "sent",
-      p_provider_message_id: submitted.providerMessageId,
-      p_error_code: null,
-    });
-    if (!completion.ok)
+    const completed = await completeSendAttempt(
+      client,
+      actorUserId,
+      input.data,
+      "submitted",
+      submitted.providerMessageId,
+      null,
+    );
+    if (!completed.ok) {
+      const reconciled = await completeSendAttempt(
+        client,
+        actorUserId,
+        input.data,
+        "reconciling",
+        submitted.providerMessageId,
+        "delivery_recording_failed",
+      );
+      if (reconciled.ok)
+        return {
+          ok: true,
+          value: {
+            mode: "resend",
+            status: "reconciling",
+            sendRequestId: reconciled.value.sendRequestId,
+            outboundShareId: reconciled.value.outboundShareId,
+            providerMessageId: reconciled.value.providerMessageId,
+            recipientCount: authorized.data.recipientSnapshot.length,
+            subject: authorized.data.subject,
+            message:
+              "Submission is being reconciled; delivery is not confirmed.",
+          },
+        };
+      const recovered = await callRpc(
+        client,
+        "authorize_meeting_packet_send",
+        {
+          p_room_id: input.data.roomId,
+          p_send_request_id: input.data.sendRequestId,
+          p_host_user_id: actorUserId,
+          p_delivery_mode: "resend",
+          p_outbound_share_id: input.data.sendRequestId,
+        },
+      );
+      const recoveredAuthorization = recovered.ok
+        ? authorizedSendSchema.safeParse(recovered.data)
+        : null;
+      if (
+        recoveredAuthorization?.success &&
+        recoveredAuthorization.data.sendRequestId === input.data.sendRequestId &&
+        recoveredAuthorization.data.outboundShareId === input.data.sendRequestId &&
+        recoveredAuthorization.data.provider === "resend" &&
+        recoveredAuthorization.data.idempotencyKey ===
+          authorized.data.idempotencyKey &&
+        recoveredAuthorization.data.subject === authorized.data.subject &&
+        sameRecipients(
+          recoveredAuthorization.data.recipientSnapshot,
+          authorized.data.recipientSnapshot,
+        ) &&
+        recoveredAuthorization.data.providerMessageId ===
+          submitted.providerMessageId
+      ) {
+        if (recoveredAuthorization.data.status === "submitted")
+          return {
+            ok: true,
+            value: {
+              mode: "resend",
+              status: "submitted",
+              sendRequestId: recoveredAuthorization.data.sendRequestId,
+              outboundShareId: recoveredAuthorization.data.outboundShareId,
+              providerMessageId:
+                recoveredAuthorization.data.providerMessageId,
+              recipientCount:
+                recoveredAuthorization.data.recipientSnapshot.length,
+              subject: recoveredAuthorization.data.subject,
+              message: "This packet was already submitted to Resend.",
+            },
+          };
+        if (recoveredAuthorization.data.status === "reconciling")
+          return {
+            ok: true,
+            value: {
+              mode: "resend",
+              status: "reconciling",
+              sendRequestId: recoveredAuthorization.data.sendRequestId,
+              outboundShareId: recoveredAuthorization.data.outboundShareId,
+              providerMessageId:
+                recoveredAuthorization.data.providerMessageId,
+              recipientCount:
+                recoveredAuthorization.data.recipientSnapshot.length,
+              subject: recoveredAuthorization.data.subject,
+              message:
+                "Submission is being reconciled; delivery is not confirmed.",
+            },
+          };
+      }
       return failure(
         "email_recording_failed",
         "Resend accepted the request, but CommandCanvas could not record the result.",
       );
-    const completed = completedSendSchema.safeParse(completion.data);
-    if (
-      !completed.success ||
-      completed.data.status !== "sent" ||
-      completed.data.sendRequestId !== input.data.sendRequestId ||
-      completed.data.outboundShareId !== input.data.sendRequestId ||
-      completed.data.providerMessageId !== submitted.providerMessageId
-    )
-      return failure(
-        "email_recording_failed",
-        "Resend accepted the request, but CommandCanvas could not record the result.",
-      );
+    }
 
     return {
       ok: true,
       value: {
         mode: "resend",
         status: "submitted",
-        sendRequestId: completed.data.sendRequestId,
-        outboundShareId: completed.data.outboundShareId,
-        providerMessageId: submitted.providerMessageId,
+        sendRequestId: completed.value.sendRequestId,
+        outboundShareId: completed.value.outboundShareId,
+        providerMessageId: completed.value.providerMessageId,
         recipientCount: authorized.data.recipientSnapshot.length,
         subject: authorized.data.subject,
         message: "Submitted to Resend; delivery is pending.",
@@ -969,31 +1149,35 @@ async function loadStagedSend(
   }
 }
 
-async function completeFailedSend(
+async function completeSendAttempt(
   client: PacketServiceClient,
   actorUserId: string,
   input: ExecutePacketSendRequest,
-  errorCode: string,
-): Promise<PacketServiceResult<true>> {
+  outcome: "reconciling" | "submitted" | "failed",
+  providerMessageId: string | null,
+  errorCode: string | null,
+): Promise<
+  PacketServiceResult<z.infer<typeof completedSendSchema>>
+> {
   const response = await callRpc(client, "complete_meeting_packet_send", {
     p_room_id: input.roomId,
     p_send_request_id: input.sendRequestId,
     p_host_user_id: actorUserId,
-    p_outcome: "failed",
-    p_provider_message_id: null,
+    p_outcome: outcome,
+    p_provider_message_id: providerMessageId,
     p_error_code: errorCode,
   });
   if (!response.ok) return response;
   const completed = completedSendSchema.safeParse(response.data);
   if (
     !completed.success ||
-    completed.data.status !== "failed" ||
+    completed.data.status !== outcome ||
     completed.data.sendRequestId !== input.sendRequestId ||
     completed.data.outboundShareId !== input.sendRequestId ||
-    completed.data.providerMessageId !== null
+    completed.data.providerMessageId !== providerMessageId
   )
     return packetUnavailable();
-  return { ok: true, value: true };
+  return { ok: true, value: completed.data };
 }
 
 type DeliveryDecision =

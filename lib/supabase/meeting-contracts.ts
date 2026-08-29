@@ -20,6 +20,7 @@ export const createMeetingRequestSchema = z
 
 export const createMeetingInvitationRequestSchema = z
   .object({
+    requestId: z.uuid(),
     email: normalizedEmailSchema,
     displayName: displayNameSchema,
     color: participantColorSchema,
@@ -40,6 +41,10 @@ export const acceptMeetingInvitationRequestSchema = z
 export type CreateMeetingRequest = z.infer<typeof createMeetingRequestSchema>;
 export type CreateMeetingInvitationRequest = z.infer<
   typeof createMeetingInvitationRequestSchema
+>;
+export type CreateMeetingInvitationDraft = Omit<
+  CreateMeetingInvitationRequest,
+  "requestId"
 >;
 export type AcceptMeetingInvitationRequest = z.infer<
   typeof acceptMeetingInvitationRequestSchema

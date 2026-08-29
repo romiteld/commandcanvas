@@ -96,8 +96,9 @@ function createClient(input?: {
 
 function authorizeResult(
   provider: "preview" | "resend",
-  status: "preview_only" | "sending" | "sent" | "failed" =
+  status: "preview_only" | "sending" | "reconciling" | "submitted" | "failed" =
     provider === "preview" ? "preview_only" : "sending",
+  providerMessageId: string | null = null,
 ) {
   return {
     sendRequestId: SEND_REQUEST_ID,
@@ -108,6 +109,7 @@ function authorizeResult(
     contentSnapshot: approvedContentSnapshot,
     recipientSnapshot: recipients,
     idempotencyKey: IDEMPOTENCY_KEY,
+    providerMessageId,
     changed: true,
   };
 }
@@ -507,7 +509,14 @@ describe("persisted meeting packet readback", () => {
         packet_content_hash: "a".repeat(64),
         recipient_snapshot_hash: "b".repeat(64),
         recipient_snapshot: recipients,
-        status: "cancelled",
+        status: "submitted",
+      },
+      error: null,
+    });
+    const outbound = createReadQueryBuilder({
+      data: {
+        provider_message_id: "email_accepted_123",
+        status: "delivered",
       },
       error: null,
     });
@@ -517,12 +526,12 @@ describe("persisted meeting packet readback", () => {
           id: CANCELLATION_RECEIPT_ID,
           activity_revision: 4,
           occurred_at: "2026-08-27T16:04:00.000Z",
-          actor_type: "human",
-          actor_display_name: "Danny",
-          action: "packet_send_cancelled",
+          actor_type: "system",
+          actor_display_name: "Resend",
+          action: "packet_email_delivered",
           packet_id: PACKET_ID,
           send_request_id: SEND_REQUEST_ID,
-          description: "Danny cancelled the staged packet send.",
+          description: "Resend confirmed packet delivery.",
         },
         {
           id: "55555555-5555-4555-8555-555555555555",
@@ -542,6 +551,7 @@ describe("persisted meeting packet readback", () => {
       room_members: membership,
       meeting_packets: packet,
       packet_send_requests: send,
+      outbound_shares: outbound,
       packet_activity_receipts: activity,
     };
     const client = {
@@ -576,19 +586,21 @@ describe("persisted meeting packet readback", () => {
           contentHash: "a".repeat(64),
           recipientHash: "b".repeat(64),
           recipients,
-          status: "cancelled",
+          status: "submitted",
+          providerMessageId: "email_accepted_123",
+          deliveryStatus: "delivered",
         },
         activity: [
           {
             receiptId: CANCELLATION_RECEIPT_ID,
             revision: 4,
             occurredAt: "2026-08-27T16:04:00.000Z",
-            actorType: "human",
-            actorDisplayName: "Danny",
-            action: "packet_send_cancelled",
+            actorType: "system",
+            actorDisplayName: "Resend",
+            action: "packet_email_delivered",
             packetId: PACKET_ID,
             sendRequestId: SEND_REQUEST_ID,
-            description: "Danny cancelled the staged packet send.",
+            description: "Resend confirmed packet delivery.",
           },
           {
             receiptId: "55555555-5555-4555-8555-555555555555",
@@ -612,6 +624,7 @@ describe("persisted meeting packet readback", () => {
     });
     expect(packet.limit).toHaveBeenCalledWith(1);
     expect(send.eq).toHaveBeenCalledWith("packet_id", PACKET_ID);
+    expect(outbound.eq).toHaveBeenCalledWith("send_request_id", SEND_REQUEST_ID);
     expect(activity.order).toHaveBeenCalledWith("activity_revision", {
       ascending: false,
     });
@@ -726,7 +739,7 @@ describe("explicit packet send execution", () => {
     const completion = {
       sendRequestId: SEND_REQUEST_ID,
       outboundShareId: SEND_REQUEST_ID,
-      status: "sent",
+      status: "submitted",
       provider: "resend",
       providerMessageId: "email_accepted_123",
       changed: true,
@@ -773,7 +786,7 @@ describe("explicit packet send execution", () => {
       p_room_id: ROOM_ID,
       p_send_request_id: SEND_REQUEST_ID,
       p_host_user_id: HOST_ID,
-      p_outcome: "sent",
+      p_outcome: "submitted",
       p_provider_message_id: "email_accepted_123",
       p_error_code: null,
     });
@@ -790,6 +803,160 @@ describe("explicit packet send execution", () => {
         message: "Submitted to Resend; delivery is pending.",
       },
     });
+  });
+
+  it("persists an ambiguous provider result as reconciling instead of failed", async () => {
+    const { client, rpc } = createClient({
+      rpc: (functionName) => ({
+        data:
+          functionName === "authorize_meeting_packet_send"
+            ? authorizeResult("resend")
+            : {
+                sendRequestId: SEND_REQUEST_ID,
+                outboundShareId: SEND_REQUEST_ID,
+                status: "reconciling",
+                provider: "resend",
+                providerMessageId: null,
+                changed: true,
+              },
+        error: null,
+      }),
+    });
+    const service = createPacketService(client, {
+      environment: {
+        RESEND_API_KEY: "re_test_secret",
+        RESEND_FROM: "CommandCanvas <canvas@example.com>",
+        COMMANDCANVAS_EMAIL_ALLOWLIST:
+          "danny@example.com,sarah@example.com",
+      },
+      submitResendEmail: vi.fn(async () => ({
+        ok: false as const,
+        errorCode: "resend_ambiguous" as const,
+        reconciling: true as const,
+      })),
+    });
+    await expect(
+      service.executeSend(HOST_ID, {
+        roomId: ROOM_ID,
+        sendRequestId: SEND_REQUEST_ID,
+        explicitHostAuthorization: true,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      value: {
+        mode: "resend",
+        status: "reconciling",
+        sendRequestId: SEND_REQUEST_ID,
+        outboundShareId: SEND_REQUEST_ID,
+        providerMessageId: null,
+        recipientCount: 2,
+        subject: approvedContentSnapshot.title,
+        message: "Submission is being reconciled; delivery is not confirmed.",
+      },
+    });
+    expect(rpc).toHaveBeenNthCalledWith(2, "complete_meeting_packet_send", {
+      p_room_id: ROOM_ID,
+      p_send_request_id: SEND_REQUEST_ID,
+      p_host_user_id: HOST_ID,
+      p_outcome: "reconciling",
+      p_provider_message_id: null,
+      p_error_code: "resend_ambiguous",
+    });
+  });
+
+  it("recovers durable acceptance when the completion response and reconciliation response are both lost", async () => {
+    let authorizationCalls = 0;
+    const { client, rpc } = createClient({
+      rpc: (functionName) => {
+        if (functionName === "authorize_meeting_packet_send") {
+          authorizationCalls += 1;
+          return {
+            data:
+              authorizationCalls === 1
+                ? authorizeResult("resend")
+                : authorizeResult(
+                    "resend",
+                    "submitted",
+                    "email_accepted_123",
+                  ),
+            error: null,
+          };
+        }
+        return {
+          data: null,
+          error: { message: "packet_send_completion_conflict" },
+        };
+      },
+    });
+    const submitResendEmail = vi.fn(async () => ({
+      ok: true as const,
+      providerMessageId: "email_accepted_123",
+    }));
+    const service = createPacketService(client, {
+      environment: {
+        RESEND_API_KEY: "re_test_secret",
+        RESEND_FROM: "CommandCanvas <canvas@example.com>",
+        COMMANDCANVAS_EMAIL_ALLOWLIST:
+          "danny@example.com,sarah@example.com",
+      },
+      submitResendEmail,
+    });
+
+    await expect(
+      service.executeSend(HOST_ID, {
+        roomId: ROOM_ID,
+        sendRequestId: SEND_REQUEST_ID,
+        explicitHostAuthorization: true,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      value: {
+        mode: "resend",
+        status: "submitted",
+        sendRequestId: SEND_REQUEST_ID,
+        outboundShareId: SEND_REQUEST_ID,
+        providerMessageId: "email_accepted_123",
+        recipientCount: 2,
+        subject: approvedContentSnapshot.title,
+        message: "This packet was already submitted to Resend.",
+      },
+    });
+    expect(submitResendEmail).toHaveBeenCalledOnce();
+    expect(rpc).toHaveBeenCalledTimes(4);
+  });
+
+  it("preserves the durable provider message ID when an already-submitted request is replayed", async () => {
+    const { client } = createClient({
+      stagedRow: { status: "submitted", recipient_snapshot: recipients },
+      rpc: () => ({
+        data: authorizeResult("resend", "submitted", "email_existing_123"),
+        error: null,
+      }),
+    });
+    const submitResendEmail = vi.fn();
+    const service = createPacketService(client, {
+      environment: {
+        RESEND_API_KEY: "re_test_secret",
+        RESEND_FROM: "CommandCanvas <canvas@example.com>",
+        COMMANDCANVAS_EMAIL_ALLOWLIST:
+          "danny@example.com,sarah@example.com",
+      },
+      submitResendEmail,
+    });
+    await expect(
+      service.executeSend(HOST_ID, {
+        roomId: ROOM_ID,
+        sendRequestId: SEND_REQUEST_ID,
+        explicitHostAuthorization: true,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        status: "submitted",
+        providerMessageId: "email_existing_123",
+      },
+    });
+    expect(submitResendEmail).not.toHaveBeenCalled();
   });
 
   it("completes the durable request as failed when Resend does not accept it", async () => {

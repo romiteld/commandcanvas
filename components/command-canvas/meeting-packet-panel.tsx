@@ -54,6 +54,8 @@ export interface StagedPacketSendView {
 export type MeetingPacketSendOutcomeView =
   | { kind: "preview_only" }
   | { kind: "submitted" }
+  | { kind: "reconciling" }
+  | { kind: "delivered" }
   | { kind: "cancelled" }
   | { kind: "failure"; message: string };
 
@@ -73,7 +75,13 @@ export interface MeetingPacketActivityView {
     | "packet_send_authorized"
     | "packet_send_expired"
     | "packet_send_submitted"
-    | "packet_send_failed";
+    | "packet_send_reconciling"
+    | "packet_send_failed"
+    | "packet_email_delivered"
+    | "packet_email_bounced"
+    | "packet_email_complained"
+    | "packet_email_failed"
+    | "packet_email_suppressed";
   description: string;
 }
 
@@ -528,7 +536,11 @@ function SendOutcome({ outcome }: { outcome: MeetingPacketSendOutcomeView }) {
         ? "Preview only: not sent"
         : outcome.kind === "cancelled"
           ? "Send request cancelled: no email was sent"
-          : "Submitted to Resend; delivery pending"}
+          : outcome.kind === "reconciling"
+            ? "Submission status is being reconciled; delivery is not confirmed"
+            : outcome.kind === "delivered"
+              ? "Resend confirmed delivery"
+              : "Submitted to Resend; delivery pending"}
     </p>
   );
 }

@@ -37,7 +37,13 @@ const packetActivityActionSchema = z.enum([
   "packet_send_authorized",
   "packet_send_expired",
   "packet_send_submitted",
+  "packet_send_reconciling",
   "packet_send_failed",
+  "packet_email_delivered",
+  "packet_email_bounced",
+  "packet_email_complained",
+  "packet_email_failed",
+  "packet_email_suppressed",
 ]);
 
 const preparedPacketSchema = z
@@ -129,9 +135,24 @@ const submittedSendSchema = z
     ]),
   })
   .strict();
-const executedSendSchema = z.discriminatedUnion("mode", [
+const reconcilingSendSchema = z
+  .object({
+    mode: z.literal("resend"),
+    status: z.literal("reconciling"),
+    sendRequestId: z.uuid(),
+    outboundShareId: z.uuid(),
+    providerMessageId: z.string().trim().min(1).max(240).nullable(),
+    recipientCount: countSchema.min(1).max(10),
+    subject: packetTitleSchema,
+    message: z.literal(
+      "Submission is being reconciled; delivery is not confirmed.",
+    ),
+  })
+  .strict();
+const executedSendSchema = z.discriminatedUnion("status", [
   previewSendSchema,
   submittedSendSchema,
+  reconcilingSendSchema,
 ]);
 const persistedPacketBase = {
   packetId: packetIdSchema,
@@ -175,12 +196,27 @@ const persistedPacketSendSchema = z
     status: z.enum([
       "awaiting_human_approval",
       "sending",
-      "sent",
+      "reconciling",
+      "submitted",
       "cancelled",
       "failed",
       "preview_only",
       "expired",
     ]),
+    providerMessageId: z.string().trim().min(1).max(240).nullable(),
+    deliveryStatus: z
+      .enum([
+        "pending",
+        "reconciling",
+        "submitted",
+        "delivered",
+        "bounced",
+        "complained",
+        "failed",
+        "suppressed",
+        "preview_only",
+      ])
+      .nullable(),
   })
   .strict();
 const packetActivitySchema = z

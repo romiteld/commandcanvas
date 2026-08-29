@@ -14,6 +14,7 @@ const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJob3N0In0.signature";
 const ACTOR_ID = "22222222-2222-4222-8222-222222222222";
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const INVITATION_ID = "33333333-3333-4333-8333-333333333333";
+const REQUEST_ID = "44444444-4444-4444-8444-444444444444";
 const TOKEN = Buffer.alloc(32, 6).toString("base64url");
 
 function request(path: string, body: unknown) {
@@ -32,6 +33,8 @@ function dependencies(input?: {
   createMeeting?: MeetingService["createMeeting"];
   createInvitation?: MeetingService["createInvitation"];
   acceptInvitation?: MeetingService["acceptInvitation"];
+  reserveInvitationDelivery?: MeetingService["reserveInvitationDelivery"];
+  completeInvitationDelivery?: MeetingService["completeInvitationDelivery"];
 }) {
   const verifier = {
     auth: {
@@ -66,6 +69,34 @@ function dependencies(input?: {
           displayName: "Sarah",
           token: TOKEN,
           expiresAt: "2026-08-29T12:00:00.000Z",
+          roomName: "Product review",
+          idempotencyKey: `commandcanvas:invite:${INVITATION_ID}`,
+          deliveryStatus: "created" as const,
+          providerMessageId: null,
+          created: true,
+        },
+      })),
+    reserveInvitationDelivery:
+      input?.reserveInvitationDelivery ??
+      vi.fn(async () => ({
+        ok: true as const,
+        value: {
+          invitationId: INVITATION_ID,
+          deliveryStatus: "sending" as const,
+          providerMessageId: null,
+          changed: true,
+        },
+      })),
+    completeInvitationDelivery:
+      input?.completeInvitationDelivery ??
+      vi.fn(async (_actor, _room, _invitation, delivery) => ({
+        ok: true as const,
+        value: {
+          invitationId: INVITATION_ID,
+          deliveryStatus: delivery.status,
+          providerMessageId:
+            delivery.status === "submitted" ? delivery.providerId : null,
+          changed: true,
         },
       })),
     acceptInvitation:
@@ -75,7 +106,9 @@ function dependencies(input?: {
         value: { roomId: ROOM_ID, role: "participant" as const, joined: true },
       })),
   };
-  const deliverInvitation = vi.fn(async () => ({
+  const deliverInvitation = vi.fn<
+    MeetingRouteDependencies["deliverInvitation"]
+  >(async () => ({
     status: "preview_only" as const,
     message: "Invite created. Copy the link.",
   }));
@@ -151,6 +184,7 @@ describe("meeting route security", () => {
     const values = dependencies();
     const response = await handleCreateMeetingInvitationRequest(
       request(`/api/meetings/${ROOM_ID}/invitations`, {
+        requestId: REQUEST_ID,
         email: "sarah@example.com",
         displayName: "Sarah",
         color: "#a855f7",
@@ -169,8 +203,171 @@ describe("meeting route security", () => {
     expect(values.deliverInvitation).toHaveBeenCalledWith(
       expect.objectContaining({
         recipientEmail: "sarah@example.com",
+        roomName: "Product review",
+        idempotencyKey: `commandcanvas:invite:${INVITATION_ID}`,
         joinUrl: `https://commandcanvas.example/meet#invite=${TOKEN}`,
       }),
+    );
+    expect(values.service.reserveInvitationDelivery).toHaveBeenCalledWith(
+      ACTOR_ID,
+      ROOM_ID,
+      INVITATION_ID,
+    );
+    expect(values.service.completeInvitationDelivery).toHaveBeenCalledWith(
+      ACTOR_ID,
+      ROOM_ID,
+      INVITATION_ID,
+      expect.objectContaining({ status: "preview_only" }),
+    );
+  });
+
+  it("does not call the provider again when the durable invitation is already submitted", async () => {
+    const values = dependencies({
+      createInvitation: vi.fn(async () => ({
+        ok: true as const,
+        value: {
+          invitationId: INVITATION_ID,
+          roomId: ROOM_ID,
+          email: "sarah@example.com",
+          displayName: "Sarah",
+          token: TOKEN,
+          expiresAt: "2026-08-29T12:00:00.000Z",
+          roomName: "Product review",
+          idempotencyKey: `commandcanvas:invite:${INVITATION_ID}`,
+          deliveryStatus: "submitted" as const,
+          providerMessageId: "email_existing",
+          created: false,
+        },
+      })),
+    });
+    const response = await handleCreateMeetingInvitationRequest(
+      request(`/api/meetings/${ROOM_ID}/invitations`, {
+        requestId: REQUEST_ID,
+        email: "sarah@example.com",
+        displayName: "Sarah",
+        color: "#a855f7",
+        expiresInHours: 24,
+      }),
+      ROOM_ID,
+      values.dependencies,
+    );
+    expect(response.status).toBe(200);
+    expect(values.deliverInvitation).not.toHaveBeenCalled();
+    expect(values.service.reserveInvitationDelivery).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      invitation: {
+        delivery: { status: "submitted", providerId: "email_existing" },
+      },
+    });
+  });
+
+  it("resumes an interrupted reservation with the original provider idempotency key", async () => {
+    const createInvitation = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        invitationId: INVITATION_ID,
+        roomId: ROOM_ID,
+        email: "sarah@example.com",
+        displayName: "Sarah",
+        token: TOKEN,
+        expiresAt: "2026-08-29T12:00:00.000Z",
+        roomName: "Product review",
+        idempotencyKey: `commandcanvas:invite:${INVITATION_ID}`,
+        deliveryStatus: "reconciling" as const,
+        providerMessageId: null,
+        created: false,
+      },
+    }));
+    const values = dependencies({ createInvitation });
+    values.deliverInvitation.mockResolvedValueOnce({
+      status: "submitted",
+      message: "Invitation accepted by the email provider.",
+      providerId: "email_resumed_123",
+    });
+
+    const response = await handleCreateMeetingInvitationRequest(
+      request(`/api/meetings/${ROOM_ID}/invitations`, {
+        requestId: REQUEST_ID,
+        email: "sarah@example.com",
+        displayName: "Sarah",
+        color: "#a855f7",
+        expiresInHours: 24,
+      }),
+      ROOM_ID,
+      values.dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    expect(values.deliverInvitation).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        idempotencyKey: `commandcanvas:invite:${INVITATION_ID}`,
+      }),
+    );
+    expect(values.service.completeInvitationDelivery).toHaveBeenCalledWith(
+      ACTOR_ID,
+      ROOM_ID,
+      INVITATION_ID,
+      { status: "submitted", providerId: "email_resumed_123" },
+    );
+  });
+
+  it("records provider acceptance as reconciling when the first completion write is lost", async () => {
+    const completeInvitationDelivery = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false as const,
+        error: {
+          code: "service_unavailable" as const,
+          message: "Meeting service is unavailable.",
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: {
+          invitationId: INVITATION_ID,
+          deliveryStatus: "reconciling" as const,
+          providerMessageId: "email_accepted_123",
+          changed: true,
+        },
+      });
+    const values = dependencies({ completeInvitationDelivery });
+    values.deliverInvitation.mockResolvedValueOnce({
+      status: "submitted",
+      message: "Invitation accepted by the email provider.",
+      providerId: "email_accepted_123",
+    });
+
+    const response = await handleCreateMeetingInvitationRequest(
+      request(`/api/meetings/${ROOM_ID}/invitations`, {
+        requestId: REQUEST_ID,
+        email: "sarah@example.com",
+        displayName: "Sarah",
+        color: "#a855f7",
+        expiresInHours: 24,
+      }),
+      ROOM_ID,
+      values.dependencies,
+    );
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      invitation: {
+        delivery: {
+          status: "reconciling",
+          providerId: "email_accepted_123",
+        },
+      },
+    });
+    expect(completeInvitationDelivery).toHaveBeenNthCalledWith(
+      2,
+      ACTOR_ID,
+      ROOM_ID,
+      INVITATION_ID,
+      {
+        status: "reconciling",
+        errorCode: "delivery_recording_failed",
+        providerId: "email_accepted_123",
+      },
     );
   });
 

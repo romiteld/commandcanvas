@@ -675,7 +675,29 @@ export function packetWorkflowFromPersisted(
     return { packet, activity, sendOutcome: { kind: "cancelled" } };
   if (latestSend.status === "preview_only")
     return { packet, activity, sendOutcome: { kind: "preview_only" } };
-  if (latestSend.status === "sent")
+  if (latestSend.deliveryStatus === "delivered")
+    return { packet, activity, sendOutcome: { kind: "delivered" } };
+  if (
+    latestSend.providerMessageId !== null &&
+    (latestSend.deliveryStatus === "bounced" ||
+      latestSend.deliveryStatus === "complained" ||
+      latestSend.deliveryStatus === "failed" ||
+      latestSend.deliveryStatus === "suppressed")
+  )
+    return {
+      packet,
+      activity,
+      sendOutcome: {
+        kind: "failure",
+        message: deliveryFailureMessage(latestSend.deliveryStatus),
+      },
+    };
+  if (
+    latestSend.status === "reconciling" ||
+    latestSend.deliveryStatus === "reconciling"
+  )
+    return { packet, activity, sendOutcome: { kind: "reconciling" } };
+  if (latestSend.status === "submitted")
     return { packet, activity, sendOutcome: { kind: "submitted" } };
   if (latestSend.status === "failed")
     return {
@@ -687,6 +709,21 @@ export function packetWorkflowFromPersisted(
       },
     };
   return { packet, activity };
+}
+
+function deliveryFailureMessage(
+  status: "bounced" | "complained" | "failed" | "suppressed",
+) {
+  switch (status) {
+    case "bounced":
+      return "Resend reported that the packet email bounced.";
+    case "complained":
+      return "Resend reported a spam complaint for the packet email.";
+    case "failed":
+      return "Resend reported a terminal packet delivery failure.";
+    case "suppressed":
+      return "Resend reported that the packet email was suppressed.";
+  }
 }
 
 export function packetOperationFailure(

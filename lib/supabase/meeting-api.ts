@@ -6,6 +6,7 @@ import {
   createMeetingRequestSchema,
   type AcceptMeetingInvitationRequest,
   type CreateMeetingInvitationRequest,
+  type CreateMeetingInvitationDraft,
   type CreateMeetingRequest,
 } from "@/lib/supabase/meeting-contracts";
 import { parseBearerJwtHeader } from "@/lib/supabase/server-auth";
@@ -35,7 +36,16 @@ const invitationResponseSchema = z
           .refine((value) => value.startsWith("https://") && value.includes("#invite=")),
         delivery: z
           .object({
-            status: z.enum(["preview_only", "submitted", "failed"]),
+            status: z.enum([
+              "preview_only",
+              "reconciling",
+              "submitted",
+              "delivered",
+              "bounced",
+              "complained",
+              "failed",
+              "suppressed",
+            ]),
             message: z.string().trim().min(1).max(300),
             providerId: z.string().trim().min(1).max(256).optional(),
           })
@@ -61,7 +71,15 @@ export interface BrowserMeetingInvitationValue {
   expiresAt: string;
   joinUrl: string;
   delivery: {
-    status: "preview_only" | "submitted" | "failed";
+    status:
+      | "preview_only"
+      | "reconciling"
+      | "submitted"
+      | "delivered"
+      | "bounced"
+      | "complained"
+      | "failed"
+      | "suppressed";
     message: string;
     providerId?: string;
   };
@@ -74,7 +92,7 @@ export interface BrowserMeetingApi {
   ) => Promise<BrowserMeetingApiResult<BrowserMeetingValue>>;
   createInvitation: (
     roomId: string,
-    input: CreateMeetingInvitationRequest,
+    input: CreateMeetingInvitationDraft,
     signal?: AbortSignal,
   ) => Promise<BrowserMeetingApiResult<BrowserMeetingInvitationValue>>;
   acceptInvitation: (
@@ -86,9 +104,16 @@ export interface BrowserMeetingApi {
 export function createBrowserMeetingApi(options: {
   accessToken: string;
   fetcher?: typeof fetch;
+  createRequestId?: () => string;
 }): BrowserMeetingApi {
   const bearer = parseBearerJwtHeader(`Bearer ${options.accessToken}`);
   const fetcher = options.fetcher ?? fetch;
+  const createRequestId =
+    options.createRequestId ?? (() => globalThis.crypto.randomUUID());
+  const pendingInvitationIds = new Map<string, string>();
+  const invitationDraftSchema = createMeetingInvitationRequestSchema.omit({
+    requestId: true,
+  });
 
   return {
     createMeeting: (input: CreateMeetingRequest, signal?: AbortSignal) =>
@@ -102,19 +127,40 @@ export function createBrowserMeetingApi(options: {
       ),
     createInvitation: (
       roomId: string,
-      input: CreateMeetingInvitationRequest,
+      input: CreateMeetingInvitationDraft,
       signal?: AbortSignal,
-    ) =>
-      z.uuid().safeParse(roomId).success
-        ? call(
+    ) => {
+      const parsed = invitationDraftSchema.safeParse(input);
+      if (!z.uuid().safeParse(roomId).success || !parsed.success)
+        return invalidInput();
+      const key = JSON.stringify([roomId, parsed.data]);
+      let requestId = pendingInvitationIds.get(key);
+      if (!requestId) {
+        const candidate = createRequestId();
+        if (!z.uuid().safeParse(candidate).success) return invalidInput();
+        requestId = candidate;
+        pendingInvitationIds.set(key, requestId);
+      }
+      const requestInput: CreateMeetingInvitationRequest = {
+        requestId,
+        ...parsed.data,
+      };
+      return call(
             `/api/meetings/${roomId}/invitations`,
-            input,
+            requestInput,
             createMeetingInvitationRequestSchema,
             invitationResponseSchema,
             (envelope) => envelope.invitation,
             signal,
-          )
-        : invalidInput(),
+          ).then((result) => {
+            if (
+              result.ok &&
+              result.value.delivery.status !== "reconciling"
+            )
+              pendingInvitationIds.delete(key);
+            return result;
+          });
+    },
     acceptInvitation: (
       input: AcceptMeetingInvitationRequest,
       signal?: AbortSignal,

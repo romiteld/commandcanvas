@@ -99,6 +99,63 @@ describe("Resend packet transport", () => {
     expect(JSON.stringify(result)).not.toContain("secret");
   });
 
+  it.each([429, 500, 503])(
+    "returns reconciliation truth for ambiguous HTTP %s",
+    async (status) => {
+      const fetcher = vi
+        .fn<ResendFetch>()
+        .mockResolvedValue(new Response("ambiguous provider response", { status }));
+      const result = await submitResendPacketEmail(
+        {
+          apiKey: "re_test_secret",
+          from: "canvas@example.com",
+          recipients: [{ name: "Danny", email: "danny@example.com" }],
+          subject: "Launch packet",
+          contentSnapshot: {
+            title: "Launch packet",
+            content: {
+              schemaVersion: 1,
+              roomName: "Launch room",
+              sourceRevision: 8,
+              objects: [],
+            },
+          },
+          idempotencyKey: `commandcanvas:${"a".repeat(64)}`,
+        },
+        fetcher,
+      );
+      expect(result).toEqual({
+        ok: false,
+        errorCode: "resend_ambiguous",
+        reconciling: true,
+      });
+    },
+  );
+
+  it("returns reconciliation truth when the provider response is lost", async () => {
+    const fetcher = vi.fn<ResendFetch>().mockRejectedValue(new TypeError("offline"));
+    const result = await submitResendPacketEmail(
+      {
+        apiKey: "re_test_secret",
+        from: "canvas@example.com",
+        recipients: [{ name: "Danny", email: "danny@example.com" }],
+        subject: "Launch packet",
+        contentSnapshot: {
+          title: "Launch packet",
+          content: {
+            schemaVersion: 1,
+            roomName: "Launch room",
+            sourceRevision: 8,
+            objects: [],
+          },
+        },
+        idempotencyKey: `commandcanvas:${"a".repeat(64)}`,
+      },
+      fetcher,
+    );
+    expect(result).toMatchObject({ reconciling: true });
+  });
+
   it("escapes untrusted packet strings in HTML while preserving literal plain text", async () => {
     const fetcher = vi.fn<ResendFetch>().mockResolvedValue(
       new Response(JSON.stringify({ id: "email_accepted_456" }), {

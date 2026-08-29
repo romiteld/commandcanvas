@@ -6,6 +6,8 @@ import { deliverMeetingInvitation } from "@/lib/supabase/invitation-email";
 
 const TOKEN = "a".repeat(43);
 const input = {
+  idempotencyKey:
+    "commandcanvas:invite:33333333-3333-4333-8333-333333333333",
   recipientEmail: "sarah@example.com",
   recipientName: "Sarah",
   roomName: "Product review",
@@ -25,24 +27,7 @@ describe("meeting invitation delivery", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it("does not call Resend for a recipient outside the exact allowlist", async () => {
-    const fetcher = vi.fn();
-    const result = await deliverMeetingInvitation(
-      input,
-      {
-        RESEND_API_KEY: "secret",
-        RESEND_FROM: "CommandCanvas <invite@example.com>",
-        COMMANDCANVAS_INVITE_EMAIL_ALLOWLIST: "danny@example.com",
-      },
-      fetcher,
-    );
-
-    expect(result.status).toBe("preview_only");
-    expect(result.message).toContain("not allowlisted");
-    expect(fetcher).not.toHaveBeenCalled();
-  });
-
-  it("claims submitted only after Resend accepts the request", async () => {
+  it("sends a standard-room invitation directly with its stable provider key", async () => {
     const fetcher = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) => {
         void _input;
@@ -57,7 +42,6 @@ describe("meeting invitation delivery", () => {
       {
         RESEND_API_KEY: "secret",
         RESEND_FROM: "CommandCanvas <invite@example.com>",
-        COMMANDCANVAS_INVITE_EMAIL_ALLOWLIST: "sarah@example.com",
       },
       fetcher,
     );
@@ -69,13 +53,19 @@ describe("meeting invitation delivery", () => {
     });
     expect(fetcher).toHaveBeenCalledExactlyOnceWith(
       "https://api.resend.com/emails",
-      expect.objectContaining({ method: "POST" }),
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "idempotency-key": input.idempotencyKey,
+        }),
+      }),
     );
     const body = JSON.parse(fetcher.mock.calls[0]![1]!.body as string);
     expect(body.to).toEqual(["sarah@example.com"]);
     expect(body.html).toContain(
       `https://commandcanvas.example/meet#invite=${TOKEN}`,
     );
+    expect(body.subject).toBe("Join Product review in CommandCanvas");
   });
 
   it("refuses a query-string invitation capability before provider work", async () => {
@@ -88,7 +78,6 @@ describe("meeting invitation delivery", () => {
       {
         RESEND_API_KEY: "secret",
         RESEND_FROM: "CommandCanvas <invite@example.com>",
-        COMMANDCANVAS_INVITE_EMAIL_ALLOWLIST: "sarah@example.com",
       },
       fetcher,
     );
@@ -100,12 +89,65 @@ describe("meeting invitation delivery", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it("reports provider rejection without claiming delivery or leaking provider details", async () => {
+  it("refuses a room-title header injection before provider work", async () => {
+    const fetcher = vi.fn();
+    const result = await deliverMeetingInvitation(
+      { ...input, roomName: "Product review\r\nBcc: attacker@example.com" },
+      {
+        RESEND_API_KEY: "secret",
+        RESEND_FROM: "CommandCanvas <invite@example.com>",
+      },
+      fetcher,
+    );
+
+    expect(result.status).toBe("failed");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([429, 500, 503])(
+    "records HTTP %s as ambiguous instead of claiming deterministic failure",
+    async (status) => {
+      const fetcher = vi.fn(async () =>
+        new Response("provider secret diagnostic", { status }),
+      );
+      const result = await deliverMeetingInvitation(
+        input,
+        {
+          RESEND_API_KEY: "secret",
+          RESEND_FROM: "CommandCanvas <invite@example.com>",
+        },
+        fetcher,
+      );
+      expect(result).toEqual({
+        status: "reconciling",
+        message:
+          "Invitation submission is being reconciled; copy the link if needed.",
+        errorCode: "resend_ambiguous",
+      });
+      expect(JSON.stringify(result)).not.toContain("diagnostic");
+    },
+  );
+
+  it("records a network exception as ambiguous because provider acceptance is unknown", async () => {
+    const result = await deliverMeetingInvitation(
+      input,
+      {
+        RESEND_API_KEY: "secret",
+        RESEND_FROM: "CommandCanvas <invite@example.com>",
+      },
+      vi.fn(async () => {
+        throw new Error("lost response after acceptance");
+      }),
+    );
+    expect(result.status).toBe("reconciling");
+  });
+
+  it("reports deterministic provider rejection without leaking provider details", async () => {
     const fetcher = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) => {
         void _input;
         void _init;
-        return new Response("upstream secret failure", { status: 500 });
+        return new Response("upstream secret failure", { status: 422 });
       },
     );
     const result = await deliverMeetingInvitation(
@@ -113,7 +155,6 @@ describe("meeting invitation delivery", () => {
       {
         RESEND_API_KEY: "secret",
         RESEND_FROM: "CommandCanvas <invite@example.com>",
-        COMMANDCANVAS_INVITE_EMAIL_ALLOWLIST: "sarah@example.com",
       },
       fetcher,
     );
@@ -122,5 +163,30 @@ describe("meeting invitation delivery", () => {
       message: "Invite created, but email delivery failed. Copy the link instead.",
     });
     expect(JSON.stringify(result)).not.toContain("upstream");
+  });
+
+  it("escapes the real room title and participant name in rendered HTML", async () => {
+    const fetcher = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => {
+        void _input;
+        void _init;
+        return Response.json({ id: "email_escaped_1" });
+      },
+    );
+    await deliverMeetingInvitation(
+      {
+        ...input,
+        recipientName: "Sarah <script>",
+        roomName: "Launch <img src=x>",
+      },
+      {
+        RESEND_API_KEY: "secret",
+        RESEND_FROM: "CommandCanvas <invite@example.com>",
+      },
+      fetcher,
+    );
+    const body = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
+    expect(body.html).toContain("Launch &lt;img src=x&gt;");
+    expect(body.html).not.toContain("<script>");
   });
 });

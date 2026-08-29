@@ -27,12 +27,14 @@ describe("meeting request contracts", () => {
 
   it("normalizes an email invitation while forbidding role escalation", () => {
     const parsed = createMeetingInvitationRequestSchema.parse({
+      requestId: "44444444-4444-4444-8444-444444444444",
       email: "  Sarah@Example.COM ",
       displayName: "Sarah",
       color: "#a855f7",
       expiresInHours: 24,
     });
     expect(parsed.email).toBe("sarah@example.com");
+    expect(parsed.requestId).toBe("44444444-4444-4444-8444-444444444444");
     expect(
       createMeetingInvitationRequestSchema.safeParse({
         ...parsed,
@@ -43,6 +45,26 @@ describe("meeting request contracts", () => {
       createMeetingInvitationRequestSchema.safeParse({
         ...parsed,
         expiresInHours: 169,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a caller-stable UUID for invitation retries", () => {
+    expect(
+      createMeetingInvitationRequestSchema.safeParse({
+        email: "sarah@example.com",
+        displayName: "Sarah",
+        color: "#a855f7",
+        expiresInHours: 24,
+      }).success,
+    ).toBe(false);
+    expect(
+      createMeetingInvitationRequestSchema.safeParse({
+        requestId: "not-a-uuid",
+        email: "sarah@example.com",
+        displayName: "Sarah",
+        color: "#a855f7",
+        expiresInHours: 24,
       }).success,
     ).toBe(false);
   });

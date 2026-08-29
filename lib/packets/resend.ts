@@ -8,6 +8,7 @@ import type {
 } from "@/lib/packets/contracts";
 
 export type ResendPacketErrorCode =
+  | "resend_ambiguous"
   | "resend_rejected"
   | "resend_unavailable"
   | "resend_invalid_response";
@@ -24,6 +25,11 @@ export interface ResendPacketEmailInput {
 
 export type ResendPacketEmailResult =
   | { ok: true; providerMessageId: string }
+  | {
+      ok: false;
+      errorCode: "resend_ambiguous";
+      reconciling: true;
+    }
   | { ok: false; errorCode: ResendPacketErrorCode };
 
 export type ResendFetch = (
@@ -60,26 +66,29 @@ export async function submitResendPacketEmail(
       signal: input.signal,
     });
   } catch {
-    return { ok: false, errorCode: "resend_unavailable" };
+    return ambiguousResult();
   }
 
   if (!response.ok)
-    return {
-      ok: false,
-      errorCode:
-        response.status === 429 || response.status >= 500
-          ? "resend_unavailable"
-          : "resend_rejected",
-    };
+    return response.status === 409 || response.status === 429 || response.status >= 500
+      ? ambiguousResult()
+      : { ok: false, errorCode: "resend_rejected" };
 
   try {
     const parsed = resendAcceptedSchema.safeParse(await response.json());
-    if (!parsed.success)
-      return { ok: false, errorCode: "resend_invalid_response" };
+    if (!parsed.success) return ambiguousResult();
     return { ok: true, providerMessageId: parsed.data.id };
   } catch {
-    return { ok: false, errorCode: "resend_invalid_response" };
+    return ambiguousResult();
   }
+}
+
+function ambiguousResult(): ResendPacketEmailResult {
+  return {
+    ok: false,
+    errorCode: "resend_ambiguous",
+    reconciling: true,
+  };
 }
 
 function formatRecipient(recipient: PacketRecipient) {

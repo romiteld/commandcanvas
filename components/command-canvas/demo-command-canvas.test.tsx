@@ -599,6 +599,8 @@ describe("DemoCommandCanvas", () => {
             { name: "Demo reviewer", email: "reviewer@example.com" },
           ],
           status: "cancelled" as const,
+          providerMessageId: null,
+          deliveryStatus: null,
         },
         activity: [
           {
@@ -890,6 +892,8 @@ describe("DemoCommandCanvas", () => {
         { name: "Demo reviewer", email: "reviewer@example.com" },
       ],
       status,
+      providerMessageId: null,
+      deliveryStatus: null,
     });
     const loadLatestPacketWorkflow = vi
       .fn()

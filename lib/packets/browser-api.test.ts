@@ -54,6 +54,8 @@ describe("browser meeting packet API", () => {
         recipientHash: "b".repeat(64),
         recipients,
         status: "cancelled",
+        providerMessageId: null,
+        deliveryStatus: null,
       },
       activity: [
         {
@@ -103,6 +105,8 @@ describe("browser meeting packet API", () => {
             recipientHash: "b".repeat(64),
             recipients,
             status: "cancelled",
+            providerMessageId: null,
+            deliveryStatus: null,
             idempotencyKey: "must-not-cross-the-browser-boundary",
           },
           activity: [],
@@ -118,6 +122,60 @@ describe("browser meeting packet API", () => {
         message: "Meeting packet service returned an invalid response.",
         status: 200,
       },
+    });
+  });
+
+  it("loads submitted packet delivery truth and provider receipts without calling it sent", async () => {
+    const workflow = {
+      packet: {
+        packetId: "packet-launch",
+        packetVersion: 2,
+        sourceRevision: 9,
+        status: "approved",
+        title: contentSnapshot.title,
+        contentSnapshot,
+        recipients,
+        approvedSnapshot: {
+          packetVersion: 2,
+          contentHash: "a".repeat(64),
+          recipientHash: "b".repeat(64),
+          contentSnapshot,
+          recipients,
+        },
+      },
+      latestSend: {
+        sendRequestId: SEND_ID,
+        packetId: "packet-launch",
+        packetVersion: 2,
+        contentHash: "a".repeat(64),
+        recipientHash: "b".repeat(64),
+        recipients,
+        status: "submitted",
+        providerMessageId: "email_accepted_123",
+        deliveryStatus: "delivered",
+      },
+      activity: [
+        {
+          receiptId: RECEIPT_ID,
+          revision: 5,
+          occurredAt: "2026-08-29T16:05:00.000Z",
+          actorType: "system",
+          actorDisplayName: "Resend",
+          action: "packet_email_delivered",
+          packetId: "packet-launch",
+          sendRequestId: SEND_ID,
+          description: "Resend confirmed packet delivery.",
+        },
+      ],
+    };
+    const api = createBrowserPacketApi({
+      accessToken: JWT,
+      fetcher: vi.fn(async () => Response.json({ ok: true, workflow })),
+    });
+
+    await expect(api.loadLatest(ROOM_ID)).resolves.toEqual({
+      ok: true,
+      value: workflow,
     });
   });
 
@@ -254,6 +312,36 @@ describe("browser meeting packet API", () => {
         }),
       }),
     );
+  });
+
+  it("reports an ambiguous provider result as reconciling instead of sent", async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        send: {
+          mode: "resend",
+          status: "reconciling",
+          sendRequestId: SEND_ID,
+          outboundShareId: SEND_ID,
+          providerMessageId: null,
+          recipientCount: 1,
+          subject: "Launch meeting packet",
+          message: "Submission is being reconciled; delivery is not confirmed.",
+        },
+      }),
+    );
+    const api = createBrowserPacketApi({ accessToken: JWT, fetcher });
+
+    await expect(
+      api.executeSend({
+        roomId: ROOM_ID,
+        sendRequestId: SEND_ID,
+        explicitHostAuthorization: true,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { mode: "resend", status: "reconciling" },
+    });
   });
 
   it("durably cancels a staged send through the explicit host endpoint", async () => {

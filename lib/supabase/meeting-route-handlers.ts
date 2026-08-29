@@ -14,6 +14,8 @@ import {
 } from "@/lib/supabase/invitation-email";
 import {
   createMeetingService,
+  type InvitationDeliveryCompletion,
+  type InvitationDeliveryStatus,
   type MeetingService,
   type MeetingServiceClient,
   type MeetingServiceResult,
@@ -29,6 +31,20 @@ import {
 } from "@/lib/supabase/server-client";
 
 const REQUEST_MAX_BYTES = 8 * 1_024;
+
+type InvitationResponseDelivery = {
+  status:
+    | "preview_only"
+    | "reconciling"
+    | "submitted"
+    | "delivered"
+    | "bounced"
+    | "complained"
+    | "failed"
+    | "suppressed";
+  message: string;
+  providerId?: string;
+};
 
 export interface MeetingRouteDependencies {
   verifier: SupabaseUserVerifier;
@@ -111,11 +127,37 @@ export async function handleCreateMeetingInvitationRequest(
     const baseUrl = dependencies.publicBaseUrl ?? safeRequestOrigin(request);
     const joinUrl = new URL("/meet", `${baseUrl}/`);
     joinUrl.hash = new URLSearchParams({ invite: result.value.token }).toString();
+
+    if (!invitationDeliveryMayResume(result.value.deliveryStatus)) {
+      return invitationResponse(result.value.created ? 201 : 200, result.value, {
+        ...durableInvitationDelivery(
+          result.value.deliveryStatus,
+          result.value.providerMessageId,
+        ),
+      }, joinUrl.toString());
+    }
+
+    const reservation = await dependencies.service.reserveInvitationDelivery(
+      auth.actorUserId,
+      pathRoomId,
+      result.value.invitationId,
+    );
+    if (!reservation.ok) return serviceFailure(reservation);
+    if (!invitationDeliveryMayResume(reservation.value.deliveryStatus)) {
+      return invitationResponse(result.value.created ? 201 : 200, result.value, {
+        ...durableInvitationDelivery(
+          reservation.value.deliveryStatus,
+          reservation.value.providerMessageId,
+        ),
+      }, joinUrl.toString());
+    }
+
     const delivery = dependencies.publicBaseUrl
       ? await dependencies.deliverInvitation({
+          idempotencyKey: result.value.idempotencyKey,
           recipientEmail: result.value.email,
           recipientName: result.value.displayName,
-          roomName: "CommandCanvas meeting",
+          roomName: result.value.roomName,
           joinUrl: joinUrl.toString(),
           expiresAt: result.value.expiresAt,
         })
@@ -125,19 +167,125 @@ export async function handleCreateMeetingInvitationRequest(
             "Invite created. Public email links are not configured; copy this link instead.",
         };
 
-    return json(201, {
-      ok: true,
-      invitation: {
-        invitationId: result.value.invitationId,
-        roomId: result.value.roomId,
-        expiresAt: result.value.expiresAt,
-        joinUrl: joinUrl.toString(),
-        delivery,
-      },
-    });
+    const completion = await dependencies.service.completeInvitationDelivery(
+      auth.actorUserId,
+      pathRoomId,
+      result.value.invitationId,
+      invitationCompletion(delivery),
+    );
+    if (!completion.ok) {
+      if (delivery.status === "submitted") {
+        const reconciled = await dependencies.service.completeInvitationDelivery(
+          auth.actorUserId,
+          pathRoomId,
+          result.value.invitationId,
+          {
+            status: "reconciling",
+            errorCode: "delivery_recording_failed",
+            providerId: delivery.providerId,
+          },
+        );
+        if (reconciled.ok)
+          return invitationResponse(
+            result.value.created ? 201 : 200,
+            result.value,
+            {
+              status: "reconciling",
+              message:
+                "Invitation submission is being reconciled; delivery is not confirmed.",
+              providerId: delivery.providerId,
+            },
+            joinUrl.toString(),
+          );
+      }
+      return serviceFailure(completion);
+    }
+
+    return invitationResponse(
+      result.value.created ? 201 : 200,
+      result.value,
+      delivery,
+      joinUrl.toString(),
+    );
   } catch {
     return unavailable();
   }
+}
+
+function invitationDeliveryMayResume(
+  status: InvitationDeliveryStatus,
+): status is "created" | "sending" | "reconciling" {
+  return status === "created" || status === "sending" || status === "reconciling";
+}
+
+function invitationCompletion(
+  delivery: InvitationDeliveryResult,
+): InvitationDeliveryCompletion {
+  switch (delivery.status) {
+    case "preview_only":
+      return { status: "preview_only" };
+    case "submitted":
+      return { status: "submitted", providerId: delivery.providerId };
+    case "reconciling":
+      return { status: "reconciling", errorCode: delivery.errorCode };
+    case "failed":
+      return { status: "failed", errorCode: "resend_rejected" };
+  }
+}
+
+function durableInvitationDelivery(
+  status: Exclude<InvitationDeliveryStatus, "created" | "sending" | "reconciling">,
+  providerMessageId: string | null,
+): InvitationResponseDelivery {
+  const provider = providerMessageId ? { providerId: providerMessageId } : {};
+  switch (status) {
+    case "preview_only":
+      return {
+        status,
+        message: "Invite created. No email was sent; copy the link instead.",
+      };
+    case "submitted":
+      return {
+        status,
+        message: "Invitation was submitted to the email provider; delivery is pending.",
+        ...provider,
+      };
+    case "delivered":
+      return { status, message: "Invitation delivery was confirmed.", ...provider };
+    case "bounced":
+      return { status, message: "Invitation email bounced.", ...provider };
+    case "complained":
+      return { status, message: "Invitation email was reported as spam.", ...provider };
+    case "suppressed":
+      return { status, message: "Invitation email was suppressed.", ...provider };
+    case "failed":
+      return {
+        status,
+        message: "Invite created, but email delivery failed. Copy the link instead.",
+      };
+  }
+}
+
+function invitationResponse(
+  status: 200 | 201,
+  invitation: {
+    invitationId: string;
+    roomId: string;
+    expiresAt: string;
+  },
+  delivery: InvitationResponseDelivery,
+  joinUrl: string,
+) {
+  return json(status, {
+    ok: true,
+    invitation: {
+      invitationId: invitation.invitationId,
+      roomId: invitation.roomId,
+      expiresAt: invitation.expiresAt,
+      joinUrl,
+      delivery,
+    },
+  });
 }
 
 export async function handleAcceptMeetingInvitationRequest(
@@ -251,6 +399,8 @@ function serviceFailure(result: Extract<MeetingServiceResult<unknown>, { ok: fal
       return error(429, result.error.code, result.error.message, {
         "retry-after": "60",
       });
+    case "invitation_conflict":
+      return error(409, result.error.code, result.error.message);
     case "invitation_unavailable":
       return error(404, result.error.code, result.error.message);
     case "service_unavailable":

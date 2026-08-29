@@ -1,4 +1,8 @@
-import { randomBytes as nodeRandomBytes, randomUUID } from "node:crypto";
+import {
+  createHmac,
+  randomBytes as nodeRandomBytes,
+  randomUUID,
+} from "node:crypto";
 
 import { z } from "zod";
 
@@ -22,10 +26,33 @@ const roomRpcSchema = z
   .strict();
 const invitationRpcSchema = z
   .object({
-    outcome: z.literal("created"),
+    outcome: z.enum(["created", "existing"]),
     invitationId: z.uuid(),
     roomId: z.uuid(),
     expiresAt: z.iso.datetime({ offset: true }),
+    roomName: z.string().trim().min(1).max(120),
+    idempotencyKey: z.string().min(16).max(256),
+    deliveryStatus: z.enum([
+      "created",
+      "sending",
+      "reconciling",
+      "preview_only",
+      "submitted",
+      "delivered",
+      "bounced",
+      "complained",
+      "failed",
+      "suppressed",
+    ]),
+    providerMessageId: z.string().trim().min(1).max(256).nullable(),
+  })
+  .strict();
+const invitationDeliveryRpcSchema = z
+  .object({
+    invitationId: z.uuid(),
+    deliveryStatus: invitationRpcSchema.shape.deliveryStatus,
+    providerMessageId: z.string().trim().min(1).max(256).nullable(),
+    changed: z.boolean(),
   })
   .strict();
 const acceptanceRpcSchema = z.discriminatedUnion("outcome", [
@@ -51,7 +78,18 @@ export interface MeetingServiceDependencies {
   createUuid: () => string;
   randomBytes: (size: number) => Uint8Array;
   now: () => Date;
+  inviteTokenSecret?: string;
 }
+
+export type InvitationDeliveryStatus = z.infer<
+  typeof invitationRpcSchema.shape.deliveryStatus
+>;
+
+export type InvitationDeliveryCompletion =
+  | { status: "preview_only" }
+  | { status: "submitted"; providerId: string }
+  | { status: "reconciling"; errorCode: string; providerId?: string }
+  | { status: "failed"; errorCode: string };
 
 export type MeetingServiceResult<T> =
   | { ok: true; value: T }
@@ -63,6 +101,7 @@ export type MeetingServiceResult<T> =
           | "permanent_email_auth_required"
           | "host_required"
           | "rate_limited"
+          | "invitation_conflict"
           | "invitation_unavailable"
           | "service_unavailable";
         message: string;
@@ -86,6 +125,36 @@ export interface MeetingService {
       displayName: string;
       token: string;
       expiresAt: string;
+      roomName: string;
+      idempotencyKey: string;
+      deliveryStatus: InvitationDeliveryStatus;
+      providerMessageId: string | null;
+      created: boolean;
+    }>
+  >;
+  reserveInvitationDelivery: (
+    actorUserId: string,
+    roomId: string,
+    invitationId: string,
+  ) => Promise<
+    MeetingServiceResult<{
+      invitationId: string;
+      deliveryStatus: InvitationDeliveryStatus;
+      providerMessageId: string | null;
+      changed: boolean;
+    }>
+  >;
+  completeInvitationDelivery: (
+    actorUserId: string,
+    roomId: string,
+    invitationId: string,
+    delivery: InvitationDeliveryCompletion,
+  ) => Promise<
+    MeetingServiceResult<{
+      invitationId: string;
+      deliveryStatus: InvitationDeliveryStatus;
+      providerMessageId: string | null;
+      changed: boolean;
     }>
   >;
   acceptInvitation: (
@@ -104,6 +173,7 @@ const defaults: MeetingServiceDependencies = {
   createUuid: randomUUID,
   randomBytes: (size) => nodeRandomBytes(size),
   now: () => new Date(),
+  inviteTokenSecret: process.env.COMMANDCANVAS_INVITE_TOKEN_SECRET,
 };
 
 export function createMeetingService(
@@ -152,31 +222,38 @@ export function createMeetingService(
       )
         return invalidRequest();
       try {
+        const secret = validInviteSecret(dependencies.inviteTokenSecret);
         const invitationId = exactUuid(dependencies.createUuid());
-        const token = Buffer.from(exactEntropy(dependencies, 32)).toString(
-          "base64url",
-        );
-        const expiresAt = new Date(
-          dependencies.now().getTime() + input.data.expiresInHours * 3_600_000,
-        ).toISOString();
+        const token = createHmac("sha256", secret)
+          .update(
+            JSON.stringify([
+              input.data.requestId,
+              roomId,
+              actorUserId,
+              input.data.email,
+              input.data.displayName,
+              input.data.color.toUpperCase(),
+              input.data.expiresInHours,
+            ]),
+          )
+          .digest("base64url");
         const response = await client.rpc("create_room_email_invitation", {
           p_invitation_id: invitationId,
+          p_request_id: input.data.requestId,
           p_room_id: roomId,
           p_actor_user_id: actorUserId,
-          p_invited_email: input.data.email,
+          p_recipient_email: input.data.email,
           p_display_name: input.data.displayName,
           p_color: input.data.color,
           p_token: token,
-          p_expires_at: expiresAt,
+          p_expires_in_hours: input.data.expiresInHours,
           p_requested_role: "participant",
         });
         if (response.error) return providerFailure(response.error);
         const parsed = invitationRpcSchema.safeParse(response.data);
         if (
           !parsed.success ||
-          parsed.data.invitationId !== invitationId ||
-          parsed.data.roomId !== roomId ||
-          parsed.data.expiresAt !== expiresAt
+          parsed.data.roomId !== roomId
         )
           return unavailable();
         return {
@@ -187,9 +264,66 @@ export function createMeetingService(
             email: input.data.email,
             displayName: input.data.displayName,
             token,
-            expiresAt,
+            expiresAt: parsed.data.expiresAt,
+            roomName: parsed.data.roomName,
+            idempotencyKey: parsed.data.idempotencyKey,
+            deliveryStatus: parsed.data.deliveryStatus,
+            providerMessageId: parsed.data.providerMessageId,
+            created: parsed.data.outcome === "created",
           },
         };
+      } catch {
+        return unavailable();
+      }
+    },
+
+    async reserveInvitationDelivery(actorUserId, roomId, invitationId) {
+      if (![actorUserId, roomId, invitationId].every((value) =>
+        uuidSchema.safeParse(value).success,
+      )) return invalidRequest();
+      try {
+        const response = await client.rpc("reserve_room_invitation_delivery", {
+          p_room_id: roomId,
+          p_invitation_id: invitationId,
+          p_host_user_id: actorUserId,
+        });
+        if (response.error) return providerFailure(response.error);
+        const parsed = invitationDeliveryRpcSchema.safeParse(response.data);
+        if (!parsed.success || parsed.data.invitationId !== invitationId)
+          return unavailable();
+        return { ok: true, value: parsed.data };
+      } catch {
+        return unavailable();
+      }
+    },
+
+    async completeInvitationDelivery(
+      actorUserId,
+      roomId,
+      invitationId,
+      delivery,
+    ) {
+      if (
+        ![actorUserId, roomId, invitationId].every((value) =>
+          uuidSchema.safeParse(value).success,
+        ) ||
+        !validDeliveryCompletion(delivery)
+      ) return invalidRequest();
+      try {
+        const response = await client.rpc("complete_room_invitation_delivery", {
+          p_room_id: roomId,
+          p_invitation_id: invitationId,
+          p_host_user_id: actorUserId,
+          p_outcome: delivery.status,
+          p_provider_message_id:
+            "providerId" in delivery ? delivery.providerId ?? null : null,
+          p_error_code: "errorCode" in delivery ? delivery.errorCode : null,
+        });
+        if (response.error) return providerFailure(response.error);
+        const parsed = invitationDeliveryRpcSchema.safeParse(response.data);
+        if (!parsed.success || parsed.data.invitationId !== invitationId)
+          return unavailable();
+        return { ok: true, value: parsed.data };
       } catch {
         return unavailable();
       }
@@ -256,7 +390,40 @@ function providerFailure(error: unknown): MeetingServiceResult<never> {
       "invitation_unavailable",
       "This invitation is invalid, expired, used, or belongs to another email.",
     );
+  if (message.includes("meeting_invitation_request_conflict"))
+    return failure(
+      "invitation_conflict",
+      "This invitation request ID was already used with different details.",
+    );
   return unavailable();
+}
+
+function validInviteSecret(raw: string | undefined) {
+  const secret = raw?.trim() ?? "";
+  if (Buffer.byteLength(secret, "utf8") < 32 || secret.length > 1024)
+    throw new Error("invite token secret unavailable");
+  return secret;
+}
+
+function validDeliveryCompletion(
+  value: InvitationDeliveryCompletion,
+): value is InvitationDeliveryCompletion {
+  const errorCodeSchema = z
+    .string()
+    .trim()
+    .min(1)
+    .max(120)
+    .regex(/^[a-z][a-z0-9_]*$/);
+  if (value.status === "preview_only") return true;
+  if (value.status === "submitted")
+    return z.string().trim().min(1).max(256).safeParse(value.providerId).success;
+  if (value.status === "reconciling")
+    return (
+      errorCodeSchema.safeParse(value.errorCode).success &&
+      (value.providerId === undefined ||
+        z.string().trim().min(1).max(256).safeParse(value.providerId).success)
+    );
+  return errorCodeSchema.safeParse(value.errorCode).success;
 }
 
 function invalidRequest(): MeetingServiceResult<never> {
