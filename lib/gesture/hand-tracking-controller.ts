@@ -918,7 +918,7 @@ export function createHandTrackingController(
     handleEngineFailure(
       run,
       worker,
-      "YOLO startup preference selected the measured MediaPipe fallback for this session and model.",
+      `${engine.descriptor.displayName} startup preference selected the measured recovery path for this session and model.`,
     );
     return true;
   }
@@ -969,7 +969,7 @@ export function createHandTrackingController(
     handleEngineFailure(
       run,
       worker,
-      `YOLO startup performance missed the local 18 Hz / 100 ms thresholds (${rate} Hz, p95 ${tail} ms).`,
+      `${engine.descriptor.displayName} startup performance missed the local 18 Hz / 100 ms thresholds (${rate} Hz, p95 ${tail} ms).`,
     );
     return true;
   }

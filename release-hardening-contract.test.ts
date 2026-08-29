@@ -1,5 +1,4 @@
 import { existsSync, readFileSync } from "node:fs";
-import { createHash } from "node:crypto";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -47,21 +46,15 @@ describe("server-only dependency boundaries", () => {
 });
 
 describe("hand detector distribution boundary", () => {
-  it("ships the pinned 320px YOLO primary and keeps the landmark fallback remote while both WASM runtimes stay local", () => {
+  it("ships only the MediaPipe browser worker and keeps its model remote", () => {
     const enginePlan = read("lib/gesture/spatial-vision-engine.ts");
-    const yoloDetector = read("lib/gesture/yolo-hand-pose-detector.ts");
+    const workerBuild = read("scripts/build-hand-worker.mjs");
     const fallbackModelUrl =
       "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
-    const yoloModelPath = path.join(
-      root,
-      "public/models/yolo26_hand_pose_320_fp16.onnx",
-    );
 
-    expect(enginePlan).toContain("YOLO_HAND_POSE_MODEL_URL");
-    expect(yoloDetector).toContain(
-      '"/models/yolo26_hand_pose_320_fp16.onnx"',
-    );
     expect(enginePlan).toContain(fallbackModelUrl);
+    expect(enginePlan).toContain("createMediaPipeSpatialVisionEngine");
+    expect(enginePlan).not.toMatch(/yolo|onnx-runtime-web/i);
     expect(enginePlan).not.toContain(
       'modelAssetUrl: "/mediapipe/hand_landmarker.task"',
     );
@@ -71,17 +64,11 @@ describe("hand detector distribution boundary", () => {
     expect(
       existsSync(path.join(root, "public/mediapipe/wasm/vision_wasm_internal.wasm")),
     ).toBe(true);
-    expect(existsSync(yoloModelPath)).toBe(true);
-    expect(readFileSync(yoloModelPath).byteLength).toBe(21_447_188);
-    expect(
-      createHash("sha256").update(readFileSync(yoloModelPath)).digest("hex"),
-    ).toBe("07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc");
-    expect(read("scripts/build-hand-worker.mjs")).toContain(
-      "ort-wasm-simd-threaded.wasm",
-    );
+    expect(workerBuild).toContain("hand-landmarker.worker.ts");
+    expect(workerBuild).not.toMatch(/yolo|onnxruntime/i);
   });
 
-  it("records runtime provenance and the selected AGPL release path", () => {
+  it("records local MediaPipe provenance without claiming the external relay as bundled", () => {
     const notices = read("THIRD_PARTY_NOTICES.md");
 
     expect(notices.replace(/\s+/g, " ")).toContain(
@@ -96,15 +83,8 @@ describe("hand detector distribution boundary", () => {
     expect(notices).not.toContain(
       "Local file: `public/mediapipe/hand_landmarker.task`",
     );
-    expect(notices).toContain("## YOLO26 Hand Pose runtime model");
-    expect(notices).toContain(
-      "2abb91a7030e1aa5231ec900ccb2c07ab3f03460",
-    );
-    expect(notices).toContain("License: AGPL-3.0-only");
-    expect(notices).toContain(
-      "https://github.com/romiteld/commandcanvas",
-    );
-    expect(notices).not.toContain("agpl-3.0-review-required");
+    expect(notices).toContain("MediaPipe is the browser hand-landmark engine");
+    expect(notices).not.toMatch(/YOLO26|ONNX Runtime Web|AGPL-3.0-only/);
   });
 });
 

@@ -34,12 +34,12 @@ Resend invitation API, and the Resend packet API are one mechanism.
 
 ## 0:24–0:46: primary wow moment
 
-**Do:** If the physical-hand rehearsal passed, show the YOLO sensor preview briefly, close the system drawer, and let the **HAND CONTROL · FULL CANVAS** indicator establish that the workspace, not the preview, is the interaction plane. Switch the on-canvas hand mode to **Draw** and trace three rough bars labeled Q1, Q2, and Q3 directly on the main canvas with the tracked index fingertip. Otherwise use pointer or touch. While drawing, say **These bars are quarterly signups: Q1 is 12, Q2 is 19, and Q3 is 31.** Pause so that completed explanation becomes bounded sketch context. Finish and select the single multi-stroke sketch.
+**Do:** If the physical-hand rehearsal passed, show the MediaPipe sensor preview briefly, close the system drawer, and let the **HAND CONTROL · FULL CANVAS** indicator establish that the workspace, not the preview, is the interaction plane. Switch the on-canvas hand mode to **Draw** and trace three rough bars labeled Q1, Q2, and Q3 directly on the main canvas with the tracked index fingertip. Otherwise use pointer or touch. While drawing, say **These bars are quarterly signups: Q1 is 12, Q2 is 19, and Q3 is 31.** Pause so that completed explanation becomes bounded sketch context. Finish and select the single multi-stroke sketch.
 
 If the private CUDA relay is part of the take, show the explicit **Use private
 GPU hand tracking** consent and the visible CUDA provider label. State that
 bounded frames go to the named private relay only while the option is active,
-semantic landmarks return, raw frames are not retained, and local YOLO is the
+semantic landmarks return, raw frames are not retained, and local MediaPipe is the
 fallback. Do not present the static-image CUDA benchmark as a physical-hand
 latency measurement.
 
@@ -101,7 +101,7 @@ latency measurement.
 - Do not show ChatGPT Site Tools invocation until the exact deployed build passes that host. Native Chrome 153 and ChatGPT are separate verification boundaries.
 - The controlled backend path has a delivered Resend record, but the public no-signup judge route remains preview-only. Show and describe the result visible in the exact environment being recorded.
 - Do not claim post-fix physical-hand or physical-iPhone accuracy unless the exact hardware rehearsal passes immediately before recording. The prior real recording recognized open palm and pinch ratios between 0.22 and 0.28, but it also exposed the old preview-boundary usability failure and does not verify the revised full-canvas plane.
-- If the physical-hand rehearsal passes, keep the YOLO skeleton, tracked fingertip, and semantic state overlay in frame so TARGET, OPEN, PINCH, HELD, RESIZING, PAN, and CANVAS ZOOM are legible. Keep the camera preview collapsed after the sensor check. Show blank-canvas pan or zoom only if it passed that exact rehearsal. Throw through either red side edge for recoverable trash and into the blue bottom dock for minimize. Show Undo immediately after the trash gesture. Do not describe recoverable trash as permanent deletion.
+- If the physical-hand rehearsal passes, keep the MediaPipe skeleton, tracked fingertip, and semantic state overlay in frame so TARGET, OPEN, PINCH, HELD, RESIZING, PAN, and CANVAS ZOOM are legible. Keep the camera preview collapsed after the sensor check. Show blank-canvas pan or zoom only if it passed that exact rehearsal. Throw through either red side edge for recoverable trash and into the blue bottom dock for minimize. Show Undo immediately after the trash gesture. Do not describe recoverable trash as permanent deletion.
 - Show the actual send result from the environment being recorded. Supabase OTP delivery, invitation submission, packet submission, preview-only fallback, and provider delivery are distinct claims.
 - Keep pointer and typed fallbacks ready for every gesture and voice action.
 - Reset the demo before the final take and verify the expected fixtures and starting revision.

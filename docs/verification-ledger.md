@@ -709,3 +709,58 @@ This checkpoint is a draft for the current source candidate. It does not replace
 ### CUT
 
 - No product capability was cut or changed by this landing-only correction.
+
+## Checkpoint 22: MIT application and separately distributed GPU relay
+
+### WORKING
+
+- The CommandCanvas application manifest, lockfile, root license, notice, and
+  browser-visible source label now identify the application as MIT. The local
+  browser hand engine is MediaPipe Hand Landmarker in a worker, with the same
+  MediaPipe package and model used in-page only as a labeled recovery path.
+- The application no longer contains the YOLO detector or worker source, the
+  same-origin YOLO model, ONNX Runtime Web dependency or public runtime assets,
+  the native relay service, its Docker inputs, or its Caddy operations source.
+  The generated browser asset inventory contains only the MediaPipe worker and
+  MediaPipe WASM runtime.
+- The MIT repository retains the consent-gated relay protocol, session, token,
+  route, browser transport, semantic-result validation, and automatic local
+  recovery contracts. Those contracts do not include a native inference
+  implementation or model artifact.
+- The former native CUDA service, operations material, notices, and both pinned
+  model artifacts are preserved in a separate local AGPL repository named
+  `commandcanvas-hand-relay`. It has no remote configured by this checkpoint.
+  Its 320 and 640 artifacts retain SHA-256 values
+  `07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc`
+  and `f85eae141155d4de959051d3c7d44f68f1881dfe6b6e180e33d6c3fc3372c59e`.
+- The application passed 109 Vitest files with 1,122 of 1,122 tests, TypeScript,
+  ESLint, the MediaPipe worker build, and explicit source/dependency/artifact
+  inventory checks. The separate relay passed 84 of 84 Python tests and its
+  reversible Caddy-route harness without changing a live configuration.
+
+### VERIFIED IN BROWSER
+
+- No browser was exercised for this isolation checkpoint. Earlier browser
+  evidence for the combined AGPL release is historical and is not transferred
+  to the changed MIT/MediaPipe candidate.
+
+### UNVERIFIED
+
+- The optimized Next.js build was attempted but Turbopack rejected the shared
+  development `node_modules` symlink because it points outside this worktree's
+  filesystem root. This is an environment/tooling boundary after the worker
+  build, not a successful application build claim.
+- The current MediaPipe candidate still requires an exact-release browser
+  camera lifecycle and real-hand rehearsal. Physical smoothness, index drawing,
+  pinch acquisition, two-hand continuity, lighting, occlusion, latency,
+  thermals, and mobile ergonomics remain unverified.
+- The separate relay repository is local only. Its public source URL and exact
+  source commit remain an explicit source-link follow-up before a public release
+  offers that external processing path.
+
+### CUT
+
+- No gesture or canvas capability was removed. The isolation removes only the
+  browser-distributed YOLO/ONNX implementation and the native service source
+  from the MIT application. The optional private GPU protocol remains, with
+  local MediaPipe as the no-consent and failure path.

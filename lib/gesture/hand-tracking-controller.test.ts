@@ -10,7 +10,11 @@ import {
   reduceHandReliability,
 } from "@/lib/gesture/hand-calibration";
 import type { HandLandmarks } from "@/lib/gesture/hand-intent";
-import { YOLO_HAND_POSE_MODEL_URL } from "@/lib/gesture/yolo-hand-pose-detector";
+import {
+  MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL,
+  MEDIA_PIPE_IN_PAGE_RECOVERY_ENGINE_ID,
+  MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
+} from "@/lib/gesture/spatial-vision-engine";
 
 function hand(index = { x: 0.3, y: 0.4 }, thumb = { x: 0.1, y: 0.4 }) {
   const points = Array.from({ length: 21 }, () => ({ x: 0.3, y: 0.78, z: 0 }));
@@ -148,8 +152,8 @@ describe("hand tracking controller lifecycle", () => {
     });
     expect(worker.postMessage).toHaveBeenCalledWith({
       type: "initialize",
-      wasmBaseUrl: "/onnxruntime/",
-      modelAssetUrl: YOLO_HAND_POSE_MODEL_URL,
+      wasmBaseUrl: "/mediapipe/wasm",
+      modelAssetUrl: MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL,
     });
 
     worker.emit({
@@ -257,8 +261,8 @@ describe("hand tracking controller lifecycle", () => {
     await controller.start(video);
 
     expect(loadDetector).toHaveBeenCalledWith({
-      wasmBaseUrl: "/onnxruntime/",
-      modelAssetUrl: YOLO_HAND_POSE_MODEL_URL,
+      wasmBaseUrl: "/mediapipe/wasm",
+      modelAssetUrl: MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL,
       runningMode: "VIDEO",
       numHands: 2,
     });
@@ -269,7 +273,7 @@ describe("hand tracking controller lifecycle", () => {
     await vi.waitFor(() => expect(detector.close).toHaveBeenCalledOnce());
   });
 
-  it("falls back from the mandatory YOLO primary worker to the labeled landmark engine", async () => {
+  it("falls back from the MediaPipe worker to the labeled in-page recovery engine", async () => {
     const primaryWorker = new FakeWorker();
     const fallbackWorker = new FakeWorker();
     const track = { stop: vi.fn() };
@@ -279,7 +283,9 @@ describe("hand tracking controller lifecycle", () => {
       play: vi.fn(async () => undefined),
     } as unknown as HTMLVideoElement;
     const createWorkerForEngine = vi.fn((engine: { id: string }) =>
-      engine.id.startsWith("yolo26") ? primaryWorker : fallbackWorker,
+      engine.id === MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID
+        ? primaryWorker
+        : fallbackWorker,
     );
     const controller = createHandTrackingController({
       getUserMedia: vi.fn(async () => ({
@@ -298,7 +304,10 @@ describe("hand tracking controller lifecycle", () => {
 
     const starting = controller.start(video);
     await vi.waitFor(() => expect(primaryWorker.postMessage).toHaveBeenCalled());
-    primaryWorker.emit({ type: "error", message: "YOLO initialization failed" });
+    primaryWorker.emit({
+      type: "error",
+      message: "MediaPipe worker initialization failed",
+    });
     await vi.waitFor(() => expect(fallbackWorker.postMessage).toHaveBeenCalledWith({
       type: "initialize",
       wasmBaseUrl: "/mediapipe/wasm",
@@ -309,30 +318,38 @@ describe("hand tracking controller lifecycle", () => {
     await starting;
 
     expect(controller.getEngineStatus?.()).toMatchObject({
-      id: "mediapipe-hand-landmarker-v1",
-      displayName: "MediaPipe Hand Landmarker",
+      id: MEDIA_PIPE_IN_PAGE_RECOVERY_ENGINE_ID,
+      displayName: "MediaPipe Hand Landmarker (in-page recovery)",
       fallback: true,
     });
     expect(engines).toContainEqual(
-      expect.objectContaining({ id: "yolo26-hand-pose-2abb91", fallback: false }),
+      expect.objectContaining({
+        id: MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
+        fallback: false,
+      }),
     );
     expect(engines).toContainEqual(
-      expect.objectContaining({ id: "mediapipe-hand-landmarker-v1", fallback: true }),
+      expect.objectContaining({
+        id: MEDIA_PIPE_IN_PAGE_RECOVERY_ENGINE_ID,
+        fallback: true,
+      }),
     );
     expect(track.stop).not.toHaveBeenCalled();
     controller.stop();
   });
 
-  it("attempts the private CUDA relay first only with current upload consent, then falls back to local YOLO", async () => {
+  it("attempts the private CUDA relay first only with current upload consent, then falls back to local MediaPipe", async () => {
     let consent = false;
     const relayWorker = Object.assign(new FakeWorker(), {
       frameQueueMode: "newest-only" as const,
     });
-    const yoloWorker = new FakeWorker();
     const mediaPipeWorker = new FakeWorker();
+    const recoveryWorker = new FakeWorker();
     const createPrivateRelayWorker = vi.fn(() => relayWorker);
     const createWorkerForEngine = vi.fn((engine: { id: string }) =>
-      engine.id.startsWith("yolo26") ? yoloWorker : mediaPipeWorker,
+      engine.id === MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID
+        ? mediaPipeWorker
+        : recoveryWorker,
     );
     const video = {
       srcObject: null,
@@ -359,9 +376,9 @@ describe("hand tracking controller lifecycle", () => {
     });
 
     const localStart = controller.start(video);
-    await vi.waitFor(() => expect(yoloWorker.postMessage).toHaveBeenCalled());
+    await vi.waitFor(() => expect(mediaPipeWorker.postMessage).toHaveBeenCalled());
     expect(createPrivateRelayWorker).not.toHaveBeenCalled();
-    yoloWorker.emit({ type: "ready" });
+    mediaPipeWorker.emit({ type: "ready" });
     await localStart;
     controller.stop();
 
@@ -377,12 +394,14 @@ describe("hand tracking controller lifecycle", () => {
       type: "error",
       message: "Private GPU relay timed out; switching to local hand tracking.",
     });
-    await vi.waitFor(() => expect(yoloWorker.postMessage).toHaveBeenCalledTimes(3));
-    yoloWorker.emit({ type: "ready" });
+    await vi.waitFor(() =>
+      expect(mediaPipeWorker.postMessage).toHaveBeenCalledTimes(3),
+    );
+    mediaPipeWorker.emit({ type: "ready" });
     await relayStart;
 
     expect(controller.getEngineStatus?.()).toMatchObject({
-      id: "yolo26-hand-pose-2abb91",
+      id: MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
       fallback: true,
       fallbackKind: "private-relay",
       fallbackReason: "Private GPU relay timed out; switching to local hand tracking.",
@@ -467,7 +486,7 @@ describe("hand tracking controller lifecycle", () => {
     });
   });
 
-  it("reports a post-ready YOLO inference failure before starting the labeled fallback", async () => {
+  it("reports a post-ready MediaPipe worker failure before starting the labeled in-page recovery", async () => {
     const primaryWorker = new FakeWorker();
     const fallbackWorker = new FakeWorker();
     const video = {
@@ -480,7 +499,9 @@ describe("hand tracking controller lifecycle", () => {
         getTracks: () => [{ stop: vi.fn() }],
       }) as unknown as MediaStream),
       createWorkerForEngine: vi.fn((engine: { id: string }) =>
-        engine.id.startsWith("yolo26") ? primaryWorker : fallbackWorker,
+        engine.id === MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID
+          ? primaryWorker
+          : fallbackWorker,
       ),
       createImageBitmap: vi.fn(
         async () => ({ close: vi.fn() }) as unknown as ImageBitmap,
@@ -497,13 +518,13 @@ describe("hand tracking controller lifecycle", () => {
     primaryWorker.emit({ type: "ready" });
     await starting;
     expect(controller.getEngineStatus?.()).toMatchObject({
-      id: "yolo26-hand-pose-2abb91",
+      id: MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
       fallback: false,
     });
 
     primaryWorker.emit({
       type: "error",
-      message: "YOLO inference failed after startup",
+      message: "MediaPipe worker inference failed after startup",
     });
     await vi.waitFor(() =>
       expect(fallbackWorker.postMessage).toHaveBeenCalledWith({
@@ -516,7 +537,7 @@ describe("hand tracking controller lifecycle", () => {
     expect(primaryWorker.terminate).toHaveBeenCalledOnce();
     expect(controller.getStatus()).toEqual({ state: "starting" });
     expect(controller.getEngineStatus?.()).toMatchObject({
-      id: "mediapipe-hand-landmarker-v1",
+      id: MEDIA_PIPE_IN_PAGE_RECOVERY_ENGINE_ID,
       fallback: true,
     });
 
@@ -525,11 +546,11 @@ describe("hand tracking controller lifecycle", () => {
     expect(engines).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "yolo26-hand-pose-2abb91",
+          id: MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
           fallback: false,
         }),
         expect.objectContaining({
-          id: "mediapipe-hand-landmarker-v1",
+          id: MEDIA_PIPE_IN_PAGE_RECOVERY_ENGINE_ID,
           fallback: true,
         }),
       ]),
@@ -722,7 +743,7 @@ describe("hand tracking controller lifecycle", () => {
           thumbTip: { x: 0.9, y: 0.4 },
           confidence: 0.96,
         }),
-        source: "yolo26-hand-pose-2abb91",
+        source: MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
         capturedAt: 1_000,
         receivedAt: 1_000,
         trackId: expect.stringMatching(/^hand-track-/),
@@ -733,7 +754,7 @@ describe("hand tracking controller lifecycle", () => {
     ]);
   });
 
-  it("accepts a valid 0.60-confidence YOLO hand instead of hard-dropping it", async () => {
+  it("accepts a valid 0.60-confidence MediaPipe hand instead of hard-dropping it", async () => {
     const { controller, worker, video } = harness();
     const observations: unknown[] = [];
     controller.subscribeObservations((observation) => observations.push(observation));
@@ -1281,12 +1302,12 @@ describe("hand tracking controller lifecycle", () => {
     expire();
 
     await expect(starting).rejects.toThrow(
-      "YOLO26 Hand Pose did not become ready in time.",
+      "MediaPipe Hand Landmarker did not become ready in time.",
     );
     expect(track.stop).toHaveBeenCalledOnce();
     expect(controller.getStatus()).toEqual({
       state: "unavailable",
-      message: "YOLO26 Hand Pose did not become ready in time.",
+      message: "MediaPipe Hand Landmarker did not become ready in time.",
     });
   });
 
@@ -1418,7 +1439,9 @@ describe("hand tracking controller lifecycle", () => {
         getTracks: () => [{ stop: vi.fn() }],
       }) as unknown as MediaStream),
       createWorkerForEngine: vi.fn((engine: { id: string }) =>
-        engine.id.startsWith("yolo26") ? primaryWorker : fallbackWorker,
+        engine.id === MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID
+          ? primaryWorker
+          : fallbackWorker,
       ),
       createImageBitmap: vi.fn(
         () => new Promise<ImageBitmap>((resolve) => { resolveBitmap = resolve; }),
@@ -1469,7 +1492,9 @@ describe("hand tracking controller lifecycle", () => {
         getTracks: () => [{ stop: vi.fn() }],
       }) as unknown as MediaStream),
       createWorkerForEngine: vi.fn((engine: { id: string }) =>
-        engine.id.startsWith("yolo26") ? primaryWorker : fallbackWorker,
+        engine.id === MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID
+          ? primaryWorker
+          : fallbackWorker,
       ),
       createImageBitmap: vi.fn(
         () =>
@@ -1495,7 +1520,7 @@ describe("hand tracking controller lifecycle", () => {
     fallbackWorker.emit({ type: "ready" });
     expect(controller.getStatus()).toEqual({ state: "ready" });
 
-    rejectBitmap(new Error("old YOLO capture failed"));
+    rejectBitmap(new Error("old MediaPipe worker capture failed"));
     await vi.waitFor(() =>
       expect(controller.getEngineStatus?.()?.runtimeMetrics).toMatchObject({
         droppedLateCapture: 1,
@@ -1504,13 +1529,13 @@ describe("hand tracking controller lifecycle", () => {
 
     expect(controller.getStatus()).toEqual({ state: "ready" });
     expect(controller.getEngineStatus?.()).toMatchObject({
-      id: "mediapipe-hand-landmarker-v1",
+      id: MEDIA_PIPE_IN_PAGE_RECOVERY_ENGINE_ID,
       fallback: true,
     });
     expect(fallbackWorker.terminate).not.toHaveBeenCalled();
   });
 
-  it("falls back one-way when twelve post-warmup YOLO results miss the delivered-rate threshold", async () => {
+  it("falls back one-way when twelve post-warmup MediaPipe worker results miss the delivered-rate threshold", async () => {
     let now = 1_000;
     const primaryWorker = new FakeWorker();
     const fallbackWorker = new FakeWorker();
@@ -1524,7 +1549,9 @@ describe("hand tracking controller lifecycle", () => {
         getTracks: () => [{ stop: vi.fn() }],
       }) as unknown as MediaStream),
       createWorkerForEngine: vi.fn((engine: { id: string }) =>
-        engine.id.startsWith("yolo26") ? primaryWorker : fallbackWorker,
+        engine.id === MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID
+          ? primaryWorker
+          : fallbackWorker,
       ),
       createImageBitmap: vi.fn(async () => ({ close: vi.fn() }) as unknown as ImageBitmap),
       requestAnimationFrame: vi.fn(() => 1),
@@ -1551,7 +1578,7 @@ describe("hand tracking controller lifecycle", () => {
       ),
     );
     expect(controller.getEngineStatus?.()).toMatchObject({
-      id: "mediapipe-hand-landmarker-v1",
+      id: MEDIA_PIPE_IN_PAGE_RECOVERY_ENGINE_ID,
       fallback: true,
       fallbackReason: expect.stringMatching(/startup performance/i),
     });

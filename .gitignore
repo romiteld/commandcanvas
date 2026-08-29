@@ -23,8 +23,6 @@
 /build
 /var/
 /public/workers/hand-landmarker.js
-/public/workers/yolo-hand-pose.js
-/public/onnxruntime/
 
 # misc
 .DS_Store

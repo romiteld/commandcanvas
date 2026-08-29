@@ -7,16 +7,16 @@ import {
   assertLiveProbeTarget,
   requireProductionApiProxyOrigin,
 } from "../lib/testing/live-probe-guards";
-import { YOLO_HAND_POSE_MODEL_URL } from "../lib/gesture/yolo-hand-pose-detector";
+import {
+  MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL,
+  MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
+} from "../lib/gesture/spatial-vision-engine";
 import {
   captureCreatedRoom,
   deleteHostedRoom,
 } from "./support/hosted-room";
 
 const fakeCameraPath = process.env.COMMANDCANVAS_FAKE_CAMERA_PATH;
-const MEDIA_PIPE_HAND_LANDMARKER_URL =
-  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
-
 test.use({
   launchOptions: {
     args: fakeCameraPath
@@ -364,10 +364,12 @@ async function exerciseFakeCameraLifecycle(
   );
   await expect(systemDrawer.getByText("READY · show one hand")).toBeVisible();
   await expect(
-    page.locator('[data-vision-engine="yolo26-hand-pose-2abb91"]'),
-  ).toHaveText("Engine YOLO26 Hand Pose");
+    page.locator(
+      `[data-vision-engine="${MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID}"]`,
+    ),
+  ).toHaveText("Engine MediaPipe Hand Landmarker");
   await expect(
-    page.getByText("Fallback MediaPipe Hand Landmarker"),
+    page.getByText("Fallback MediaPipe Hand Landmarker (in-page recovery)"),
   ).toHaveCount(0);
 
   const liveTrack = await page.evaluate(() => {
@@ -396,13 +398,13 @@ async function exerciseFakeCameraLifecycle(
   expect(
     cameraResponses.some(
       ({ url, status }) =>
-        new URL(url).pathname === "/workers/yolo-hand-pose.js" && status === 200,
+        new URL(url).pathname === "/workers/hand-landmarker.js" && status === 200,
     ),
   ).toBe(true);
   expect(
     cameraResponses.some(
       ({ url, status }) =>
-        new URL(url).pathname.startsWith("/onnxruntime/") &&
+        new URL(url).pathname.startsWith("/mediapipe/wasm/") &&
         url.endsWith(".wasm") &&
         status === 200,
     ),
@@ -410,13 +412,9 @@ async function exerciseFakeCameraLifecycle(
   expect(
     cameraResponses.some(
       ({ url, status }) =>
-        new URL(url).pathname === YOLO_HAND_POSE_MODEL_URL && status === 200,
+        url.startsWith(MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL) && status === 200,
     ),
   ).toBe(true);
-  expect(
-    cameraResponses.filter(({ url }) => isMediaPipeFallbackAsset(url)),
-    "MediaPipe assets may load only after the UI explicitly reports the labeled fallback.",
-  ).toEqual([]);
 
   await page.getByRole("button", { name: "Disable hand input" }).click();
   await expect(page.getByText("Camera off · pointer active").first()).toBeVisible();
@@ -450,18 +448,9 @@ function waitForPacketResponse(page: Page, pathname: string, method: string) {
 
 function isHandEngineAsset(url: string) {
   return (
-    url.includes("/workers/yolo-hand-pose.js") ||
-    url.includes("/onnxruntime/") ||
-    new URL(url).pathname === YOLO_HAND_POSE_MODEL_URL ||
-    isMediaPipeFallbackAsset(url)
-  );
-}
-
-function isMediaPipeFallbackAsset(url: string) {
-  return (
     url.includes("/workers/hand-landmarker.js") ||
     url.includes("/mediapipe/wasm/") ||
-    url === MEDIA_PIPE_HAND_LANDMARKER_URL
+    url.startsWith(MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL)
   );
 }
 

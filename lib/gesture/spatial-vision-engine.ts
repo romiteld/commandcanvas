@@ -2,14 +2,15 @@ import type {
   HandDetector,
   HandDetectorLoadOptions,
 } from "@/lib/gesture/hand-tracking-worker-core";
-import { YOLO_HAND_POSE_MODEL_URL } from "@/lib/gesture/yolo-hand-pose-detector";
 
-export const MEDIA_PIPE_FALLBACK_SPATIAL_VISION_ENGINE_ID =
+export const MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID =
   "mediapipe-hand-landmarker-v1" as const;
-export const PREFERRED_SPATIAL_VISION_ENGINE_ID =
-  "yolo26-hand-pose-2abb91" as const;
+export const MEDIA_PIPE_IN_PAGE_RECOVERY_ENGINE_ID =
+  "mediapipe-hand-landmarker-in-page-v1" as const;
 export const DEFAULT_SPATIAL_VISION_ENGINE_ID =
-  PREFERRED_SPATIAL_VISION_ENGINE_ID;
+  MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID;
+export const MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL =
+  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" as const;
 
 export interface SpatialVisionEngineDescriptor {
   id: string;
@@ -52,105 +53,51 @@ export interface MediaPipeSpatialVisionEngineDependencies {
   ) => Promise<HandDetector>;
 }
 
-export interface YoloSpatialVisionEngineDependencies {
-  loadDetector?: (
-    options: HandDetectorLoadOptions,
-  ) => Promise<HandDetector>;
-}
-
 const MEDIA_PIPE_DETECTOR_OPTIONS: HandDetectorLoadOptions = {
   wasmBaseUrl: "/mediapipe/wasm",
-  modelAssetUrl:
-    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+  modelAssetUrl: MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL,
   runningMode: "VIDEO",
   numHands: 2,
 };
 
 /**
- * Explicit recovery engine. CommandCanvas starts YOLO first and reaches this
- * adapter only after a reported YOLO initialization or runtime failure.
+ * Permissively licensed browser default. Camera frames remain local; only the
+ * model file and WASM runtime are fetched when the user enables hand input.
  */
 export function createMediaPipeSpatialVisionEngine(
   dependencies: MediaPipeSpatialVisionEngineDependencies = {},
 ): SpatialVisionEngine {
-  const loadDetector =
-    dependencies.loadDetector ??
-    (async (options: HandDetectorLoadOptions) => {
-      const detectorModule = await import(
-        "@/lib/gesture/mediapipe-hand-detector"
-      );
-      return detectorModule.loadMediaPipeHandDetector(options);
-    });
-  return {
-    descriptor: {
-      id: MEDIA_PIPE_FALLBACK_SPATIAL_VISION_ENGINE_ID,
-      displayName: "MediaPipe Hand Landmarker",
-      role: "fallback",
-      runtime: "mediapipe-tasks-vision",
-      output: "hand-pose-keypoints",
-      keypointCount: 21,
-      modelVersion: "float16-1",
-      evidence: {
-        targetDeviceBenchmark: "required-for-replacement",
-        licenseReview: "verified-candidate",
-      },
-    },
-    detectorLoadOptions: { ...MEDIA_PIPE_DETECTOR_OPTIONS },
+  return createMediaPipeEngine({
+    dependencies,
+    id: MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
+    displayName: "MediaPipe Hand Landmarker",
+    role: "default",
     worker: {
       scriptUrl: "/workers/hand-landmarker.js",
       name: "commandcanvas-hand-tracker",
     },
-    loadDetector,
-  };
-}
-
-export function createDefaultSpatialVisionEngine(): SpatialVisionEngine {
-  return createYoloSpatialVisionEngine();
+  });
 }
 
 /**
- * Primary browser YOLO hand-pose engine. Its real browser worker/model smoke
- * test is covered separately; physical target-device performance remains a
- * distinct evidence boundary.
+ * Same model and package, but without a Worker requirement. This is an honest
+ * recovery path for browsers whose worker canvas/runtime path fails; it is not
+ * represented as a second or higher-performance detector.
  */
-export function createYoloSpatialVisionEngine(
-  dependencies: YoloSpatialVisionEngineDependencies = {},
+export function createMediaPipeInPageRecoveryEngine(
+  dependencies: MediaPipeSpatialVisionEngineDependencies = {},
 ): SpatialVisionEngine {
-  const loadDetector =
-    dependencies.loadDetector ??
-    (async (options: HandDetectorLoadOptions) => {
-      const detectorModule = await import(
-        "@/lib/gesture/yolo-hand-pose-detector"
-      );
-      return detectorModule.loadYoloHandPoseDetector(options);
-    });
-  return {
-    descriptor: {
-      id: PREFERRED_SPATIAL_VISION_ENGINE_ID,
-      displayName: "YOLO26 Hand Pose",
-      role: "default",
-      runtime: "onnx-runtime-web",
-      output: "hand-pose-keypoints",
-      keypointCount: 21,
-      modelVersion:
-        "2abb91a7030e1aa5231ec900ccb2c07ab3f03460-320-fp16",
-      evidence: {
-        targetDeviceBenchmark: "required-for-replacement",
-        licenseReview: "agpl-3.0-source-release",
-      },
-    },
-    detectorLoadOptions: {
-      wasmBaseUrl: "/onnxruntime/",
-      modelAssetUrl: YOLO_HAND_POSE_MODEL_URL,
-      runningMode: "VIDEO",
-      numHands: 2,
-    },
-    worker: {
-      scriptUrl: "/workers/yolo-hand-pose.js",
-      name: "commandcanvas-yolo-hand-pose",
-    },
-    loadDetector,
-  };
+  return createMediaPipeEngine({
+    dependencies,
+    id: MEDIA_PIPE_IN_PAGE_RECOVERY_ENGINE_ID,
+    displayName: "MediaPipe Hand Landmarker (in-page recovery)",
+    role: "fallback",
+    worker: null,
+  });
+}
+
+export function createDefaultSpatialVisionEngine(): SpatialVisionEngine {
+  return createMediaPipeSpatialVisionEngine();
 }
 
 export interface SpatialVisionEnginePlan {
@@ -161,8 +108,46 @@ export interface SpatialVisionEnginePlan {
 
 export function createDefaultSpatialVisionEnginePlan(): SpatialVisionEnginePlan {
   return {
-    primary: createYoloSpatialVisionEngine(),
-    fallback: createMediaPipeSpatialVisionEngine(),
+    primary: createMediaPipeSpatialVisionEngine(),
+    fallback: createMediaPipeInPageRecoveryEngine(),
     fallbackOn: ["initialization-error", "runtime-error"],
+  };
+}
+
+function createMediaPipeEngine(options: {
+  readonly dependencies: MediaPipeSpatialVisionEngineDependencies;
+  readonly id: string;
+  readonly displayName: string;
+  readonly role: "default" | "fallback";
+  readonly worker: SpatialVisionEngine["worker"];
+}): SpatialVisionEngine {
+  const loadDetector =
+    options.dependencies.loadDetector ??
+    (async (detectorOptions: HandDetectorLoadOptions) => {
+      const detectorModule = await import(
+        "@/lib/gesture/mediapipe-hand-detector"
+      );
+      return detectorModule.loadMediaPipeHandDetector(detectorOptions);
+    });
+  return {
+    descriptor: {
+      id: options.id,
+      displayName: options.displayName,
+      role: options.role,
+      runtime: "mediapipe-tasks-vision",
+      output: "hand-pose-keypoints",
+      keypointCount: 21,
+      modelVersion: "float16-1",
+      evidence: {
+        targetDeviceBenchmark: "required-for-replacement",
+        licenseReview:
+          options.role === "default"
+            ? "verified-current-default"
+            : "verified-candidate",
+      },
+    },
+    detectorLoadOptions: { ...MEDIA_PIPE_DETECTOR_OPTIONS },
+    worker: options.worker,
+    loadDetector,
   };
 }

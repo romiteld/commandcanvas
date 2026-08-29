@@ -124,17 +124,17 @@ Pointer previews, hand landmarks, and remote cursors remain ephemeral. A stable 
 
 ## Camera and privacy
 
-Hand tracking starts with a pinned YOLO26 Hand Pose checkpoint exported to a same-origin 320×320 FP16 ONNX model. ONNX Runtime Web runs it locally in a module worker and returns exactly 21 hand keypoints; it refuses bounding-box-only model output. WebGPU is preferred and a bounded threaded WASM path is the fallback runtime. MediaPipe is a separately labeled recovery detector and is attempted only after YOLO reports an initialization or runtime failure.
+Browser hand tracking uses the Apache-2.0 MediaPipe Tasks Vision package and its 21-keypoint Hand Landmarker. The generated module worker is same-origin; the official model is retrieved from Google's published URL only after the user enables hand input. If the worker canvas/runtime path fails, CommandCanvas uses the same MediaPipe model through an explicitly labeled in-page recovery endpoint rather than silently substituting another detector.
 
-The gesture vocabulary maps the YOLO index fingertip to direct drawing on the main canvas, one-hand pinch to magnetic grab and move, two-hand pinch span over an object to resize, and open-palm dwell to focus or restore. Over blank canvas, an open-palm drag pans the local viewport and a two-hand spread or pinch zooms it around the tracked midpoint. These viewport changes are local view state, so they do not create shared mutation receipts. Drawing mode accumulates repeated lines into one `SketchObject`; it never opens a drawer per stroke. Deliberately releasing a held object through either side edge moves it into recoverable trash after a short exit animation, with a receipt and universal Undo. Releasing it into the blue bottom dock minimizes it. No gesture permanently deletes data and neither edge path opens a confirmation panel.
+The gesture vocabulary maps the tracked index fingertip to direct drawing on the main canvas, one-hand pinch to magnetic grab and move, two-hand pinch span over an object to resize, and open-palm dwell to focus or restore. Over blank canvas, an open-palm drag pans the local viewport and a two-hand spread or pinch zooms it around the tracked midpoint. These viewport changes are local view state, so they do not create shared mutation receipts. Drawing mode accumulates repeated lines into one `SketchObject`; it never opens a drawer per stroke. Deliberately releasing a held object through either side edge moves it into recoverable trash after a short exit animation, with a receipt and universal Undo. Releasing it into the blue bottom dock minimizes it. No gesture permanently deletes data and neither edge path opens a confirmation panel.
 
 The camera's comfortable central tracking region maps across the full canvas, so a person does not need to reach to the physical edges of a small preview to reach the workspace edges. The preview is an optional sensor and skeleton check, not an interaction boundary. The system drawer closes when spatial input begins and the on-canvas feedback names what the tracker currently understands, including target, open-hand, pinch, held-object, resizing, panning, and canvas-zoom states. They make an accepted gesture visible; they are not a claim that every physical hand, camera, lighting condition, or device has passed calibration.
 
 The camera panel includes a session-local self-check. It records point and pinch separately and reports success only after both observations actually occur in that camera session. This is a calibration aid, not a claim that every webcam, hand, or lighting condition has been validated.
 
-Hand tracking is local by default. The browser runs the pinned YOLO model with WebGPU or threaded WASM and may visibly fall back to MediaPipe. In that mode, camera frames remain in the browser.
+Hand tracking is local by default. MediaPipe processes camera frames inside the browser and exposes only semantic landmarks to the canvas command layer.
 
-The installed private CUDA relay is a separate, explicit opt-in. Only while **Use private GPU hand tracking** is on and Hand input is active, the browser may encode one bounded JPEG or WebP frame at a time and send it to `hands.autolensai.com`. The relay runs the same pinned YOLO hand-pose model, does not retain raw frames, and returns only bounded semantic landmarks. Turning consent off, disabling Hand input, hiding or leaving the page, or a relay failure closes the remote path and restores local processing. Camera frames are never sent to ChatGPT, OpenAI, Supabase, or WebMCP in either mode. Every camera action has pointer and button equivalents.
+The installed private CUDA relay is a separate, explicit opt-in. Only while **Use private GPU hand tracking** is on and Hand input is active, the browser may encode one bounded JPEG or WebP frame at a time and send it to the configured relay origin. That separately distributed service runs the pinned GPU hand-pose model, does not retain raw frames, and returns only bounded semantic landmarks. Turning consent off, disabling Hand input, hiding or leaving the page, or a relay failure closes the remote path and restores local MediaPipe processing. Camera frames are never sent to ChatGPT, OpenAI, Supabase, or WebMCP in either mode. Every camera action has pointer and button equivalents.
 
 Continuous voice has a separate and explicit privacy boundary. Microphone audio travels to OpenAI only while the user-visible **Live voice** session is on, and assistant audio returns over that WebRTC connection. The server creates the provider call with a server-only key; no provider credential reaches the browser. Typed commands remain available when continuous voice is disabled or unavailable. The older reviewed browser-transcription control may use the browser vendor's speech service under that browser's policy, but it never executes a transcript until the user presses **Run**.
 
@@ -182,9 +182,8 @@ Invitation links use `/meet#invite=...`. The fragment is never sent in an HTTP r
 - WebMCP `document.modelContext.registerTool(...)`
 - OpenAI `gpt-realtime-2.1` over WebRTC for optional continuous in-page voice
 - OpenAI Responses image input and strict structured output
-- YOLO26 Hand Pose, ONNX Runtime Web, and a same-origin FP16 ONNX model
-- Optional native ONNX Runtime CUDA relay at `hands.autolensai.com`, behind explicit per-session camera-upload consent
-- MediaPipe Hand Landmarker only as a visibly labeled recovery detector
+- MediaPipe Tasks Vision and its 21-keypoint Hand Landmarker for local browser input
+- Optional separately distributed private CUDA relay behind explicit per-session camera-upload consent
 - Vercel Functions and deployment
 - Optional Resend delivery
 
@@ -297,11 +296,13 @@ email was sent.
 ### Optional private CUDA relay
 
 The four `PRIVATE_HAND_RELAY_*` values in the application environment authorize
-short-lived sessions from CommandCanvas to the installed relay. They never
-belong in `NEXT_PUBLIC_*` values. The native service has a separate safe example
-at [`services/hand-relay/.env.example`](services/hand-relay/.env.example) and an
-installed-topology runbook at [docs/private-hand-relay.md](docs/private-hand-relay.md).
-The application and service share only the independently generated signing key.
+short-lived sessions from CommandCanvas to an installed relay. They never
+belong in `NEXT_PUBLIC_*` values. The service, model, container, and edge
+operations are deliberately excluded from this MIT application repository; the
+application-side boundary and pending public source-link requirement are in
+[docs/private-hand-relay.md](docs/private-hand-relay.md). The application and
+service share only the independently generated signing key and versioned
+protocol.
 
 ## Verification
 
@@ -321,20 +322,10 @@ npm run build
 npm run test:e2e
 ```
 
-Native-relay contracts and reversible edge operations are separate from the
-browser build:
+Native-relay service and edge-operation gates live in the separately licensed
+relay repository and are not part of this application build.
 
-```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-  python3 -m pytest services/hand-relay/tests -q
-bash ops/hand-relay/tests/manage-caddy-route.test.sh
-```
-
-Those tests inject the CUDA session boundary and do not claim a GPU was used.
-The native benchmark command and its evidence boundary are documented in
-[`services/hand-relay/README.md`](services/hand-relay/README.md).
-
-The integrated source gate runs ESLint, TypeScript, the complete current Vitest suite, both generated hand-worker bundles, and the optimized application build. Separate deterministic gates exercise the non-GPU native-relay contracts and the reversible Caddy-route helper. Coverage includes object schemas, command mutations, stale-revision refusal, undo and redo, multi-selection, grouping, ungrouping, rotation, thought-card speech-to-text lifecycle and conflict recovery, persistence projection, RLS/RPC contracts, WebMCP schemas and guards, bounded agent context, GPT Realtime admission and tool truthfulness, PNG validation, durable vision admission, YOLO output and preprocessing contracts, packet approval/cancel/execute transitions, private-relay security and fallback, shared-camera shutdown, responsive rendering, Realtime adapters, OTP invitations, and demo reset. Time-scoped command output and counts belong in the verification ledger instead of this README.
+The integrated source gate runs ESLint, TypeScript, the complete current Vitest suite, the generated MediaPipe hand worker, and the optimized application build. Coverage includes object schemas, command mutations, stale-revision refusal, undo and redo, multi-selection, grouping, ungrouping, rotation, thought-card speech-to-text lifecycle and conflict recovery, persistence projection, RLS/RPC contracts, WebMCP schemas and guards, bounded agent context, GPT Realtime admission and tool truthfulness, PNG validation, durable vision admission, MediaPipe detector and worker contracts, packet approval/cancel/execute transitions, private-relay client security and fallback, shared-camera shutdown, responsive rendering, Realtime adapters, OTP invitations, and demo reset. Time-scoped command output and counts belong in the verification ledger instead of this README.
 
 Environment-specific browser probes are separate so their claims stay narrow:
 
@@ -354,7 +345,7 @@ npx playwright test --config=playwright.webmcp153.config.ts
 
 The Chrome 153 test refuses to run against another major version, defaults to loopback, and requires `WEBMCP_LIVE_PROBE=true` before it may target a public origin. Its optional local-to-production API proxy accepts only `https://commandcanvas.vercel.app` and only the exact room endpoints used by the probe. Dynamic mode uses the same probe with `WEBMCP_EXPECTED_MODE=dynamic` against a build created with `NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION=true`.
 
-Current browser evidence is narrower than the complete source surface. Two authenticated browser contexts passed Supabase collaboration and peer-to-peer media with live local and remote tracks. A paid `gpt-realtime-2.1` session heard a controlled audio fixture, invoked the narrow `create_board` tool, and produced the canonical voice receipt. Real OpenAI image interpretation passed through an injected standards-shaped `document.modelContext`, preserving the sketch beside a validated structured visual. Chromium loaded the pinned same-origin YOLO model in its real worker and inferred one 21-keypoint hand from a CC0 image; Chromium also exercised fake-camera permission, model loading, and exact track shutdown, while WebKit exercised the worker fallback boundary. The installed native relay reported a warmed CUDA provider on an NVIDIA GeForce RTX 3090 and passed a CC0 static-image protocol plus a repeated native benchmark. Those are relay and static-image facts, not post-fix physical-hand ergonomics. A real screen recording showed the rendered UI recognizing open-palm state and pinch ratios between 0.22 and 0.28, while also exposing the old preview-boundary usability failure that the full-canvas control plane addresses. A controlled allowlisted packet completed the full approval and explicit-SEND path, received a Resend provider ID, and was reported delivered by Resend. The public no-signup environment remains preview-only to prevent anonymous email abuse. ChatGPT built-in-browser Site Tools, post-fix physical iPhone and real-hand interaction quality, cross-network WebRTC, and TURN behavior remain unverified.
+Current browser evidence is narrower than the complete source surface. Two authenticated browser contexts passed Supabase collaboration and peer-to-peer media with live local and remote tracks. A paid `gpt-realtime-2.1` session heard a controlled audio fixture, invoked the narrow `create_board` tool, and produced the canonical voice receipt. Real OpenAI image interpretation passed through an injected standards-shaped `document.modelContext`, preserving the sketch beside a validated structured visual. Earlier browser YOLO and native CUDA evidence belongs to the superseded combined AGPL build and does not verify the current MIT browser engine. The current MediaPipe-only release still requires a fresh production-browser camera lifecycle and physical-hand rehearsal. A real screen recording previously showed the UI recognizing open-palm state and pinch ratios between 0.22 and 0.28 while also exposing the old preview-boundary usability failure that the full-canvas control plane addresses; that recording is not current-engine proof. A controlled allowlisted packet completed the full approval and explicit-SEND path, received a Resend provider ID, and was reported delivered by Resend. The public no-signup environment remains preview-only to prevent anonymous email abuse. ChatGPT built-in-browser Site Tools, post-fix physical iPhone and real-hand interaction quality, current MediaPipe target-browser behavior, cross-network media, and TURN behavior remain unverified.
 
 The [verification ledger](docs/verification-ledger.md) distinguishes:
 
@@ -393,7 +384,8 @@ Mouse, keyboard, touch, and named buttons remain the guaranteed interaction base
 
 ## License
 
-[GNU Affero General Public License v3.0 only](LICENSE) © 2026 Daniel Romitelli.
-See the [Corresponding Source](SOURCE.md) manifest and
-[third-party notices](THIRD_PARTY_NOTICES.md) for the embedded hand-pose model
-and runtime provenance.
+[MIT License](LICENSE) © 2026 Daniel Romitelli. See the application
+[source and license boundary](SOURCE.md) and
+[third-party notices](THIRD_PARTY_NOTICES.md). The optional private GPU relay is
+a separately distributed service and is not licensed or bundled as part of
+this application repository.

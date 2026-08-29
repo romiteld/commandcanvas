@@ -39,9 +39,8 @@ An optional meeting filmstrip lets up to four room members start peer-to-peer au
 - Supabase Postgres for rooms, semantic objects, immutable receipts, packet snapshots, send requests, and vision-admission records
 - Supabase Realtime Presence for connected participants and Broadcast for high-frequency cursors and compact revision notifications
 - Browser WebRTC for an opt-in small-room meeting filmstrip, with signaling isolated on `room-media:<room-id>`
-- Pinned YOLO26 Hand Pose exported to a same-origin 320×320 FP16 ONNX model, with ONNX Runtime Web and exactly 21 keypoints
-- An installed optional native ONNX Runtime CUDA relay at `hands.autolensai.com`, selected only after explicit camera-upload consent; local YOLO remains the fallback
-- A visibly labeled MediaPipe recovery detector that is attempted only after a YOLO initialization or runtime failure
+- MediaPipe Hand Landmarker with exactly 21 landmarks, running locally in a browser worker with a same-model in-page recovery path
+- An optional separately operated private CUDA relay, selected only after explicit camera-upload consent and always recoverable to local MediaPipe
 - OpenAI `gpt-realtime-2.1` over WebRTC for opt-in continuous voice, with a narrower tool catalog and durable paid-session admission limits
 - OpenAI Responses image input with strict structured output for sketch interpretation
 - Vercel Functions for authenticated mutation, vision, and packet boundaries
@@ -49,9 +48,11 @@ An optional meeting filmstrip lets up to four room members start peer-to-peer au
 
 Local hand tracking keeps camera frames in the browser. If a person explicitly
 enables the private-GPU option, bounded newest-only JPEG/WebP frames go only to
-`hands.autolensai.com` while Hand input is active. The relay returns semantic
-landmarks, does not retain raw frames, and falls back to local YOLO when it is
-unavailable. Camera frames never enter ChatGPT, OpenAI, Supabase, or WebMCP.
+the configured private relay while Hand input is active. The relay returns
+semantic landmarks, does not retain raw frames, and falls back to local MediaPipe when it is
+unavailable. The MIT application does not distribute that service, its model,
+or its GPU operations source. Camera frames never enter ChatGPT, OpenAI,
+Supabase, or WebMCP.
 
 All input paths converge on one architecture:
 
@@ -128,7 +129,7 @@ An additional browser constraint was experimental WebMCP lifecycle behavior. Com
 - Reversible, attributable canvas mutations
 - Modifier and touch-friendly multi-selection, semantic grouping and ungrouping, 15-degree rotation, and shared undo/redo
 - Nested semantic frames whose descendants move and rotate through one canonical mutation
-- YOLO index-fingertip drawing, one-hand pinch grab, two-hand pinch resize, open-palm focus or restore, side-edge recoverable trash, and bottom-dock minimize
+- MediaPipe index-fingertip drawing, one-hand pinch grab, two-hand pinch resize, open-palm focus or restore, side-edge recoverable trash, and bottom-dock minimize
 - A full-canvas hand control plane that maps a comfortable central camera region across the workspace, with the camera preview reduced to a sensor check
 - Local open-palm canvas pan, two-hand canvas zoom, and visible target, open, pinch, held, resizing, panning, and zoom feedback
 - Optional consented CUDA hand-pose inference with bounded newest-frame transport, semantic-only results, no raw retention, and automatic local fallback
@@ -148,4 +149,4 @@ The immediate next work is measured real-hand calibration across webcams and lig
 
 ## Honest verification boundary
 
-The repository’s `docs/verification-ledger.md` separates automated evidence, named browser evidence, live-service evidence, unverified integrations, and deliberate cuts. The integrated gates cover the complete current TypeScript suite, generated workers, the optimized application build, non-GPU relay contracts, and reversible edge operations without relying on a stale total in this description. Controlled browser runs verified two-browser Supabase collaboration and peer-to-peer media, a paid `gpt-realtime-2.1` provider session, real vision through an injected standards-shaped `document.modelContext`, real local YOLO worker inference, camera lifecycle, and one allowlisted Resend packet through the full approval and explicit-SEND path. The installed private relay separately returned ready CUDA capabilities and 21 landmarks from a CC0 static hand image. A real screen recording showed the UI recognizing open palm and pinch ratios between 0.22 and 0.28, but post-fix physical-hand ergonomics remain unverified. The public no-signup environment remains preview-only. ChatGPT built-in-browser Site Tools, post-fix physical iPhone interaction, cross-network media, and TURN behavior remain unverified.
+The repository’s `docs/verification-ledger.md` separates automated evidence, named browser evidence, live-service evidence, unverified integrations, and deliberate cuts. Earlier local YOLO/browser and native CUDA evidence belongs to the superseded combined AGPL build; it does not prove the current MIT browser engine. The current source and generated-asset checks verify the MediaPipe-only browser boundary, but a fresh exact-release production camera lifecycle and physical-hand rehearsal are still required. Controlled runs separately verified two-browser Supabase collaboration and peer-to-peer media, a paid `gpt-realtime-2.1` provider session, real vision through an injected standards-shaped `document.modelContext`, and one allowlisted Resend packet through the full approval and explicit-SEND path. The public no-signup environment remains preview-only. ChatGPT built-in-browser Site Tools, post-fix physical iPhone interaction, cross-network media, and TURN behavior remain unverified.

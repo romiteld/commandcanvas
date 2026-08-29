@@ -3,7 +3,10 @@ import { isAbsolute } from "node:path";
 
 import { expect, test } from "@playwright/test";
 
-import { YOLO_HAND_POSE_MODEL_URL } from "../lib/gesture/yolo-hand-pose-detector";
+import {
+  MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL,
+  MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
+} from "../lib/gesture/spatial-vision-engine";
 
 import {
   captureCreatedRoom,
@@ -50,11 +53,7 @@ test("starts the local hand detector from a real browser camera stream and relea
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("response", (response) => {
     const url = response.url();
-    if (
-      url.includes("/workers/yolo-hand-pose.js") ||
-      url.includes("/onnxruntime/") ||
-      new URL(url).pathname === YOLO_HAND_POSE_MODEL_URL
-    )
+    if (isMediaPipeHandEngineAsset(url))
       cameraResponses.push({ url, status: response.status() });
   });
 
@@ -70,7 +69,11 @@ test("starts the local hand detector from a real browser camera stream and relea
       page.getByText("Hand input ready · local only").last(),
     ).toBeVisible({ timeout: 60_000 });
     await expect(page.getByText("READY · show one hand")).toBeVisible();
-    await expect(page.getByText("Engine YOLO26 Hand Pose")).toBeVisible();
+    await expect(
+      page.locator(
+        `[data-vision-engine="${MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID}"]`,
+      ),
+    ).toHaveText("Engine MediaPipe Hand Landmarker");
 
     await expect(
       page.getByRole("complementary", { name: "System status drawer" }),
@@ -126,7 +129,7 @@ test("starts the local hand detector from a real browser camera stream and relea
     expect(
       cameraResponses.some(
         ({ url, status }) =>
-          new URL(url).pathname === "/workers/yolo-hand-pose.js" &&
+          new URL(url).pathname === "/workers/hand-landmarker.js" &&
           status === 200,
       ),
     ).toBe(true);
@@ -136,7 +139,7 @@ test("starts the local hand detector from a real browser camera stream and relea
     expect(
       cameraResponses.some(
         ({ url, status }) =>
-          new URL(url).pathname === YOLO_HAND_POSE_MODEL_URL &&
+          url.startsWith(MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL) &&
           status >= 200 &&
           status < 400,
       ),
@@ -180,3 +183,11 @@ test("starts the local hand detector from a real browser camera stream and relea
     if (roomId) await deleteHostedRoom(page, roomId);
   }
 });
+
+function isMediaPipeHandEngineAsset(url: string) {
+  return (
+    url.includes("/workers/hand-landmarker.js") ||
+    url.includes("/mediapipe/wasm/") ||
+    url.startsWith(MEDIA_PIPE_HAND_LANDMARKER_MODEL_URL)
+  );
+}
