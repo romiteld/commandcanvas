@@ -284,6 +284,10 @@ const TWO_HAND_LOSS_GRACE_MS = 300;
 const ROTATION_DEADBAND_DEGREES = 4.5;
 const MIN_TRANSFORM_SCALE = 0.25;
 const MAX_TRANSFORM_SCALE = 4;
+const MIN_OBJECT_WIDTH = 160;
+const MIN_OBJECT_HEIGHT = 80;
+const MAX_OBJECT_WIDTH = 2_000;
+const MAX_OBJECT_HEIGHT = 1_400;
 const LOG_SCALE_ALPHA = 0.65;
 const EDGE_ZONE_PX = 64;
 const EDGE_DWELL_MS = 100;
@@ -360,8 +364,6 @@ export function reduceSpatialGesture(
   if (current.phase === "drawing") return endStroke(current);
   if (current.phase === "lost_grace")
     return reduceLostGrace(current, mapped, scene, policy);
-  if (ownsObject(current) && inputIsUnsafe(mapped))
-    return enterLostGrace(current, timestampOf(mapped), true);
   if (ownsObject(current))
     return reduceOwnedObject(current, mapped, scene, policy);
   if (mapped.mode === "idle") return empty();
@@ -444,6 +446,11 @@ function reducePinchPendingOrAcquire(
   if (inputIsUnsafe(input)) return empty();
   const timestamp = requiredTimestamp(input.timestamp);
   const ownerTrackId = input.reliability?.trackId ?? "legacy-primary";
+  if (
+    state.pinchPending &&
+    state.pinchPending.ownerTrackId !== ownerTrackId
+  )
+    return { state, effects: [] };
   const objectId = state.pinchPending?.objectId ?? state.candidate?.objectId ?? null;
   const startedAt = state.pinchPending?.startedAt ?? timestamp;
   const stable =
@@ -528,6 +535,10 @@ function reduceOwnedObject(
       : releaseOwnedObject(state, input, scene, policy);
   if (input.mode === "bimanual_pinch")
     return reduceOwnedBimanual(state, input, scene);
+  const inputTrackId = input.reliability?.trackId ?? "legacy-primary";
+  if (inputTrackId !== state.held.ownerTrackId) return { state, effects: [] };
+  if (inputIsUnsafe(input))
+    return enterLostGrace(state, timestampOf(input), true);
   if (state.phase === "transforming_two" && input.mode === "pinch")
     return enterLostGrace(state, timestampOf(input), false);
   if (state.phase === "two_hand_pending" && input.mode === "pinch")
@@ -618,11 +629,17 @@ function reduceOwnedBimanual(
   if (!input.hands || input.hands.some((hand) => !isTrusted(hand)))
     return enterLostGrace(state, timestampOf(input), true);
   const owner = input.hands.find(({ trackId }) => trackId === state.held?.ownerTrackId);
-  const second = input.hands.find(({ trackId }) => trackId !== state.held?.ownerTrackId);
-  if (!owner || !second) return enterLostGrace(state, timestampOf(input), true);
+  if (!owner) return enterLostGrace(state, timestampOf(input), true);
   const timestamp = requiredTimestamp(input.timestamp);
-  if (state.phase === "transforming_two" && state.transform)
+  if (state.phase === "transforming_two" && state.transform) {
+    const storedSecond = input.hands.find(
+      ({ trackId }) => trackId === state.transform?.secondTrackId,
+    );
+    if (!storedSecond) return enterLostGrace(state, timestamp, true);
     return updateTwoHandTransform(state, input, scene);
+  }
+  const second = input.hands.find(({ trackId }) => trackId !== state.held?.ownerTrackId);
+  if (!second) return enterLostGrace(state, timestamp, true);
   const secondWorld = normalizedToWorld(second.pointer, scene);
   if (
     distanceToObjectRectangle(secondWorld, heldRectangle(state.held)) *
@@ -647,7 +664,13 @@ function reduceOwnedBimanual(
       },
       effects: [],
     };
-  const geometry = bimanualGeometry(input, scene);
+  const geometry = bimanualGeometryForTracks(
+    input,
+    scene,
+    owner.trackId,
+    second.trackId,
+  );
+  if (!geometry) return enterLostGrace(state, timestamp, true);
   if (geometry.span < MIN_BIMANUAL_SPAN_PX)
     return { state: { ...state, phase: "two_hand_pending", secondHand }, effects: [] };
   const transform: SpatialTwoHandTransform = {
@@ -679,17 +702,34 @@ function updateTwoHandTransform(
   scene: SpatialGestureScene,
 ): SpatialGestureTransition {
   if (!state.held || !state.transform) return empty();
-  const geometry = bimanualGeometry(input, scene);
+  const geometry = bimanualGeometryForTracks(
+    input,
+    scene,
+    state.transform.ownerTrackId,
+    state.transform.secondTrackId,
+  );
+  if (!geometry) return enterLostGrace(state, timestampOf(input), true);
   if (!Number.isFinite(geometry.span) || geometry.span <= 0)
     return enterLostGrace(state, timestampOf(input), true);
+  const baseline = state.transform.baselineObject;
+  const minimumScale = Math.max(
+    MIN_TRANSFORM_SCALE,
+    MIN_OBJECT_WIDTH / baseline.width,
+    MIN_OBJECT_HEIGHT / baseline.height,
+  );
+  const maximumScale = Math.min(
+    MAX_TRANSFORM_SCALE,
+    MAX_OBJECT_WIDTH / baseline.width,
+    MAX_OBJECT_HEIGHT / baseline.height,
+  );
   const boundedScale = clamp(
     geometry.span / state.transform.baselineSpan,
-    MIN_TRANSFORM_SCALE,
-    MAX_TRANSFORM_SCALE,
+    minimumScale,
+    maximumScale,
   );
   const targetLogScale = Math.log(boundedScale);
   const smoothedLogScale =
-    boundedScale === MIN_TRANSFORM_SCALE || boundedScale === MAX_TRANSFORM_SCALE
+    boundedScale === minimumScale || boundedScale === maximumScale
       ? targetLogScale
       : state.transform.smoothedLogScale +
         (targetLogScale - state.transform.smoothedLogScale) * LOG_SCALE_ALPHA;
@@ -701,7 +741,6 @@ function updateTwoHandTransform(
   );
   const appliedRotation =
     Math.abs(rotationDelta) < ROTATION_DEADBAND_DEGREES ? 0 : rotationDelta;
-  const baseline = state.transform.baselineObject;
   const width = rounded(baseline.width * scale);
   const height = rounded(baseline.height * scale);
   const currentTransform: SpatialTransform = {
@@ -719,7 +758,7 @@ function updateTwoHandTransform(
     ),
     width,
     height,
-    rotation: rounded(baseline.rotation + appliedRotation),
+    rotation: rounded(normalizeAngle(baseline.rotation + appliedRotation)),
   };
   const held: SpatialHeldState = {
     ...state.held,
@@ -830,10 +869,15 @@ function reduceLostGrace(
   if (!state.held || !state.loss) return empty();
   const timestamp = timestampOf(input);
   if (timestamp - state.loss.startedAt > TWO_HAND_LOSS_GRACE_MS)
-    return {
-      state: createInitialSpatialGestureState(),
-      effects: [{ type: "preview.clear" as const }],
-    };
+    return finalizeLostGrace(state, input, scene, policy);
+  if (input.mode === "idle" && input.reason === "release")
+    return finalizeLostGrace(state, input, scene, policy);
+  if (
+    input.mode !== "idle" &&
+    input.mode !== "bimanual_pinch" &&
+    (input.reliability?.trackId ?? "legacy-primary") !== state.held.ownerTrackId
+  )
+    return { state, effects: [] };
   if (input.mode === "idle" || inputIsUnsafe(input)) return { state, effects: [] };
   if (input.mode === "bimanual_pinch" && state.transform) {
     if (!input.hands || input.hands.some((hand) => !isTrusted(hand)))
@@ -864,6 +908,26 @@ function reduceLostGrace(
       policy,
     );
   return { state, effects: [] };
+}
+
+function finalizeLostGrace(
+  state: SpatialGestureState,
+  input: SpatialGestureInput,
+  scene: SpatialGestureScene,
+  policy: SpatialGesturePolicy,
+) {
+  return releaseOwnedObject(
+    {
+      ...state,
+      phase: "held_one",
+      loss: null,
+      edgeAction: null,
+      motionHistory: [],
+    },
+    input,
+    scene,
+    policy,
+  );
 }
 
 function reduceBlankPalm(
@@ -1229,8 +1293,25 @@ function bimanualGeometry(
         normalizedToWorld(hand.motionPointer ?? hand.pointer, scene),
       )
     : input.pointers.map((pointer) => normalizedToWorld(pointer, scene));
-  const first = points[0]!;
-  const second = points[1]!;
+  return geometryFromPoints(points[0]!, points[1]!);
+}
+
+function bimanualGeometryForTracks(
+  input: Extract<SpatialGestureInput, { mode: "bimanual_pinch" }>,
+  scene: SpatialGestureScene,
+  ownerTrackId: string,
+  secondTrackId: string,
+) {
+  const owner = input.hands?.find(({ trackId }) => trackId === ownerTrackId);
+  const second = input.hands?.find(({ trackId }) => trackId === secondTrackId);
+  if (!owner || !second) return null;
+  return geometryFromPoints(
+    normalizedToWorld(owner.motionPointer ?? owner.pointer, scene),
+    normalizedToWorld(second.motionPointer ?? second.pointer, scene),
+  );
+}
+
+function geometryFromPoints(first: CanvasPoint, second: CanvasPoint) {
   return {
     centroid: {
       x: rounded((first.x + second.x) / 2),
@@ -1409,9 +1490,15 @@ function objectTransform(
   return {
     x: object.x,
     y: object.y,
-    width: object.width,
-    height: object.minimized ? 62 : object.height,
-    rotation: object.rotation ?? 0,
+    width: rounded(clamp(object.width, MIN_OBJECT_WIDTH, MAX_OBJECT_WIDTH)),
+    height: rounded(
+      clamp(
+        object.minimized ? 62 : object.height,
+        MIN_OBJECT_HEIGHT,
+        MAX_OBJECT_HEIGHT,
+      ),
+    ),
+    rotation: rounded(normalizeAngle(object.rotation ?? 0)),
   };
 }
 
@@ -1427,8 +1514,20 @@ function maximizeTransform(scene: SpatialGestureScene): SpatialTransform {
   return {
     x: rounded(-scene.viewport.x / scene.viewport.scale),
     y: rounded(-scene.viewport.y / scene.viewport.scale),
-    width: rounded(scene.bounds.width / scene.viewport.scale),
-    height: rounded(scene.bounds.height / scene.viewport.scale),
+    width: rounded(
+      clamp(
+        scene.bounds.width / scene.viewport.scale,
+        MIN_OBJECT_WIDTH,
+        MAX_OBJECT_WIDTH,
+      ),
+    ),
+    height: rounded(
+      clamp(
+        scene.bounds.height / scene.viewport.scale,
+        MIN_OBJECT_HEIGHT,
+        MAX_OBJECT_HEIGHT,
+      ),
+    ),
     rotation: 0,
   };
 }

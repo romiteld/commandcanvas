@@ -10,6 +10,7 @@ import {
   createInitialSpatialGestureState,
   reduceSpatialGesture,
   spatialGestureCompletionToCommand,
+  type SpatialGestureCompletionEffect,
   type SpatialGestureInput,
   type SpatialGestureScene,
   type SpatialGestureState,
@@ -236,6 +237,58 @@ function acknowledgeEdge(
   );
 }
 
+function applyGestureCompletion(
+  completion: SpatialGestureCompletionEffect,
+  spatialScene: SpatialGestureScene,
+) {
+  const source = spatialScene.objects.find(({ id }) => id === completion.objectId);
+  if (!source) throw new Error("completion fixture needs its source object");
+  const canvas: CanvasState = {
+    roomId: "room-command-boundary",
+    revision: 1,
+    objects: {
+      [source.id]: {
+        id: source.id,
+        roomId: "room-command-boundary",
+        type: "note",
+        title: "Gesture command boundary",
+        x: source.x,
+        y: source.y,
+        width: source.width,
+        height: source.height,
+        zIndex: source.zIndex,
+        payload: { text: "Canonical transform", tone: "coral" },
+        minimized: source.minimized,
+        pinned: source.pinned,
+        createdBy: "participant-host",
+        createdAt: "2026-08-29T12:00:00.000Z",
+        updatedAt: "2026-08-29T12:00:00.000Z",
+        deletedAt: null,
+        version: 1,
+        metadata: {},
+        rotation: source.rotation ?? 0,
+        parentId: null,
+      },
+    },
+    receipts: [],
+    undoneReceiptIds: [],
+    redoReceiptIds: [],
+  };
+  return applyCanvasCommand(
+    canvas,
+    {
+      id: `command-${completion.type}-${completion.objectId}`,
+      roomId: canvas.roomId,
+      baseRevision: canvas.revision,
+      issuedAt: "2026-08-29T12:00:01.000Z",
+      actor: { id: "participant-host", displayName: "Danny", type: "human" },
+      source: "gesture",
+      command: spatialGestureCompletionToCommand(completion),
+    },
+    { createId: (prefix) => `${prefix}-canonical` },
+  );
+}
+
 describe("authoritative spatial gesture reducer", () => {
   it("uses the clamped magnetic radius, 100 ms dwell, and an 80 ms 12px contender threshold", () => {
     const unrotatedA = { ...scene.objects[0], rotation: 0 };
@@ -348,6 +401,108 @@ describe("authoritative spatial gesture reducer", () => {
     );
   });
 
+  it("does not let another track complete the owner's pinch-pending acquisition", () => {
+    const entered = step(
+      createInitialSpatialGestureState(),
+      point(0.25, 0.35, 1_000),
+    );
+    const pending = step(
+      entered.state,
+      pinch(0.25, 0.35, 1_050, { reliability: reliability("hand-a") }),
+    );
+    const wrongTrack = step(
+      pending.state,
+      pinch(0.25, 0.35, 1_150, { reliability: reliability("hand-b") }),
+    );
+
+    expect(wrongTrack.state).toMatchObject({
+      phase: "pinch_pending",
+      pinchPending: { objectId: "note-a", ownerTrackId: "hand-a" },
+      held: null,
+    });
+    expect(wrongTrack.effects).toEqual([]);
+  });
+
+  it("ignores a non-owner track instead of moving the held object", () => {
+    const acquired = held();
+    const wrongTrack = step(
+      acquired.state,
+      pinch(0.5, 0.5, 1_200, { reliability: reliability("hand-b") }),
+    );
+
+    expect(wrongTrack.state).toMatchObject({
+      phase: "held_one",
+      held: {
+        ownerTrackId: "hand-a",
+        currentTransform: { x: 200, y: 150, width: 200, height: 120, rotation: 10 },
+      },
+    });
+    expect(wrongTrack.effects).toEqual([]);
+  });
+
+  it("ignores a non-owner point release and preserves held ownership", () => {
+    const acquired = held();
+    const wrongTrack = step(
+      acquired.state,
+      point(0.3, 0.4, 1_200, { reliability: reliability("hand-b") }),
+    );
+
+    expect(wrongTrack.state).toMatchObject({
+      phase: "held_one",
+      held: { objectId: "note-a", ownerTrackId: "hand-a" },
+    });
+    expect(wrongTrack.effects).toEqual([]);
+  });
+
+  it("does not let a non-owner track finalize the owner's lost-grace transform", () => {
+    const acquired = held();
+    const moved = step(acquired.state, pinch(0.3, 0.4, 1_150));
+    const lost = step(moved.state, {
+      mode: "idle",
+      timestamp: 1_180,
+      reason: "loss",
+    });
+    const wrongTrack = step(
+      lost.state,
+      point(0.3, 0.4, 1_220, { reliability: reliability("hand-b") }),
+    );
+
+    expect(wrongTrack.state).toMatchObject({
+      phase: "lost_grace",
+      held: { ownerTrackId: "hand-a" },
+    });
+    expect(wrongTrack.effects).not.toContainEqual(
+      expect.objectContaining({ type: "object.complete_transform" }),
+    );
+  });
+
+  it("does not let a non-owner track build or arm side-throw evidence", () => {
+    const acquired = held();
+    const first = step(
+      acquired.state,
+      pinch(0.25, 0.4, 1_200, { reliability: reliability("hand-b") }),
+    );
+    const middle = step(
+      first.state,
+      pinch(0.16, 0.4, 1_250, { reliability: reliability("hand-b") }),
+    );
+    const edge = step(
+      middle.state,
+      pinch(0.05, 0.4, 1_300, {
+        reliability: reliability("hand-b"),
+        edgePreviewVisible: true,
+      }),
+    );
+
+    expect(edge.state).toMatchObject({
+      phase: "held_one",
+      held: { objectId: "note-a", ownerTrackId: "hand-a" },
+      edgeAction: null,
+    });
+    expect(edge.state.motionHistory).toHaveLength(1);
+    expect(edge.effects).toEqual([]);
+  });
+
   it("moves from the stable motion point so pinch closure does not jump the object", () => {
     const entered = step(
       createInitialSpatialGestureState(),
@@ -375,6 +530,32 @@ describe("authoritative spatial gesture reducer", () => {
       type: "object.preview_transform",
       objectId: "note-a",
       transform: { x: 240, y: 162, width: 200, height: 120, rotation: 10 },
+    });
+  });
+
+  it("canonicalizes a stale object's transform before emitting an acquisition preview", () => {
+    const staleScene: SpatialGestureScene = {
+      ...scene,
+      objects: [
+        {
+          ...scene.objects[0]!,
+          width: 80,
+          height: 40,
+          rotation: 540,
+        },
+      ],
+    };
+    const stable = hoverStable(staleScene);
+    const acquired = step(
+      stable.state,
+      pinch(0.25, 0.35, 1_110),
+      staleScene,
+    );
+
+    expect(acquired.effects).toContainEqual({
+      type: "object.preview_transform",
+      objectId: "note-a",
+      transform: { x: 200, y: 150, width: 160, height: 80, rotation: 180 },
     });
   });
 
@@ -449,6 +630,72 @@ describe("authoritative spatial gesture reducer", () => {
     });
   });
 
+  it("canonicalizes two-hand geometry by stored track IDs when detector order reverses", () => {
+    const upgraded = transforming();
+    const ownerPoint = { x: 0.3, y: 0.4 };
+    const secondPoint = { x: 0.62, y: 0.48 };
+    const ordered = step(
+      upgraded.state,
+      bimanual(ownerPoint, secondPoint, 1_340),
+    );
+    const reversed = step(
+      upgraded.state,
+      bimanual(secondPoint, ownerPoint, 1_340, {
+        hands: [
+          {
+            pointer: secondPoint,
+            motionPointer: secondPoint,
+            ...reliability("hand-b"),
+          },
+          {
+            pointer: ownerPoint,
+            motionPointer: ownerPoint,
+            ...reliability("hand-a"),
+          },
+        ],
+      }),
+    );
+
+    expect(reversed.state.phase).toBe("transforming_two");
+    expect(
+      reversed.effects.find((effect) => effect.type === "object.preview_transform"),
+    ).toEqual(
+      ordered.effects.find((effect) => effect.type === "object.preview_transform"),
+    );
+  });
+
+  it("enters loss grace when another track replaces the stored second hand", () => {
+    const upgraded = transforming();
+    const ownerPoint = { x: 0.3, y: 0.4 };
+    const replacementPoint = { x: 0.62, y: 0.48 };
+    const replaced = step(
+      upgraded.state,
+      bimanual(ownerPoint, replacementPoint, 1_340, {
+        hands: [
+          {
+            pointer: ownerPoint,
+            motionPointer: ownerPoint,
+            ...reliability("hand-a"),
+          },
+          {
+            pointer: replacementPoint,
+            motionPointer: replacementPoint,
+            ...reliability("hand-c"),
+          },
+        ],
+      }),
+    );
+
+    expect(replaced.state).toMatchObject({
+      phase: "lost_grace",
+      held: { ownerTrackId: "hand-a" },
+      transform: { ownerTrackId: "hand-a", secondTrackId: "hand-b" },
+    });
+    expect(replaced.effects).not.toContainEqual(
+      expect.objectContaining({ type: "object.preview_transform" }),
+    );
+  });
+
   it("previews centroid translation, clamped scale, and deadbanded rotation", () => {
     const upgraded = transforming();
     const smallRotation = step(
@@ -500,7 +747,141 @@ describe("authoritative spatial gesture reducer", () => {
     );
     if (!tinyPreview || tinyPreview.type !== "object.preview_transform")
       throw new Error("expected tiny transform preview");
-    expect(tinyPreview.transform.width / 200).toBe(0.25);
+    expect(tinyPreview.transform).toMatchObject({ width: 160, height: 96 });
+  });
+
+  it("emits only canonical transforms and applies min, max, rotate, minimize, and maximize through the command engine", () => {
+    const minimumBase = transforming();
+    const minimumPreview = step(
+      minimumBase.state,
+      bimanual({ x: 0.324, y: 0.35 }, { x: 0.326, y: 0.35 }, 1_340),
+    );
+    const minimumRelease = step(minimumPreview.state, point(0.324, 0.35, 1_360));
+    const minimumCompletion = minimumRelease.effects.find(
+      (effect) => effect.type === "object.complete_transform",
+    );
+    if (!minimumCompletion || minimumCompletion.type !== "object.complete_transform")
+      throw new Error("expected minimum transform completion");
+    expect(minimumCompletion.transform).toMatchObject({ width: 160, height: 96 });
+    const minimumApplied = applyGestureCompletion(minimumCompletion, scene);
+    expect(minimumApplied.ok).toBe(true);
+
+    const maximumScene: SpatialGestureScene = {
+      ...scene,
+      objects: [
+        {
+          ...scene.objects[0]!,
+          width: 1_000,
+          height: 800,
+          rotation: 0,
+        },
+      ],
+    };
+    const maximumBase = transforming(maximumScene);
+    const maximumPreview = step(
+      maximumBase.state,
+      bimanual({ x: 0, y: 0 }, { x: 1, y: 1 }, 1_340),
+      maximumScene,
+    );
+    const maximumRelease = step(
+      maximumPreview.state,
+      point(0.3, 0.4, 1_360),
+      maximumScene,
+    );
+    const maximumCompletion = maximumRelease.effects.find(
+      (effect) => effect.type === "object.complete_transform",
+    );
+    if (!maximumCompletion || maximumCompletion.type !== "object.complete_transform")
+      throw new Error("expected maximum transform completion");
+    expect(maximumCompletion.transform).toMatchObject({ width: 1_750, height: 1_400 });
+    const maximumApplied = applyGestureCompletion(maximumCompletion, maximumScene);
+    expect(maximumApplied.ok).toBe(true);
+
+    const rotatedScene: SpatialGestureScene = {
+      ...scene,
+      objects: [{ ...scene.objects[0]!, rotation: 170 }],
+    };
+    const rotatedBase = transforming(rotatedScene);
+    const rotatedPreview = step(
+      rotatedBase.state,
+      bimanual({ x: 0.3, y: 0.3 }, { x: 0.6, y: 0.5 }, 1_340),
+      rotatedScene,
+    );
+    const rotatedRelease = step(
+      rotatedPreview.state,
+      point(0.3, 0.3, 1_360),
+      rotatedScene,
+    );
+    const rotatedCompletion = rotatedRelease.effects.find(
+      (effect) => effect.type === "object.complete_transform",
+    );
+    if (!rotatedCompletion || rotatedCompletion.type !== "object.complete_transform")
+      throw new Error("expected rotated transform completion");
+    expect(rotatedCompletion.transform.rotation).toBeCloseTo(-168.2, 1);
+    const rotatedApplied = applyGestureCompletion(rotatedCompletion, rotatedScene);
+    expect(rotatedApplied.ok).toBe(true);
+
+    const bottomHeld = held(scene, 0.25, 0.35, 2_000);
+    const bottomEntered = step(bottomHeld.state, pinch(0.25, 0.94, 2_200));
+    const bottomDwelled = step(bottomEntered.state, pinch(0.25, 0.94, 2_320));
+    const bottomVisible = step(
+      bottomDwelled.state,
+      pinch(0.25, 0.94, 2_330, { edgePreviewVisible: true }),
+    );
+    const bottomRelease = step(bottomVisible.state, point(0.25, 0.94, 2_340));
+    const minimizeCompletion = bottomRelease.effects.find(
+      (effect) =>
+        effect.type === "object.complete_edge_action" &&
+        effect.action === "minimize",
+    );
+    if (!minimizeCompletion || minimizeCompletion.type !== "object.complete_edge_action")
+      throw new Error("expected minimize completion");
+    const minimizeApplied = applyGestureCompletion(minimizeCompletion, scene);
+    expect(minimizeApplied.ok).toBe(true);
+
+    const maximizeScene: SpatialGestureScene = {
+      ...scene,
+      bounds: { left: 0, top: 0, width: 3_000, height: 2_000 },
+      viewport: { x: 250, y: -100, scale: 0.5 },
+      objects: [{ ...scene.objects[0]!, x: 900, y: 1_500 }],
+    };
+    const topHeld = held(maximizeScene);
+    const topEntered = step(
+      topHeld.state,
+      pinch(0.25, 0.02, 3_200),
+      maximizeScene,
+    );
+    const topDwelled = step(
+      topEntered.state,
+      pinch(0.25, 0.02, 3_320),
+      maximizeScene,
+    );
+    const topVisible = step(
+      topDwelled.state,
+      pinch(0.25, 0.02, 3_330, { edgePreviewVisible: true }),
+      maximizeScene,
+    );
+    const topRelease = step(
+      topVisible.state,
+      point(0.25, 0.02, 3_340),
+      maximizeScene,
+    );
+    const maximizeCompletion = topRelease.effects.find(
+      (effect) =>
+        effect.type === "object.complete_edge_action" &&
+        effect.action === "maximize",
+    );
+    if (!maximizeCompletion || maximizeCompletion.type !== "object.complete_edge_action")
+      throw new Error("expected maximize completion");
+    expect(maximizeCompletion.transform).toEqual({
+      x: -500,
+      y: 200,
+      width: 2_000,
+      height: 1_400,
+      rotation: 0,
+    });
+    const maximizeApplied = applyGestureCompletion(maximizeCompletion, maximizeScene);
+    expect(maximizeApplied.ok).toBe(true);
   });
 
   it("keeps a two-hand transform in asymmetric loss grace and commits exactly once on intentional release", () => {
@@ -532,6 +913,74 @@ describe("authoritative spatial gesture reducer", () => {
       .toHaveLength(1);
     const after = step(released.state, point(0.31, 0.41, 1_500));
     expect(after.effects).not.toContainEqual(
+      expect.objectContaining({ type: "object.complete_transform" }),
+    );
+  });
+
+  it("commits the last trusted moved transform once on Task 2 terminal safe release", () => {
+    const acquired = held();
+    const moved = step(acquired.state, pinch(0.3, 0.4, 1_150));
+    const lost = step(moved.state, {
+      mode: "idle",
+      timestamp: 1_180,
+      reason: "loss",
+    });
+    const terminalRelease = step(lost.state, {
+      mode: "idle",
+      timestamp: 1_400,
+      reason: "release",
+    });
+
+    expect(terminalRelease.effects).toContainEqual({
+      type: "object.complete_transform",
+      objectId: "note-a",
+      transform: { x: 250, y: 180, width: 200, height: 120, rotation: 10 },
+    });
+    expect(terminalRelease.effects).not.toContainEqual(
+      expect.objectContaining({ type: "object.complete_edge_action" }),
+    );
+    expect(terminalRelease.state.phase).toBe("idle");
+
+    const duplicate = step(terminalRelease.state, {
+      mode: "idle",
+      timestamp: 1_420,
+      reason: "release",
+    });
+    expect(duplicate.effects).not.toContainEqual(
+      expect.objectContaining({ type: "object.complete_transform" }),
+    );
+  });
+
+  it("commits the last trusted moved transform once when loss grace expires", () => {
+    const acquired = held();
+    const moved = step(acquired.state, pinch(0.3, 0.4, 1_150));
+    const lost = step(moved.state, {
+      mode: "idle",
+      timestamp: 1_180,
+      reason: "loss",
+    });
+    const expired = step(lost.state, {
+      mode: "idle",
+      timestamp: 1_481,
+      reason: "loss",
+    });
+
+    expect(expired.effects).toContainEqual({
+      type: "object.complete_transform",
+      objectId: "note-a",
+      transform: { x: 250, y: 180, width: 200, height: 120, rotation: 10 },
+    });
+    expect(expired.effects).not.toContainEqual(
+      expect.objectContaining({ type: "object.complete_edge_action" }),
+    );
+    expect(expired.state.phase).toBe("idle");
+
+    const duplicate = step(expired.state, {
+      mode: "idle",
+      timestamp: 1_500,
+      reason: "release",
+    });
+    expect(duplicate.effects).not.toContainEqual(
       expect.objectContaining({ type: "object.complete_transform" }),
     );
   });
