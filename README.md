@@ -52,13 +52,17 @@ The dated hybrid verification record is
 
 ## Publication boundary
 
-The public corresponding-source repository is
-<https://github.com/romiteld/commandcanvas-hand-relay>. The verified CUDA image
-was built from service source commit
-[`9f652a67dbe2c824ee68f7985ab13bb0af56ae6f`](https://github.com/romiteld/commandcanvas-hand-relay/commit/9f652a67dbe2c824ee68f7985ab13bb0af56ae6f),
-with the dated host evidence recorded by the next documentation commit. Runtime
-credentials, host configuration, and deployment state are intentionally not
-stored in this repository.
+This checkout is local and unpublished. No public corresponding-source
+repository or public source-commit link exists yet.
+
+The public service must remain disabled until a public corresponding-source
+repository exists and both this README and [`SOURCE.md`](SOURCE.md) link the
+exact source commit used to build the image that would be served publicly. A
+local commit hash or dated local verification record is not a substitute for
+that public source link.
+
+Runtime credentials, host configuration, and deployment state are
+intentionally not stored in this repository.
 
 ## License
 

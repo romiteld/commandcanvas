@@ -1,20 +1,23 @@
 # Corresponding Source
 
-CommandCanvas Hand Relay is released under the GNU Affero General Public
+CommandCanvas Hand Relay is licensed under the GNU Affero General Public
 License, version 3 only. This local repository contains the relay's service,
 container configuration, operations, tests, pinned model artifacts, dependency
 locks, and source manifest.
 
-## Public corresponding source
+## Publication status
 
-- Repository: <https://github.com/romiteld/commandcanvas-hand-relay>
-- Verified CUDA image source:
-  <https://github.com/romiteld/commandcanvas-hand-relay/commit/9f652a67dbe2c824ee68f7985ab13bb0af56ae6f>
-- Dated local CUDA evidence:
-  <https://github.com/romiteld/commandcanvas-hand-relay/blob/main/docs/local-cuda-verification-2026-08-29.md>
+This checkout is local and unpublished. It is not currently a public
+corresponding-source repository, and no public source-commit link exists.
 
-The verified image was built from the exact source commit above. A newer or
-older branch is not a substitute for the source of running relay bytes.
+The public service must remain disabled until a public corresponding-source
+repository exists and this file links the exact source commit used to build the
+image that would be served publicly. A branch reference, local commit hash, or
+local verification record is not a substitute for that public source link.
+
+The dated CUDA evidence remains a local verification record:
+[`docs/local-cuda-verification-2026-08-29.md`](docs/local-cuda-verification-2026-08-29.md).
+It does not establish public source availability.
 
 Private credentials, host configuration, firewall state, and deployment data
 are not source artifacts. `services/hand-relay/.env.example` records only the
