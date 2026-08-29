@@ -764,3 +764,25 @@ This checkpoint is a draft for the current source candidate. It does not replace
   browser-distributed YOLO/ONNX implementation and the native service source
   from the MIT application. The optional private GPU protocol remains, with
   local MediaPipe as the no-consent and failure path.
+
+## Current policy correction after Checkpoint 22
+
+The following release policy supersedes older checkpoint descriptions without
+rewriting their historical evidence:
+
+- The no-signup `/demo` room is always preview-only for meeting-packet email. It
+  never calls Resend, regardless of standard-room provider configuration.
+- An authenticated host may submit one exact-email standard-room invitation
+  through the server-side Resend path after durable admission. Invitation
+  recipients do not use an address allowlist. Missing or rejected provider
+  configuration leaves an honest copy-link fallback.
+- Standard-room meeting packets use a separate Resend path and retain the exact
+  packet-recipient allowlist, immutable approval snapshot, and explicit host
+  **SEND** gate. Provider submission and provider-confirmed delivery are recorded
+  as different states.
+- The optional private GPU relay remains disabled for public release until its
+  separate AGPL repository and exact public source commit are published and
+  linked. Local MediaPipe remains the MIT application fallback.
+- WebMCP Site Tools are exposed to supported agent hosts. Native Chrome,
+  ChatGPT's built-in browser, and in-page Realtime voice remain separate
+  verification boundaries.

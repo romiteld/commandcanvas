@@ -314,6 +314,24 @@
   height: 100%;
 }
 
+.workspaceEvidence {
+  position: absolute;
+  z-index: 5;
+  top: calc(10.5% + 7px);
+  right: 2.6%;
+  max-width: 48%;
+  padding: 4px 7px;
+  border: 1px solid rgb(218 222 234 / 82%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 88%);
+  color: #68728a;
+  font-size: clamp(6px, 0.54vw, 8px);
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: right;
+  backdrop-filter: blur(7px);
+}
+
 .workspaceTopbar {
   height: 10.5%;
   min-height: 48px;
@@ -550,7 +568,7 @@
 .receiptDetail dl div { display: grid; grid-template-columns: 0.75fr 1.25fr; gap: 7px; font-size: 12px; }
 .receiptDetail dt { color: #626c80; }
 .receiptDetail dd { margin: 0; color: #3e4963; font-weight: 650; }
-.verifiedBadge { width: fit-content; display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border-radius: 999px; background: #e4f8f1; color: #0b6f58; font-size: 12px; font-weight: 760; }
+.recordedBadge { width: fit-content; display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border-radius: 999px; background: #e4f8f1; color: #0b6f58; font-size: 12px; font-weight: 760; }
 
 .finalCta { min-height: 185px; margin-bottom: 42px; padding: clamp(32px, 5vw, 52px) clamp(30px, 6vw, 76px); display: flex; align-items: center; justify-content: space-between; gap: 32px; overflow: hidden; border-radius: 20px; background: radial-gradient(circle at 72% -10%, rgb(181 94 255 / 85%), transparent 36%), linear-gradient(125deg, #172b8d, #3023ba 54%, #7c2fe4); color: white; box-shadow: 0 24px 55px rgb(47 36 161 / 24%); }
 .finalCta > div:first-child { max-width: 520px; }

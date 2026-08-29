@@ -1,6 +1,6 @@
 # CommandCanvas
 
-CommandCanvas is a shared spatial workspace where people, remote collaborators, the optional Live voice agent, and ChatGPT manipulate the same collection of semantic objects. Rough sketches and their spoken explanation become separate schema-validated visuals without destroying the source, and every supported canvas mutation remains attributable and reversible whether it was initiated by a human, participant, or agent.
+CommandCanvas is a shared spatial workspace where people, remote collaborators, the optional Live voice agent, and, where Site Tools are supported, ChatGPT manipulate the same collection of semantic objects. Rough sketches and their spoken explanation become separate schema-validated visuals without destroying the source, and every supported canvas mutation remains attributable and reversible whether it was initiated by a human, participant, or agent.
 
 **Product landing page:** <https://commandcanvas.vercel.app>
 
@@ -14,7 +14,7 @@ Standard rooms use a six-digit Supabase Email OTP. A host can send an exact-emai
 
 ## The product thesis
 
-The canvas is not a document and the agent is not a detached chat panel. Notes, boards, schedules, sketches, diagrams, and charts are typed application objects with stable identities, spatial geometry, versions, and payload schemas. WebMCP gives ChatGPT bounded tools over those same live objects and the same selected state that human participants see.
+The canvas is not a document and the agent is not a detached chat panel. Notes, boards, schedules, sketches, diagrams, and charts are typed application objects with stable identities, spatial geometry, versions, and payload schemas. WebMCP exposes bounded Site Tools over those same live objects and selected state to supported agent hosts. Where ChatGPT Site Tools are available, ChatGPT can use those capabilities against the page and session that human participants see.
 
 That makes the core interaction possible:
 
@@ -50,7 +50,7 @@ The current validated output kinds are a generic diagram, architecture diagram, 
 4. Keep the rough sketch visible beside the auto-selected, schema-validated visual. Move, resize, rotate, pin, minimize, restore, trash, recover, undo, and redo through named controls.
 5. Turn on **Select many**, choose two objects, group them into a semantic frame, move the frame, then ungroup it.
 6. Click **Prepare meeting packet**, review the exact content and recipient, then approve it.
-7. Click **Request email send**. The agent or site stages the action; only the host can press **SEND**. Without an allowlisted Resend configuration the result is explicitly **Preview only: not sent**.
+7. Click **Request email send**. The agent or site stages the action; only the host can press **SEND**. The no-signup demo always records **Preview only: not sent** and never calls Resend.
 8. Click **Copy invite** and open the link in a private window to exercise Supabase Presence, cursor Broadcast, a participant mutation, and the opt-in peer-to-peer meeting filmstrip.
 
 Use **Reset demo** to remove the current hosted demo room and return to a clean deterministic room.
@@ -64,7 +64,7 @@ The site registers ten stable tools through `document.modelContext.registerTool(
 | Tool | Capability | Human control |
 | --- | --- | --- |
 | `get_canvas_state` | Read a bounded semantic projection of current objects, selection, and recent receipts | Read-only |
-| `create_object` | Create one validated note, board, schedule, sketch, or diagram | Canonical mutation + receipt |
+| `create_object` | Create one validated note, task board, schedule, sketch, diagram or chart, frame, data table, reference card, or meeting card | Canonical mutation + receipt |
 | `transform_object` | Move, resize, or rotate one unpinned object | Canonical mutation + receipt |
 | `set_object_state` | Pin, unpin, minimize, or restore | Canonical mutation + receipt |
 | `discard_object` | Move an object to recoverable trash | Reversible; no permanent delete |
@@ -83,7 +83,7 @@ The compact canvas projection has a hard 32,768-byte envelope. It prioritizes se
 These are distinct agent surfaces with different authority:
 
 - **Continuous in-page voice** opens a regular `gpt-realtime-2.1` WebRTC session only after the user presses **Start**. It uses a narrower set of canvas tools for note, board, schedule, sketch, selected-object state, local focus, grouping, ungrouping, rotation, undo, redo, recoverable trash, thought capture, and sketch transformation. Saying **Start a new thought** creates and selects one note card, then completed user turns are serialized into that card as speech-to-text until **Finish thought**. Boundary commands and assistant speech are never appended. Each accepted turn is a version-checked canonical mutation with a receipt and the same Undo behavior as other object edits. While thought capture is active, unrelated canvas tools are refused so command speech cannot leak into the note. Completed user speech outside thought capture is bounded and can accompany the next selected-sketch transformation as untrusted explanatory context. A spoken discard request is explicit and recoverable through the same receipt and Undo path; it never permanently deletes data. Live voice cannot manage rooms, approve packets, stage email, or send email. Except for local-only focus, a successful voice tool result means the action was submitted to the canonical command path; the shared receipt is the completion record.
-- **ChatGPT Site Tools** use the ten WebMCP tools registered on the same live page through `document.modelContext`. They can read current canvas state, mutate semantic objects, organize objects, transform a sketch, prepare a packet, and stage an approved send. Normal room, phase, role, revision, and human-confirmation guards remain authoritative.
+- **ChatGPT Site Tools**, where supported by the current ChatGPT host rollout, use the ten WebMCP tools registered on the same live page through `document.modelContext`. They can read current canvas state, mutate semantic objects, organize objects, transform a sketch, prepare a packet, and stage an approved send. Normal room, phase, role, revision, and human-confirmation guards remain authoritative. Native Chrome discovery and in-page Realtime voice are separate verification boundaries.
 
 Live voice is an optional paid provider path with a separate server-only key, durable admission limits, and a ten-minute session ceiling. It is not a substitute for WebMCP, and a verified Realtime provider session is not evidence that ChatGPT or Chrome discovered the Site Tools catalog.
 
@@ -92,7 +92,7 @@ Live voice is an optional paid provider path with a separate server-only key, du
 ```text
 Pointer · Touch · Stylus · Typed command · Continuous GPT Realtime voice
 Local or consented private-GPU hand landmarks · Collaborator
-ChatGPT Site Tools through WebMCP
+Supported agent hosts through WebMCP Site Tools
                                   │
                                   ▼
                          Semantic intent
@@ -134,7 +134,7 @@ The camera panel includes a session-local self-check. It records point and pinch
 
 Hand tracking is local by default. MediaPipe processes camera frames inside the browser and exposes only semantic landmarks to the canvas command layer.
 
-The installed private CUDA relay is a separate, explicit opt-in. Only while **Use private GPU hand tracking** is on and Hand input is active, the browser may encode one bounded JPEG or WebP frame at a time and send it to the configured relay origin. That separately distributed service runs the pinned GPU hand-pose model, does not retain raw frames, and returns only bounded semantic landmarks. Turning consent off, disabling Hand input, hiding or leaving the page, or a relay failure closes the remote path and restores local MediaPipe processing. Camera frames are never sent to ChatGPT, OpenAI, Supabase, or WebMCP in either mode. Every camera action has pointer and button equivalents.
+A separately operated private CUDA relay may be configured as an explicit opt-in. Only while **Use private GPU hand tracking** is on and Hand input is active may the browser encode one bounded JPEG or WebP frame at a time and send it to the configured relay origin. That separately distributed service runs the pinned GPU hand-pose model, does not retain raw frames, and returns only bounded semantic landmarks. Turning consent off, disabling Hand input, hiding or leaving the page, or a relay failure closes the remote path and restores local MediaPipe processing. Camera frames are never sent to ChatGPT, OpenAI, Supabase, or WebMCP in either mode. Every camera action has pointer and button equivalents. The relay repository is not public at this checkpoint, so public deployments must keep the path disabled until the exact AGPL source commit is published and linked.
 
 Continuous voice has a separate and explicit privacy boundary. Microphone audio travels to OpenAI only while the user-visible **Live voice** session is on, and assistant audio returns over that WebRTC connection. The server creates the provider call with a server-only key; no provider credential reaches the browser. Typed commands remain available when continuous voice is disabled or unavailable. The older reviewed browser-transcription control may use the browser vendor's speech service under that browser's policy, but it never executes a transcript until the user presses **Run**.
 
@@ -161,15 +161,15 @@ Prepare → edit recipients → inspect exact content → approve
         → immutable packet activity receipt
 ```
 
-Cancellation is durable and idempotent. A cancelled request cannot later execute. Resend delivery is enabled only when the API key, verified sender, and recipient allowlist are all configured; otherwise no provider call occurs.
+Cancellation is durable and idempotent. A cancelled request cannot later execute. The no-signup `/demo` room is always preview-only and never calls Resend. Eligible standard rooms can submit a packet only when the API key, verified sender, approved recipient snapshot, exact recipient allowlist, and explicit host authorization are all present; otherwise the application records an honest preview-only or failed outcome without a delivery claim.
 
 ## Passwordless rooms, invitations, and email boundaries
 
 CommandCanvas has three distinct email paths:
 
 1. **Supabase Auth OTP:** `/meet` calls `signInWithOtp` and verifies the user-entered six-digit token with `verifyOtp({ type: "email" })`. Supabase Auth sends this mail through its configured mailer. If Resend is selected as custom SMTP, its SMTP credential lives in Supabase Auth configuration and never enters the browser.
-2. **Meeting invitation:** an authenticated host creates an exact-email, participant-only invitation. The database stores only the SHA-256 token digest and normalized email, applies durable issuance limits, and accepts it once in a transaction. The Next.js server may submit that invitation through the Resend HTTPS API only when the invitation recipient is separately allowlisted. Otherwise the UI provides an honest copy-link fallback.
-3. **Meeting packet:** after the host reviews and approves an immutable content and recipient snapshot, WebMCP or the site may stage a send request. Only an explicit host **SEND** authorizes the Resend HTTPS API call. Packet recipients use a separate allowlist from meeting invitations.
+2. **Meeting invitation:** an authenticated host creates an exact-email, participant-only invitation. The database stores only the SHA-256 token digest and normalized email, applies durable issuance limits, and accepts it once in a transaction. The host-authorized Next.js server may submit that exact invitation through the Resend HTTPS API when its provider configuration is present. Invitation recipients do not use an address allowlist. Missing or rejected provider configuration leaves the host with an honest copy-link fallback.
+3. **Meeting packet:** after the host reviews and approves an immutable content and recipient snapshot, WebMCP or the site may stage a send request. Only an explicit host **SEND** authorizes the Resend HTTPS API call. Packet recipients must match the server-side packet allowlist. The no-signup demo remains preview-only regardless of provider configuration.
 
 Invitation links use `/meet#invite=...`. The fragment is never sent in an HTTP request. The client reads it once, scrubs it before constructing a Supabase client or making application calls, and presents the normal email OTP flow. Acceptance compares the verified top-level Supabase Auth email with the invitation email and atomically creates participant membership while consuming the invitation.
 
@@ -218,10 +218,11 @@ REALTIME_VOICE_ENABLED=false
 OPENAI_REALTIME_API_KEY=
 NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION=false
 COMMANDCANVAS_PUBLIC_URL=https://your-commandcanvas.example
+COMMANDCANVAS_INVITE_TOKEN_SECRET=
 RESEND_API_KEY=
 RESEND_FROM=
+RESEND_WEBHOOK_SECRET=
 COMMANDCANVAS_EMAIL_ALLOWLIST=
-COMMANDCANVAS_INVITE_EMAIL_ALLOWLIST=
 PRIVATE_HAND_RELAY_ENABLED=false
 PRIVATE_HAND_RELAY_ORIGIN=https://hands.example.com
 PRIVATE_HAND_RELAY_SIGNING_KEY=
@@ -282,21 +283,24 @@ and [custom SMTP](https://supabase.com/docs/guides/auth/auth-smtp).
 ```dotenv
 RESEND_API_KEY=replace_me
 RESEND_FROM=CommandCanvas <verified-sender@example.com>
+RESEND_WEBHOOK_SECRET=replace_me
 COMMANDCANVAS_EMAIL_ALLOWLIST=allowed-one@example.com,allowed-two@example.com
-COMMANDCANVAS_INVITE_EMAIL_ALLOWLIST=allowed-one@example.com,allowed-two@example.com
 COMMANDCANVAS_PUBLIC_URL=https://your-commandcanvas.example
+COMMANDCANVAS_INVITE_TOKEN_SECRET=replace_with_a_server_only_secret
 ```
 
-Meeting-packet recipients and room-invitation recipients use separate exact
-allowlists. An invitation is durably admitted before Resend is called. Missing,
-mismatched, rejected, or failed delivery configuration produces an explicit
-preview-only or failed result plus a copyable secure link; it never claims the
-email was sent.
+An authenticated host can submit an exact-email room invitation without an
+address allowlist after the invitation is durably admitted. Meeting-packet
+recipients use `COMMANDCANVAS_EMAIL_ALLOWLIST` and also require an immutable
+approval snapshot plus explicit host **SEND**. The no-signup demo never calls
+Resend. Missing, mismatched, rejected, or failed configuration produces an
+explicit copy-link, preview-only, or failed result; it never claims that mail
+was sent or delivered.
 
 ### Optional private CUDA relay
 
 The four `PRIVATE_HAND_RELAY_*` values in the application environment authorize
-short-lived sessions from CommandCanvas to an installed relay. They never
+short-lived sessions from CommandCanvas to a separately configured relay. They never
 belong in `NEXT_PUBLIC_*` values. The service, model, container, and edge
 operations are deliberately excluded from this MIT application repository; the
 application-side boundary and pending public source-link requirement are in

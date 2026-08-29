@@ -81,4 +81,16 @@ describe("CommandCanvas landing page", () => {
       container.querySelectorAll("img[data-real-hand-capture]"),
     ).toHaveLength(2);
   });
+
+  it("labels illustrative evidence and supported-host Site Tools without a verification claim", () => {
+    render(<Home />);
+
+    expect(
+      screen.getByText("Product illustration using real hand-capture frames"),
+    ).toBeVisible();
+    expect(screen.getByText("WebMCP Site Tools exposed")).toBeVisible();
+    expect(screen.getByText(/available where supported/i)).toBeVisible();
+    expect(screen.getByText("Recorded")).toBeVisible();
+    expect(screen.queryByText(/^verified$/i)).not.toBeInTheDocument();
+  });
 });

@@ -4,6 +4,14 @@
   "author": "Daniel Romitelli",
   "license": "MIT",
   "private": true,
+  "homepage": "https://commandcanvas.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/romiteld/commandcanvas.git"
+  },
+  "bugs": {
+    "url": "https://github.com/romiteld/commandcanvas/issues"
+  },
   "engines": {
     "node": ">=22.14.0 <23"
   },

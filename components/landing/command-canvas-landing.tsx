@@ -113,10 +113,13 @@ function FlowDiagram({ rough = false }: { rough?: boolean }) {
 function HeroWorkspace() {
   return (
     <figure className={styles.heroWorkspace}>
-      <figcaption className={styles.srOnly}>
-        A CommandCanvas sprint planning room with live collaborators, goals, tasks,
-        a schedule, a rough sketch becoming a structured visual, voice input,
-        hand tracking, and attributed activity receipts.
+      <figcaption className={styles.workspaceEvidence}>
+        <span>Product illustration using real hand-capture frames</span>
+        <span className={styles.srOnly}>
+          A CommandCanvas sprint planning room with live collaborators, goals,
+          tasks, a schedule, a rough sketch becoming a structured visual, voice
+          input, hand tracking, and attributed activity receipts.
+        </span>
       </figcaption>
       <div aria-hidden="true">
         <div className={styles.workspaceTopbar}>
@@ -247,7 +250,7 @@ const capabilityCards: Array<{ icon: IconName; tone: string; title: string; text
   { icon: "hand", tone: "tealTone", title: "Hand input", text: "Draw, sketch, grab, move, resize, minimize, or discard with your hand." },
   { icon: "receipt", tone: "orangeTone", title: "Shared receipts", text: "Supported canvas changes are attributed, visible, and reversible when technically reasonable." },
   { icon: "people", tone: "blueTone", title: "Live collaboration", text: "People join one room and edit the same spatial workspace in real time." },
-  { icon: "spark", tone: "purpleTone", title: "WebMCP ready", text: "Agents act through structured tools to create, organize, and summarize." },
+  { icon: "spark", tone: "purpleTone", title: "WebMCP Site Tools exposed", text: "Available where supported, agents use structured page tools to create, organize, and summarize." },
 ];
 
 const workflowCards: Array<{ title: string; text: string; visual: ReactNode }> = [
@@ -392,7 +395,7 @@ function TransformationStory() {
               <div><dt>Method</dt><dd>Pointer</dd></div>
               <div><dt>Session</dt><dd>Sprint planning</dd></div>
             </dl>
-            <span className={styles.verifiedBadge}><Icon name="check" size={12} /> Verified</span>
+            <span className={styles.recordedBadge}><Icon name="check" size={12} /> Recorded</span>
           </div>
         </div>
       </div>

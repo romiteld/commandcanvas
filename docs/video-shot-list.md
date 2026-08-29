@@ -36,12 +36,14 @@ Resend invitation API, and the Resend packet API are one mechanism.
 
 **Do:** If the physical-hand rehearsal passed, show the MediaPipe sensor preview briefly, close the system drawer, and let the **HAND CONTROL · FULL CANVAS** indicator establish that the workspace, not the preview, is the interaction plane. Switch the on-canvas hand mode to **Draw** and trace three rough bars labeled Q1, Q2, and Q3 directly on the main canvas with the tracked index fingertip. Otherwise use pointer or touch. While drawing, say **These bars are quarterly signups: Q1 is 12, Q2 is 19, and Q3 is 31.** Pause so that completed explanation becomes bounded sketch context. Finish and select the single multi-stroke sketch.
 
-If the private CUDA relay is part of the take, show the explicit **Use private
-GPU hand tracking** consent and the visible CUDA provider label. State that
-bounded frames go to the named private relay only while the option is active,
-semantic landmarks return, raw frames are not retained, and local MediaPipe is the
-fallback. Do not present the static-image CUDA benchmark as a physical-hand
-latency measurement.
+Keep the private CUDA relay out of the 90-second core unless its separate AGPL
+repository and exact source commit are public and the exact deployed
+browser-to-relay-to-visible-canvas path has just passed. If that gate passes,
+use it only as supporting footage: show the explicit **Use private GPU hand
+tracking** consent and visible CUDA provider label, state that bounded frames
+go only to the named relay while the option is active, and show automatic local
+MediaPipe fallback. Do not present the static-image CUDA benchmark as a
+physical-hand latency measurement.
 
 **Say as a separate command:** “Make this sketch professional.”
 
@@ -51,7 +53,7 @@ latency measurement.
 
 ## 0:46–0:59: shared spatial state
 
-**Do:** Pinch-grab and move the structured chart, then use two hands to resize it if the physical-camera rehearsal passed. Otherwise use the exact pointer controls. Turn on **Select many**, group two objects, move the frame, then undo and redo. In browser B, add a note.
+**Do:** Pinch-grab and move the structured chart, then use two hands to resize it if the physical-camera rehearsal passed. Otherwise use the exact pointer controls. In browser B, add a note. Keep grouping, ungrouping, and history controls for supporting footage so the real collaborator and shared receipt remain readable in this short segment.
 
 **Visible reaction:** Both browsers converge. The receipt rail identifies Daniel, Sarah, and agent actions by revision and source.
 
@@ -83,7 +85,7 @@ latency measurement.
 
 **Picture:** Fast split shot of the ten-tool catalog and `document.modelContext.registerTool(...)` implementation.
 
-**Line:** “Ten Site Tools operate against this same live page, with schemas, cancellation, phase guards, and site-controlled approval.”
+**Line:** “CommandCanvas exposes ten Site Tools against this same live page, with schemas, cancellation, phase guards, and site-controlled approval wherever the agent host supports them.”
 
 ## 1:27–1:30: close
 
