@@ -94,10 +94,19 @@ function toCameraObservation(
 ): HandTrackingObservation {
   if (observation.mode === "idle") return observation;
   if (observation.mode !== "bimanual_pinch")
-    return { ...observation, pointer: toCameraPoint(observation.pointer) };
-  const hands = observation.hands.map((hand) => ({
+    return {
+      ...observation,
+      pointer: toCameraPoint(observation.pointer),
+      trackId: observation.trackId ?? "hand-a",
+      prediction: observation.prediction ?? { predicted: false },
+      trackingState: observation.trackingState ?? "tracked",
+    };
+  const hands = observation.hands.map((hand, index) => ({
     ...hand,
     pointer: toCameraPoint(hand.pointer),
+    trackId: hand.trackId ?? `hand-${index === 0 ? "a" : "b"}`,
+    prediction: hand.prediction ?? { predicted: false },
+    trackingState: hand.trackingState ?? "tracked",
   })) as unknown as typeof observation.hands;
   return {
     ...observation,
@@ -151,6 +160,32 @@ function bimanual(
     center: { x: (leftX + rightX) / 2, y: 0.4 },
     span: rightX - leftX,
     timestamp,
+  });
+}
+
+function acquireAt(
+  hand: ReturnType<typeof fakeHandController>,
+  x: number,
+  y: number,
+  startedAt = 1_000,
+) {
+  hand.emit({
+    mode: "point",
+    pointer: { x, y },
+    confidence: 0.97,
+    timestamp: startedAt,
+  });
+  hand.emit({
+    mode: "point",
+    pointer: { x, y },
+    confidence: 0.97,
+    timestamp: startedAt + 100,
+  });
+  hand.emit({
+    mode: "pinch",
+    pointer: { x, y },
+    confidence: 0.97,
+    timestamp: startedAt + 110,
   });
 }
 
@@ -275,14 +310,7 @@ describe("CommandCanvas hand-only navigation", () => {
     const user = await enableHand(hand);
     await user.click(screen.getByRole("button", { name: "Select raised-card" }));
 
-    act(() =>
-      hand.emit({
-        mode: "pinch",
-        pointer: { x: 0.3, y: 0.4 },
-        confidence: 0.97,
-        timestamp: 1_000,
-      }),
-    );
+    act(() => acquireAt(hand, 0.3, 0.4));
 
     expect(
       screen.getByRole("button", { name: "Select raised-card" }).closest("article"),
@@ -306,14 +334,25 @@ describe("CommandCanvas hand-only navigation", () => {
     await enableHand(hand);
 
     act(() => {
-      hand.emit({ mode: "pinch", pointer: { x: 0.055, y: 0.4 }, confidence: 0.97, timestamp: 1_000 });
-      hand.emit({ mode: "pinch", pointer: { x: 0.05, y: 0.4 }, confidence: 0.97, timestamp: 1_016 });
+      acquireAt(hand, 0.055, 0.4);
+      hand.emit({ mode: "pinch", pointer: { x: 0.05, y: 0.4 }, confidence: 0.97, timestamp: 1_126 });
     });
     expect(container.querySelector(".gesture-edge-discard-left")).not.toHaveClass("is-armed");
 
-    act(() => hand.emit({ mode: "idle", timestamp: 1_032 }));
-    act(() => bimanual(hand, 0.02, 0.18, 1_100));
-    expect(screen.getByText("RESIZING")).toBeVisible();
+    act(() =>
+      hand.emit({
+        mode: "point",
+        pointer: { x: 0.05, y: 0.4 },
+        confidence: 0.97,
+        timestamp: 1_140,
+      }),
+    );
+    act(() => {
+      acquireAt(hand, 0.055, 0.4, 1_300);
+      bimanual(hand, 0.02, 0.18, 1_420);
+      bimanual(hand, 0.02, 0.18, 1_520);
+    });
+    expect(screen.getByText("RESIZE")).toBeVisible();
     expect(container.querySelector(".gesture-edge-targets")).toBeNull();
   });
 });

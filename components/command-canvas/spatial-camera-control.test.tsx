@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -666,6 +666,49 @@ describe("SpatialCameraControl", () => {
       mode: "idle",
       timestamp: 1_020,
     });
+  });
+
+  it("uses a full-canvas calibration overlay then a draggable hideable sensor PiP", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    const onObservation = vi.fn();
+    const { container } = render(
+      <SpatialCameraControl
+        createController={() => fake.controller}
+        onObservation={onObservation}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => fake.setStatus({ state: "ready" }));
+    await user.click(screen.getByRole("button", { name: "Open hand calibration" }));
+
+    expect(container.querySelector(".spatial-camera-control")).toHaveClass(
+      "is-calibrating-full-canvas",
+    );
+    await user.click(screen.getByRole("button", { name: "Return to full canvas" }));
+    const control = container.querySelector<HTMLElement>(".spatial-camera-control");
+    expect(control).toHaveClass("is-sensor-pip");
+
+    act(() =>
+      fake.emit({
+        mode: "point",
+        pointer: { x: 0.3, y: 0.4 },
+        confidence: 0.95,
+        timestamp: 4_000,
+      }),
+    );
+    expect(onObservation).toHaveBeenCalledOnce();
+
+    const drag = screen.getByRole("button", { name: "Move hand sensor preview" });
+    fireEvent.pointerDown(drag, { pointerId: 8, clientX: 40, clientY: 40 });
+    fireEvent.pointerMove(drag, { pointerId: 8, clientX: 100, clientY: 120 });
+    fireEvent.pointerUp(drag, { pointerId: 8, clientX: 100, clientY: 120 });
+    expect(control?.style.getPropertyValue("--sensor-pip-x")).toBe("60px");
+    expect(control?.style.getPropertyValue("--sensor-pip-y")).toBe("80px");
+
+    await user.click(screen.getByRole("button", { name: "Hide hand sensor preview" }));
+    expect(control).toHaveClass("is-sensor-pip-hidden");
+    expect(screen.getByRole("button", { name: "Show hand sensor preview" })).toBeVisible();
   });
 
   it("presents the camera as a sensor preview rather than a movement boundary", () => {

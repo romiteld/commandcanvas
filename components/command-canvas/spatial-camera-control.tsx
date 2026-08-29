@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
 import type {
   HandTrackingController,
@@ -63,7 +70,16 @@ export function SpatialCameraControl({
   const [lastObservation, setLastObservation] =
     useState<HandTrackingObservation | null>(null);
   const [videoAspectRatio, setVideoAspectRatio] = useState(4 / 3);
+  const [sensorPreviewVisible, setSensorPreviewVisible] = useState(true);
+  const [sensorPipOffset, setSensorPipOffset] = useState({ x: 0, y: 0 });
   const videoRef = useRef<HTMLVideoElement>(null);
+  const sensorPipDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    initialX: number;
+    initialY: number;
+  } | null>(null);
   const spatialModeStartedRef = useRef(false);
   const spatialModeRequestedRef = useRef(false);
   const calibrationOpenRef = useRef(false);
@@ -115,6 +131,7 @@ export function SpatialCameraControl({
         spatialModeStartedRef.current = true;
         spatialModeRequestedRef.current = false;
         setPreviewExpanded(false);
+        setSensorPreviewVisible(true);
         spatialModeStartedHandlerRef.current?.();
       }
       if (next.state !== "ready") {
@@ -238,6 +255,7 @@ export function SpatialCameraControl({
   }
 
   const active = status.state === "starting" || status.state === "ready";
+  const sensorPip = status.state === "ready" && !previewExpanded;
   const trackedHands =
     lastObservation?.mode === "bimanual_pinch"
       ? lastObservation.hands
@@ -247,10 +265,45 @@ export function SpatialCameraControl({
 
   return (
     <section
-      className={`spatial-camera-control${previewExpanded ? " is-expanded" : ""}`}
+      className={`spatial-camera-control${
+        previewExpanded
+          ? " is-expanded is-calibrating-full-canvas"
+          : sensorPip
+            ? " is-sensor-pip"
+            : ""
+      }${sensorPip && !sensorPreviewVisible ? " is-sensor-pip-hidden" : ""}`}
       aria-label="Hand input"
+      style={
+        {
+          "--sensor-pip-x": `${sensorPipOffset.x}px`,
+          "--sensor-pip-y": `${sensorPipOffset.y}px`,
+        } as CSSProperties
+      }
     >
       <div className="spatial-camera-heading">
+        {sensorPip ? (
+          <button
+            type="button"
+            className="sensor-pip-drag-handle"
+            aria-label="Move hand sensor preview"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              sensorPipDragRef.current = {
+                pointerId: event.pointerId,
+                startX: event.clientX,
+                startY: event.clientY,
+                initialX: sensorPipOffset.x,
+                initialY: sensorPipOffset.y,
+              };
+              event.currentTarget.setPointerCapture?.(event.pointerId);
+            }}
+            onPointerMove={moveSensorPip}
+            onPointerUp={finishSensorPipDrag}
+            onPointerCancel={finishSensorPipDrag}
+          >
+            <span aria-hidden="true">⠿</span>
+          </button>
+        ) : null}
         <div>
           <strong>Hand input</strong>
           <span role="status" aria-live="polite">
@@ -258,6 +311,19 @@ export function SpatialCameraControl({
           </span>
         </div>
         <div className="spatial-camera-actions">
+          {sensorPip ? (
+            <button
+              type="button"
+              aria-label={
+                sensorPreviewVisible
+                  ? "Hide hand sensor preview"
+                  : "Show hand sensor preview"
+              }
+              onClick={() => setSensorPreviewVisible((visible) => !visible)}
+            >
+              {sensorPreviewVisible ? "Hide" : "Show"}
+            </button>
+          ) : null}
           <button
             type="button"
             aria-label={
@@ -576,6 +642,25 @@ export function SpatialCameraControl({
       ) : null}
     </section>
   );
+
+  function moveSensorPip(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = sensorPipDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    setSensorPipOffset({
+      x: drag.initialX + event.clientX - drag.startX,
+      y: drag.initialY + event.clientY - drag.startY,
+    });
+  }
+
+  function finishSensorPipDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = sensorPipDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    moveSensorPip(event);
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    sensorPipDragRef.current = null;
+  }
 }
 
 const HAND_CONNECTIONS = [

@@ -3311,10 +3311,6 @@ body {
     0 30px 72px rgb(35 58 118 / 28%);
   transform: scale(1.018) rotate(-0.25deg);
   transition:
-    left 64ms linear,
-    top 64ms linear,
-    width 64ms linear,
-    height 64ms linear,
     box-shadow 120ms ease,
     border-color 120ms ease,
     transform 120ms ease;
@@ -3562,7 +3558,6 @@ body {
   color: var(--cobalt);
   pointer-events: none;
   transform: translate(-50%, -50%);
-  transition: left 64ms linear, top 64ms linear;
   will-change: left, top;
 }
 

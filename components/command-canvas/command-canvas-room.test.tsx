@@ -129,10 +129,25 @@ function cameraObservationForCanvasObservation(
 ): HandTrackingObservation {
   if (observation.mode === "idle") return observation;
   if (observation.mode !== "bimanual_pinch")
-    return { ...observation, pointer: cameraPointer(observation.pointer) };
-  const hands = observation.hands.map((hand) => ({
+    return {
+      ...observation,
+      pointer: cameraPointer(observation.pointer),
+      trackId: observation.trackId ?? "hand-a",
+      prediction: observation.prediction ?? { predicted: false },
+      trackingState: observation.trackingState ?? "tracked",
+      measurements: observation.measurements
+        ? cameraMeasurements(observation.measurements)
+        : undefined,
+    };
+  const hands = observation.hands.map((hand, index) => ({
     ...hand,
     pointer: cameraPointer(hand.pointer),
+    trackId: hand.trackId ?? `hand-${index === 0 ? "a" : "b"}`,
+    prediction: hand.prediction ?? { predicted: false },
+    trackingState: hand.trackingState ?? "tracked",
+    measurements: hand.measurements
+      ? cameraMeasurements(hand.measurements)
+      : undefined,
   })) as unknown as typeof observation.hands;
   return {
     ...observation,
@@ -156,6 +171,50 @@ function cameraPointer(pointer: { x: number; y: number }) {
       pointer.y *
         (DEFAULT_HAND_ACTIVE_ZONE.bottom - DEFAULT_HAND_ACTIVE_ZONE.top),
   };
+}
+
+function cameraMeasurements(
+  measurements: NonNullable<
+    Exclude<HandTrackingObservation, { mode: "idle" | "bimanual_pinch" }>["measurements"]
+  >,
+) {
+  return {
+    ...measurements,
+    indexTip: cameraPointer(measurements.indexTip),
+    thumbTip: cameraPointer(measurements.thumbTip),
+    pinchMidpoint: cameraPointer(measurements.pinchMidpoint),
+    palmMcpCentroid: cameraPointer(measurements.palmMcpCentroid),
+  };
+}
+
+function pointAt(
+  hand: ReturnType<typeof fakeHandController>,
+  x: number,
+  y: number,
+  timestamp: number,
+) {
+  hand.emit({
+    mode: "point",
+    pointer: { x, y },
+    confidence: 0.97,
+    timestamp,
+  });
+}
+
+function acquireAt(
+  hand: ReturnType<typeof fakeHandController>,
+  x: number,
+  y: number,
+  startedAt = 1_000,
+) {
+  pointAt(hand, x, y, startedAt);
+  pointAt(hand, x, y, startedAt + 100);
+  hand.emit({
+    mode: "pinch",
+    pointer: { x, y },
+    confidence: 0.97,
+    timestamp: startedAt + 110,
+  });
 }
 
 function setCanvasBounds(
@@ -536,12 +595,8 @@ describe("CommandCanvasRoom", () => {
     expect(container.querySelector("[data-hand-cursor]")).not.toBeNull();
 
     hand.emit({ mode: "idle", timestamp: 1_008 });
-    hand.emit({
-      mode: "point",
-      pointer: { x: 0.19, y: 0.18 },
-      confidence: 0.97,
-      timestamp: 1_012,
-    });
+    pointAt(hand, 0.19, 0.18, 1_020);
+    pointAt(hand, 0.19, 0.18, 1_120);
     expect(await screen.findByText("TARGET")).toBeVisible();
     expect(
       screen
@@ -549,12 +604,11 @@ describe("CommandCanvasRoom", () => {
         .closest("article"),
     ).toHaveClass("is-hand-target");
 
-    hand.emit({ mode: "idle", timestamp: 1_014 });
     hand.emit({
       mode: "pinch",
       pointer: { x: 0.25, y: 0.18 },
       confidence: 0.97,
-      timestamp: 1_016,
+      timestamp: 1_130,
     });
 
     expect(await screen.findByText("HELD")).toBeVisible();
@@ -621,32 +675,44 @@ describe("CommandCanvasRoom", () => {
     expect(
       screen.getByRole("region", { name: "Hand interaction controls" }),
     ).toHaveTextContent("HAND CONTROL · FULL CANVAS");
+    const handControls = screen.getByRole("region", {
+      name: "Hand interaction controls",
+    });
     expect(
-      screen.getByRole("button", { name: "Open hand calibration" }),
+      within(handControls).getByRole("button", {
+        name: "Open hand calibration",
+      }),
     ).toBeVisible();
 
     await user.click(
-      screen.getByRole("button", { name: "Open hand calibration" }),
+      within(handControls).getByRole("button", {
+        name: "Open hand calibration",
+      }),
     );
 
     expect(
-      screen.getByRole("complementary", { name: "System status drawer" }),
-    ).toBeVisible();
-    expect(container.querySelector(".command-canvas-shell")).toHaveClass(
-      "is-system-open",
+      screen.queryByRole("complementary", { name: "System status drawer" }),
+    ).toBeNull();
+    expect(screen.getByRole("region", { name: "Hand input" })).toHaveClass(
+      "is-calibrating-full-canvas",
     );
+    const handInput = screen.getByRole("region", { name: "Hand input" });
     expect(
-      screen.getByRole("button", { name: "Close hand calibration" }),
+      within(handInput).getByRole("button", {
+        name: "Close hand calibration",
+      }),
     ).toBeVisible();
 
     await user.click(
-      screen.getByRole("button", { name: "Close hand calibration" }),
+      within(handInput).getByRole("button", {
+        name: "Close hand calibration",
+      }),
     );
     expect(
       screen.queryByRole("complementary", { name: "System status drawer" }),
     ).toBeNull();
-    expect(container.querySelector(".command-canvas-shell")).not.toHaveClass(
-      "is-system-open",
+    expect(screen.getByRole("region", { name: "Hand input" })).toHaveClass(
+      "is-sensor-pip",
     );
   });
 
@@ -677,8 +743,13 @@ describe("CommandCanvasRoom", () => {
       });
     });
     expect(await screen.findByText("TARGET")).toBeVisible();
+    const handControls = screen.getByRole("region", {
+      name: "Hand interaction controls",
+    });
     await user.click(
-      screen.getByRole("button", { name: "Open hand calibration" }),
+      within(handControls).getByRole("button", {
+        name: "Open hand calibration",
+      }),
     );
 
     expect(
@@ -696,9 +767,9 @@ describe("CommandCanvasRoom", () => {
       }),
     );
 
-    expect(
-      screen.getByRole("complementary", { name: "System status drawer" }),
-    ).toBeVisible();
+    expect(screen.getByRole("region", { name: "Hand input" })).toHaveClass(
+      "is-calibrating-full-canvas",
+    );
     expect(
       screen
         .getByRole("button", { name: "Select Calibration target" })
@@ -707,7 +778,12 @@ describe("CommandCanvasRoom", () => {
     expect(store.getState().canvas.receipts).toHaveLength(1);
 
     await user.click(
-      screen.getByRole("button", { name: "Close hand calibration" }),
+      within(screen.getByRole("region", { name: "Hand input" })).getByRole(
+        "button",
+        {
+          name: "Close hand calibration",
+        },
+      ),
     );
     act(() =>
       hand.emit({
@@ -793,14 +869,10 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => hand.setStatus({ state: "ready" }));
 
-    act(() =>
-      hand.emit({
-        mode: "point",
-        pointer: { x: 0.19, y: 0.35 },
-        confidence: 0.97,
-        timestamp: 1_000,
-      }),
-    );
+    act(() => {
+      pointAt(hand, 0.19, 0.35, 1_000);
+      pointAt(hand, 0.19, 0.35, 1_100);
+    });
     expect(await screen.findByText("TARGET")).toBeVisible();
 
     act(() =>
@@ -808,7 +880,7 @@ describe("CommandCanvasRoom", () => {
         mode: "pinch",
         pointer: { x: 0.12, y: 0.35 },
         confidence: 0.97,
-        timestamp: 1_016,
+        timestamp: 1_116,
       }),
     );
 
@@ -1395,7 +1467,7 @@ describe("CommandCanvasRoom", () => {
     });
   });
 
-  it("keeps drawing from a tracked index fingertip when the rest of the hand reads open", async () => {
+  it("draws from landmark 8 and treats an open palm as pen-up", async () => {
     const user = userEvent.setup();
     const hand = fakeHandController();
     const store = createCanvasStore("room-local", dependencies());
@@ -1411,29 +1483,59 @@ describe("CommandCanvasRoom", () => {
     act(() => hand.setStatus({ state: "ready" }));
     await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
 
+    const measurements = (
+      indexTip: { x: number; y: number },
+      palmMcpCentroid: { x: number; y: number },
+    ) => ({
+      indexTip,
+      thumbTip: { x: indexTip.x - 0.03, y: indexTip.y + 0.02 },
+      pinchMidpoint: { x: indexTip.x - 0.015, y: indexTip.y + 0.01 },
+      palmMcpCentroid,
+      pinchDistance: 0.08,
+      palmScale: 0.18,
+      pinchRatio: 0.44,
+      confidence: 0.94,
+      indexTipConfidence: 0.94,
+      thumbTipConfidence: 0.94,
+    });
     act(() => {
       hand.emit({
-        mode: "open_palm",
-        pointer: { x: 0.22, y: 0.3 },
+        mode: "point",
+        pointer: { x: 0.78, y: 0.76 },
+        measurements: measurements(
+          { x: 0.22, y: 0.3 },
+          { x: 0.78, y: 0.76 },
+        ),
         confidence: 0.94,
         timestamp: 1_000,
       });
       hand.emit({
+        mode: "point",
+        pointer: { x: 0.79, y: 0.75 },
+        measurements: measurements(
+          { x: 0.31, y: 0.39 },
+          { x: 0.79, y: 0.75 },
+        ),
+        confidence: 0.94,
+        timestamp: 1_016,
+      });
+      hand.emit({
         mode: "open_palm",
         pointer: { x: 0.31, y: 0.39 },
         confidence: 0.94,
-        timestamp: 1_084,
-      });
-      hand.emit({
-        mode: "pinch",
-        pointer: { x: 0.31, y: 0.39 },
-        confidence: 0.94,
-        timestamp: 1_168,
+        timestamp: 1_032,
       });
     });
 
     expect(screen.getByText("1 stroke ready")).toBeVisible();
     expect(screen.queryByRole("complementary", { name: /drawer/i })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Finish hand sketch" }));
+    const sketch = Object.values(store.getState().canvas.objects).find(
+      (object) => object.type === "sketch",
+    );
+    expect(sketch).toMatchObject({ type: "sketch", x: expect.any(Number) });
+    expect(sketch?.x).toBeLessThan(400);
+    expect(store.getState().canvas.receipts).toHaveLength(1);
   });
 
   it("keeps ten independent hand-drawn lines in one sketch without opening drawers", async () => {
@@ -1469,7 +1571,12 @@ describe("CommandCanvasRoom", () => {
           confidence: 0.96,
           timestamp: timestamp + 16,
         });
-        hand.emit({ mode: "idle", timestamp: timestamp + 32 });
+        hand.emit({
+          mode: "open_palm",
+          pointer: { x: 0.15 + index * 0.025, y: 0.24 + index * 0.02 },
+          confidence: 0.96,
+          timestamp: timestamp + 32,
+        });
       }
     });
 
@@ -1489,6 +1596,62 @@ describe("CommandCanvasRoom", () => {
       expect(objects[0].payload.strokes).toHaveLength(10);
     expect(store.getState().canvas.receipts).toHaveLength(1);
     expect(screen.queryByRole("complementary", { name: /drawer/i })).toBeNull();
+  });
+
+  it("shows an armed open-palm finish preview and commits once at 300 ms", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+
+    act(() => {
+      pointAt(hand, 0.2, 0.3, 1_000);
+      pointAt(hand, 0.3, 0.4, 1_016);
+      hand.emit({
+        mode: "open_palm",
+        pointer: { x: 0.3, y: 0.4 },
+        confidence: 0.97,
+        timestamp: 1_032,
+      });
+    });
+    expect(screen.getByText("OPEN PALM · HOLD TO FINISH 0%")).toBeVisible();
+    expect(Object.values(store.getState().canvas.objects)).toHaveLength(0);
+
+    act(() =>
+      hand.emit({
+        mode: "open_palm",
+        pointer: { x: 0.3, y: 0.4 },
+        confidence: 0.97,
+        timestamp: 1_329,
+      }),
+    );
+    expect(screen.getByText("OPEN PALM · HOLD TO FINISH 99%")).toHaveAttribute(
+      "data-palm-finish-progress",
+      "99",
+    );
+    expect(Object.values(store.getState().canvas.objects)).toHaveLength(0);
+
+    act(() =>
+      hand.emit({
+        mode: "open_palm",
+        pointer: { x: 0.3, y: 0.4 },
+        confidence: 0.97,
+        timestamp: 1_332,
+      }),
+    );
+    expect(Object.values(store.getState().canvas.objects)).toHaveLength(1);
+    expect(store.getState().canvas.receipts).toHaveLength(1);
+    expect(screen.queryByText(/OPEN PALM · HOLD TO FINISH/)).toBeNull();
   });
 
   it("erases a stroke inside the active hand-drawing session without creating another object", async () => {
@@ -1522,7 +1685,12 @@ describe("CommandCanvasRoom", () => {
           confidence: 0.96,
           timestamp: timestamp + 16,
         });
-        hand.emit({ mode: "idle", timestamp: timestamp + 32 });
+        hand.emit({
+          mode: "open_palm",
+          pointer: { x: 0.25 + index * 0.1, y: 0.35 },
+          confidence: 0.96,
+          timestamp: timestamp + 32,
+        });
       }
     });
     expect(screen.getByText("3 strokes ready")).toBeVisible();
@@ -1581,19 +1749,19 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => hand.setStatus({ state: "ready" }));
 
-    hand.emit({
-      mode: "pinch",
-      pointer: { x: 0.25, y: 0.4 },
-      confidence: 0.96,
-      timestamp: 1_000,
-    });
+    act(() => acquireAt(hand, 0.25, 0.4));
     hand.emit({
       mode: "pinch",
       pointer: { x: 0.35, y: 0.5 },
       confidence: 0.96,
-      timestamp: 1_016,
+      timestamp: 1_210,
     });
-    hand.emit({ mode: "idle", timestamp: 1_032 });
+    hand.emit({
+      mode: "point",
+      pointer: { x: 0.35, y: 0.5 },
+      confidence: 0.96,
+      timestamp: 1_226,
+    });
 
     expect(store.getState().canvas.objects["note-spatial"]).toMatchObject({
       x: 300,
@@ -1623,21 +1791,23 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => hand.setStatus({ state: "ready" }));
 
-    hand.emit({
-      mode: "pinch",
-      pointer: { x: 0.25, y: 0.18 },
-      confidence: 0.97,
-      timestamp: 1_000,
+    act(() => acquireAt(hand, 0.25, 0.18));
+    act(() => {
+      hand.emit({ mode: "pinch", pointer: { x: 0.25, y: 0.18 }, confidence: 0.97, timestamp: 1_200 });
+      hand.emit({ mode: "pinch", pointer: { x: 0.16, y: 0.18 }, confidence: 0.97, timestamp: 1_250 });
+      hand.emit({ mode: "pinch", pointer: { x: 0.04, y: 0.18 }, confidence: 0.97, timestamp: 1_300 });
     });
-    hand.emit({
-      mode: "pinch",
-      pointer: { x: 0.04, y: 0.18 },
-      confidence: 0.97,
-      timestamp: 1_200,
-    });
-    hand.emit({ mode: "idle", timestamp: 1_216 });
 
     expect(store.getState().canvas.objects["note-spatial"]?.deletedAt).toBeNull();
+    await waitFor(() =>
+      expect(container.querySelector(".gesture-edge-discard-left")).toHaveClass(
+        "is-armed",
+      ),
+    );
+    act(() => {
+      hand.emit({ mode: "pinch", pointer: { x: 0.04, y: 0.18 }, confidence: 0.97, timestamp: 1_310 });
+      hand.emit({ mode: "point", pointer: { x: 0.04, y: 0.18 }, confidence: 0.97, timestamp: 1_320 });
+    });
     await waitFor(() => {
       expect(
         screen
@@ -1684,19 +1854,11 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => hand.setStatus({ state: "ready" }));
 
-    hand.emit({
-      mode: "pinch",
-      pointer: { x: 0.25, y: 0.18 },
-      confidence: 0.97,
-      timestamp: 1_000,
+    act(() => {
+      acquireAt(hand, 0.25, 0.18);
+      hand.emit({ mode: "pinch", pointer: { x: 0.04, y: 0.18 }, confidence: 0.97, timestamp: 1_220 });
+      hand.emit({ mode: "point", pointer: { x: 0.04, y: 0.18 }, confidence: 0.97, timestamp: 1_230 });
     });
-    hand.emit({
-      mode: "pinch",
-      pointer: { x: 0.04, y: 0.18 },
-      confidence: 0.97,
-      timestamp: 1_200,
-    });
-    hand.emit({ mode: "idle", timestamp: 1_216 });
     expect(store.getState().canvas.objects["note-spatial"]?.deletedAt).toBeNull();
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
@@ -1717,19 +1879,21 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => hand.setStatus({ state: "ready" }));
 
-    hand.emit({
-      mode: "pinch",
-      pointer: { x: 0.25, y: 0.18 },
-      confidence: 0.97,
-      timestamp: 1_000,
+    act(() => acquireAt(hand, 0.25, 0.18));
+    act(() => {
+      hand.emit({ mode: "pinch", pointer: { x: 0.25, y: 0.84 }, confidence: 0.97, timestamp: 1_200 });
+      hand.emit({ mode: "pinch", pointer: { x: 0.25, y: 0.9 }, confidence: 0.97, timestamp: 1_320 });
+      hand.emit({ mode: "pinch", pointer: { x: 0.25, y: 0.9 }, confidence: 0.97, timestamp: 1_420 });
     });
-    hand.emit({
-      mode: "pinch",
-      pointer: { x: 0.25, y: 0.96 },
-      confidence: 0.97,
-      timestamp: 1_200,
+    await waitFor(() =>
+      expect(container.querySelector(".gesture-edge-minimize")).toHaveClass(
+        "is-armed",
+      ),
+    );
+    act(() => {
+      hand.emit({ mode: "pinch", pointer: { x: 0.25, y: 0.9 }, confidence: 0.97, timestamp: 1_430 });
+      hand.emit({ mode: "point", pointer: { x: 0.25, y: 0.9 }, confidence: 0.97, timestamp: 1_440 });
     });
-    hand.emit({ mode: "idle", timestamp: 1_216 });
     expect(store.getState().canvas.objects["note-spatial"]?.minimized).toBe(true);
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(store.getState().canvas.receipts.at(-1)?.source).toBe("gesture");
@@ -1737,19 +1901,11 @@ describe("CommandCanvasRoom", () => {
     expect(store.getState().canvas.objects["note-spatial"]?.minimized).toBe(false);
   });
 
-  it("restores a minimized object through deliberate open-palm dwell", async () => {
+  it("maximizes through the distinct top edge after a visible armed preview", async () => {
     const user = userEvent.setup();
     const hand = fakeHandController();
     const store = createCanvasStore("room-local", dependencies());
     seedNote(store, { id: "note-spatial", title: "Spatial note", x: 200 });
-    store.getState().dispatch(
-      {
-        type: "object.set_flags",
-        objectId: "note-spatial",
-        flags: { minimized: true },
-      },
-      "system",
-    );
     const { container } = render(
       <CommandCanvasRoom
         store={store}
@@ -1761,24 +1917,31 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => hand.setStatus({ state: "ready" }));
 
-    hand.emit({
-      mode: "open_palm",
-      pointer: { x: 0.25, y: 0.12 },
-      confidence: 0.96,
-      timestamp: 1_000,
+    act(() => acquireAt(hand, 0.25, 0.18));
+    act(() => {
+      hand.emit({ mode: "pinch", pointer: { x: 0.25, y: 0.16 }, confidence: 0.97, timestamp: 1_200 });
+      hand.emit({ mode: "pinch", pointer: { x: 0.25, y: 0.1 }, confidence: 0.97, timestamp: 1_320 });
+      hand.emit({ mode: "pinch", pointer: { x: 0.25, y: 0.1 }, confidence: 0.97, timestamp: 1_420 });
     });
-    expect(await screen.findByText("PALM · HOLD 0%")).toBeVisible();
-    hand.emit({
-      mode: "open_palm",
-      pointer: { x: 0.25, y: 0.12 },
-      confidence: 0.96,
-      timestamp: 1_660,
+    await waitFor(() =>
+      expect(container.querySelector(".gesture-edge-maximize")).toHaveClass(
+        "is-armed",
+      ),
+    );
+    act(() => {
+      hand.emit({ mode: "pinch", pointer: { x: 0.25, y: 0.1 }, confidence: 0.97, timestamp: 1_430 });
+      hand.emit({ mode: "point", pointer: { x: 0.25, y: 0.1 }, confidence: 0.97, timestamp: 1_440 });
     });
 
-    expect(store.getState().canvas.objects["note-spatial"]?.minimized).toBe(false);
+    expect(store.getState().canvas.objects["note-spatial"]).toMatchObject({
+      x: expect.any(Number),
+      y: expect.any(Number),
+      version: 2,
+    });
+    expect(store.getState().canvas.objects["note-spatial"]?.width).toBeGreaterThan(280);
     expect(store.getState().canvas.receipts.at(-1)).toMatchObject({
       source: "gesture",
-      action: "restore",
+      action: "transform",
       affectedObjectIds: ["note-spatial"],
     });
   });
@@ -1819,23 +1982,21 @@ describe("CommandCanvasRoom", () => {
         timestamp,
       });
 
-    bimanual(0.3, 0.35, 0.65, 1_000);
-    expect(await screen.findByText("RESIZING")).toBeVisible();
-    bimanual(0.45, 0.275, 0.725, 1_100);
-    // Real two-hand release is staggered: one hand usually remains pinched for
-    // one detector frame. That frame must commit the resize, not start a grab.
+    act(() => acquireAt(hand, 0.35, 0.3));
+    bimanual(0.1, 0.35, 0.45, 1_200);
+    bimanual(0.1, 0.35, 0.45, 1_300);
+    expect(await screen.findByText("RESIZE")).toBeVisible();
+    bimanual(0.45, 0.275, 0.725, 1_400);
     hand.emit({
-      mode: "pinch",
+      mode: "point",
       pointer: { x: 0.275, y: 0.3 },
       confidence: 0.96,
-      timestamp: 1_116,
+      timestamp: 1_416,
     });
 
-    expect(store.getState().canvas.objects["note-spatial"]).toMatchObject({
-      width: 420,
-      height: 285,
-      version: 2,
-    });
+    expect(store.getState().canvas.objects["note-spatial"]?.width).toBeGreaterThan(280);
+    expect(store.getState().canvas.objects["note-spatial"]?.height).toBeGreaterThan(190);
+    expect(store.getState().canvas.objects["note-spatial"]?.version).toBe(2);
     expect(store.getState().canvas.receipts.at(-1)).toMatchObject({
       source: "gesture",
       action: "transform",
@@ -2605,7 +2766,7 @@ describe("CommandCanvasRoom", () => {
     });
     expect(store.getState().canvas.receipts.at(-1)?.action).toBe("transform");
     expect(container.querySelector(".canvas-object")).toHaveStyle({
-      transform: "rotate(15deg)",
+      transform: "rotate(var(--gesture-rotation, 15deg))",
     });
   });
 

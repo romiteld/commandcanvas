@@ -91,12 +91,12 @@ export function SketchComposer({
     const active = activePointer.current;
     if (!active || active.pointerId !== event.pointerId) return;
     event.preventDefault();
-    const point = localPoint(event, width, height);
+    const points = localPointerSamples(event, width, height);
     if (active.mode === "erase") {
-      eraseAt(point);
+      for (const point of points) eraseAt(point);
       return;
     }
-    if (active.strokeId) appendPoint(active.strokeId, point);
+    if (active.strokeId) appendPoints(active.strokeId, points);
   }
 
   function endPointer(event: ReactPointerEvent<SVGSVGElement>) {
@@ -127,11 +127,17 @@ export function SketchComposer({
     setIsPointerActive(false);
   }
 
-  function appendPoint(strokeId: string, point: SketchPoint) {
+  function appendPoints(strokeId: string, points: readonly SketchPoint[]) {
     setStrokes((current) =>
       current.map((stroke) =>
         stroke.id === strokeId
-          ? { ...stroke, points: appendDistinctPoint(stroke.points, point) }
+          ? {
+              ...stroke,
+              points: points.reduce(
+                (next, point) => appendDistinctPoint(next, point),
+                stroke.points,
+              ),
+            }
           : stroke,
       ),
     );
@@ -270,6 +276,29 @@ function localPoint(
   height: number,
 ): SketchPoint {
   const bounds = event.currentTarget.getBoundingClientRect();
+  return localPointFromClient(event, bounds, width, height);
+}
+
+function localPointerSamples(
+  event: ReactPointerEvent<SVGSVGElement>,
+  width: number,
+  height: number,
+): SketchPoint[] {
+  const bounds = event.currentTarget.getBoundingClientRect();
+  const native = event.nativeEvent as PointerEvent;
+  const coalesced = native.getCoalescedEvents?.() ?? [];
+  const samples = coalesced.length > 0 ? coalesced : [native];
+  return samples.map((sample) =>
+    localPointFromClient(sample, bounds, width, height),
+  );
+}
+
+function localPointFromClient(
+  event: Pick<PointerEvent, "clientX" | "clientY" | "pressure">,
+  bounds: Pick<DOMRect, "left" | "top" | "width" | "height">,
+  width: number,
+  height: number,
+): SketchPoint {
   const localX =
     bounds.width > 0
       ? ((event.clientX - bounds.left) / bounds.width) * width

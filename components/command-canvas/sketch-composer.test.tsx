@@ -106,6 +106,63 @@ describe("SketchComposer", () => {
     expect(sketchPayloadSchema.safeParse(completed[0]).success).toBe(true);
   });
 
+  it("processes coalesced pointer samples instead of also replaying the parent event", async () => {
+    const user = userEvent.setup();
+    const completed: SketchPayload[] = [];
+    const { container } = render(
+      <SketchComposer
+        width={WORLD_WIDTH}
+        height={WORLD_HEIGHT}
+        onDone={(payload) => completed.push(payload)}
+        onCancel={() => undefined}
+      />,
+    );
+    const { surface } = prepareSurface(container);
+    fireEvent.pointerDown(surface, {
+      pointerId: 41,
+      pointerType: "pen",
+      clientX: 110,
+      clientY: 60,
+    });
+    const move = new MouseEvent("pointermove", {
+      bubbles: true,
+      clientX: 260,
+      clientY: 100,
+    });
+    Object.defineProperties(move, {
+      pointerId: { value: 41 },
+      pointerType: { value: "pen" },
+      pressure: { value: 0.5 },
+      getCoalescedEvents: {
+        value: () => [
+          { clientX: 130, clientY: 70, pressure: 0.2 },
+          { clientX: 180, clientY: 80, pressure: 0.4 },
+        ],
+      },
+    });
+    surface.dispatchEvent(move);
+    fireEvent.pointerUp(surface, {
+      pointerId: 41,
+      pointerType: "pen",
+      clientX: 200,
+      clientY: 100,
+      pressure: 0.6,
+    });
+    await user.click(screen.getByRole("button", { name: "Finish sketch" }));
+
+    expect(completed[0]?.strokes[0]?.points).toEqual([
+      { x: 20, y: 20 },
+      { x: 60, y: 40, pressure: 0.2 },
+      { x: 160, y: 60, pressure: 0.4 },
+      { x: 200, y: 100, pressure: 0.6 },
+    ]);
+    expect(completed[0]?.strokes[0]?.points).not.toContainEqual({
+      x: 320,
+      y: 100,
+      pressure: 0.5,
+    });
+  });
+
   it("clamps out-of-bounds pointer movement to the world-space draft", async () => {
     const user = userEvent.setup();
     const completed: SketchPayload[] = [];
