@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   cancelPacketSendRequestSchema,
+  packetContentSchema,
   preparePacketRequestSchema,
   updatePacketRequestSchema,
 } from "@/lib/packets/contracts";
@@ -9,6 +10,57 @@ import {
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 
 describe("meeting packet request contracts", () => {
+  it("accepts the complete packet-safe semantic object vocabulary", () => {
+    const result = packetContentSchema.safeParse({
+      schemaVersion: 1,
+      roomName: "Launch meeting",
+      sourceRevision: 12,
+      objects: [
+        {
+          objectId: "table-metrics",
+          objectType: "data_table",
+          title: "Launch metrics",
+          payload: { columns: [], rows: [] },
+        },
+        {
+          objectId: "reference-research",
+          objectType: "reference_card",
+          title: "Research",
+          payload: { kind: "article" },
+        },
+        {
+          objectId: "meeting-decision",
+          objectType: "meeting_card",
+          title: "Decision",
+          payload: { kind: "decision" },
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it.each(["sketch", "frame"])(
+    "continues to omit the working-only %s type from final packet snapshots",
+    (objectType) => {
+      expect(
+        packetContentSchema.safeParse({
+          schemaVersion: 1,
+          roomName: "Launch meeting",
+          sourceRevision: 12,
+          objects: [
+            {
+              objectId: "working-object",
+              objectType,
+              title: "Working object",
+              payload: {},
+            },
+          ],
+        }).success,
+      ).toBe(false);
+    },
+  );
+
   it("rejects duplicate selected object IDs before packet preparation", () => {
     const result = preparePacketRequestSchema.safeParse({
       roomId: ROOM_ID,

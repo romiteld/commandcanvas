@@ -56,7 +56,15 @@ export const packetContentSchema = z
         z
           .object({
             objectId: packetIdSchema,
-            objectType: z.enum(["note", "task_board", "schedule", "diagram"]),
+            objectType: z.enum([
+              "note",
+              "task_board",
+              "schedule",
+              "diagram",
+              "data_table",
+              "reference_card",
+              "meeting_card",
+            ]),
             title: packetTitleSchema,
             payload: z.record(z.string(), z.unknown()),
           })
