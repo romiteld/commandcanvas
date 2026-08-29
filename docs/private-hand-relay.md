@@ -5,19 +5,17 @@ and dated local CUDA verification are ready. The edge route is configured for
 `https://hands.autolensai.com`, but the production true-640 listener has not yet
 been started and the public capability route must not be represented as ready
 until a fresh probe succeeds. The relay remains an opt-in acceleration path,
-not the privacy default and not a judge dependency. Local YOLO remains the
-default and the automatic fallback.
+not the privacy default and not a judge dependency. Local MediaPipe Hand
+Landmarker remains the default and the automatic fallback.
 
 ## Processing choices
 
 ```text
 Camera
   |
-  +-- no private-GPU consent --> local YOLO WebGPU
+  +-- no private-GPU consent --> local MediaPipe worker
   |                                  |
-  |                                  +--> threaded WASM
-  |                                  |
-  |                                  +--> labeled MediaPipe recovery
+  |                                  +--> in-page MediaPipe recovery
   |
   +-- explicit consent ------> bounded JPEG/WebP, newest frame only
                                       |
@@ -44,7 +42,7 @@ WebMCP tool.
 
 Disabling consent, disabling Hand input, hiding or leaving the page, an expired
 session, a network failure, or an invalid relay result closes the remote path
-and selects the local engine. Private relay failure is not a reason to stop the
+and selects local MediaPipe. Private relay failure is not a reason to stop the
 canvas.
 
 ## Target topology

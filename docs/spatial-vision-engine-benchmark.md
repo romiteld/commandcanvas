@@ -1,4 +1,4 @@
-# Spatial vision engine benchmark
+# Spatial vision engine benchmark record
 
 ## Decision boundary
 
@@ -7,16 +7,16 @@ two-hand continuity. A generic YOLO bounding-box detector cannot supply the
 index fingertip, thumb-to-index distance, pinch hysteresis, or two-hand resize
 geometry, so a bounding-box-only model is not an eligible replacement.
 
-The engine plan now selects the pinned YOLO hand-pose engine as primary and
-labels MediaPipe Hand Landmarker as the initialization/runtime fallback. The
-primary designation is based on the requested product direction plus a real
-Chromium worker/model inference smoke test. It is not a claim that YOLO has
-better physical-device interaction quality; that still requires the protocol
-below.
+The current MIT application uses MediaPipe Hand Landmarker locally. The pinned
+YOLO hand-pose engine exists only in this separately distributed AGPL relay and
+is selected after explicit camera-upload consent. Relay failure returns to
+local MediaPipe. Earlier browser-YOLO measurements below are retained as dated
+model-selection evidence, not as a description of the shipping browser bundle
+and not as proof that YOLO has better physical-device interaction quality.
 
 ## Replaceable contract
 
-`lib/gesture/spatial-vision-engine.ts` describes the detector/runtime boundary:
+The application and relay share a versioned semantic boundary that describes:
 
 - engine identity and model version;
 - `hand-pose-keypoints` output with exactly 21 keypoints;
@@ -24,13 +24,12 @@ below.
 - detector load options and normalized detector loader;
 - license-review and target-device-evidence status.
 
-Engines without a compatible worker use the controller's local in-page
-detector endpoint. Camera frames stay in the browser for every local engine.
-The installed native CUDA relay is a separate engine selected only after
-explicit camera-upload consent; it accepts bounded newest-only JPEG/WebP frames
-while Hand input is active and returns semantic landmarks without raw
-retention. Gesture interpretation and canvas mutation code do not depend on the
-engine ID or processing location.
+The application runs MediaPipe in a worker with an in-page MediaPipe recovery
+path. Camera frames stay in the browser in local mode. The native CUDA relay is
+selected only after explicit camera-upload consent; it accepts bounded
+newest-only JPEG/WebP frames while Hand input is active and returns semantic
+landmarks without raw retention. Gesture interpretation and canvas mutation
+code do not depend on the engine ID or processing location.
 
 ## Candidate review
 
@@ -40,7 +39,7 @@ production dependencies:
 
 | Candidate | Relevant capability | Current blocker |
 | --- | --- | --- |
-| [poptoz/yolo26-hand-pose-face-detection](https://huggingface.co/poptoz/yolo26-hand-pose-face-detection) | The pinned checkpoint was exported as FP16 ONNX at `[1,3,320,320]`; output remains `[1,300,69]`. Real Chromium inference returned 21 keypoints for a CC0 bare-hand image. The release selects the model vendor's AGPL open-source path; exact provenance and Corresponding Source are recorded in `SOURCE.md`. | Live iPhone interaction quality is unverified. The exact public source commit is linked from `SOURCE.md`. |
+| [poptoz/yolo26-hand-pose-face-detection](https://huggingface.co/poptoz/yolo26-hand-pose-face-detection) | The production relay pins the upstream FP16 ONNX artifact at `[1,3,640,640]`; output is `[1,300,69]`. A historical 320 export was also benchmarked in a browser candidate. The release selects the model vendor's AGPL open-source path; exact provenance and Corresponding Source are recorded in `SOURCE.md`. | Live iPhone interaction quality is unverified. The exact public source commit is linked from `SOURCE.md`. |
 | [opencv/handpose_estimation_mediapipe](https://huggingface.co/opencv/handpose_estimation_mediapipe) | 21-keypoint ONNX hand-pose model | Requires a separate palm detector and is derived from the same MediaPipe path, so it is not yet evidence of an interaction improvement. |
 | [STMicroelectronics/hand_landmarks](https://huggingface.co/STMicroelectronics/hand_landmarks) | Quantized TFLite landmarks | Targeted at an embedded NPU workflow; no browser/iPhone adapter or target evidence is present. |
 
@@ -49,19 +48,21 @@ revision, artifact hash, model bytes, license source, and whether browser
 redistribution is permitted. `unverified-do-not-ship` is a benchmarkable state,
 not a release approval.
 
-The primary source checkpoint is pinned to revision
+The source checkpoint is pinned to revision
 `2abb91a7030e1aa5231ec900ccb2c07ab3f03460`, 25,228,590 bytes, SHA-256
 `39cb54e63cac0d8905d7cab2112430dc9bf60a26779e361165fc03bf9c6ca36d`.
-Ultralytics `8.4.33` exported the production graph with image size `320`,
-opset `17`, simplification, and FP16 conversion. The same-origin artifact is
-21,447,188 bytes with SHA-256
+The production relay uses the tracked upstream 640-pixel FP16 artifact. Its
+21,547,949 bytes have SHA-256
+`f85eae141155d4de959051d3c7d44f68f1881dfe6b6e180e33d6c3fc3372c59e`.
+The separately tracked 320-pixel rollback artifact is 21,447,188 bytes with
+SHA-256
 `07a1cfb3d782d4bfd3b8843dbe8b3af971fc9f297c33ea5d14893ed8704e81fc`.
 
 ## Target-device protocol
 
-Use the recorder and schemas in
-`lib/gesture/spatial-vision-benchmark.ts`. Fixture runs can validate the
-calculation code but cannot support an engine replacement claim.
+Use a recorder and versioned benchmark schema from the CommandCanvas
+application. Fixture runs can validate calculation code but cannot support an
+engine replacement claim.
 
 For a controlled recorded comparison:
 
@@ -107,15 +108,16 @@ behavior.
 
 ## Current evidence
 
-- The engine plan makes YOLO primary and MediaPipe the labeled fallback.
-- The new contract and metric calculations have deterministic unit coverage.
-- ONNX Runtime Web and the dedicated YOLO worker are implemented. The optimized
-  320-pixel model is served from the application origin.
-- COOP/COEP isolation enables bounded multithreaded WASM inference when the
-  browser permits it; WebGPU remains the preferred execution provider.
-- A real Chromium worker/model smoke test loaded the exact production model
-  and completed inference.
-- Three controlled inferences on the same CC0 bare-hand image each returned one
+- The MIT application ships local MediaPipe in a worker with an in-page
+  MediaPipe recovery path. It does not distribute YOLO, ONNX Runtime Web, or a
+  YOLO model.
+- The AGPL relay ships the pinned YOLO hand-pose model and native CUDA service.
+- The semantic engine contract and benchmark calculations have deterministic
+  unit coverage.
+- A historical browser-YOLO candidate loaded the 320-pixel rollback artifact
+  and completed real Chromium inference before the license/runtime isolation.
+- In that historical browser candidate, three controlled inferences on the same
+  CC0 bare-hand image each returned one
   hand and exactly 21 keypoints at `0.92822265625` confidence. Startup measured
   `1,837.870 ms`; inference measured `261.035`, `109.505`, and `96.815 ms` in
   headless Chromium's threaded WASM path. The warm measurement is approximately
