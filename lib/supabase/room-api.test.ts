@@ -318,6 +318,90 @@ describe("browser room API", () => {
     expect(JSON.parse(requestBody as string)).toEqual(commandInput);
   });
 
+  it.each([
+    {
+      id: "table-launch-metrics",
+      type: "data_table",
+      title: "Launch metrics",
+      payload: {
+        columns: [{ id: "column-metric", label: "Metric", kind: "text" }],
+        rows: [{ id: "row-signups", cells: ["Signups"] }],
+      },
+    },
+    {
+      id: "reference-launch-brief",
+      type: "reference_card",
+      title: "Launch brief",
+      payload: {
+        kind: "article",
+        sourceUrl: "https://example.com/launch-brief",
+        summary: "A bounded source card created through the agent.",
+        excerpt: null,
+      },
+    },
+    {
+      id: "decision-launch-date",
+      type: "meeting_card",
+      title: "Launch date",
+      payload: {
+        kind: "decision",
+        body: "Ship the public demo on September 3.",
+        bullets: [],
+        owner: "Danny",
+        dueDate: "2026-09-03",
+        status: "confirmed",
+      },
+    },
+  ])("accepts an authoritative $type object", async (semantic) => {
+    const object = {
+      ...noteObject,
+      ...semantic,
+    };
+    const state = {
+      ...authoritativeState,
+      objects: { [object.id]: object },
+      receipts: [
+        {
+          ...authoritativeState.receipts[0],
+          affectedObjectIds: [object.id],
+          before: { objects: { [object.id]: null } },
+          after: { objects: { [object.id]: object } },
+        },
+      ],
+    };
+    const fetcher = vi.fn<RoomApiFetch>(async () =>
+      Response.json({
+        ok: true,
+        mutation: {
+          roomId: ROOM_ID,
+          revision: 1,
+          receiptId: RECEIPT_ID,
+          state,
+        },
+      }),
+    );
+
+    const result = await createBrowserRoomApi({
+      accessToken: JWT,
+      fetcher,
+    }).commitCommand(commandInput);
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        state: {
+          objects: {
+            [object.id]: {
+              id: object.id,
+              type: object.type,
+              payload: object.payload,
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("rejects an authoritative canvas whose object references a missing frame", async () => {
     const fetcher = vi.fn<RoomApiFetch>(async () =>
       Response.json({

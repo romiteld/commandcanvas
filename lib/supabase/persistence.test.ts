@@ -163,6 +163,100 @@ function envelope(
 }
 
 describe("parseCanvasPersistenceRows", () => {
+  it.each([
+    {
+      id: "table-launch-metrics",
+      type: "data_table",
+      title: "Launch metrics",
+      payload: {
+        columns: [
+          { id: "column-metric", label: "Metric", kind: "text" },
+          { id: "column-target", label: "Target", kind: "number" },
+        ],
+        rows: [{ id: "row-signups", cells: ["Signups", 250] }],
+      },
+    },
+    {
+      id: "reference-launch-brief",
+      type: "reference_card",
+      title: "Launch brief",
+      payload: {
+        kind: "article",
+        sourceUrl: "https://example.com/launch-brief",
+        summary: "A source card created from a spoken research request.",
+        excerpt: "The launch brief describes the release decision.",
+      },
+    },
+    {
+      id: "decision-launch-date",
+      type: "meeting_card",
+      title: "Launch date",
+      payload: {
+        kind: "decision",
+        body: "Ship the public demo on September 3.",
+        bullets: ["Keep the judge path no-signup."],
+        owner: "Danny",
+        dueDate: "2026-09-03",
+        status: "confirmed",
+      },
+    },
+  ])(
+    "reloads a persisted $type object and its receipt snapshot",
+    ({ id, type, title, payload: semanticPayload }) => {
+      const snapshot = {
+        ...createSnapshot,
+        id,
+        type,
+        title,
+        payload: semanticPayload,
+      };
+      const row = {
+        ...objectRow,
+        id,
+        object_type: type,
+        title,
+        x: snapshot.x,
+        updated_at: CREATED_AT,
+        version: 1,
+        revision: 1,
+        payload: semanticPayload,
+      };
+      const receipt = {
+        ...createReceiptRow,
+        affected_object_ids: [id],
+        previous_state: [{ objectId: id, state: null }],
+        resulting_state: [{ objectId: id, state: snapshot }],
+      };
+
+      const result = parseCanvasPersistenceRows(
+        persistenceInput({
+          room: { ...roomRow, revision: 1, updated_at: CREATED_AT },
+          objects: [row],
+          receipts: [receipt],
+        }),
+      );
+
+      expect(result).toMatchObject({
+        ok: true,
+        state: {
+          objects: {
+            [id]: { id, type, title, payload: semanticPayload },
+          },
+          receipts: [
+            {
+              affectedObjectIds: [id],
+              after: {
+                objects: {
+                  [id]: { id, type, payload: semanticPayload },
+                },
+              },
+            },
+          ],
+        },
+      });
+    },
+  );
+
   it("maps strict deployed rows into the exact canonical canvas state", () => {
     const result = parseCanvasPersistenceRows(persistenceInput());
 
