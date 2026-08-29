@@ -1,8 +1,13 @@
 import {
   createInitialHandIntentState,
   interpretHandFrame,
+  type HandEngineSource,
   type HandIntentState,
   type HandLandmarks,
+  type HandPhysicalMeasurements,
+  type HandPredictionMarker,
+  type HandReceiveTimestamp,
+  type HandTrackId,
 } from "@/lib/gesture/hand-intent";
 import type {
   HandDetector,
@@ -40,6 +45,13 @@ export type HandTrackingObservation =
       confidence: number;
       handedness?: TrackedHandedness;
       landmarks?: HandLandmarks;
+      /** Optional additive physical data; existing consumers can keep using pointer/mode. */
+      measurements?: HandPhysicalMeasurements;
+      source?: HandEngineSource;
+      capturedAt?: number;
+      receivedAt?: HandReceiveTimestamp;
+      trackId?: HandTrackId;
+      prediction?: HandPredictionMarker;
       pinchDistance?: number;
       pinchRatio?: number;
       trackingState?: "tracked" | "grace";
@@ -478,6 +490,8 @@ export function createHandTrackingController(
       return;
     }
     const stateKeys = assignHandStateKeys(run, message.hands, message.timestamp);
+    const receivedAt = dependencies.now();
+    const source = run.visionEngines[run.engineIndex]?.descriptor.id ?? "unknown";
     const activeKeys = new Set<string>();
     const interpreted = message.hands.map((hand, index) => {
       const key = stateKeys[index]!;
@@ -488,13 +502,17 @@ export function createHandTrackingController(
           landmarks: hand.landmarks as HandLandmarks,
           confidence: hand.confidence,
           timestamp: message.timestamp,
+          source,
+          receivedAt,
+          trackId: key,
+          handedness: hand.handedness,
         },
         dependencies.now(),
         { mirrorX: true },
       );
       if (transition.output.accepted)
         run.intentStates.set(key, transition.state);
-      return { hand, transition };
+      return { hand, trackId: key, transition };
     });
     for (const key of run.intentStates.keys()) {
       if (!activeKeys.has(key) && !run.unknownHandTracks.has(key))
@@ -556,6 +574,12 @@ export function createHandTrackingController(
       confidence: output.confidence,
       handedness: primary.hand.handedness,
       landmarks: primary.hand.landmarks,
+      measurements: primary.transition.measurements ?? undefined,
+      source,
+      capturedAt: output.timestamp,
+      receivedAt,
+      trackId: primary.trackId,
+      prediction: primary.transition.prediction,
       pinchDistance: output.pinchDistance,
       pinchRatio: output.pinchRatio,
       trackingState: "tracked",

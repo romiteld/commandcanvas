@@ -182,13 +182,88 @@ describe("hand intent validation", () => {
     expect(transition.output).toMatchObject({
       accepted: true,
       mode: "open_palm",
-      pointer: { x: 0.59, y: 0.718 },
+      pointer: { x: 0.5, y: 0.25 },
     });
+  });
+
+  it("keeps an adequate relaxed index fingertip available as the visible pointer", () => {
+    const base = frame();
+    const landmarks = [...base.landmarks] as HandLandmark[];
+    landmarks[6] = { x: 0.5, y: 0.7, z: 0, visibility: 0.95 };
+    landmarks[8] = { x: 0.5, y: 0.72, z: 0, visibility: 0.95 };
+    const relaxed = {
+      ...base,
+      landmarks: landmarks as unknown as HandLandmarks,
+    };
+
+    const transition = interpretHandFrame(
+      createInitialHandIntentState(),
+      relaxed,
+      1_000,
+    );
+
+    expect(transition.output).toMatchObject({
+      accepted: true,
+      mode: "point",
+      pointer: { x: 0.5, y: 0.72 },
+    });
+  });
+
+  it("keeps physical measurements separate from the mode-dependent observation", () => {
+    const transition = interpretHandFrame(
+      createInitialHandIntentState(),
+      frame({ index: { x: 0.62, y: 0.28 } }),
+      1_020,
+    );
+
+    expect(transition).toMatchObject({
+      measurements: {
+        indexTip: { x: 0.62, y: 0.28 },
+        thumbTip: { x: 0.2, y: 0.5 },
+        pinchMidpoint: { x: 0.41, y: 0.39 },
+        palmMcpCentroid: { x: 0.59, y: 0.718 },
+        pinchRatio: 2.154029,
+        confidence: 0.96,
+      },
+    });
+  });
+
+  it("marks a predicted sample and refuses to let it enter semantic state", () => {
+    const transition = interpretHandFrame(
+      createInitialHandIntentState(),
+      { ...frame(), predicted: true },
+      1_000,
+    );
+
+    expect(transition.output).toMatchObject({
+      accepted: false,
+      mode: "idle",
+      reason: "predicted_sample",
+    });
+    expect(transition.state).toEqual(createInitialHandIntentState());
   });
 });
 
 describe("pointer smoothing", () => {
-  it("suppresses index-tip jitter with deterministic exponential smoothing", () => {
+  it("uses capture timestamps to apply the One Euro cutoff to index coordinates", () => {
+    const first = interpretHandFrame(
+      createInitialHandIntentState(),
+      frame({ index: { x: 0.3, y: 0.4 }, timestamp: 1_000 }),
+      1_000,
+    );
+    const next = interpretHandFrame(
+      first.state,
+      frame({ index: { x: 0.6, y: 0.4 }, timestamp: 1_016 }),
+      1_016,
+    );
+
+    expect(next.output).toMatchObject({
+      accepted: true,
+      pointer: { x: expect.closeTo(0.3277, 3), y: 0.4 },
+    });
+  });
+
+  it("suppresses index-tip jitter with the timestamp-aware One Euro filter", () => {
     const first = interpretHandFrame(
       createInitialHandIntentState(),
       frame({
@@ -197,7 +272,6 @@ describe("pointer smoothing", () => {
         timestamp: 1_000,
       }),
       1_000,
-      { smoothingAlpha: 0.25 },
     );
     const jittered = interpretHandFrame(
       first.state,
@@ -207,13 +281,15 @@ describe("pointer smoothing", () => {
         timestamp: 1_016,
       }),
       1_016,
-      { smoothingAlpha: 0.25 },
     );
 
     expect(jittered.output).toMatchObject({
       accepted: true,
       mode: "point",
-      pointer: { x: 0.51, y: 0.49 },
+      pointer: {
+        x: expect.closeTo(0.5037, 3),
+        y: expect.closeTo(0.4963, 3),
+      },
     });
   });
 
@@ -228,7 +304,7 @@ describe("pointer smoothing", () => {
     expect(transition.output.pointer).toEqual({ x: 0.8, y: 0.7 });
   });
 
-  it("reduces stationary jitter without making deliberate fast movement trail behind", () => {
+  it("adapts filtering to the capture interval while retaining stationary jitter suppression", () => {
     const first = interpretHandFrame(
       createInitialHandIntentState(),
       frame({ index: { x: 0.3, y: 0.4 }, timestamp: 1_000 }),
@@ -247,9 +323,12 @@ describe("pointer smoothing", () => {
 
     expect(jitter.output).toMatchObject({
       accepted: true,
-      pointer: { x: expect.closeTo(0.3014, 3), y: expect.closeTo(0.3986, 3) },
+      pointer: {
+        x: expect.closeTo(0.3004, 3),
+        y: expect.closeTo(0.3996, 3),
+      },
     });
-    expect(fast.output.accepted && fast.output.pointer.x).toBeGreaterThan(0.58);
+    expect(fast.output.accepted && fast.output.pointer.x).toBeGreaterThan(0.33);
   });
 
   it("does not contaminate the next index pointer with an open-palm center", () => {
@@ -262,13 +341,12 @@ describe("pointer smoothing", () => {
       palm.state,
       frame({ index: { x: 0.2, y: 0.25 }, timestamp: 1_016 }),
       1_016,
-      { smoothingAlpha: 1 },
     );
 
     expect(point.output).toMatchObject({
       accepted: true,
       mode: "point",
-      pointer: { x: 0.2, y: 0.25 },
+      pointer: { x: expect.closeTo(0.4722, 3), y: 0.25 },
     });
   });
 });
