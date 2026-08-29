@@ -9,7 +9,12 @@ test("registers the stable catalog on Chrome's native WebMCP surface", async ({
 
   await page.goto("/local");
   await page.getByRole("button", { name: "Open system status" }).click();
-  await expect(page.getByText("10 Site Tools registered")).toBeVisible();
+  await expect(
+    page
+      .getByRole("complementary", { name: "System status drawer" })
+      .getByRole("region", { name: "Service status" })
+      .getByText("10 Site Tools registered", { exact: true }),
+  ).toBeVisible();
 
   const toolNames = await page.evaluate(async () => {
     const modelContext = (

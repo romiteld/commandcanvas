@@ -294,7 +294,11 @@ test("routes trusted touch and pen pointer sequences into canonical sketch recei
   });
   await expect(page.getByText("1 draft stroke")).toBeVisible();
   await page.getByRole("button", { name: "Finish sketch" }).click();
-  await expect(page.getByText("R1 · touch")).toBeVisible();
+  await expect(
+    page
+      .getByRole("button", { name: /^Open activity drawer:/ })
+      .getByText("R1 · touch", { exact: true }),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Create sketch" }).click();
   const penSurface = page.getByRole("img", { name: "Sketch draft surface" });
@@ -331,7 +335,11 @@ test("routes trusted touch and pen pointer sequences into canonical sketch recei
   await expect(page.getByText("1 draft stroke")).toBeVisible();
   await page.getByRole("button", { name: "Finish sketch" }).click();
 
-  await expect(page.getByText("R2 · stylus")).toBeVisible();
+  await expect(
+    page
+      .getByRole("button", { name: /^Open activity drawer:/ })
+      .getByText("R2 · stylus", { exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Select Rough sketch" }),
   ).toHaveCount(2);
@@ -362,7 +370,12 @@ test("keeps the ordinary-browser canvas usable under an iPhone WebKit profile", 
 
   await page.goto("/local");
   await page.getByRole("button", { name: "Open system status" }).tap();
-  await expect(page.getByText("Site Tools unavailable")).toBeVisible();
+  await expect(
+    page
+      .getByRole("complementary", { name: "System status drawer" })
+      .getByRole("region", { name: "Service status" })
+      .getByText("Site Tools unavailable", { exact: true }),
+  ).toBeVisible();
   await page
     .getByRole("button", { name: "Close system status drawer" })
     .tap();
@@ -374,7 +387,11 @@ test("keeps the ordinary-browser canvas usable under an iPhone WebKit profile", 
   await expect(
     page.getByRole("button", { name: "Select Launch board" }),
   ).toBeVisible();
-  await expect(page.getByText("Danny created “Launch board”.")).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: "Open activity drawer: Danny created “Launch board”.",
+    }),
+  ).toBeVisible();
 
   const overflow = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,

@@ -13,22 +13,40 @@ test("creates, pins, and undoes one semantic object with visible receipts", asyn
     page.getByRole("main", { name: "Spatial command surface" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Open system status" }).click();
-  await expect(page.getByText("Site Tools unavailable")).toBeVisible();
-  await expect(page.getByText("Realtime not connected")).toBeVisible();
+  const systemStatus = page.getByRole("complementary", {
+    name: "System status drawer",
+  });
+  const serviceStatus = systemStatus.getByRole("region", {
+    name: "Service status",
+  });
+  await expect(
+    serviceStatus.getByText("Site Tools unavailable", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    serviceStatus.getByText("Realtime not connected", { exact: true }),
+  ).toBeVisible();
   await page
     .getByRole("button", { name: "Close system status drawer" })
     .click();
 
   await page.getByRole("button", { name: "Create note" }).click();
   await page.getByRole("button", { name: "Select New thought" }).click();
-  await expect(page.getByText("Danny created “New thought”.")).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: "Open activity drawer: Danny created “New thought”.",
+    }),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Pin object" }).click();
   await expect(page.getByText("Pinned to canvas")).toBeVisible();
 
   await page.getByRole("button", { name: "Undo last change" }).click();
   await expect(page.getByText("Pinned to canvas")).toBeHidden();
-  await expect(page.getByText(/Danny undid: Danny pinned/)).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: /Open activity drawer: Danny undid: Danny pinned/,
+    }),
+  ).toBeVisible();
 
   if (testInfo.project.name === "chromium-desktop")
     await page.screenshot({
@@ -72,7 +90,12 @@ test("bridges a document.modelContext invocation into the live canvas", async ({
 
   await page.goto("/local");
   await page.getByRole("button", { name: "Open system status" }).click();
-  await expect(page.getByText("10 Site Tools registered")).toBeVisible();
+  await expect(
+    page
+      .getByRole("complementary", { name: "System status drawer" })
+      .getByRole("region", { name: "Service status" })
+      .getByText("10 Site Tools registered", { exact: true }),
+  ).toBeVisible();
   await page
     .getByRole("button", { name: "Close system status drawer" })
     .click();
@@ -120,8 +143,11 @@ test("bridges a document.modelContext invocation into the live canvas", async ({
   await expect(
     page.getByRole("button", { name: "Select Browser agent action" }),
   ).toBeVisible();
-  await expect(page.getByText("ChatGPT created “Browser agent action”.")).toBeVisible();
-  await expect(page.getByText("R1 · webmcp")).toBeVisible();
+  const agentReceipt = page.getByRole("button", {
+    name: "Open activity drawer: ChatGPT created “Browser agent action”.",
+  });
+  await expect(agentReceipt).toBeVisible();
+  await expect(agentReceipt.getByText("R1 · webmcp", { exact: true })).toBeVisible();
 });
 
 test("keeps the canvas and primary action usable at a mobile viewport", async ({
@@ -164,7 +190,11 @@ test("keeps the canvas and primary action usable at a mobile viewport", async ({
   expect(boardBox.x + boardBox.width).toBeLessThanOrEqual(
     canvasBox.x + canvasBox.width + 1,
   );
-  await expect(page.getByText("Danny created “Launch board”.")).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: "Open activity drawer: Danny created “Launch board”.",
+    }),
+  ).toBeVisible();
 });
 
 test("keeps the off-state hand sensor compact and out of mobile object hit testing", async ({
@@ -292,7 +322,11 @@ test("creates semantic project-board and schedule objects from the toolbar", asy
   ).toBeVisible();
   await expect(page.getByText("Review WebMCP flow")).toBeVisible();
   await expect(page.getByText("America/New_York")).toBeVisible();
-  await expect(page.getByText("Revision 2")).toBeVisible();
+  await expect(
+    page
+      .getByLabel("Canvas coordinates")
+      .getByText("Revision 2", { exact: true }),
+  ).toBeVisible();
   const board = await page
     .getByRole("button", { name: "Select Launch board" })
     .boundingBox();
@@ -393,7 +427,13 @@ test("reviews a deterministic browser speech transcript before a canonical voice
   await expect(
     page.getByRole("button", { name: "Select Launch board" }),
   ).toBeVisible();
-  await expect(page.getByText("R1 · voice")).toBeVisible();
+  await expect(
+    page
+      .getByRole("button", {
+        name: "Open activity drawer: Danny created “Launch board”.",
+      })
+      .getByText("R1 · voice", { exact: true }),
+  ).toBeVisible();
 });
 
 test("commits exactly one canonical transform when a pointer drag ends", async ({
@@ -412,8 +452,16 @@ test("commits exactly one canonical transform when a pointer drag ends", async (
   await page.mouse.move(before.x + 230, before.y + 125, { steps: 5 });
   await page.mouse.up();
 
-  await expect(page.getByText("Danny transformed “New thought” spatially.")).toBeVisible();
-  await expect(page.getByText("Revision 2")).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: "Open activity drawer: Danny transformed “New thought” spatially.",
+    }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByLabel("Canvas coordinates")
+      .getByText("Revision 2", { exact: true }),
+  ).toBeVisible();
   await expect.poll(async () => (await object.boundingBox())?.x).toBeCloseTo(
     before.x + 140,
     0,
@@ -459,8 +507,16 @@ test("resizes a selected object with a canonical pointer-up mutation", async ({
   await expect
     .poll(async () => (await object.boundingBox())?.height)
     .toBeCloseTo(before.height + 50, 0);
-  await expect(page.getByText("Danny transformed “New thought” spatially.")).toBeVisible();
-  await expect(page.getByText("Revision 2")).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: "Open activity drawer: Danny transformed “New thought” spatially.",
+    }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByLabel("Canvas coordinates")
+      .getByText("Revision 2", { exact: true }),
+  ).toBeVisible();
 });
 
 test("pans and zooms the viewport without creating object receipts", async ({
@@ -473,12 +529,26 @@ test("pans and zooms the viewport without creating object receipts", async ({
   const object = page.getByRole("button", { name: "Select New thought" });
   const before = await object.boundingBox();
   const canvas = page.getByRole("region", { name: "Infinite canvas" });
-  const canvasBox = await canvas.boundingBox();
-  if (!before || !canvasBox) throw new Error("canvas geometry is unavailable");
+  const viewport = canvas.locator(".canvas-viewport");
+  const viewportBox = await viewport.boundingBox();
+  if (!before || !viewportBox) throw new Error("canvas geometry is unavailable");
 
-  await page.mouse.move(canvasBox.x + canvasBox.width - 90, canvasBox.y + 120);
+  const panStart = {
+    x: viewportBox.x + viewportBox.width * 0.65,
+    y: viewportBox.y + viewportBox.height * 0.55,
+  };
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ x, y }) =>
+          Boolean(document.elementFromPoint(x, y)?.closest(".canvas-viewport")),
+        { x: panStart.x, y: panStart.y },
+      ),
+    )
+    .toBe(true);
+  await page.mouse.move(panStart.x, panStart.y);
   await page.mouse.down();
-  await page.mouse.move(canvasBox.x + canvasBox.width - 10, canvasBox.y + 180, {
+  await page.mouse.move(panStart.x + 80, panStart.y + 60, {
     steps: 5,
   });
   await page.mouse.up();
@@ -486,15 +556,16 @@ test("pans and zooms the viewport without creating object receipts", async ({
   const panned = await object.boundingBox();
   expect(panned?.x).toBeCloseTo(before.x + 80, 0);
   expect(panned?.y).toBeCloseTo(before.y + 60, 0);
-  await expect(page.getByText("Revision 1")).toBeVisible();
+  const canvasStatus = page.getByLabel("Canvas coordinates");
+  await expect(canvasStatus.getByText("Revision 1", { exact: true })).toBeVisible();
 
-  await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + 280);
+  await page.mouse.move(viewportBox.x + viewportBox.width / 2, viewportBox.y + 280);
   await page.mouse.wheel(0, -420);
 
   await expect(page.getByText(/Zoom (?!100%)[0-9]+%/)).toBeVisible();
   const zoomed = await object.boundingBox();
   expect(zoomed?.width).toBeGreaterThan(before.width);
-  await expect(page.getByText("Revision 1")).toBeVisible();
+  await expect(canvasStatus.getByText("Revision 1", { exact: true })).toBeVisible();
   await page
     .getByRole("button", { name: "Open activity drawer", exact: true })
     .click();
@@ -515,21 +586,35 @@ test("minimizes, restores, safely discards, and recovers the selected object", a
   await expect(
     page.getByText("Capture the decision while everyone can still see the context."),
   ).toBeHidden();
-  await expect(page.getByText("Danny minimized “New thought”.")).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: "Open activity drawer: Danny minimized “New thought”.",
+    }),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Restore object" }).click();
   await expect(
     page.getByText("Capture the decision while everyone can still see the context."),
   ).toBeVisible();
-  await expect(page.getByText("Danny restored “New thought”.")).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: "Open activity drawer: Danny restored “New thought”.",
+    }),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Move object to trash" }).click();
   await expect(object).toBeHidden();
   await expect(
-    page.getByText("Danny moved “New thought” to recoverable trash."),
+    page.getByRole("button", {
+      name: "Open activity drawer: Danny moved “New thought” to recoverable trash.",
+    }),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Undo last change" }).click();
   await expect(object).toBeVisible();
-  await expect(page.getByText(/Danny undid: Danny moved/)).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: /Open activity drawer: Danny undid: Danny moved/,
+    }),
+  ).toBeVisible();
 });
