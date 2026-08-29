@@ -72,6 +72,7 @@ function createClient(input?: {
   stagedRow?: unknown;
   stagedError?: unknown;
   rpc?: RpcResponder;
+  admissionResult?: unknown;
 }) {
   const queryBuilder = createQueryBuilder({
     data:
@@ -82,11 +83,20 @@ function createClient(input?: {
       } satisfies Record<string, unknown>),
     error: input?.stagedError ?? null,
   });
-  const rpc = vi.fn(async (functionName: string, args: Record<string, unknown>) =>
-    input?.rpc
+  const rpc = vi.fn(async (functionName: string, args: Record<string, unknown>) => {
+    if (functionName === "reserve_packet_resend_admission")
+      return {
+        data: input?.admissionResult ?? {
+          allowed: true,
+          reason: "admitted",
+          changed: true,
+        },
+        error: null,
+      };
+    return input?.rpc
       ? input.rpc(functionName, args)
-      : { data: null, error: { message: "unexpected_rpc" } },
-  );
+      : { data: null, error: { message: "unexpected_rpc" } };
+  });
   const client = {
     from: vi.fn(() => queryBuilder),
     rpc,
@@ -653,6 +663,146 @@ describe("persisted meeting packet readback", () => {
 });
 
 describe("explicit packet send execution", () => {
+  it("forces a configured public demo room to preview before any Resend provider call", async () => {
+    const { client, rpc } = createClient({
+      admissionResult: {
+        allowed: false,
+        reason: "demo_room_preview_only",
+        changed: false,
+      },
+      rpc: (functionName) => {
+        if (functionName === "authorize_meeting_packet_send")
+          return { data: authorizeResult("preview"), error: null };
+        return { data: null, error: { message: "unexpected_rpc" } };
+      },
+    });
+    const submitResendEmail = vi.fn();
+    const service = createPacketService(client, {
+      environment: {
+        RESEND_API_KEY: "re_test_secret",
+        RESEND_FROM: "CommandCanvas <canvas@example.com>",
+        COMMANDCANVAS_EMAIL_ALLOWLIST:
+          "danny@example.com,sarah@example.com",
+      },
+      submitResendEmail,
+    });
+
+    await expect(
+      service.executeSend(HOST_ID, {
+        roomId: ROOM_ID,
+        sendRequestId: SEND_REQUEST_ID,
+        explicitHostAuthorization: true,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        mode: "preview_only",
+        reason: "demo_room_preview_only",
+      },
+    });
+    expect(rpc).toHaveBeenNthCalledWith(1, "reserve_packet_resend_admission", {
+      p_room_id: ROOM_ID,
+      p_send_request_id: SEND_REQUEST_ID,
+      p_host_user_id: HOST_ID,
+    });
+    expect(rpc).toHaveBeenNthCalledWith(
+      2,
+      "authorize_meeting_packet_send",
+      expect.objectContaining({ p_delivery_mode: "preview" }),
+    );
+    expect(submitResendEmail).not.toHaveBeenCalled();
+  });
+
+  it("refuses a capped Resend admission before authorization or provider work", async () => {
+    const { client, rpc } = createClient({
+      admissionResult: {
+        allowed: false,
+        reason: "packet_resend_rate_limited",
+        changed: false,
+      },
+    });
+    const submitResendEmail = vi.fn();
+    const service = createPacketService(client, {
+      environment: {
+        RESEND_API_KEY: "re_test_secret",
+        RESEND_FROM: "CommandCanvas <canvas@example.com>",
+        COMMANDCANVAS_EMAIL_ALLOWLIST:
+          "danny@example.com,sarah@example.com",
+      },
+      submitResendEmail,
+    });
+
+    await expect(
+      service.executeSend(HOST_ID, {
+        roomId: ROOM_ID,
+        sendRequestId: SEND_REQUEST_ID,
+        explicitHostAuthorization: true,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "email_rate_limited",
+        message: "Packet email capacity is temporarily unavailable.",
+      },
+    });
+    expect(rpc).toHaveBeenCalledExactlyOnceWith(
+      "reserve_packet_resend_admission",
+      {
+        p_room_id: ROOM_ID,
+        p_send_request_id: SEND_REQUEST_ID,
+        p_host_user_id: HOST_ID,
+      },
+    );
+    expect(submitResendEmail).not.toHaveBeenCalled();
+  });
+
+  it("reserves one durable standard-room admission before authorization and provider work", async () => {
+    const completion = {
+      sendRequestId: SEND_REQUEST_ID,
+      outboundShareId: SEND_REQUEST_ID,
+      status: "submitted",
+      provider: "resend",
+      providerMessageId: "email_accepted_123",
+      changed: true,
+    };
+    const { client, rpc } = createClient({
+      rpc: (functionName) => {
+        if (functionName === "authorize_meeting_packet_send")
+          return { data: authorizeResult("resend"), error: null };
+        if (functionName === "complete_meeting_packet_send")
+          return { data: completion, error: null };
+        return { data: null, error: { message: "unexpected_rpc" } };
+      },
+    });
+    const submitResendEmail = vi.fn(async () => ({
+      ok: true as const,
+      providerMessageId: "email_accepted_123",
+    }));
+    const service = createPacketService(client, {
+      environment: {
+        RESEND_API_KEY: "re_test_secret",
+        RESEND_FROM: "CommandCanvas <canvas@example.com>",
+        COMMANDCANVAS_EMAIL_ALLOWLIST:
+          "danny@example.com,sarah@example.com",
+      },
+      submitResendEmail,
+    });
+
+    await expect(
+      service.executeSend(HOST_ID, {
+        roomId: ROOM_ID,
+        sendRequestId: SEND_REQUEST_ID,
+        explicitHostAuthorization: true,
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { status: "submitted" } });
+    expect(rpc.mock.calls.map(([name]) => name)).toEqual([
+      "reserve_packet_resend_admission",
+      "authorize_meeting_packet_send",
+      "complete_meeting_packet_send",
+    ]);
+    expect(submitResendEmail).toHaveBeenCalledOnce();
+  });
+
   it("authorizes preview-only and returns the exact approved snapshot when email is unconfigured", async () => {
     const { client, rpc } = createClient({
       rpc: (functionName) => ({
@@ -782,7 +932,7 @@ describe("explicit packet send execution", () => {
       idempotencyKey: IDEMPOTENCY_KEY,
       signal: undefined,
     });
-    expect(rpc).toHaveBeenNthCalledWith(2, "complete_meeting_packet_send", {
+    expect(rpc).toHaveBeenNthCalledWith(3, "complete_meeting_packet_send", {
       p_room_id: ROOM_ID,
       p_send_request_id: SEND_REQUEST_ID,
       p_host_user_id: HOST_ID,
@@ -854,7 +1004,7 @@ describe("explicit packet send execution", () => {
         message: "Submission is being reconciled; delivery is not confirmed.",
       },
     });
-    expect(rpc).toHaveBeenNthCalledWith(2, "complete_meeting_packet_send", {
+    expect(rpc).toHaveBeenNthCalledWith(3, "complete_meeting_packet_send", {
       p_room_id: ROOM_ID,
       p_send_request_id: SEND_REQUEST_ID,
       p_host_user_id: HOST_ID,
@@ -922,7 +1072,7 @@ describe("explicit packet send execution", () => {
       },
     });
     expect(submitResendEmail).toHaveBeenCalledOnce();
-    expect(rpc).toHaveBeenCalledTimes(4);
+    expect(rpc).toHaveBeenCalledTimes(5);
   });
 
   it("preserves the durable provider message ID when an already-submitted request is replayed", async () => {
@@ -996,7 +1146,7 @@ describe("explicit packet send execution", () => {
       explicitHostAuthorization: true,
     });
 
-    expect(rpc).toHaveBeenNthCalledWith(2, "complete_meeting_packet_send", {
+    expect(rpc).toHaveBeenNthCalledWith(3, "complete_meeting_packet_send", {
       p_room_id: ROOM_ID,
       p_send_request_id: SEND_REQUEST_ID,
       p_host_user_id: HOST_ID,

@@ -109,7 +109,11 @@ const previewSendSchema = z
     status: z.literal("preview_only"),
     sendRequestId: z.uuid(),
     outboundShareId: z.uuid(),
-    reason: z.enum(["resend_unconfigured", "recipient_not_allowed"]),
+    reason: z.enum([
+      "resend_unconfigured",
+      "recipient_not_allowed",
+      "demo_room_preview_only",
+    ]),
     message: z.literal("Preview only: no email was sent."),
     preview: z
       .object({

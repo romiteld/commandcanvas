@@ -344,6 +344,39 @@ describe("browser meeting packet API", () => {
     });
   });
 
+  it("accepts the honest demo-room preview reason", async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        send: {
+          mode: "preview_only",
+          status: "preview_only",
+          sendRequestId: SEND_ID,
+          outboundShareId: SEND_ID,
+          reason: "demo_room_preview_only",
+          message: "Preview only: no email was sent.",
+          preview: {
+            subject: "Launch meeting packet",
+            recipients,
+            contentSnapshot,
+          },
+        },
+      }),
+    );
+    const api = createBrowserPacketApi({ accessToken: JWT, fetcher });
+
+    await expect(
+      api.executeSend({
+        roomId: ROOM_ID,
+        sendRequestId: SEND_ID,
+        explicitHostAuthorization: true,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { mode: "preview_only", reason: "demo_room_preview_only" },
+    });
+  });
+
   it("durably cancels a staged send through the explicit host endpoint", async () => {
     const input = {
       roomId: ROOM_ID,

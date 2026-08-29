@@ -105,11 +105,19 @@ export function createBrowserMeetingApi(options: {
   accessToken: string;
   fetcher?: typeof fetch;
   createRequestId?: () => string;
+  invitationRequestStorage?: Pick<
+    Storage,
+    "getItem" | "setItem" | "removeItem"
+  > | null;
 }): BrowserMeetingApi {
   const bearer = parseBearerJwtHeader(`Bearer ${options.accessToken}`);
   const fetcher = options.fetcher ?? fetch;
   const createRequestId =
     options.createRequestId ?? (() => globalThis.crypto.randomUUID());
+  const invitationRequestStorage =
+    options.invitationRequestStorage === undefined
+      ? browserSessionStorage()
+      : options.invitationRequestStorage;
   const pendingInvitationIds = new Map<string, string>();
   const invitationDraftSchema = createMeetingInvitationRequestSchema.omit({
     requestId: true,
@@ -125,7 +133,7 @@ export function createBrowserMeetingApi(options: {
         (envelope) => envelope.meeting,
         signal,
       ),
-    createInvitation: (
+    createInvitation: async (
       roomId: string,
       input: CreateMeetingInvitationDraft,
       signal?: AbortSignal,
@@ -133,33 +141,35 @@ export function createBrowserMeetingApi(options: {
       const parsed = invitationDraftSchema.safeParse(input);
       if (!z.uuid().safeParse(roomId).success || !parsed.success)
         return invalidInput();
-      const key = JSON.stringify([roomId, parsed.data]);
-      let requestId = pendingInvitationIds.get(key);
+      const inMemoryKey = JSON.stringify([roomId, parsed.data]);
+      const storageKey = await invitationStorageKey(inMemoryKey);
+      let requestId =
+        pendingInvitationIds.get(inMemoryKey) ??
+        readPersistedRequestId(invitationRequestStorage, storageKey);
       if (!requestId) {
         const candidate = createRequestId();
         if (!z.uuid().safeParse(candidate).success) return invalidInput();
         requestId = candidate;
-        pendingInvitationIds.set(key, requestId);
       }
+      pendingInvitationIds.set(inMemoryKey, requestId);
+      persistRequestId(invitationRequestStorage, storageKey, requestId);
       const requestInput: CreateMeetingInvitationRequest = {
         requestId,
         ...parsed.data,
       };
-      return call(
-            `/api/meetings/${roomId}/invitations`,
-            requestInput,
-            createMeetingInvitationRequestSchema,
-            invitationResponseSchema,
-            (envelope) => envelope.invitation,
-            signal,
-          ).then((result) => {
-            if (
-              result.ok &&
-              result.value.delivery.status !== "reconciling"
-            )
-              pendingInvitationIds.delete(key);
-            return result;
-          });
+      const result = await call(
+        `/api/meetings/${roomId}/invitations`,
+        requestInput,
+        createMeetingInvitationRequestSchema,
+        invitationResponseSchema,
+        (envelope) => envelope.invitation,
+        signal,
+      );
+      if (result.ok && result.value.delivery.status !== "reconciling") {
+        pendingInvitationIds.delete(inMemoryKey);
+        removePersistedRequestId(invitationRequestStorage, storageKey);
+      }
+      return result;
     },
     acceptInvitation: (
       input: AcceptMeetingInvitationRequest,
@@ -221,6 +231,77 @@ export function createBrowserMeetingApi(options: {
         error: { code: "request_failed", message: "Meeting request failed." },
       };
     }
+  }
+}
+
+const INVITATION_REQUEST_STORAGE_PREFIX =
+  "commandcanvas:invitation-request:v1:";
+
+function browserSessionStorage(): Pick<
+  Storage,
+  "getItem" | "setItem" | "removeItem"
+> | null {
+  try {
+    return typeof globalThis.sessionStorage === "undefined"
+      ? null
+      : globalThis.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+async function invitationStorageKey(identity: string) {
+  try {
+    const digest = await globalThis.crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(identity),
+    );
+    const hex = [...new Uint8Array(digest)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    return `${INVITATION_REQUEST_STORAGE_PREFIX}${hex}`;
+  } catch {
+    return null;
+  }
+}
+
+function readPersistedRequestId(
+  storage: Pick<Storage, "getItem"> | null,
+  key: string | null,
+) {
+  if (!storage || !key) return undefined;
+  try {
+    const requestId = storage.getItem(key);
+    return requestId && z.uuid().safeParse(requestId).success
+      ? requestId
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistRequestId(
+  storage: Pick<Storage, "setItem"> | null,
+  key: string | null,
+  requestId: string,
+) {
+  if (!storage || !key) return;
+  try {
+    storage.setItem(key, requestId);
+  } catch {
+    // Session storage can be disabled; same-page in-memory idempotency remains.
+  }
+}
+
+function removePersistedRequestId(
+  storage: Pick<Storage, "removeItem"> | null,
+  key: string | null,
+) {
+  if (!storage || !key) return;
+  try {
+    storage.removeItem(key);
+  } catch {
+    // A failed cleanup must not turn a completed invitation into a user error.
   }
 }
 

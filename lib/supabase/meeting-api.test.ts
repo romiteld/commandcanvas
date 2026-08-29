@@ -98,6 +98,79 @@ describe("browser meeting API", () => {
     expect(createRequestId).toHaveBeenCalledOnce();
   });
 
+  it("recovers a lost invitation response after the browser API is recreated without storing PII", async () => {
+    const persisted = new Map<string, string>();
+    const invitationRequestStorage = {
+      getItem: vi.fn((key: string) => persisted.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => {
+        persisted.set(key, value);
+      }),
+      removeItem: vi.fn((key: string) => {
+        persisted.delete(key);
+      }),
+    };
+    const invitation = {
+      invitationId: "33333333-3333-4333-8333-333333333333",
+      roomId: ROOM_ID,
+      expiresAt: "2026-08-30T12:00:00.000Z",
+      joinUrl: `https://commandcanvas.example/meet#invite=${"a".repeat(43)}`,
+      delivery: {
+        status: "submitted" as const,
+        message: "Invitation was submitted to the email provider; delivery is pending.",
+        providerId: "email_accepted_123",
+      },
+    };
+    const firstFetch = vi.fn().mockRejectedValueOnce(new TypeError("lost response"));
+    const firstApi = createBrowserMeetingApi({
+      accessToken: JWT,
+      fetcher: firstFetch,
+      createRequestId: () => "44444444-4444-4444-8444-444444444444",
+      invitationRequestStorage,
+    });
+    const input = {
+      email: "Sarah@Example.com",
+      displayName: "Sarah Person",
+      color: "#a855f7",
+      expiresInHours: 24,
+    };
+
+    await expect(firstApi.createInvitation(ROOM_ID, input)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "request_failed" },
+    });
+    expect(persisted.size).toBe(1);
+    const persistedText = JSON.stringify([...persisted.entries()]);
+    expect(persistedText).not.toContain("sarah@example.com");
+    expect(persistedText).not.toContain("Sarah Person");
+    expect(persistedText).not.toContain(JWT);
+
+    const secondFetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        void input;
+        void init;
+        return Response.json({ ok: true, invitation });
+      },
+    );
+    const secondCreateRequestId = vi.fn(
+      () => "55555555-5555-4555-8555-555555555555",
+    );
+    const recreatedApi = createBrowserMeetingApi({
+      accessToken: JWT,
+      fetcher: secondFetch,
+      createRequestId: secondCreateRequestId,
+      invitationRequestStorage,
+    });
+
+    await expect(
+      recreatedApi.createInvitation(ROOM_ID, input),
+    ).resolves.toEqual({ ok: true, value: invitation });
+    const firstBody = JSON.parse(String(firstFetch.mock.calls[0]?.[1]?.body));
+    const retriedBody = JSON.parse(String(secondFetch.mock.calls[0]?.[1]?.body));
+    expect(retriedBody.requestId).toBe(firstBody.requestId);
+    expect(secondCreateRequestId).not.toHaveBeenCalled();
+    expect(persisted.size).toBe(0);
+  });
+
   it("does not trust malformed success envelopes", async () => {
     const api = createBrowserMeetingApi({
       accessToken: JWT,

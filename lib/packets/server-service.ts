@@ -77,7 +77,8 @@ export type PacketServiceErrorCode =
   | "packet_conflict"
   | "packet_unavailable"
   | "email_submission_failed"
-  | "email_recording_failed";
+  | "email_recording_failed"
+  | "email_rate_limited";
 
 export interface PacketServiceError {
   code: PacketServiceErrorCode;
@@ -145,7 +146,10 @@ export interface PreviewOnlyPacketSendValue {
   status: "preview_only";
   sendRequestId: string;
   outboundShareId: string;
-  reason: "resend_unconfigured" | "recipient_not_allowed";
+  reason:
+    | "resend_unconfigured"
+    | "recipient_not_allowed"
+    | "demo_room_preview_only";
   message: "Preview only: no email was sent.";
   preview: {
     subject: string;
@@ -413,6 +417,25 @@ const authorizationRefusalSchema = z
     changed: z.boolean(),
   })
   .strict();
+const resendAdmissionSchema = z.discriminatedUnion("allowed", [
+  z
+    .object({
+      allowed: z.literal(true),
+      reason: z.literal("admitted"),
+      changed: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      allowed: z.literal(false),
+      reason: z.enum([
+        "demo_room_preview_only",
+        "packet_resend_rate_limited",
+      ]),
+      changed: z.literal(false),
+    })
+    .strict(),
+]);
 const completedSendSchema = z
   .object({
     sendRequestId: z.uuid(),
@@ -782,10 +805,36 @@ export function createPacketService(
 
     const staged = await loadStagedSend(client, input.data);
     if (!staged.ok) return staged;
-    const decision = decideDelivery(
+    let decision = decideDelivery(
       dependencies.environment,
       staged.value.recipient_snapshot,
     );
+
+    if (decision.mode === "resend") {
+      const admissionResponse = await callRpc(
+        client,
+        "reserve_packet_resend_admission",
+        {
+          p_room_id: input.data.roomId,
+          p_send_request_id: input.data.sendRequestId,
+          p_host_user_id: actorUserId,
+        },
+      );
+      if (!admissionResponse.ok) return admissionResponse;
+      const admission = resendAdmissionSchema.safeParse(admissionResponse.data);
+      if (!admission.success) return packetUnavailable();
+      if (!admission.data.allowed) {
+        if (admission.data.reason === "packet_resend_rate_limited")
+          return failure(
+            "email_rate_limited",
+            "Packet email capacity is temporarily unavailable.",
+          );
+        decision = {
+          mode: "preview",
+          reason: "demo_room_preview_only",
+        };
+      }
+    }
 
     const authorization = await callRpc(
       client,
@@ -1183,7 +1232,10 @@ async function completeSendAttempt(
 type DeliveryDecision =
   | {
       mode: "preview";
-      reason: "resend_unconfigured" | "recipient_not_allowed";
+      reason:
+        | "resend_unconfigured"
+        | "recipient_not_allowed"
+        | "demo_room_preview_only";
     }
   | {
       mode: "resend";

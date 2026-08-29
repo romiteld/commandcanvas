@@ -385,6 +385,8 @@ function serviceErrorResponse(error: PacketServiceError) {
       return errorResponse(409, error);
     case "email_submission_failed":
       return errorResponse(502, error);
+    case "email_rate_limited":
+      return errorResponse(429, error, { "retry-after": "3600" });
     case "email_recording_failed":
     case "packet_unavailable":
       return errorResponse(503, error);
@@ -419,16 +421,22 @@ function serviceUnavailable() {
 function errorResponse(
   status: number,
   error: { code: string; message: string },
+  headers: Readonly<Record<string, string>> = {},
 ) {
-  return jsonResponse(status, { ok: false, error });
+  return jsonResponse(status, { ok: false, error }, headers);
 }
 
-function jsonResponse(status: number, body: unknown) {
+function jsonResponse(
+  status: number,
+  body: unknown,
+  extraHeaders: Readonly<Record<string, string>> = {},
+) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
+      ...extraHeaders,
     },
   });
 }

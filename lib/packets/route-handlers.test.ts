@@ -446,4 +446,36 @@ describe("packet route operations", () => {
       requestWithSignal.signal,
     );
   });
+
+  it("returns a retryable 429 when durable packet email admission is capped", async () => {
+    const { dependencies } = createDependencies({
+      serviceResult: {
+        ok: false,
+        error: {
+          code: "email_rate_limited",
+          message: "Packet email capacity is temporarily unavailable.",
+        },
+      },
+    });
+    const response = await handleExecutePacketSendRequest(
+      request({
+        roomId: ROOM_ID,
+        sendRequestId: SEND_REQUEST_ID,
+        explicitHostAuthorization: true,
+      }),
+      ROOM_ID,
+      SEND_REQUEST_ID,
+      dependencies,
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("3600");
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "email_rate_limited",
+        message: "Packet email capacity is temporarily unavailable.",
+      },
+    });
+  });
 });

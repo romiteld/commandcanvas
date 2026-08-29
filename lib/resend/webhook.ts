@@ -181,6 +181,12 @@ export async function handleResendWebhookRequest(
 
   try {
     const result = applyResultSchema.parse(await dependencies.apply(input));
+    if (result.processingResult === "unmatched")
+      return json(
+        503,
+        { ok: false, error: { code: "webhook_target_pending" } },
+        { "retry-after": "5" },
+      );
     return json(200, { ok: true, ...result });
   } catch {
     return error(503, "webhook_persistence_failed");
@@ -297,13 +303,18 @@ function error(status: number, code: string) {
   return json(status, { ok: false, error: { code } });
 }
 
-function json(status: number, body: unknown) {
+function json(
+  status: number,
+  body: unknown,
+  extraHeaders: Readonly<Record<string, string>> = {},
+) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "referrer-policy": "no-referrer",
+      ...extraHeaders,
     },
   });
 }

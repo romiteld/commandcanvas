@@ -173,6 +173,28 @@ describe("signed Resend webhook boundary", () => {
     });
   });
 
+  it("asks Resend to retry a verified event whose provider target is not durable yet", async () => {
+    const deps = dependencies({
+      apply: vi.fn(async () => ({
+        processingResult: "unmatched" as const,
+        target: "none" as const,
+        deliveryStatus: "delivered" as const,
+        changed: false,
+      })),
+    });
+
+    const response = await handleResendWebhookRequest(request(), deps, {
+      RESEND_WEBHOOK_SECRET: "whsec_test",
+    });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("5");
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: { code: "webhook_target_pending" },
+    });
+  });
+
   it("records a signed unknown email event as ignored without changing delivery truth", async () => {
     const deps = dependencies({
       verify: vi.fn(() => ({
