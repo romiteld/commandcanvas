@@ -242,3 +242,202 @@ commit so the report can record the immutable implementation commit hash.
 - DEFERRED BY SCOPE: Task 3 consumes the snapshot to govern acquisition,
   transforms, and edge actions; Task 4 handles UI/state display and calibration
   collection flow. Neither is implemented or wired in this task.
+
+## Fix Round 1 — identity producer, confidence provenance, and monotonic evidence
+
+### Review findings fixed
+
+1. The controller no longer derives state keys from the detector's `left` or
+   `right` label. It now creates `hand-track-*` identities for every hand and
+   matches them with palm/MCP spatial continuity plus a short velocity
+   prediction. This works before the Task 2 reliability reducer, so a label
+   flip, detector reordering, rapid motion, or a second hand entering cannot
+   change the producer's identity merely because handedness changed. The
+   current normalized worker contract carries no ROI, so this uses the
+   available spatial continuity rather than inventing ROI data.
+2. `PinchVoteInput`, `HandReliabilityHandInput`, and
+   `HandReliabilityHandSnapshot` now carry explicit index-tip and thumb-tip
+   confidence. Pointer continuity requires a real, adequate index; pinch
+   transition voting additionally requires a real, adequate thumb. Predicted,
+   low-index, and low-thumb samples never engage or release a pinch, while an
+   existing latch stays intact during the uncertainty window. The controller
+   propagates this Task 1 measurement provenance for both bimanual pointers as
+   well as single-hand observations.
+3. Both the vote and reliability reducers now retain a latest-evidence
+   timestamp. Equal or older frames return a typed `ignored: true` snapshot and
+   preserve the prior state; duplicate frames cannot become a second vote and
+   older loss frames cannot rewind `reacquire` to an earlier grace phase.
+
+The additions remain Task 2-only. No object targeting, edge-zone judgement,
+canonical mutation, receipt, UI state machine, or Task 3 policy was added.
+`edgeAction` remains `null` for every reliability snapshot.
+
+### Changed files
+
+- `lib/gesture/hand-calibration.ts` — explicit index/thumb confidence
+  provenance, predicted-sample pinch gate, monotonic vote/reliability state,
+  and additive `ignored` evidence status.
+- `lib/gesture/hand-calibration.test.ts` — low-thumb, low-index, predicted,
+  duplicate, out-of-order, and loss-grace regression cases, plus snapshot
+  confidence provenance assertions.
+- `lib/gesture/hand-tracking-controller.ts` — label-independent spatial
+  `hand-track-*` association and additive two-hand reliability provenance.
+- `lib/gesture/hand-tracking-controller.test.ts` — real controller-producer to
+  reliability-reducer coverage for a rapid label flip/reorder/second-hand
+  entrance and bimanual provenance propagation.
+
+### TDD evidence
+
+All commands used Node `v22.14.0` with `TMPDIR=/tmp`, `TEMP=/tmp`, and
+`TMP=/tmp`.
+
+#### RED — reviewer findings 1–3
+
+Command:
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test -- lib/gesture/hand-calibration.test.ts lib/gesture/hand-tracking-controller.test.ts
+```
+
+Observed output before production changes:
+
+```text
+Test Files  2 failed (2)
+Tests  4 failed | 52 passed (56)
+```
+
+The named failures demonstrated each reported defect: a low-thumb/index or
+predicted sample supplied the second engage vote; duplicate evidence supplied a
+second vote; duplicate loss lacked an ignored state; and the real controller
+producer emitted `["left", "left", "right"]` instead of retaining the first
+track through the label flip and second-hand entrance.
+
+#### GREEN — reviewer findings 1–3
+
+Command:
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test -- lib/gesture/hand-calibration.test.ts lib/gesture/hand-tracking-controller.test.ts
+```
+
+Output:
+
+```text
+Test Files  2 passed (2)
+Tests  56 passed (56)
+```
+
+#### RED/GREEN — self-review temporal boundary
+
+The first green pass prompted a narrow self-review test: a confident frame at
+1040ms must not be accepted after a 1050ms uncertain frame. Before adding the
+voter's `lastEvidenceTimestamp`, the older frame engaged pinch using the 1000ms
+sample.
+
+RED command:
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test -- lib/gesture/hand-calibration.test.ts
+```
+
+RED output:
+
+```text
+Test Files  1 failed (1)
+Tests  1 failed | 22 passed (23)
+Expected pinched false / lastConfidentAt 1000; received pinched true / lastConfidentAt 1040
+```
+
+GREEN command:
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test -- lib/gesture/hand-calibration.test.ts lib/gesture/hand-tracking-controller.test.ts
+```
+
+GREEN output:
+
+```text
+Test Files  2 passed (2)
+Tests  57 passed (57)
+```
+
+#### RED/GREEN — snapshot and bimanual provenance
+
+Two further focused contract checks were added before their production fields:
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test -- lib/gesture/hand-calibration.test.ts
+```
+
+```text
+Test Files  1 failed (1)
+Tests  1 failed | 22 passed (23)
+Expected indexTipConfidence/thumbTipConfidence in the active hand snapshot; fields were absent.
+```
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test -- lib/gesture/hand-tracking-controller.test.ts
+```
+
+```text
+Test Files  1 failed (1)
+Tests  1 failed | 33 passed (34)
+Expected bimanual pointer trackId, prediction, measurements, and trackingState; fields were absent.
+```
+
+After the minimal additive propagation changes:
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test -- lib/gesture/hand-calibration.test.ts lib/gesture/hand-tracking-controller.test.ts
+```
+
+```text
+Test Files  2 passed (2)
+Tests  57 passed (57)
+```
+
+### Verification and self-review
+
+```bash
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm run typecheck
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm run lint
+PATH="/home/romiteld/.nvm/versions/node/v22.14.0/bin:$PATH" TMPDIR=/tmp TEMP=/tmp TMP=/tmp npm test
+git diff --check
+```
+
+Results:
+
+```text
+npm run typecheck: exit 0, no diagnostics
+npm run lint: exit 0, no diagnostics
+Test Files  98 passed (98)
+Tests  988 passed (988)
+git diff --check: exit 0, no output
+```
+
+Self-review confirmed that controller association uses only palm/MCP spatial
+history and velocity, never detector handedness labels; unmatched/expired
+tracks remove only their own per-hand intent state; low-thumb data may preserve
+the pointer but cannot vote pinch; and every duplicate/older reducer result
+keeps state unchanged. No reliability return path feeds an edge decision.
+
+### Commit
+
+Implementation commit:
+
+```text
+5b54eb911437fe9610d64a28490fb3257174a235 Harden hand reliability evidence
+Author: Daniel Romitelli <danny.romitelli@gmail.com>
+Committer: Daniel Romitelli <danny.romitelli@gmail.com>
+```
+
+This appended report section is committed immediately afterward as a separate
+documentation commit so it can contain the immutable implementation hash.
+
+### Remaining evidence boundary
+
+The unit producer trace proves the contract with controlled landmarks; it does
+not prove physical detector identity continuity during real camera occlusion,
+crossing, variable lighting, or a private-relay ROI. Those remain physical
+device/relay checks. The code neither claims them nor changes the Task 3 edge
+policy boundary.
