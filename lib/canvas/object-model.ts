@@ -11,6 +11,21 @@ const widthSchema = z.number().finite().min(160).max(2_000);
 const heightSchema = z.number().finite().min(80).max(1_400);
 const zIndexSchema = z.number().int().min(0).max(100_000);
 const rotationSchema = z.number().finite().min(-180).max(180);
+const safeHttpUrlSchema = z
+  .url()
+  .max(2_048)
+  .refine((value) => {
+    try {
+      const url = new URL(value);
+      return (
+        (url.protocol === "https:" || url.protocol === "http:") &&
+        !url.username &&
+        !url.password
+      );
+    } catch {
+      return false;
+    }
+  }, "Reference URLs must use HTTP(S) without embedded credentials.");
 
 export const NOTE_TEXT_MAX_LENGTH = 4_000;
 export const NOTE_APPEND_TEXT_MAX_LENGTH = 1_000;
@@ -153,7 +168,7 @@ export const diagramKindSchema = z.enum(DIAGRAM_KINDS);
 const nodeDiagramPayloadSchema = z
   .object({
     kind: z.enum(NODE_DIAGRAM_KINDS),
-    sourceSketchId: objectIdSchema,
+    sourceSketchId: objectIdSchema.optional(),
     interpretationSummary: z.string().trim().min(1).max(600),
     nodes: z.array(diagramNodeSchema).min(1).max(30),
     edges: z.array(diagramEdgeSchema).max(60),
@@ -204,7 +219,7 @@ const chartSeriesSchema = z
 const chartPayloadSchema = z
   .object({
     kind: z.enum(CHART_DIAGRAM_KINDS),
-    sourceSketchId: objectIdSchema,
+    sourceSketchId: objectIdSchema.optional(),
     interpretationSummary: z.string().trim().min(1).max(600),
     chart: z
       .object({
@@ -288,6 +303,94 @@ export const framePayloadSchema = z
   })
   .strict();
 
+const dataTableColumnSchema = z
+  .object({
+    id: objectIdSchema,
+    label: z.string().trim().min(1).max(80),
+    kind: z.enum(["text", "number", "currency", "percentage", "date"]),
+  })
+  .strict();
+
+const dataTableCellSchema = z.union([
+  z.string().max(500),
+  z.number().finite().min(-1_000_000_000_000).max(1_000_000_000_000),
+  z.boolean(),
+  z.null(),
+]);
+
+const dataTableRowSchema = z
+  .object({
+    id: objectIdSchema,
+    cells: z.array(dataTableCellSchema).max(12),
+  })
+  .strict();
+
+export const dataTablePayloadSchema = z
+  .object({
+    columns: z.array(dataTableColumnSchema).min(1).max(12),
+    rows: z.array(dataTableRowSchema).max(50),
+  })
+  .strict()
+  .superRefine((payload, context) => {
+    const columnIds = new Set(payload.columns.map((column) => column.id));
+    if (columnIds.size !== payload.columns.length)
+      context.addIssue({
+        code: "custom",
+        path: ["columns"],
+        message: "Table column IDs must be unique.",
+      });
+
+    const rowIds = new Set(payload.rows.map((row) => row.id));
+    if (rowIds.size !== payload.rows.length)
+      context.addIssue({
+        code: "custom",
+        path: ["rows"],
+        message: "Table row IDs must be unique.",
+      });
+
+    payload.rows.forEach((row, index) => {
+      if (row.cells.length !== payload.columns.length)
+        context.addIssue({
+          code: "custom",
+          path: ["rows", index, "cells"],
+          message: "Every table row must contain one cell per column.",
+        });
+    });
+  });
+
+export const referenceCardPayloadSchema = z
+  .object({
+    kind: z.enum(["article", "document", "image", "link"]),
+    sourceUrl: safeHttpUrlSchema.nullable(),
+    summary: z.string().trim().min(1).max(1_200),
+    excerpt: z.string().trim().min(1).max(1_200).nullable(),
+  })
+  .strict();
+
+export const meetingCardPayloadSchema = z
+  .object({
+    kind: z.enum([
+      "decision",
+      "action_item",
+      "summary",
+      "risk",
+      "open_question",
+    ]),
+    body: z.string().trim().min(1).max(4_000),
+    bullets: z.array(z.string().trim().min(1).max(300)).max(20),
+    owner: z.string().trim().min(1).max(80).nullable(),
+    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+    status: z.enum([
+      "proposed",
+      "confirmed",
+      "open",
+      "in_progress",
+      "done",
+      "blocked",
+    ]),
+  })
+  .strict();
+
 const newNoteObjectSchema = z
   .object({
     ...spatialFields,
@@ -336,6 +439,30 @@ const newFrameObjectSchema = z
   })
   .strict();
 
+const newDataTableObjectSchema = z
+  .object({
+    ...spatialFields,
+    type: z.literal("data_table"),
+    payload: dataTablePayloadSchema,
+  })
+  .strict();
+
+const newReferenceCardObjectSchema = z
+  .object({
+    ...spatialFields,
+    type: z.literal("reference_card"),
+    payload: referenceCardPayloadSchema,
+  })
+  .strict();
+
+const newMeetingCardObjectSchema = z
+  .object({
+    ...spatialFields,
+    type: z.literal("meeting_card"),
+    payload: meetingCardPayloadSchema,
+  })
+  .strict();
+
 export const newCanvasObjectSchema = z.discriminatedUnion("type", [
   newNoteObjectSchema,
   newTaskBoardObjectSchema,
@@ -343,6 +470,9 @@ export const newCanvasObjectSchema = z.discriminatedUnion("type", [
   newSketchObjectSchema,
   newDiagramObjectSchema,
   newFrameObjectSchema,
+  newDataTableObjectSchema,
+  newReferenceCardObjectSchema,
+  newMeetingCardObjectSchema,
 ]);
 
 const transformSchema = z
@@ -419,6 +549,9 @@ export type SketchPayload = z.infer<typeof sketchPayloadSchema>;
 export type DiagramPayload = z.infer<typeof diagramPayloadSchema>;
 export type DiagramKind = z.infer<typeof diagramKindSchema>;
 export type FramePayload = z.infer<typeof framePayloadSchema>;
+export type DataTablePayload = z.infer<typeof dataTablePayloadSchema>;
+export type ReferenceCardPayload = z.infer<typeof referenceCardPayloadSchema>;
+export type MeetingCardPayload = z.infer<typeof meetingCardPayloadSchema>;
 export type NewCanvasObject = z.infer<typeof newCanvasObjectSchema>;
 export type NewNoteObject = Extract<NewCanvasObject, { type: "note" }>;
 export type NewFrameObject = Extract<NewCanvasObject, { type: "frame" }>;

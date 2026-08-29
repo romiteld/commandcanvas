@@ -182,6 +182,175 @@ describe("newCanvasObjectSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts a standalone diagram created from spoken intent without inventing a sketch source", () => {
+    const result = diagramPayloadSchema.safeParse({
+      kind: "flowchart",
+      interpretationSummary: "A reviewable approval path created from the spoken request.",
+      nodes: [
+        {
+          id: "node-draft",
+          label: "Draft",
+          kind: "process",
+          x: 40,
+          y: 80,
+          width: 160,
+          height: 72,
+        },
+        {
+          id: "node-approve",
+          label: "Approve",
+          kind: "decision",
+          x: 280,
+          y: 80,
+          width: 160,
+          height: 72,
+        },
+      ],
+      edges: [
+        {
+          id: "edge-review",
+          from: "node-draft",
+          to: "node-approve",
+          label: "review",
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a bounded semantic data table with typed columns", () => {
+    const result = newCanvasObjectSchema.safeParse({
+      id: "table-launch-metrics",
+      type: "data_table",
+      title: "Launch metrics",
+      ...geometry,
+      payload: {
+        columns: [
+          { id: "column-metric", label: "Metric", kind: "text" },
+          { id: "column-target", label: "Target", kind: "number" },
+        ],
+        rows: [
+          {
+            id: "row-signups",
+            cells: ["Signups", 250],
+          },
+          {
+            id: "row-conversion",
+            cells: ["Conversion", 12.5],
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a table row whose cells do not match the declared columns", () => {
+    const result = newCanvasObjectSchema.safeParse({
+      id: "table-invalid",
+      type: "data_table",
+      title: "Invalid table",
+      ...geometry,
+      payload: {
+        columns: [
+          { id: "column-name", label: "Name", kind: "text" },
+          { id: "column-owner", label: "Owner", kind: "text" },
+        ],
+        rows: [{ id: "row-one", cells: ["Launch"] }],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it.each([
+    {
+      id: "reference-article",
+      kind: "article" as const,
+      title: "Browser hand interaction research",
+      sourceUrl: "https://example.com/research/hand-interaction",
+      summary: "A cited research reference brought into the live workspace.",
+    },
+    {
+      id: "reference-image",
+      kind: "image" as const,
+      title: "Launch concept",
+      sourceUrl: "https://example.com/assets/launch-concept.png",
+      summary: "An image reference that remains a semantic canvas object.",
+    },
+    {
+      id: "reference-document",
+      kind: "document" as const,
+      title: "Requirements brief",
+      sourceUrl: null,
+      summary: "A document summary supplied directly by a participant.",
+    },
+  ])("accepts a bounded $kind reference card", (reference) => {
+    expect(
+      newCanvasObjectSchema.safeParse({
+        id: reference.id,
+        type: "reference_card",
+        title: reference.title,
+        ...geometry,
+        payload: {
+          kind: reference.kind,
+          sourceUrl: reference.sourceUrl,
+          summary: reference.summary,
+          excerpt: null,
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("refuses active-content and credential-bearing reference URLs", () => {
+    for (const sourceUrl of [
+      "javascript:alert(1)",
+      "https://user:password@example.com/private",
+      "data:text/html,<script>alert(1)</script>",
+    ]) {
+      expect(
+        newCanvasObjectSchema.safeParse({
+          id: "reference-unsafe",
+          type: "reference_card",
+          title: "Unsafe reference",
+          ...geometry,
+          payload: {
+            kind: "link",
+            sourceUrl,
+            summary: "This URL must not enter canonical canvas state.",
+            excerpt: null,
+          },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it.each([
+    "decision",
+    "action_item",
+    "summary",
+    "risk",
+    "open_question",
+  ] as const)("accepts a bounded %s meeting card", (kind) => {
+    expect(
+      newCanvasObjectSchema.safeParse({
+        id: `meeting-${kind.replace("_", "-")}`,
+        type: "meeting_card",
+        title: kind.replace("_", " "),
+        ...geometry,
+        payload: {
+          kind,
+          body: "A structured outcome created from the live meeting.",
+          bullets: ["Visible", "Attributed", "Reviewable"],
+          owner: kind === "action_item" ? "Danny" : null,
+          dueDate: kind === "action_item" ? "2026-09-03" : null,
+          status: kind === "action_item" ? "open" : "confirmed",
+        },
+      }).success,
+    ).toBe(true);
+  });
+
   it.each([
     {
       kind: "pie_chart" as const,

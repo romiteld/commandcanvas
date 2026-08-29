@@ -17,6 +17,13 @@ const DIAGRAM_NODE_LIMIT = 12;
 const DIAGRAM_EDGE_LIMIT = 16;
 const CHART_SERIES_LIMIT = 3;
 const CHART_POINTS_PER_SERIES_LIMIT = 8;
+const TABLE_COLUMN_LIMIT = 8;
+const TABLE_ROW_LIMIT = 12;
+const TABLE_TEXT_CELL_LIMIT = 160;
+const REFERENCE_SUMMARY_LIMIT = 600;
+const REFERENCE_EXCERPT_LIMIT = 400;
+const MEETING_CARD_BODY_LIMIT = 800;
+const MEETING_CARD_BULLET_LIMIT = 8;
 const RECEIPT_AFFECTED_OBJECT_LIMIT = 12;
 
 type TruncationReason = "object_limit" | "receipt_limit" | "byte_budget";
@@ -344,7 +351,47 @@ function summarizePayload(object: CanvasObject) {
         tone: object.payload.tone,
         container: true as const,
       };
+    case "data_table": {
+      const columns = object.payload.columns.slice(0, TABLE_COLUMN_LIMIT);
+      const rows = object.payload.rows.slice(0, TABLE_ROW_LIMIT).map((row) => ({
+        id: row.id,
+        cells: row.cells.slice(0, columns.length).map(summarizeTableCell),
+      }));
+      return {
+        columnCount: object.payload.columns.length,
+        rowCount: object.payload.rows.length,
+        returnedColumnCount: columns.length,
+        returnedRowCount: rows.length,
+        omittedColumnCount: object.payload.columns.length - columns.length,
+        omittedRowCount: object.payload.rows.length - rows.length,
+        columns,
+        rows,
+      };
+    }
+    case "reference_card":
+      return {
+        kind: object.payload.kind,
+        sourceUrl: object.payload.sourceUrl,
+        summary: object.payload.summary.slice(0, REFERENCE_SUMMARY_LIMIT),
+        excerpt:
+          object.payload.excerpt?.slice(0, REFERENCE_EXCERPT_LIMIT) ?? null,
+      };
+    case "meeting_card":
+      return {
+        kind: object.payload.kind,
+        body: object.payload.body.slice(0, MEETING_CARD_BODY_LIMIT),
+        bullets: object.payload.bullets.slice(0, MEETING_CARD_BULLET_LIMIT),
+        owner: object.payload.owner,
+        dueDate: object.payload.dueDate,
+        status: object.payload.status,
+      };
   }
+}
+
+function summarizeTableCell(
+  cell: string | number | boolean | null,
+): string | number | boolean | null {
+  return typeof cell === "string" ? cell.slice(0, TABLE_TEXT_CELL_LIMIT) : cell;
 }
 
 function summarizeReceipt(receipt: ActivityReceipt) {

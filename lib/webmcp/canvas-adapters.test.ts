@@ -327,7 +327,72 @@ describe("canvas WebMCP adapters", () => {
       }),
       parentId: null,
     };
-    hydrate(store, [note, taskBoard, schedule, sketch, diagram, chart, frame]);
+    const table = persistObject({
+      id: "table-launch",
+      type: "data_table",
+      title: "Launch metrics",
+      x: 3_100,
+      y: 20,
+      width: 900,
+      height: 520,
+      zIndex: 7,
+      payload: {
+        columns: [
+          { id: "column-metric", label: "Metric", kind: "text" },
+          { id: "column-target", label: "Target", kind: "number" },
+        ],
+        rows: [
+          { id: "row-signups", cells: ["Signups", 250] },
+          { id: "row-conversion", cells: ["Conversion", 12.5] },
+        ],
+      },
+    });
+    const reference = persistObject({
+      id: "reference-research",
+      type: "reference_card",
+      title: "Hand interaction research",
+      x: 3_100,
+      y: 580,
+      width: 560,
+      height: 360,
+      zIndex: 8,
+      payload: {
+        kind: "article",
+        sourceUrl: "https://example.com/research/hand-interaction",
+        summary: "A cited source brought into the live canvas.",
+        excerpt: "Pinch hysteresis improves acquisition stability.",
+      },
+    });
+    const meetingCard = persistObject({
+      id: "meeting-decision",
+      type: "meeting_card",
+      title: "Realtime decision",
+      x: 3_700,
+      y: 580,
+      width: 560,
+      height: 360,
+      zIndex: 9,
+      payload: {
+        kind: "decision",
+        body: "Use one canonical mutation and receipt path.",
+        bullets: ["Hands", "Voice", "ChatGPT via WebMCP"],
+        owner: null,
+        dueDate: null,
+        status: "confirmed",
+      },
+    });
+    hydrate(store, [
+      note,
+      taskBoard,
+      schedule,
+      sketch,
+      diagram,
+      chart,
+      frame,
+      table,
+      reference,
+      meetingCard,
+    ]);
 
     const result = await adapters.executeTool({
       toolName: "get_canvas_state",
@@ -405,6 +470,36 @@ describe("canvas WebMCP adapters", () => {
       spatial: { rotation: 15 },
       state: { parentId: null },
       payload: { tone: "violet", container: true },
+    });
+    expect(summaries["table-launch"].payload).toEqual({
+      columnCount: 2,
+      rowCount: 2,
+      returnedColumnCount: 2,
+      returnedRowCount: 2,
+      omittedColumnCount: 0,
+      omittedRowCount: 0,
+      columns: [
+        { id: "column-metric", label: "Metric", kind: "text" },
+        { id: "column-target", label: "Target", kind: "number" },
+      ],
+      rows: [
+        { id: "row-signups", cells: ["Signups", 250] },
+        { id: "row-conversion", cells: ["Conversion", 12.5] },
+      ],
+    });
+    expect(summaries["reference-research"].payload).toEqual({
+      kind: "article",
+      sourceUrl: "https://example.com/research/hand-interaction",
+      summary: "A cited source brought into the live canvas.",
+      excerpt: "Pinch hysteresis improves acquisition stability.",
+    });
+    expect(summaries["meeting-decision"].payload).toEqual({
+      kind: "decision",
+      body: "Use one canonical mutation and receipt path.",
+      bullets: ["Hands", "Voice", "ChatGPT via WebMCP"],
+      owner: null,
+      dueDate: null,
+      status: "confirmed",
     });
   });
 
