@@ -15,9 +15,9 @@ alter table private.room_email_invitations
 update private.room_email_invitations invitation
 set
   request_id = invitation.id,
-  expires_in_hours = pg_catalog.greatest(
+  expires_in_hours = greatest(
     1,
-    pg_catalog.least(
+    least(
       168,
       pg_catalog.ceil(
         extract(epoch from invitation.expires_at - invitation.created_at)

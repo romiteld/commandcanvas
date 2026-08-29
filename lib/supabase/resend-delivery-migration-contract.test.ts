@@ -49,10 +49,11 @@ describe("forward Resend delivery migrations", () => {
     expect(sql).not.toMatch(/raw_token/i);
   });
 
-  it("uses PostgreSQL EXTRACT syntax without schema-qualifying the keyword", () => {
+  it("does not schema-qualify PostgreSQL syntax constructs as functions", () => {
     const sql = forwardMigration("harden_invitation_delivery");
     expect(sql).toMatch(/extract\s*\(\s*epoch\s+from\s+invitation\.expires_at/i);
     expect(sql).not.toMatch(/pg_catalog\.extract\s*\(/i);
+    expect(sql).not.toMatch(/pg_catalog\.(?:least|greatest)\s*\(/i);
   });
 
   it("keeps invitation mutation RPCs host checked, service-only, and safe-search-path", () => {
