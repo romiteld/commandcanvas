@@ -326,3 +326,96 @@ The build is therefore recorded as environment-blocked, not passing.
 
 These boundaries require Task 7 replay, fake-media, real-device, target-browser,
 and deployed-environment evidence. Unit/component tests do not close them.
+
+---
+
+## Review fix round 1
+
+Independent review required six important corrections. They are implemented in
+`cace387862679c9e4838e57c3775e14a8bbef289` without changing the Task 2 or Task 3
+reducers.
+
+### Corrections completed
+
+1. Calibration is now operational rather than decorative. The full-canvas
+   overlay collects reach, open-pinch, and closed-pinch samples; builds and
+   retains a `HandCalibrationProfile` for the current camera component session;
+   and sends observations through Task 2's `mapCalibratedPointer`, gain states,
+   reliability reducer, calibrated thresholds, and temporal pinch vote before
+   Task 3. Fallback calibration is used only after the visible Skip action.
+2. Live ink moved to an isolated `HandInkPreview` leaf and the existing narrow
+   `CanvasMotionLayer`. Twenty transient samples coalesce into one animation
+   frame DOM write and produce zero additional React Profiler commits. React
+   renders only completed stroke boundaries and the durable sketch commit.
+3. Touch, stylus, and mouse drawing remain explicitly available while the
+   camera is ready. Hand drawing is a separate visible action, and voice can
+   select the pointer path instead of silently preferring the camera.
+4. Authoritative asynchronous object transforms and exits retain the final
+   ephemeral visual state until the command is applied. A refused command
+   visibly rolls that state back; a pending preview is not cleared early by a
+   following reducer cleanup effect.
+5. The eraser latch re-arms whenever the semantic pose leaves `point`, so
+   `point -> open_palm -> point` can erase two separate strokes without an
+   idle-only dependency.
+6. The hand-sensor PiP is clamped to the workspace and above the tool dock in
+   all four drag directions. It is reclamped on resize and orientation change,
+   keeping its drag handle reachable on compact viewports.
+
+The round also integrated the concurrently landed generic object contract in
+the room: standalone diagrams safely omit `sourceSketchId`, generic table,
+reference, and meeting-card previews render through `SemanticObjectPreview`,
+and `create_semantic_object` resolves to exactly one canonical `object.create`
+command and receipt.
+
+### TDD evidence for review fixes
+
+The initial review-contract run was genuinely red:
+
+```text
+Test Files  4 failed
+Tests       9 failed | 96 passed (105)
+```
+
+The final focused command is green:
+
+```bash
+env -u TEMP -u TMP npm test -- --run \
+  lib/gesture/spatial-room-input.test.ts \
+  lib/gesture/canvas-motion-layer.test.ts \
+  components/command-canvas/hand-ink-preview.test.tsx \
+  components/command-canvas/spatial-camera-control.test.tsx \
+  components/command-canvas/command-canvas-room.test.tsx \
+  components/command-canvas/command-canvas-room-hand-navigation.test.tsx
+```
+
+```text
+Test Files  6 passed (6)
+Tests       114 passed (114)
+```
+
+This includes direct tests that two retained profiles map the same physical
+point differently, calibrated pinch thresholds alter the emitted semantic
+state after the two-of-three vote, camera-ready pen input remains usable,
+deferred authority retains the final preview, refusal rolls it back, the eraser
+re-arms, extreme mobile PiP drags stay bounded, and twenty ink samples do not
+rerender the React preview leaf.
+
+### Final repository checks at commit time
+
+- `npm run lint`: exit 0, no diagnostics.
+- Task 4 explicit-path `git diff --check`: exit 0, no whitespace errors.
+- Full suite: `108` files and `1117` tests passed; `7` tests failed only in
+  concurrent, unstaged delivery work (`4` in
+  `lib/packets/server-service.test.ts` and `3` in
+  `lib/supabase/resend-reconciliation-migration-contract.test.ts`). No Task 4
+  suite failed.
+- Project typecheck was not green because concurrent
+  `lib/supabase/meeting-api.test.ts:162` produced two diagnostics. There was no
+  Task 4 diagnostic.
+- The production build was not rerun or relabeled green in this round. The last
+  attempt remains environment-blocked before application compilation because
+  the shared `node_modules` symlink points outside Turbopack's filesystem root.
+
+The concurrent delivery files were neither edited nor staged by Task 4. The
+physical-device, target-browser, production-build, deployment, and provider
+verification boundaries listed above remain intentionally unclaimed.
