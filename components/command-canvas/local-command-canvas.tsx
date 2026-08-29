@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { CommandCanvasRoom } from "@/components/command-canvas/command-canvas-room";
+import type { WebMcpSurfaceState } from "@/components/command-canvas/chatgpt-command-surface";
 import {
   createCanvasStore,
   type CanvasStoreState,
@@ -11,12 +12,19 @@ import { createCanvasWebMcpAdapters } from "@/lib/webmcp/canvas-adapters";
 import { resolveDocumentWebMcpTarget } from "@/lib/webmcp/document-target";
 import type { WebMcpExecutionContext } from "@/lib/webmcp/phase-guards";
 import { WebMcpRegistry } from "@/lib/webmcp/registry";
+import type { WebMcpExecutionEvent } from "@/lib/webmcp/registry";
+import { upsertWebMcpExecutionActivity } from "@/lib/webmcp/execution-activity";
 
 export function LocalCommandCanvas() {
   const [webMcpStatus, setWebMcpStatus] = useState<{
     value: string;
     tone: "idle" | "working" | "ready";
   }>({ value: "Checking Site Tools…", tone: "working" });
+  const [webMcpSurfaceState, setWebMcpSurfaceState] =
+    useState<WebMcpSurfaceState>({ status: "checking" });
+  const [webMcpExecutionActivity, setWebMcpExecutionActivity] = useState<
+    readonly WebMcpExecutionEvent[]
+  >([]);
   const [store] = useState(() =>
     createCanvasStore("room-local", {
       actor: {
@@ -36,6 +44,7 @@ export function LocalCommandCanvas() {
       queueMicrotask(() => {
         if (active)
           setWebMcpStatus({ value: "Site Tools unavailable", tone: "idle" });
+        if (active) setWebMcpSurfaceState({ status: "unavailable" });
       });
       return () => {
         active = false;
@@ -51,6 +60,17 @@ export function LocalCommandCanvas() {
       target,
       getContext: () => localWebMcpContext(store.getState()),
       adapters: createCanvasWebMcpAdapters({ store }),
+      onExecutionEvent(event) {
+        if (!active) return;
+        setWebMcpExecutionActivity((current) =>
+          upsertWebMcpExecutionActivity(current, event),
+        );
+        setWebMcpSurfaceState({
+          status: "invoked",
+          registeredToolCount: registry.registeredToolNames().length,
+          latestInvocationId: event.invocationId,
+        });
+      },
     });
 
     const sync = async () => {
@@ -61,12 +81,23 @@ export function LocalCommandCanvas() {
             value: `${registry.registeredToolNames().length} Site Tools registered`,
             tone: "ready",
           });
+        if (active)
+          setWebMcpSurfaceState((current) =>
+            current.status === "invoked"
+              ? current
+              : {
+                  status: "registered_to_page",
+                  registeredToolCount: registry.registeredToolNames().length,
+                },
+          );
       } catch {
         if (active)
           setWebMcpStatus({
             value: "Site Tools registration failed",
             tone: "idle",
           });
+        if (active)
+          setWebMcpSurfaceState({ status: "registration_failed" });
       }
     };
 
@@ -85,6 +116,8 @@ export function LocalCommandCanvas() {
     <CommandCanvasRoom
       store={store}
       serviceStatus={{ webMcp: webMcpStatus }}
+      webMcpSurfaceState={webMcpSurfaceState}
+      webMcpExecutionActivity={webMcpExecutionActivity}
     />
   );
 }

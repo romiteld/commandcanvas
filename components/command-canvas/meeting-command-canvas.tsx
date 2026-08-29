@@ -5,6 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { StoreApi } from "zustand";
 
 import { CommandCanvasRoom } from "@/components/command-canvas/command-canvas-room";
+import type { WebMcpSurfaceState } from "@/components/command-canvas/chatgpt-command-surface";
 import type { SpatialCameraControllerPreferences } from "@/components/command-canvas/spatial-camera-control";
 import { MeetingFilmstrip } from "@/components/command-canvas/meeting-filmstrip";
 import {
@@ -41,8 +42,10 @@ import { resolveDocumentWebMcpTarget } from "@/lib/webmcp/document-target";
 import type { WebMcpExecutionContext } from "@/lib/webmcp/phase-guards";
 import {
   WebMcpRegistry,
+  type WebMcpExecutionEvent,
   type WebMcpRegistrationTarget,
 } from "@/lib/webmcp/registry";
+import { upsertWebMcpExecutionActivity } from "@/lib/webmcp/execution-activity";
 
 type BrowserClient = SupabaseClient;
 
@@ -86,6 +89,11 @@ export function MeetingCommandCanvas({
     value: "Checking Site Tools…",
     tone: "working" as "idle" | "working" | "ready",
   });
+  const [webMcpSurfaceState, setWebMcpSurfaceState] =
+    useState<WebMcpSurfaceState>({ status: "checking" });
+  const [webMcpExecutionActivity, setWebMcpExecutionActivity] = useState<
+    readonly WebMcpExecutionEvent[]
+  >([]);
 
   useEffect(() => {
     const lifecycle = new AbortController();
@@ -416,6 +424,9 @@ export function MeetingCommandCanvas({
       void Promise.resolve().then(() =>
         setWebMcpStatus({ value: "Site Tools unavailable", tone: "idle" }),
       );
+      void Promise.resolve().then(() =>
+        setWebMcpSurfaceState({ status: "unavailable" }),
+      );
       return;
     }
     const registry = createStandardMeetingWebMcpRegistry({
@@ -433,6 +444,17 @@ export function MeetingCommandCanvas({
         preparePacket: prepareMeetingPacket,
         stagePacketSend: stageMeetingPacketSend,
       },
+      onExecutionEvent(event) {
+        if (!active) return;
+        setWebMcpExecutionActivity((current) =>
+          upsertWebMcpExecutionActivity(current, event),
+        );
+        setWebMcpSurfaceState({
+          status: "invoked",
+          registeredToolCount: registry.registeredToolNames().length,
+          latestInvocationId: event.invocationId,
+        });
+      },
     });
     webMcpRegistryRef.current = registry;
     let active = true;
@@ -444,9 +466,20 @@ export function MeetingCommandCanvas({
             value: `${registry.registeredToolNames().length} Site Tools registered`,
             tone: "ready",
           });
+        if (active)
+          setWebMcpSurfaceState((current) =>
+            current.status === "invoked"
+              ? current
+              : {
+                  status: "registered_to_page",
+                  registeredToolCount: registry.registeredToolNames().length,
+                },
+          );
       } catch {
         if (active)
           setWebMcpStatus({ value: "Site Tools registration failed", tone: "idle" });
+        if (active)
+          setWebMcpSurfaceState({ status: "registration_failed" });
       }
     };
     void sync();
@@ -475,15 +508,27 @@ export function MeetingCommandCanvas({
     if (!registry) return;
     void registry.sync().then(
       () =>
-        setWebMcpStatus({
-          value: `${registry.registeredToolNames().length} Site Tools registered`,
-          tone: "ready",
-        }),
-      () =>
+        {
+          setWebMcpStatus({
+            value: `${registry.registeredToolNames().length} Site Tools registered`,
+            tone: "ready",
+          });
+          setWebMcpSurfaceState((current) =>
+            current.status === "invoked"
+              ? current
+              : {
+                  status: "registered_to_page",
+                  registeredToolCount: registry.registeredToolNames().length,
+                },
+          );
+        },
+      () => {
         setWebMcpStatus({
           value: "Site Tools registration failed",
           tone: "idle",
-        }),
+        });
+        setWebMcpSurfaceState({ status: "registration_failed" });
+      },
     );
   }, [packetWorkflow.state.packet?.status]);
   const createHandController = useCallback(
@@ -569,6 +614,8 @@ export function MeetingCommandCanvas({
           },
           spatialInput: { value: "Camera off · pointer active", tone: "idle" },
         }}
+        webMcpSurfaceState={webMcpSurfaceState}
+        webMcpExecutionActivity={webMcpExecutionActivity}
         onCommand={async (command, source) => {
           const result = await runtime.session.submitCommand(command, source);
           if (!result.ok) throw new Error(result.message);
@@ -698,6 +745,7 @@ export function createStandardMeetingWebMcpRegistry(options: {
     MeetingPacketWorkflowController,
     "getStatus" | "preparePacket" | "stagePacketSend"
   >;
+  onExecutionEvent?: (event: WebMcpExecutionEvent) => void;
 }) {
   return new WebMcpRegistry({
     mode: options.mode,
@@ -783,6 +831,7 @@ export function createStandardMeetingWebMcpRegistry(options: {
         };
       },
     }),
+    onExecutionEvent: options.onExecutionEvent,
   });
 }
 

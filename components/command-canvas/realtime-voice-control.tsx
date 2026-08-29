@@ -34,6 +34,7 @@ export interface RealtimeVoiceControlProps {
   onIntent: RealtimeVoiceControllerOptions["onIntent"];
   inspectCanvas?: RealtimeVoiceControllerOptions["inspectCanvas"];
   onThoughtDraftChange?: (text: string | null) => void;
+  onActiveChange?: (active: boolean) => void;
   createController?: (
     options: RealtimeVoiceControllerOptions,
   ) => RealtimeVoiceControlController;
@@ -460,9 +461,10 @@ export const RealtimeVoiceControl = forwardRef<
   getAccessToken,
   disabled = false,
   onIntent,
-  inspectCanvas,
-  onThoughtDraftChange = () => undefined,
-  createController = createRealtimeVoiceController,
+    inspectCanvas,
+    onThoughtDraftChange = () => undefined,
+    onActiveChange,
+    createController = createRealtimeVoiceController,
 }, ref) {
   const [activity, setActivity] = useState<VoiceActivity[]>([]);
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
@@ -602,6 +604,10 @@ export const RealtimeVoiceControl = forwardRef<
   const active = ["connecting", "listening", "thinking", "speaking"].includes(
     state.status,
   );
+
+  useEffect(() => {
+    onActiveChange?.(active);
+  }, [active, onActiveChange]);
 
   const startVoice = useCallback(() => {
     if (disabled || active) return;

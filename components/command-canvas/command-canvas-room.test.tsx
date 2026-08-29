@@ -369,17 +369,29 @@ describe("CommandCanvasRoom", () => {
     expect(
       screen.getByRole("region", { name: "Infinite canvas" }),
     ).toBeVisible();
+    const chatGptControls = screen.getByRole("group", {
+      name: "ChatGPT controls",
+    });
+    expect(within(chatGptControls).getAllByRole("button")).toHaveLength(2);
     expect(
-      screen.queryByRole("complementary", { name: "Command drawer" }),
+      within(chatGptControls).getByRole("button", {
+        name: "Use voice with ChatGPT",
+      }),
+    ).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: "Open command drawer" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("complementary", { name: "ChatGPT command drawer" }),
     ).toBeNull();
     expect(
       screen.queryByRole("region", { name: "Meeting packet workflow" }),
     ).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
 
     expect(
-      screen.getByRole("complementary", { name: "Command drawer" }),
+      screen.getByRole("complementary", { name: "ChatGPT command drawer" }),
     ).toBeVisible();
     expect(screen.getByLabelText("Live voice command")).toBeVisible();
     expect(screen.getByLabelText("Meeting packet workflow")).toBeVisible();
@@ -400,10 +412,146 @@ describe("CommandCanvasRoom", () => {
         .closest(".typed-command-fallback"),
     ).toHaveClass("has-realtime-voice");
 
-    await user.click(screen.getByRole("button", { name: "Close command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Close ChatGPT command drawer" }));
     expect(
-      screen.queryByRole("complementary", { name: "Command drawer" }),
+      screen.queryByRole("complementary", { name: "ChatGPT command drawer" }),
     ).toBeNull();
+  });
+
+  it("keeps surrounding ChatGPT Voice primary when Site Tools are registered", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    const idleState = { status: "idle" as const };
+    const controller = {
+      getState: () => idleState,
+      subscribe: () => () => undefined,
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(),
+      resumeAudio: vi.fn(async () => true),
+    };
+    render(
+      <CommandCanvasRoom
+        store={store}
+        webMcpSurfaceState={{
+          status: "registered_to_page",
+          registeredToolCount: 10,
+        }}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+          createController: () => controller,
+        }}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Use voice with ChatGPT" }),
+    );
+
+    expect(controller.start).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        "Use ChatGPT Voice in the surrounding app. This page cannot press that microphone for you.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("complementary", { name: "ChatGPT command drawer" }),
+    ).toBeVisible();
+  });
+
+  it("starts the ordinary-browser voice fallback during drawing without opening the drawer", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    const idleState = { status: "idle" as const };
+    const controller = {
+      getState: () => idleState,
+      subscribe: () => () => undefined,
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(),
+      resumeAudio: vi.fn(async () => true),
+    };
+    render(
+      <CommandCanvasRoom
+        store={store}
+        webMcpSurfaceState={{ status: "unavailable" }}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+          createController: () => controller,
+        }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Create sketch" }));
+    const mic = screen.getByRole("button", { name: "Use voice with ChatGPT" });
+    expect(mic).toBeEnabled();
+    await user.click(mic);
+
+    expect(controller.start).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole("complementary", { name: "ChatGPT command drawer" }),
+    ).toBeNull();
+  });
+
+  it("gives Realtime the same bounded live canvas projection shown in ChatGPT", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "note-context", title: "Context note", x: 40 });
+    let options: RealtimeVoiceControllerOptions | undefined;
+    const idleState = { status: "idle" as const };
+    const createController = vi.fn((next: RealtimeVoiceControllerOptions) => {
+      options = next;
+      return {
+        getState: () => idleState,
+        subscribe: () => () => undefined,
+        start: vi.fn(async () => undefined),
+        stop: vi.fn(),
+        resumeAudio: vi.fn(async () => true),
+      };
+    });
+    render(
+      <CommandCanvasRoom
+        store={store}
+        webMcpSurfaceState={{ status: "unavailable" }}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+          createController,
+        }}
+      />,
+    );
+
+    const controller = new AbortController();
+    const first = await options?.inspectCanvas?.(
+      { scope: "all", includeReceipts: true },
+      controller.signal,
+    );
+    expect(first).toMatchObject({
+      roomId: "room-local",
+      revision: 1,
+      selectedObjectId: null,
+      objects: [{ id: "note-context", type: "note", title: "Context note" }],
+      receipts: [{ revision: 1, affectedObjectIds: ["note-context"] }],
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
+    );
+    expect(screen.getByText("Revision 1 · 1 visible object")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Create task board" }));
+    const second = await options?.inspectCanvas?.(
+      { scope: "all", includeReceipts: true },
+      controller.signal,
+    );
+    expect(second).toMatchObject({
+      revision: 2,
+      objects: [
+        { id: "note-context", type: "note" },
+        { type: "task_board" },
+      ],
+    });
+    expect(createController).toHaveBeenCalledOnce();
   });
 
   it("does not pan the canvas when an overlay control moves under a pointer", async () => {
@@ -411,8 +559,8 @@ describe("CommandCanvasRoom", () => {
     const store = createCanvasStore("room-local", dependencies());
     const { container } = render(<CommandCanvasRoom store={store} />);
 
-    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
-    const close = screen.getByRole("button", { name: "Close command drawer" });
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
+    const close = screen.getByRole("button", { name: "Close ChatGPT command drawer" });
     const viewport = container.querySelector<HTMLElement>(".canvas-viewport");
     if (!viewport) throw new Error("Canvas viewport fixture was not rendered.");
     const before = store.getState().viewport;
@@ -463,7 +611,7 @@ describe("CommandCanvasRoom", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
     expect(screen.getByRole("button", { name: "Start live voice" })).toBeVisible();
 
     let result:
@@ -653,14 +801,14 @@ describe("CommandCanvasRoom", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
     await user.click(screen.getByRole("button", { name: "Start live voice" }));
-    await user.click(screen.getByRole("button", { name: "Close command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Close ChatGPT command drawer" }));
 
     expect(controller.start).toHaveBeenCalledOnce();
     expect(controller.stop).not.toHaveBeenCalled();
     expect(
-      screen.queryByRole("complementary", { name: "Command drawer" }),
+      screen.queryByRole("complementary", { name: "ChatGPT command drawer" }),
     ).toBeNull();
   });
 
@@ -675,7 +823,7 @@ describe("CommandCanvasRoom", () => {
       />,
     );
     expect(
-      screen.queryByRole("complementary", { name: "Command drawer" }),
+      screen.queryByRole("complementary", { name: "ChatGPT command drawer" }),
     ).toBeNull();
 
     rerender(
@@ -689,7 +837,7 @@ describe("CommandCanvasRoom", () => {
     );
 
     expect(
-      await screen.findByRole("complementary", { name: "Command drawer" }),
+      await screen.findByRole("complementary", { name: "ChatGPT command drawer" }),
     ).toBeVisible();
     expect(screen.getByText("Review exact recipients")).toBeVisible();
   });
@@ -1269,6 +1417,9 @@ describe("CommandCanvasRoom", () => {
       ),
     ).toHaveLength(1);
     expect(screen.getByText("HAND CONTROL · FULL CANVAS")).toBeVisible();
+    expect(
+      screen.queryByRole("complementary", { name: "ChatGPT command drawer" }),
+    ).toBeNull();
   });
 
   it("creates one selected thought card and receipts later completed speech inside it", async () => {
@@ -1608,7 +1759,15 @@ describe("CommandCanvasRoom", () => {
   it("locks background canvas actions while the pointer sketch surface is active", async () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
-    render(<CommandCanvasRoom store={store} />);
+    render(
+      <CommandCanvasRoom
+        store={store}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+        }}
+      />,
+    );
 
     await user.click(screen.getByRole("button", { name: "Create sketch" }));
 
@@ -1618,7 +1777,7 @@ describe("CommandCanvasRoom", () => {
         .getAllByRole("button")
         .every((button) => button.hasAttribute("disabled")),
     ).toBe(true);
-    expect(screen.getByRole("button", { name: "Open command drawer" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Use voice with ChatGPT" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Create task board" }));
     expect(Object.values(store.getState().canvas.objects)).toHaveLength(0);
   });
@@ -2351,8 +2510,8 @@ describe("CommandCanvasRoom", () => {
       screen.getByRole("button", { name: "Select New thought" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Danny created “New thought”."),
-    ).toBeInTheDocument();
+      screen.getAllByText("Danny created “New thought”.").length,
+    ).toBeGreaterThan(0);
     expect(store.getState().canvas.revision).toBe(1);
   });
 
@@ -3069,7 +3228,7 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Undo last change" }));
 
     expect(store.getState().canvas.objects[object!.id]?.pinned).toBe(false);
-    expect(screen.getByText(/Danny undid: Danny pinned/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Danny undid: Danny pinned/).length).toBeGreaterThan(0);
   });
 
   it("groups a modifier multi-selection into a movable frame and ungroups through canonical receipts", async () => {
@@ -3329,7 +3488,7 @@ describe("CommandCanvasRoom", () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
     const input = screen.getByRole("textbox", {
       name: "Direct canvas command",
     });
@@ -3356,7 +3515,7 @@ describe("CommandCanvasRoom", () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
     const input = screen.getByRole("textbox", {
       name: "Direct canvas command",
     });
@@ -3383,7 +3542,7 @@ describe("CommandCanvasRoom", () => {
     seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
     seedNote(store, { id: "note-risk", title: "Risk note", x: 340 });
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
 
     await user.click(screen.getByRole("button", { name: "Select Launch note" }));
     await user.type(
@@ -3410,7 +3569,7 @@ describe("CommandCanvasRoom", () => {
     const store = createCanvasStore("room-local", dependencies());
     seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
 
     await user.click(screen.getByRole("button", { name: "Select Launch note" }));
     await user.type(
@@ -3447,7 +3606,7 @@ describe("CommandCanvasRoom", () => {
     const store = createCanvasStore("room-local", dependencies());
     seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
 
     await user.click(screen.getByRole("button", { name: "Select Launch note" }));
     await user.type(

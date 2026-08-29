@@ -436,7 +436,7 @@ describe("DemoCommandCanvas", () => {
       render(<DemoCommandCanvas environment={harness.environment} />);
       await screen.findByText("Live demo room");
       await user.click(
-        screen.getByRole("button", { name: "Open command drawer" }),
+        screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
       );
       await waitFor(() => {
         expect(
@@ -551,7 +551,7 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
     await user.click(
-      screen.getByRole("button", { name: "Open command drawer" }),
+      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
     );
     await user.click(
       screen.getByRole("button", { name: "Prepare meeting packet" }),
@@ -624,7 +624,7 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
     await user.click(
-      screen.getByRole("button", { name: "Open command drawer" }),
+      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
     );
 
     expect(await screen.findByText("Approved packet v2")).toBeVisible();
@@ -717,7 +717,7 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
     await user.click(
-      screen.getByRole("button", { name: "Open command drawer" }),
+      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
     );
     await user.click(
       screen.getByRole("button", { name: "Prepare meeting packet" }),
@@ -821,7 +821,7 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
     await user.click(
-      screen.getByRole("button", { name: "Open command drawer" }),
+      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
     );
     await user.click(
       screen.getByRole("button", { name: "Prepare meeting packet" }),
@@ -1025,7 +1025,7 @@ describe("DemoCommandCanvas", () => {
     ).not.toBeNull();
     expect(screen.queryByText(/fixture collaborator/i)).toBeNull();
     await user.click(
-      screen.getByRole("button", { name: "Open command drawer" }),
+      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
     );
     expect(screen.getByRole("button", { name: "Start live voice" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Run direct command" })).toBeNull();

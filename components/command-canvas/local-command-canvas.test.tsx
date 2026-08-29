@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LocalCommandCanvas } from "@/components/command-canvas/local-command-canvas";
@@ -21,10 +22,11 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
 
     render(<LocalCommandCanvas />);
 
-    expect(await screen.findByText("Site Tools unavailable")).toBeInTheDocument();
+    expect(await screen.findAllByText("Site Tools unavailable")).not.toHaveLength(0);
   });
 
   it("registers the stable tool catalog against the current document surface", async () => {
+    const user = userEvent.setup();
     const registered: RegisteredWebMcpTool[] = [];
     const registerTool = vi.fn(async (tool: RegisteredWebMcpTool) => {
       registered.push(tool);
@@ -38,6 +40,15 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
 
     await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(10));
     expect(screen.getByText("10 Site Tools registered")).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
+    );
+    expect(
+      screen.getByText("10 Site Tools registered to this page"),
+    ).toBeVisible();
+    expect(
+      screen.getByText("No Site Tool has been invoked on this page yet."),
+    ).toBeVisible();
     expect(registered.map((tool) => tool.name)).toEqual([
       "get_canvas_state",
       "create_object",
@@ -82,7 +93,12 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
     expect(
       screen.getByRole("button", { name: "Select Shared agent action" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("ChatGPT created “Shared agent action”.")).toBeInTheDocument();
-    expect(screen.getByText("R1 · webmcp")).toBeInTheDocument();
+    expect(
+      screen.getAllByText("ChatGPT created “Shared agent action”.").length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText("R1 · webmcp").length).toBeGreaterThan(0);
+    expect(screen.getByText("A page Site Tool was invoked")).toBeVisible();
+    expect(screen.getByText("create object")).toBeVisible();
+    expect(screen.getByText("COMPLETED")).toBeVisible();
   });
 });

@@ -9,7 +9,10 @@ import {
 } from "@/components/command-canvas/meeting-command-canvas";
 import { createCanvasStore } from "@/lib/canvas/canvas-store";
 import type { DemoRoomSnapshot } from "@/lib/demo/room-session";
-import type { RegisteredWebMcpTool } from "@/lib/webmcp/registry";
+import type {
+  RegisteredWebMcpTool,
+  WebMcpExecutionEvent,
+} from "@/lib/webmcp/registry";
 
 describe("normal meeting lobby", () => {
   it("uses a compact email OTP gate with no password and preserves the no-signup demo link", () => {
@@ -122,10 +125,13 @@ describe("meeting invitation lifecycle and Site Tools", () => {
       now: () => "2026-08-28T12:00:00.000Z",
     });
     const signals: AbortSignal[] = [];
+    const registered: RegisteredWebMcpTool[] = [];
+    const executionActivity: WebMcpExecutionEvent[] = [];
     const registry = createStandardMeetingWebMcpRegistry({
       mode: "static",
       target: {
-        registerTool: vi.fn(async (_tool, options) => {
+        registerTool: vi.fn(async (tool, options) => {
+          registered.push(tool);
           signals.push(options.signal);
         }),
       },
@@ -144,11 +150,22 @@ describe("meeting invitation lifecycle and Site Tools", () => {
           presence: [],
         }) as unknown as DemoRoomSnapshot,
       transformSketch: vi.fn(),
+      onExecutionEvent: (event) => executionActivity.push(event),
     });
 
     await registry.sync();
     expect(registry.registeredToolNames()).toHaveLength(10);
     expect(signals.every((signal) => !signal.aborted)).toBe(true);
+    const inspect = registered.find((tool) => tool.name === "get_canvas_state");
+    if (!inspect) throw new Error("get_canvas_state was not registered");
+    await inspect.execute(
+      { scope: "all", includeReceipts: true },
+      { signal: new AbortController().signal },
+    );
+    expect(executionActivity.map((event) => event.status)).toEqual([
+      "running",
+      "completed",
+    ]);
     registry.dispose();
     expect(signals.every((signal) => signal.aborted)).toBe(true);
   });

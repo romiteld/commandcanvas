@@ -100,6 +100,28 @@ describe("RealtimeVoiceControl", () => {
     expect(setup.controller.stop).toHaveBeenCalledOnce();
   });
 
+  it("reports the actual live-session state to the shared ChatGPT control", async () => {
+    const user = userEvent.setup();
+    const setup = controllerHarness();
+    const activity: boolean[] = [];
+    render(
+      <RealtimeVoiceControl
+        roomId={ROOM_ID}
+        getAccessToken={() => "header.payload.signature"}
+        onIntent={() => ({ ok: true, message: "Submitted." })}
+        onActiveChange={(active) => activity.push(active)}
+        createController={() => setup.controller}
+      />,
+    );
+
+    expect(activity).toEqual([false]);
+    await user.click(screen.getByRole("button", { name: "Start live voice" }));
+    expect(activity).toEqual([false, true]);
+
+    await user.click(screen.getByRole("button", { name: "Stop live voice" }));
+    expect(activity).toEqual([false, true, false]);
+  });
+
   it("renders transcript, assistant, and tool activity callbacks", async () => {
     let callbacks:
       | {

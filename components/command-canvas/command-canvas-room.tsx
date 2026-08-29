@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useMemo,
   useEffect,
   useRef,
   useState,
@@ -14,6 +15,10 @@ import type { StoreApi } from "zustand";
 import { useStore } from "zustand";
 
 import { DiagramPreview } from "@/components/command-canvas/diagram-preview";
+import {
+  ChatGptCommandSurface,
+  type WebMcpSurfaceState,
+} from "@/components/command-canvas/chatgpt-command-surface";
 import { HandInkPreview } from "@/components/command-canvas/hand-ink-preview";
 import {
   HumanCommandControl,
@@ -23,6 +28,7 @@ import {
 } from "@/components/command-canvas/human-command-control";
 import {
   RealtimeVoiceControl,
+  type RealtimeVoiceControlHandle,
   type RealtimeVoiceControlProps,
 } from "@/components/command-canvas/realtime-voice-control";
 import { SemanticObjectPreview } from "@/components/command-canvas/semantic-object-preview";
@@ -80,6 +86,9 @@ import {
 } from "@/lib/gesture/spatial-room-input";
 import type { HandCalibrationProfile } from "@/lib/gesture/hand-calibration";
 import type { CanvasSketchTransformer } from "@/lib/vision/canvas-transform";
+import { projectCanvasState } from "@/lib/webmcp/canvas-state-projection";
+import type { WebMcpExecutionEvent } from "@/lib/webmcp/registry";
+import type { JsonValue } from "@/lib/webmcp/tool-catalog";
 
 const configuredSourceRevision =
   process.env.NEXT_PUBLIC_COMMANDCANVAS_SOURCE_REVISION ?? "main";
@@ -104,6 +113,8 @@ export interface CommandCanvasRoomProps {
   ) => HandTrackingController;
   privateGpuRelayAvailable?: boolean;
   realtimeVoice?: Omit<RealtimeVoiceControlProps, "onIntent">;
+  webMcpSurfaceState?: WebMcpSurfaceState;
+  webMcpExecutionActivity?: readonly WebMcpExecutionEvent[];
   meetingMediaPanel?: ReactNode;
   commandDrawerRequestKey?: string;
   meetingPacketPanel?: ReactNode;
@@ -172,6 +183,8 @@ export function CommandCanvasRoom({
   createHandTrackingController,
   privateGpuRelayAvailable = false,
   realtimeVoice,
+  webMcpSurfaceState = { status: "unavailable" },
+  webMcpExecutionActivity = [],
   meetingMediaPanel,
   commandDrawerRequestKey,
   meetingPacketPanel,
@@ -211,6 +224,7 @@ export function CommandCanvasRoom({
   const [handCalibrationProfile, setHandCalibrationProfile] =
     useState<HandCalibrationProfile | null>(null);
   const [typedFallbackOpen, setTypedFallbackOpen] = useState(false);
+  const [realtimeVoiceActive, setRealtimeVoiceActive] = useState(false);
   const [commandExecution, setCommandExecution] =
     useState<CommandExecutionState>({ status: "idle" });
   const [sketchTransformExecution, setSketchTransformExecution] =
@@ -246,6 +260,7 @@ export function CommandCanvasRoom({
     store.getState().canvas.receipts.at(-1)?.id,
   );
   const activeVoiceThoughtIdRef = useRef<string | null>(null);
+  const realtimeVoiceControlRef = useRef<RealtimeVoiceControlHandle>(null);
   const gestureExitTimeoutsRef = useRef(new Map<string, number>());
   const pendingGestureCompletionObjectIdsRef = useRef(new Set<string>());
   const canvas = useStore(store, (state) => state.canvas);
@@ -299,6 +314,14 @@ export function CommandCanvasRoom({
   const interactionPending = commandPending || sketchTransformPending;
   const drawingActive =
     sketchComposerOpen || handInteractionMode === "draw";
+  const chatGptProjection = useMemo(
+    () =>
+      projectCanvasState(canvas, selectedObjectId, {
+        scope: "all",
+        includeReceipts: true,
+      }),
+    [canvas, selectedObjectId],
+  );
   const spatialServiceState = serviceStateForHandTracking(
     handTrackingStatus,
     serviceStatus?.spatialInput,
@@ -2656,81 +2679,42 @@ export function CommandCanvasRoom({
           </button>
         </aside>
 
-        <button
-          type="button"
-          className="command-drawer-trigger"
-          aria-label="Open command drawer"
-          aria-expanded={openDrawer === "command"}
-          disabled={drawingActive}
-          onClick={() => setOpenDrawer(openDrawer === "command" ? null : "command")}
-        >
-          <span className="agent-pulse" aria-hidden="true" />
-          <span>Command ChatGPT</span>
-          <span aria-hidden="true">↗</span>
-        </button>
-
-        {latestReceipt && latestReceiptVisible && !drawingActive && openDrawer !== "activity" ? (
-          <button
-            type="button"
-            className="latest-activity-toast"
-            aria-label={`Open activity drawer: ${latestReceipt.description}`}
-            onClick={() => setOpenDrawer("activity")}
-          >
-            <span className={`actor-token actor-${latestReceipt.actor.type}`}>
-              {latestReceipt.actor.type === "agent"
-                ? "AI"
-                : initials(latestReceipt.actor.displayName)}
-            </span>
-            <span>
-              <strong>{latestReceipt.description}</strong>
-              <small>R{latestReceipt.revision} · {latestReceipt.source}</small>
-            </span>
-          </button>
-        ) : null}
-
-        {commandExecution.status !== "idle" ||
-        sketchTransformExecution.status === "refused" ||
-        lastError ? (
-          <div className="operation-toast" role="status" aria-live="polite">
-            {commandExecution.status === "pending" ? (
-              <><strong>Applying command…</strong><span>Waiting for the shared canvas to confirm the change.</span></>
-            ) : commandExecution.status === "refused" ? (
-              <><strong>Command refused</strong><span>{commandExecution.message}</span></>
-            ) : sketchTransformExecution.status === "refused" ? (
-              <><strong>Sketch interpretation failed</strong><span>{sketchTransformExecution.message}</span></>
-            ) : lastError ? (
-              <><strong>{lastError.code}</strong><span>{lastError.message}</span></>
-            ) : null}
-          </div>
-        ) : null}
-
-        <aside
-          className={`command-rail overlay-drawer persistent-command-drawer${
-            openDrawer === "command" ? " is-open" : ""
-          }`}
-          aria-label="Command drawer"
-          aria-hidden={openDrawer === "command" ? undefined : true}
-          inert={openDrawer !== "command"}
-        >
-            <DrawerHeading
-              eyebrow="Shared command surface"
-              title="Command"
-              closeLabel="Close command drawer"
-              onClose={() => {
-                setHandCalibrationOpen(false);
-                setOpenDrawer(null);
-              }}
-            />
-            {realtimeVoice ? (
-              <section className="voice-control-slot" data-command-drawer-lead>
-                <p className="eyebrow">Live conversation</p>
-                <RealtimeVoiceControl
-                  {...realtimeVoice}
-                  onIntent={handleRealtimeIntent}
-                />
-              </section>
-            ) : null}
-            {realtimeVoice ? (
+        <ChatGptCommandSurface
+          surfaceState={webMcpSurfaceState}
+          executionActivity={webMcpExecutionActivity}
+          projection={chatGptProjection}
+          drawerOpen={openDrawer === "command"}
+          drawingActive={drawingActive}
+          realtimeActive={realtimeVoiceActive}
+          realtimeAvailable={Boolean(realtimeVoice && !realtimeVoice.disabled)}
+          onOpenDrawer={() => setOpenDrawer("command")}
+          onCloseDrawer={() => {
+            setHandCalibrationOpen(false);
+            setOpenDrawer(null);
+          }}
+          onToggleRealtimeVoice={() => realtimeVoiceControlRef.current?.toggle()}
+          onViewAllActivity={() => setOpenDrawer("activity")}
+          realtimeContent={
+            realtimeVoice ? (
+              <RealtimeVoiceControl
+                ref={realtimeVoiceControlRef}
+                {...realtimeVoice}
+                onIntent={handleRealtimeIntent}
+                inspectCanvas={(input, signal) => {
+                  signal.throwIfAborted();
+                  const state = store.getState();
+                  return projectCanvasState(
+                    state.canvas,
+                    state.selectedObjectId,
+                    input,
+                  ) as unknown as JsonValue;
+                }}
+                onActiveChange={setRealtimeVoiceActive}
+              />
+            ) : undefined
+          }
+          typedCommandContent={
+            realtimeVoice ? (
               <details
                 className="typed-command-fallback has-realtime-voice"
                 open={typedFallbackOpen}
@@ -2769,9 +2753,45 @@ export function CommandCanvasRoom({
                     : null
                 }
               />
-            )}
-            {meetingPacketPanel}
-        </aside>
+            )
+          }
+          packetPanel={meetingPacketPanel}
+        />
+
+        {latestReceipt && latestReceiptVisible && !drawingActive && openDrawer !== "activity" ? (
+          <button
+            type="button"
+            className="latest-activity-toast"
+            aria-label={`Open activity drawer: ${latestReceipt.description}`}
+            onClick={() => setOpenDrawer("activity")}
+          >
+            <span className={`actor-token actor-${latestReceipt.actor.type}`}>
+              {latestReceipt.actor.type === "agent"
+                ? "AI"
+                : initials(latestReceipt.actor.displayName)}
+            </span>
+            <span>
+              <strong>{latestReceipt.description}</strong>
+              <small>R{latestReceipt.revision} · {latestReceipt.source}</small>
+            </span>
+          </button>
+        ) : null}
+
+        {commandExecution.status !== "idle" ||
+        sketchTransformExecution.status === "refused" ||
+        lastError ? (
+          <div className="operation-toast" role="status" aria-live="polite">
+            {commandExecution.status === "pending" ? (
+              <><strong>Applying command…</strong><span>Waiting for the shared canvas to confirm the change.</span></>
+            ) : commandExecution.status === "refused" ? (
+              <><strong>Command refused</strong><span>{commandExecution.message}</span></>
+            ) : sketchTransformExecution.status === "refused" ? (
+              <><strong>Sketch interpretation failed</strong><span>{sketchTransformExecution.message}</span></>
+            ) : lastError ? (
+              <><strong>{lastError.code}</strong><span>{lastError.message}</span></>
+            ) : null}
+          </div>
+        ) : null}
 
         <aside
           className={`command-rail overlay-drawer persistent-system-drawer${
