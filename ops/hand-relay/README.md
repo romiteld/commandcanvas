@@ -67,9 +67,11 @@ ops/hand-relay/manage-caddy-route.sh validate
 bash ops/hand-relay/tests/manage-caddy-route.test.sh
 ```
 
-`status` is read-only. `validate` builds and provisions a temporary candidate
-without replacing or reloading the live Caddyfile. The behavioral test uses a
-fake Caddy binary and temporary paths; it never touches the installed edge.
+`status` is read-only. Before installation, `validate` builds and validates a
+temporary candidate. After installation, it validates the installed Caddyfile
+in place. Neither path replaces or reloads the live Caddyfile. The behavioral
+test covers both states with a fake Caddy binary and temporary paths; it never
+touches the installed edge.
 
 Rollback is destructive to the current hand-relay route and must be deliberate:
 

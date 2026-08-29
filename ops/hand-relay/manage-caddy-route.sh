@@ -24,7 +24,7 @@ usage() {
     'Usage: manage-caddy-route.sh ACTION [options]' \
     '' \
     'Actions:' \
-    '  validate   Build and validate a candidate without changing the live config.' \
+    '  validate   Validate the installed config or a candidate without changing it.' \
     '  install    Snapshot, validate, install, and reload the Caddy config.' \
     '  rollback   Restore the exact pre-install snapshot and reload Caddy.' \
     '  status     Report whether the managed route marker is present.' \
@@ -271,9 +271,14 @@ status_route() {
 case "$ACTION" in
   validate)
     require_common_files
-    build_candidate
-    validate_file "$CANDIDATE"
-    printf 'Candidate is valid; live config was not changed.\n'
+    if has_managed_route; then
+      validate_file "$CONFIG"
+      printf 'Installed config is valid; live config was not changed.\n'
+    else
+      build_candidate
+      validate_file "$CANDIDATE"
+      printf 'Candidate is valid; live config was not changed.\n'
+    fi
     ;;
   install)
     require_common_files

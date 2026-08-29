@@ -78,6 +78,15 @@ assert_contains 'hands.autolensai.com {' "$TEST_ROOT/Caddyfile"
 assert_contains 'reload --config' "$FAKE_CADDY_LOG"
 assert_contains 'installed' "$TEST_ROOT/backups/state"
 
+# Once the managed route is installed, validation must check the installed
+# Caddyfile in place without rebuilding the route or reloading Caddy.
+cp "$TEST_ROOT/Caddyfile" "$TEST_ROOT/installed"
+: > "$FAKE_CADDY_LOG"
+run_manager validate
+assert_file_equals "$TEST_ROOT/installed" "$TEST_ROOT/Caddyfile"
+assert_contains "validate --config $TEST_ROOT/Caddyfile --adapter caddyfile" "$FAKE_CADDY_LOG"
+assert_not_contains 'reload --config' "$FAKE_CADDY_LOG"
+
 original_bytes="$(wc -c < "$TEST_ROOT/original" | tr -d ' ')"
 head -c "$original_bytes" "$TEST_ROOT/Caddyfile" > "$TEST_ROOT/installed-prefix"
 assert_file_equals "$TEST_ROOT/original" "$TEST_ROOT/installed-prefix"
