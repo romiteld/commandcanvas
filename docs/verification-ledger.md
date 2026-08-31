@@ -1264,3 +1264,94 @@ rewriting their historical evidence:
   external target-surface checks. The public release is available for those
   rehearsals, but neither is inferred from unit, browser-profile, native Chrome,
   or provider evidence.
+
+## Checkpoint 29: self-healing no-signup demo rooms
+
+### ROOT CAUSE VERIFIED
+
+- The reported **Demo room could not be created** state was not a Vercel,
+  Supabase Auth, RLS, or Realtime outage. Production recorded ten consecutive
+  `POST /api/rooms` HTTP 409 responses from 16:15:47 through 16:16:00 UTC, and
+  PostgreSQL recorded `demo_room_limit_reached` for every corresponding RPC.
+- The affected anonymous identity still existed in Supabase Auth and owned the
+  maximum three durable demo rooms. Its Supabase identity persisted in
+  `localStorage`, while the raw room capability deliberately lived only in the
+  tab's `sessionStorage`. A fresh embedded tab therefore retained the identity,
+  lost the room descriptor, attempted a fourth room, and reached the lifetime
+  three-room guard.
+- The browser session replaced the server's actionable bounded-room error with
+  the generic message. The released path now preserves the validated server
+  message rather than masking it.
+
+### WORKING
+
+- Commit `b5b4479452c975b604e5b9da87171eb97d679c8f` switches demo bootstrap to
+  the atomic `open_demo_room_with_host` RPC. The RPC selects and row-locks the
+  actor's latest demo room before cleanup, preserves that room even when its
+  durable activity timestamp is old, deletes only older actor-owned rooms that
+  have been inactive for more than 24 hours, and creates a room only when none
+  exists.
+- Open and exact host reset use the same per-actor transaction lock. The
+  resumed host membership is revalidated, the new tab receives a newly rotated
+  raw invite capability, and only hashes remain in Postgres. The immediately
+  previous hash remains valid for one bounded hour so opening another host tab
+  does not instantly invalidate the invite copied from the preceding tab.
+- The receipt self-reference now uses `ON DELETE NO ACTION DEFERRABLE INITIALLY
+  DEFERRED`, allowing one room-owned cascade to remove both an original receipt
+  and its undo receipt without weakening the immutable-receipt trigger.
+- The focused recovery suite first failed on the absent RPC, missing resume
+  response, generic error, destructive delete order, invite continuity, reset
+  serialization, and receipt cascade contract. The corrected implementation
+  passes 62 focused tests.
+- The exact Node 22.17.0 release gate passed ESLint, raw TypeScript, all 1,200
+  Vitest tests across 115 files, the generated hand worker, the optimized
+  Next.js webpack build with all 13 generated routes, and `git diff --check`.
+
+### VERIFIED IN SUPABASE AND PUBLIC BROWSERS
+
+- Supabase applied migration `20260831170235_open_or_reclaim_demo_room` to the
+  active production project. Catalog read-back confirms the RPC exists,
+  `service_role` can execute it, `anon` and `authenticated` cannot, the host
+  activity index exists, the invite-grace column exists, and the undo receipt
+  constraint is deferred.
+- A production rollback-only SQL probe created an older room with an object,
+  original receipt, and undo receipt; a newer stale room for the same host; and
+  an equally stale control room for another actor. It proved that recovery
+  preserved the newest room, removed the older graph, forced the deferred FK
+  check, retained the other actor's room, accepted the immediately previous
+  invite, rotated the capability, exercised exact reset, exercised the no-room
+  creation branch, and retained the legacy three-room refusal. The transaction
+  returned `rollback_probe_passed`; read-back confirmed zero fixture rooms for
+  both probe users.
+- Vercel deployment `dpl_B8cbMjcB6yeFdZUUdYRzzB1dLJM2` built the exact public
+  code commit, reached `READY`, and assigned `commandcanvas.vercel.app` with no
+  alias error.
+- The focused public Chromium regression preserved one Supabase anonymous
+  identity across two pages while the second page began with empty
+  `sessionStorage`. `/demo` made exactly one open request, returned HTTP 201,
+  resumed the exact same room ID and revision 3, restored the tab descriptor,
+  rendered the existing fixtures, emitted no page error, and deleted the exact
+  temporary room. The applicable scenario passed in 6.7 seconds.
+- A separate public two-browser regression copied a real invite, joined a
+  second no-signup browser, observed two Supabase Presence members, exchanged a
+  cursor, persisted collaborator mutations and receipts, recovered Realtime,
+  reconstructed revision 9 after reload, and deleted the exact room. The
+  applicable scenario passed in 16.7 seconds.
+- Deployment-scoped Vercel logs for those checks contain three HTTP 201 and 26
+  HTTP 200 responses, no error status group, and no `/api/rooms` runtime error
+  cluster.
+
+### REMAINS UNVERIFIED
+
+- The exact report-origin ChatGPT in-app browser tab still needs one human
+  refresh after this deployment. The retained-identity/missing-tab-descriptor
+  mechanism is verified in a public browser, but that does not constitute an
+  observation of the user's physical phone session.
+- ChatGPT built-in-browser Site Tools invocation, physical phone hand-control
+  accuracy, and other physical-device checks remain the honest external
+  boundaries recorded in the preceding checkpoints. This room-lifecycle
+  release does not change or reclassify them.
+- One synthetic control room created while isolating the original outage was
+  not manually deleted after the database tool refused that destructive action.
+  It is actor-scoped, has no user content, and is eligible for the same bounded
+  recovery cleanup; no deletion is claimed.
