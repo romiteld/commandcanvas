@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import {
   captureCreatedRoom,
   deleteHostedRoom,
+  readSessionRoomId,
 } from "./support/hosted-room";
 import { requireProductionApiProxyOrigin } from "../lib/testing/live-probe-guards";
 
@@ -237,6 +238,149 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
   }
 });
 
+test("reopens the same recent demo room when a fresh tab retains only the Supabase identity", async ({
+  browser,
+}, testInfo) => {
+  test.skip(
+    process.env.RUN_SUPABASE_E2E !== "true" ||
+      testInfo.project.name !== "chromium-desktop",
+  );
+  test.setTimeout(90_000);
+
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+  });
+  const pageA = await context.newPage();
+  const apiProxyOrigin = process.env.COMMANDCANVAS_API_PROXY_ORIGIN;
+  if (apiProxyOrigin) await installApiProxy(pageA, apiProxyOrigin);
+
+  const browserErrors: string[] = [];
+  pageA.on("pageerror", (error) =>
+    browserErrors.push(`initial: ${error.message}`),
+  );
+
+  const roomCapture = captureCreatedRoom(pageA);
+  const roomsToDelete = new Set<string>();
+  let cleanupPage: Page = pageA;
+
+  try {
+    await pageA.goto("/demo");
+    await expect(pageA.getByText("Live demo room")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(
+      pageA
+        .getByLabel("Canvas coordinates")
+        .getByText("Revision 3", { exact: true }),
+    ).toBeVisible();
+
+    const initialRoomId = await roomCapture.resolveRoomId();
+    expect(initialRoomId).toMatch(/^[0-9a-f-]{36}$/);
+    roomsToDelete.add(initialRoomId!);
+    expect(await readSessionRoomId(pageA)).toBe(initialRoomId);
+
+    const initialUserId = await readSupabaseAnonymousUserId(pageA);
+    expect(initialUserId).toMatch(/^[0-9a-f-]{36}$/);
+
+    const pageB = await context.newPage();
+    cleanupPage = pageB;
+    if (apiProxyOrigin) await installApiProxy(pageB, apiProxyOrigin);
+    pageB.on("pageerror", (error) =>
+      browserErrors.push(`reopen: ${error.message}`),
+    );
+
+    await pageB.goto("/");
+    expect(await readSupabaseAnonymousUserId(pageB)).toBe(initialUserId);
+    expect(await readSessionRoomId(pageB)).toBeNull();
+
+    roomCapture.stop();
+    await pageA.close();
+
+    let roomOpenRequestCount = 0;
+    pageB.on("request", (request) => {
+      const url = new URL(request.url());
+      if (request.method() === "POST" && url.pathname === "/api/rooms")
+        roomOpenRequestCount += 1;
+    });
+    const reopenResponsePromise = pageB.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return (
+        response.request().method() === "POST" &&
+        url.pathname === "/api/rooms"
+      );
+    });
+
+    await pageB.goto("/demo");
+    const reopenResponse = await reopenResponsePromise;
+    const rawBody = (await reopenResponse.json().catch(() => null)) as
+      | {
+          ok?: unknown;
+          room?: {
+            roomId?: unknown;
+            role?: unknown;
+            joined?: unknown;
+          };
+        }
+      | null;
+    const reopenedRoom = {
+      ok: rawBody?.ok,
+      roomId: rawBody?.room?.roomId,
+      role: rawBody?.room?.role,
+      joined: rawBody?.room?.joined,
+    };
+
+    if (
+      typeof reopenedRoom.roomId === "string" &&
+      /^[0-9a-f-]{36}$/.test(reopenedRoom.roomId)
+    )
+      roomsToDelete.add(reopenedRoom.roomId);
+
+    expect(reopenResponse.status()).toBe(201);
+    expect(roomOpenRequestCount).toBe(1);
+    expect(reopenedRoom).toEqual({
+      ok: true,
+      roomId: initialRoomId,
+      role: "host",
+      joined: true,
+    });
+
+    await expect(pageB.getByText("Live demo room")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(
+      pageB.getByRole("button", { name: "Select Launch readiness" }),
+    ).toBeVisible();
+    await expect(
+      pageB
+        .getByLabel("Canvas coordinates")
+        .getByText("Revision 3", { exact: true }),
+    ).toBeVisible();
+    expect(await readSupabaseAnonymousUserId(pageB)).toBe(initialUserId);
+    expect(await readSessionRoomId(pageB)).toBe(initialRoomId);
+    await expect(
+      pageB.getByText("Demo room could not be created.", { exact: true }),
+    ).toHaveCount(0);
+    expect(browserErrors).toEqual([]);
+  } finally {
+    roomCapture.stop();
+
+    let cleanupError: unknown;
+    try {
+      for (const roomId of [...roomsToDelete].reverse()) {
+        try {
+          await deleteHostedRoom(cleanupPage, roomId);
+        } catch (error) {
+          cleanupError ??= error;
+        }
+      }
+    } finally {
+      await context.close();
+    }
+
+    if (cleanupError) throw cleanupError;
+  }
+});
+
 async function installApiProxy(page: Page, proxyOrigin: string) {
   const targetOrigin = requireProductionApiProxyOrigin(proxyOrigin);
   await page.route("**/api/**", async (route) => {
@@ -258,4 +402,22 @@ function isDemoProbeApiPath(pathname: string) {
     pathname === "/api/rooms/join" ||
     /^\/api\/rooms\/[0-9a-f-]{36}(?:\/commands)?$/.test(pathname)
   );
+}
+
+async function readSupabaseAnonymousUserId(page: Page) {
+  return page.evaluate(() => {
+    const authKey = Object.keys(localStorage).find(
+      (key) => key.startsWith("sb-") && key.endsWith("-auth-token"),
+    );
+    if (!authKey) return null;
+
+    try {
+      const stored = JSON.parse(localStorage.getItem(authKey) ?? "null") as {
+        user?: { id?: unknown };
+      } | null;
+      return typeof stored?.user?.id === "string" ? stored.user.id : null;
+    } catch {
+      return null;
+    }
+  });
 }

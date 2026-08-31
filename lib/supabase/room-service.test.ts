@@ -309,6 +309,7 @@ describe("CommandCanvas room service", () => {
             slug: SLUG,
             role: "host",
             joined: true,
+            resumed: false,
           },
           error: null,
         },
@@ -335,17 +336,61 @@ describe("CommandCanvas room service", () => {
     });
     expect(JOIN_TOKEN).toHaveLength(43);
     expect(harness.rawClient.rpc).toHaveBeenCalledWith(
-      "create_room_with_host",
+      "open_demo_room_with_host",
       {
         p_room_id: ROOM_ID,
         p_slug: SLUG,
         p_name: "Launch room",
-        p_mode: "demo",
         p_host_user_id: HOST_ID,
         p_display_name: "Danny",
         p_color: "#275ed7",
         p_join_token: JOIN_TOKEN,
       },
+    );
+  });
+
+  it("accepts a verified resumed room and returns only its newly rotated capability", async () => {
+    const resumedRoomId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const resumedSlug = "room-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const harness = createClient({
+      rpcResults: [
+        {
+          data: {
+            roomId: resumedRoomId,
+            slug: resumedSlug,
+            role: "host",
+            joined: true,
+            resumed: true,
+          },
+          error: null,
+        },
+      ],
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).createRoom(HOST_ID, {
+      mode: "demo",
+      name: "Launch room",
+      displayName: "Danny",
+      color: "#275ed7",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        roomId: resumedRoomId,
+        slug: resumedSlug,
+        joinToken: JOIN_TOKEN,
+        role: "host",
+        joined: true,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(ROOM_ID);
+    expect(harness.rawClient.rpc).toHaveBeenCalledExactlyOnceWith(
+      "open_demo_room_with_host",
+      expect.objectContaining({ p_join_token: JOIN_TOKEN }),
     );
   });
 

@@ -421,7 +421,7 @@ export function createDemoRoomSession(
         });
         if (disposed) return disposedResult();
         if (!created.ok)
-          return fail(created.error.code, "Demo room could not be created.");
+          return fail(created.error.code, created.error.message);
         roomId = created.value.roomId;
         requiredRole = "host";
         joinAccess = {

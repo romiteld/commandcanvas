@@ -513,6 +513,34 @@ describe("authenticated packet workflow bridge", () => {
 });
 
 describe("demo room bootstrap", () => {
+  it("preserves an actionable bounded room-open refusal", async () => {
+    const harness = createHarness({
+      api: {
+        createRoom: vi.fn(async () => ({
+          ok: false as const,
+          error: {
+            code: "demo_room_limit_reached",
+            message: "Reset one of your demo rooms before creating another.",
+            status: 409,
+          },
+        })),
+      },
+    });
+
+    await expect(
+      harness.session.start({
+        kind: "host",
+        roomName: "CommandCanvas demo",
+        displayName: "Danny",
+        color: "#0ea5e9",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "demo_room_limit_reached",
+      message: "Reset one of your demo rooms before creating another.",
+    });
+  });
+
   it("creates a host room with the anonymous identity, then exposes only RLS-verified state", async () => {
     const harness = createHarness();
     const observed: string[] = [];

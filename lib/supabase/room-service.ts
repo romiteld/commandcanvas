@@ -146,6 +146,7 @@ const createRoomRpcSchema = z
     slug: z.string().min(12).max(96),
     role: z.literal("host"),
     joined: z.literal(true),
+    resumed: z.boolean(),
   })
   .strict();
 const joinRoomRpcSchema = z
@@ -217,11 +218,10 @@ export function createRoomService(
     }
 
     try {
-      const response = await client.rpc("create_room_with_host", {
+      const response = await client.rpc("open_demo_room_with_host", {
         p_room_id: roomId,
         p_slug: slug,
         p_name: input.data.name,
-        p_mode: input.data.mode,
         p_host_user_id: actorUserId,
         p_display_name: input.data.displayName,
         p_color: input.data.color,
@@ -238,16 +238,16 @@ export function createRoomService(
       const parsed = createRoomRpcSchema.safeParse(response.data);
       if (
         !parsed.success ||
-        parsed.data.roomId !== roomId ||
-        parsed.data.slug !== slug
+        (!parsed.data.resumed &&
+          (parsed.data.roomId !== roomId || parsed.data.slug !== slug))
       )
         return failure("create_unavailable", "Room could not be created.");
 
       return {
         ok: true,
         value: {
-          roomId,
-          slug,
+          roomId: parsed.data.roomId,
+          slug: parsed.data.slug,
           joinToken,
           role: "host",
           joined: true,
