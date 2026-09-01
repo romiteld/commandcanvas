@@ -8,6 +8,15 @@ enter an email, submit a six-digit Supabase OTP, create a standard room, and
 show its exact-email invitation. Do not imply that Supabase OTP mail, the
 Resend invitation API, and the Resend packet API are one mechanism.
 
+Embedded Live voice and direct sketch interpretation use a project-scoped
+OpenAI API key supplied by the presenter for the current tab. Enter it outside
+the captured frame, verify that the password field masks it, and never show or
+paste the credential into narration, developer tools, logs, receipts, or the
+canvas. This is the no-signup `/demo` behavior. A verified non-anonymous
+`/meet` user can explicitly save, replace, or delete an account-owned key
+encrypted through Supabase Vault. The raw saved key never returns to the
+browser. CommandCanvas has no deployment-owner OpenAI key fallback.
+
 ## 0:00–0:07: camera and opening
 
 **Picture:** Presenter on camera, no product UI yet.
@@ -24,11 +33,11 @@ Resend invitation API, and the Resend packet API are one mechanism.
 
 ## 0:16–0:24: continuous voice
 
-**Do:** Open the command drawer, press **Start** under **Live voice** once, and say **Bring in our project board**.
+**Do:** After the per-tab key has been entered outside the captured frame, open the command drawer, press **Start** under **Live voice** once, and say **Bring in our project board**.
 
-**Visible reaction:** `gpt-realtime-2.1` transcribes the request, invokes the narrow board tool, and the canonical voice receipt appears. Do not press Run.
+**Visible reaction:** `gpt-realtime-2.1` transcribes the request, invokes the narrow board tool, and the canonical voice receipt appears. Do not press Run. Use this shot only after the exact BYOK release has completed a live provider rehearsal; earlier owner-key evidence does not satisfy this gate.
 
-**Line:** “Live voice stays open for natural canvas commands. Its tools are intentionally narrower than ChatGPT Site Tools.”
+**Line:** “Live voice uses my project-scoped API key for this tab. Its tools are intentionally narrower than ChatGPT Site Tools.”
 
 **Optional alternate proof:** Replace the board command with **Start a new thought**, dictate **Launch risk is supplier lead time**, then say **Finish thought**. Keep the selected card and its receipt visible. Do not imply that assistant speech or the boundary commands are written into the card.
 
@@ -62,6 +71,8 @@ physical-hand latency measurement.
 ## 0:59–1:16: ChatGPT Site Tools and human control
 
 **Recording gate:** Use this shot only after ChatGPT Site Tools has been exercised against the exact deployed build. A paid Realtime voice run does not satisfy this gate.
+
+**Account boundary:** Site Tools use the account already signed into the surrounding ChatGPT host. CommandCanvas never receives that ChatGPT credential. Do not imply that the ChatGPT subscription supplies or pays for embedded Live voice or direct sketch interpretation.
 
 **Ask ChatGPT:** “Prepare the meeting packet.”
 
@@ -99,7 +110,9 @@ physical-hand latency measurement.
 - Use a real browser B for Presence, cursor, collaborator mutation, and the filmstrip.
 - Do not describe a demo collaborator as seeded Presence.
 - Start meeting media only after both browser contexts are present. Do not claim arbitrary cross-network connectivity or TURN support.
-- Use a real paid `gpt-realtime-2.1` session for the Live voice shot. The tool receipt, not the spoken response, proves the shared mutation.
+- Use a real paid `gpt-realtime-2.1` session with a deliberately supplied project-scoped per-tab key for the Live voice shot. The tool receipt, not the spoken response, proves the shared mutation. Do not show the key.
+- Confirm that reloading the tab clears the user-entered key and that missing-key Live voice and sketch interpretation fail honestly. Do not claim the no-owner-key boundary from source tests alone; verify it on the exact deployed release without printing either the user key or deployment environment values.
+- If the authenticated `/meet` credential path is shown, verify explicit save, replacement, deletion, encrypted Vault storage, and server-side provider resolution without displaying the raw value. Do not claim that a saved key is returned to the browser.
 - Do not show ChatGPT Site Tools invocation until the exact deployed build passes that host. Native Chrome 153 and ChatGPT are separate verification boundaries.
 - The controlled backend path has a delivered Resend record, but the public no-signup judge route remains preview-only. Show and describe the result visible in the exact environment being recorded.
 - Do not claim post-fix physical-hand or physical-iPhone accuracy unless the exact hardware rehearsal passes immediately before recording. The prior real recording recognized open palm and pinch ratios between 0.22 and 0.28, but it also exposed the old preview-boundary usability failure and does not verify the revised full-canvas plane.

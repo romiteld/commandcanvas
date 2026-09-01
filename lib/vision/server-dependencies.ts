@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import { diagramPayloadSchema } from "@/lib/canvas/object-model";
+import { resolveSavedOpenAiApiKey as resolveAccountOpenAiApiKey } from "@/lib/openai-credentials/service";
 import {
   createRoomService,
   type RoomServiceClient,
@@ -34,7 +35,10 @@ import {
 } from "@/lib/vision/route-handler";
 
 const memberRoleSchema = z
-  .object({ role: z.enum(["host", "participant"]) })
+  .object({
+    role: z.enum(["host", "participant"]),
+    rooms: z.object({ mode: z.enum(["standard", "demo"]) }).strict(),
+  })
   .strict();
 
 type VisionServiceClient = RoomServiceClient & SupabaseUserVerifier;
@@ -137,6 +141,7 @@ interface ServerSketchTransformDependencyOptions {
     model: "gpt-5.6-terra" | "gpt-5.6-sol";
   }) => OpenAiDiagramTransformer;
   createLeaseToken?: () => string;
+  resolveSavedOpenAiApiKey?: (actorUserId: string) => Promise<string | null>;
 }
 
 export type ServerSketchTransformDependenciesResult =
@@ -164,13 +169,10 @@ export function createServerSketchTransformDependencies(
     return { ok: false };
   }
   const roomService = createRoomService(client);
-  const openAiConfig = readOpenAiDiagramConfig(options.environment);
-  const transformer: OpenAiDiagramTransformer | null = openAiConfig.ok
-    ? options.createTransformer
-      ? options.createTransformer(openAiConfig)
-      : createOpenAiDiagramTransformer(openAiConfig)
-    : null;
+  const environment = options.environment ?? process.env;
   const createLeaseToken = options.createLeaseToken ?? randomUUID;
+  const resolveSavedOpenAiApiKey =
+    options.resolveSavedOpenAiApiKey ?? resolveAccountOpenAiApiKey;
 
   return {
     ok: true,
@@ -180,14 +182,18 @@ export function createServerSketchTransformDependencies(
         try {
           const response = await client
             .from("room_members")
-            .select("role")
+            .select("role, rooms!inner(mode)")
             .eq("room_id", roomId)
             .eq("user_id", actorUserId)
             .maybeSingle();
           if (response.error || response.data === null) return { ok: false };
           const member = memberRoleSchema.safeParse(response.data);
           return member.success
-            ? { ok: true, role: member.data.role }
+            ? {
+                ok: true,
+                role: member.data.role,
+                roomMode: member.data.rooms.mode,
+              }
             : { ok: false };
         } catch {
           return { ok: false };
@@ -199,6 +205,7 @@ export function createServerSketchTransformDependencies(
           ? { ok: true, state: result.value }
           : { ok: false };
       },
+      resolveSavedOpenAiApiKey,
       async admitTransform(rawInput): Promise<VisionAdmissionResult> {
         const input = admissionInputSchema.safeParse(rawInput);
         if (!input.success)
@@ -310,13 +317,25 @@ export function createServerSketchTransformDependencies(
         }
       },
       safetyIdentifier: createPrivacyPreservingSafetyIdentifier,
-      transform: transformer
-        ? (input) => transformer.transform(input)
-        : async () => ({
+      async transform(input, openAiApiKey) {
+        const openAiConfig = readOpenAiDiagramConfig({
+          OPENAI_API_KEY: openAiApiKey,
+          OPENAI_VISION_MODEL: environment.OPENAI_VISION_MODEL,
+        });
+        if (!openAiConfig.ok)
+          return {
             ok: false,
-            code: "vision_unconfigured",
-            message: "Sketch interpretation is not configured.",
-          }),
+            code: "vision_unconfigured" as const,
+            message: "Sketch interpretation is not configured." as const,
+          };
+        const transformer = options.createTransformer
+          ? options.createTransformer({
+              apiKey: openAiConfig.apiKey,
+              model: openAiConfig.model,
+            })
+          : createOpenAiDiagramTransformer(openAiConfig);
+        return transformer.transform(input);
+      },
     },
   };
 }

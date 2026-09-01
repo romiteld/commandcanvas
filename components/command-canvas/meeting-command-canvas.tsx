@@ -18,6 +18,11 @@ import { createCanvasStore, type CanvasStoreState } from "@/lib/canvas/canvas-st
 import type { CanvasPoint } from "@/lib/canvas/coordinates";
 import { createSharedCameraHandController } from "@/lib/gesture/shared-camera-controller";
 import type { MeetingMediaClient } from "@/lib/meeting/media-controller";
+import {
+  createBrowserOpenAiCredentialApi,
+  type BrowserOpenAiCredentialApi,
+  type BrowserOpenAiCredentialStatus,
+} from "@/lib/openai-credentials/browser-api";
 import { createBrowserPacketApi } from "@/lib/packets/browser-api";
 import {
   createDemoRoomSession,
@@ -91,6 +96,19 @@ export function MeetingCommandCanvas({
   const [inviteBusy, setInviteBusy] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [copyLabel, setCopyLabel] = useState("Copy secure link");
+  const [openAiApiKey, setOpenAiApiKey] = useState("");
+  const [savedOpenAiCredential, setSavedOpenAiCredential] =
+    useState<BrowserOpenAiCredentialStatus>({ configured: false });
+  const [savedOpenAiCredentialBusy, setSavedOpenAiCredentialBusy] =
+    useState(false);
+  const [savedOpenAiCredentialError, setSavedOpenAiCredentialError] =
+    useState<string | null>(null);
+  const [useSavedOpenAiCredential, setUseSavedOpenAiCredential] =
+    useState(false);
+  const openAiApiKeyRef = useRef("");
+  const useSavedOpenAiCredentialRef = useRef(false);
+  const openAiCredentialApiRef =
+    useRef<BrowserOpenAiCredentialApi | null>(null);
   const clientRef = useRef<BrowserClient | null>(null);
   const inviteTokenRef = useRef<string | null>(null);
   const inviteReadRef = useRef(false);
@@ -110,12 +128,20 @@ export function MeetingCommandCanvas({
     readonly WebMcpExecutionEvent[]
   >([]);
 
+  const selectSavedOpenAiCredential = useCallback((value: boolean) => {
+    useSavedOpenAiCredentialRef.current = value;
+    setUseSavedOpenAiCredential(value);
+  }, []);
+
   useEffect(() => {
     const lifecycle = new AbortController();
     const { signal } = lifecycle;
     lifecycleAbortRef.current = lifecycle;
     const cleanup = () => {
       lifecycle.abort();
+      openAiApiKeyRef.current = "";
+      useSavedOpenAiCredentialRef.current = false;
+      openAiCredentialApiRef.current = null;
       if (lifecycleAbortRef.current === lifecycle)
         lifecycleAbortRef.current = null;
       roomUnsubscribeRef.current?.();
@@ -237,7 +263,12 @@ export function MeetingCommandCanvas({
         realtimeClient: client as unknown as DemoRoomRealtimeClient,
         createRoomApi: (token) => createBrowserRoomApi({ accessToken: token }),
         createSketchTransformApi: (token) =>
-          createBrowserSketchTransformApi({ accessToken: token }),
+          createBrowserSketchTransformApi({
+            accessToken: token,
+            getOpenAiApiKey: () => openAiApiKeyRef.current,
+            getUseSavedOpenAiCredential: () =>
+              useSavedOpenAiCredentialRef.current,
+          }),
         createPacketApi: (token) => createBrowserPacketApi({ accessToken: token }),
         hydrateCanvas: (state) => {
           if (!store)
@@ -288,6 +319,87 @@ export function MeetingCommandCanvas({
             : current,
         ),
       );
+      const credentialApi = createBrowserOpenAiCredentialApi({ accessToken });
+      openAiCredentialApiRef.current = credentialApi;
+      setSavedOpenAiCredentialBusy(true);
+      setSavedOpenAiCredentialError(null);
+      void credentialApi.load(signal).then((result) => {
+        if (
+          signal.aborted ||
+          openAiCredentialApiRef.current !== credentialApi
+        )
+          return;
+        setSavedOpenAiCredentialBusy(false);
+        if (!result.ok) {
+          setSavedOpenAiCredential({ configured: false });
+          selectSavedOpenAiCredential(false);
+          setSavedOpenAiCredentialError(result.error.message);
+          return;
+        }
+        setSavedOpenAiCredential(result.value);
+        selectSavedOpenAiCredential(result.value.configured);
+      });
+  }
+
+  async function saveOpenAiCredential(apiKey: string) {
+    const signal = lifecycleAbortRef.current?.signal;
+    const accessToken = runtime?.session.getAccessToken();
+    if (!accessToken || !signal || signal.aborted) {
+      setSavedOpenAiCredentialError(
+        "OpenAI credential service is unavailable for this room.",
+      );
+      return;
+    }
+    const credentialApi = createBrowserOpenAiCredentialApi({ accessToken });
+    openAiCredentialApiRef.current = credentialApi;
+    setSavedOpenAiCredentialBusy(true);
+    setSavedOpenAiCredentialError(null);
+    const result = await credentialApi.save(
+      { apiKey, confirmSave: true },
+      signal,
+    );
+    if (
+      signal.aborted ||
+      openAiCredentialApiRef.current !== credentialApi
+    )
+      return;
+    setSavedOpenAiCredentialBusy(false);
+    if (!result.ok) {
+      setSavedOpenAiCredentialError(result.error.message);
+      return;
+    }
+    openAiApiKeyRef.current = "";
+    setOpenAiApiKey("");
+    setSavedOpenAiCredential(result.value);
+    selectSavedOpenAiCredential(true);
+  }
+
+  async function deleteOpenAiCredential() {
+    const signal = lifecycleAbortRef.current?.signal;
+    const accessToken = runtime?.session.getAccessToken();
+    if (!accessToken || !signal || signal.aborted) {
+      setSavedOpenAiCredentialError(
+        "OpenAI credential service is unavailable for this room.",
+      );
+      return;
+    }
+    const credentialApi = createBrowserOpenAiCredentialApi({ accessToken });
+    openAiCredentialApiRef.current = credentialApi;
+    setSavedOpenAiCredentialBusy(true);
+    setSavedOpenAiCredentialError(null);
+    const result = await credentialApi.clear(signal);
+    if (
+      signal.aborted ||
+      openAiCredentialApiRef.current !== credentialApi
+    )
+      return;
+    setSavedOpenAiCredentialBusy(false);
+    if (!result.ok) {
+      setSavedOpenAiCredentialError(result.error.message);
+      return;
+    }
+    setSavedOpenAiCredential(result.value);
+    selectSavedOpenAiCredential(false);
   }
 
   async function requestCode(form: FormData) {
@@ -680,6 +792,22 @@ export function MeetingCommandCanvas({
           roomId: snapshot.roomId!,
           getAccessToken: runtime.session.getAccessToken,
           disabled: snapshot.status !== "ready" && snapshot.status !== "degraded",
+          useSavedOpenAiCredential,
+          onUseSavedOpenAiCredentialChange: selectSavedOpenAiCredential,
+          savedOpenAiCredential: {
+            ...savedOpenAiCredential,
+            busy: savedOpenAiCredentialBusy,
+            ...(savedOpenAiCredentialError
+              ? { error: savedOpenAiCredentialError }
+              : {}),
+            onSave: saveOpenAiCredential,
+            onDelete: deleteOpenAiCredential,
+          },
+        }}
+        openAiApiKey={openAiApiKey}
+        onOpenAiApiKeyChange={(value) => {
+          openAiApiKeyRef.current = value;
+          setOpenAiApiKey(value);
         }}
         meetingMediaPanel={
           snapshot.membership ? (

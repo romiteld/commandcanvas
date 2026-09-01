@@ -8,6 +8,12 @@ import {
 
 const MAX_SDP_BYTES = 256 * 1_024;
 const roomIdSchema = z.uuid();
+const openAiApiKeySchema = z
+  .string()
+  .trim()
+  .min(20)
+  .max(512)
+  .regex(/^sk-[A-Za-z0-9_-]+$/);
 
 export type RealtimeSessionAdmissionResult =
   | { ok: true }
@@ -32,7 +38,9 @@ export interface RealtimeSessionRouteDependencies {
     roomId: string,
     actorUserId: string,
   ) => Promise<RealtimeSessionAdmissionResult>;
+  resolveSavedOpenAiApiKey: (actorUserId: string) => Promise<string | null>;
   createCall: (input: {
+    apiKey: string;
     sdp: string;
     safetyIdentifier: string;
     signal: AbortSignal;
@@ -100,6 +108,14 @@ export async function handleRealtimeSessionRequest(
       );
   }
 
+  const credential = await resolveOpenAiCredential(
+    request,
+    membership.roomMode,
+    actor.actorUserId,
+    dependencies,
+  );
+  if (!credential.ok) return credential.response;
+
   let sdp: string;
   try {
     sdp = await request.text();
@@ -137,6 +153,7 @@ export async function handleRealtimeSessionRequest(
 
   try {
     const result = await dependencies.createCall({
+      apiKey: credential.apiKey,
       sdp,
       safetyIdentifier: dependencies.safetyIdentifier(actor.actorUserId),
       signal: request.signal,
@@ -148,6 +165,85 @@ export async function handleRealtimeSessionRequest(
     });
   } catch {
     return unavailable();
+  }
+}
+
+async function resolveOpenAiCredential(
+  request: Request,
+  roomMode: "standard" | "demo",
+  actorUserId: string,
+  dependencies: RealtimeSessionRouteDependencies,
+): Promise<
+  | { ok: true; apiKey: string }
+  | { ok: false; response: Response }
+> {
+  const rawKey = request.headers.get("x-commandcanvas-openai-key");
+  const savedHeader = request.headers.get(
+    "x-commandcanvas-openai-credential",
+  );
+  if (savedHeader !== null && savedHeader !== "saved")
+    return {
+      ok: false,
+      response: jsonError(
+        400,
+        "invalid_openai_credential",
+        "OpenAI credential selection is invalid.",
+      ),
+    };
+  const useSaved = savedHeader === "saved";
+  if (useSaved && rawKey !== null)
+    return {
+      ok: false,
+      response: jsonError(
+        400,
+        "ambiguous_openai_credential",
+        "Choose either a saved OpenAI credential or a temporary key.",
+      ),
+    };
+  if (!useSaved) {
+    const parsed = openAiApiKeySchema.safeParse(rawKey);
+    return parsed.success
+      ? { ok: true, apiKey: parsed.data }
+      : {
+          ok: false,
+          response: jsonError(
+            400,
+            "invalid_openai_api_key",
+            "Enter a valid OpenAI API key for this live voice session.",
+          ),
+        };
+  }
+  if (roomMode !== "standard")
+    return {
+      ok: false,
+      response: jsonError(
+        403,
+        "saved_credential_unavailable",
+        "Saved credentials are available after email sign-in in a meeting room.",
+      ),
+    };
+  try {
+    const savedKey = await dependencies.resolveSavedOpenAiApiKey(actorUserId);
+    const parsed = openAiApiKeySchema.safeParse(savedKey);
+    return parsed.success
+      ? { ok: true, apiKey: parsed.data }
+      : {
+          ok: false,
+          response: jsonError(
+            409,
+            "openai_credential_not_configured",
+            "Save an OpenAI API key to your CommandCanvas account first.",
+          ),
+        };
+  } catch {
+    return {
+      ok: false,
+      response: jsonError(
+        503,
+        "openai_credential_unavailable",
+        "Your saved OpenAI credential is temporarily unavailable.",
+      ),
+    };
   }
 }
 

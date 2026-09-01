@@ -16,34 +16,94 @@ const serverEnvironment = {
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "publishable-test-key",
   SUPABASE_SECRET_KEY: "server-secret-key-that-stays-private",
   REALTIME_VOICE_ENABLED: "true",
-  OPENAI_REALTIME_API_KEY: "realtime-test-key-that-stays-server-side",
+  OPENAI_REALTIME_API_KEY: "sk-server-key-must-never-be-used-for-public-voice",
   OPENAI_API_KEY: "general-openai-key-must-not-enable-realtime",
 };
 
+const SESSION_OPENAI_API_KEY =
+  "sk-test-session-only-commandcanvas-key-123456789";
+
 describe("OpenAI Realtime unified-interface boundary", () => {
-  it("fails closed without both server-side Supabase and OpenAI configuration", () => {
+  it("fails closed without server-side Supabase configuration", () => {
     expect(
       createServerRealtimeSessionDependencies({ environment: {} }),
     ).toEqual({ ok: false });
   });
 
-  it("requires an explicit voice flag and dedicated Realtime key", () => {
+  it("requires the voice kill switch but never a server-owned OpenAI key", () => {
+    const query = {
+      select: vi.fn(),
+      eq: vi.fn(),
+      maybeSingle: vi.fn(),
+    };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+    const createClient = () => ({
+      auth: { getUser: vi.fn() },
+      from: vi.fn(() => query),
+      rpc: vi.fn(),
+    });
     expect(
       createServerRealtimeSessionDependencies({
         environment: {
           ...serverEnvironment,
           REALTIME_VOICE_ENABLED: "false",
         },
+        createClient,
       }),
     ).toEqual({ ok: false });
-    expect(
-      createServerRealtimeSessionDependencies({
+
+    const withoutServerOpenAiKey = createServerRealtimeSessionDependencies({
         environment: {
           ...serverEnvironment,
           OPENAI_REALTIME_API_KEY: undefined,
+          OPENAI_API_KEY: undefined,
         },
+        createClient,
+      });
+    expect(withoutServerOpenAiKey.ok).toBe(true);
+  });
+
+  it("uses only the session-supplied OpenAI key for provider authorization", async () => {
+    const query = {
+      select: vi.fn(),
+      eq: vi.fn(),
+      maybeSingle: vi.fn(),
+    };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      new Response("v=0\no=openai-answer", { status: 200 }),
+    );
+    const result = createServerRealtimeSessionDependencies({
+      environment: serverEnvironment,
+      createClient: () => ({
+        auth: { getUser: vi.fn() },
+        from: vi.fn(() => query),
+        rpc: vi.fn(),
       }),
-    ).toEqual({ ok: false });
+      fetch: fetcher,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    await result.dependencies.createCall({
+      apiKey: SESSION_OPENAI_API_KEY,
+      sdp: "v=0\no=browser-offer",
+      safetyIdentifier: "cc_voice_0123456789abcdef",
+      signal: new AbortController().signal,
+    });
+
+    const [, init] = fetcher.mock.calls[0]!;
+    expect(init?.headers).toEqual(
+      expect.objectContaining({
+        authorization: `Bearer ${SESSION_OPENAI_API_KEY}`,
+      }),
+    );
+    expect(JSON.stringify(init)).not.toContain(
+      serverEnvironment.OPENAI_REALTIME_API_KEY,
+    );
+    expect(JSON.stringify(init)).not.toContain(serverEnvironment.OPENAI_API_KEY);
   });
 
   it("uses a service-only durable admission RPC before paid session creation", async () => {
@@ -87,6 +147,37 @@ describe("OpenAI Realtime unified-interface boundary", () => {
       p_room_id: ROOM_ID,
       p_actor_user_id: ACTOR_ID,
     });
+  });
+
+  it("wires the account-owned saved credential resolver without reading owner OpenAI environment keys", async () => {
+    const query = {
+      select: vi.fn(),
+      eq: vi.fn(),
+      maybeSingle: vi.fn(),
+    };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+    const resolveSavedOpenAiApiKey = vi.fn(async () => SESSION_OPENAI_API_KEY);
+    const result = createServerRealtimeSessionDependencies({
+      environment: serverEnvironment,
+      createClient: () => ({
+        auth: { getUser: vi.fn() },
+        from: vi.fn(() => query),
+        rpc: vi.fn(),
+      }),
+      resolveSavedOpenAiApiKey,
+      fetch: vi.fn(),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    await expect(
+      result.dependencies.resolveSavedOpenAiApiKey(ACTOR_ID),
+    ).resolves.toBe(SESSION_OPENAI_API_KEY);
+    expect(resolveSavedOpenAiApiKey).toHaveBeenCalledWith(ACTOR_ID);
+    expect(resolveSavedOpenAiApiKey).not.toHaveBeenCalledWith(
+      serverEnvironment.OPENAI_API_KEY,
+    );
   });
 
   it("preserves compact durable rate denials without leaking database errors", async () => {

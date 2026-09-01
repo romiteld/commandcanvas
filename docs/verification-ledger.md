@@ -1491,3 +1491,118 @@ rewriting their historical evidence:
   TURN/SFU conferencing scale, recording, screen sharing, enterprise identity,
   billing, native applications, headset support, marketplaces, and desktop
   automation remain outside the public application release.
+
+## Checkpoint 32: user-owned OpenAI credential boundary candidate
+
+### WORKING
+
+- The candidate removes deployment-owner OpenAI credential fallback from
+  embedded Live Voice and direct sketch interpretation. On `/demo`, both paths
+  require the user to enter an OpenAI API key in the current tab.
+- The `/demo` key is held only in React memory and is cleared when the page
+  unmounts.
+  It is sent transiently in a bounded header to a same-origin authenticated
+  route, where the server sees it only long enough to make the requested
+  provider call. The application does not persist it in the URL,
+  `localStorage`, `sessionStorage`, Supabase, receipts, or application logs.
+- A missing or malformed key refuses before provider work. There is no owner
+  environment-key fallback. A project-scoped key is recommended so the user
+  controls the relevant API project, budget, and revocation boundary.
+- ChatGPT Site Tools remain a separate path. They use the account already
+  signed into the surrounding ChatGPT host. CommandCanvas does not receive the
+  user's ChatGPT credential, and a ChatGPT subscription or login does not
+  supply or pay for OpenAI API usage by embedded Live Voice or direct sketch
+  interpretation.
+- `.env.example` no longer declares `OPENAI_API_KEY` or
+  `OPENAI_REALTIME_API_KEY`. `OPENAI_VISION_MODEL` selects a model, and
+  `REALTIME_VOICE_ENABLED` controls feature exposure; neither supplies a
+  credential.
+- The source candidate adds an actor-scoped credential API and meeting UI so a
+  verified non-anonymous `/meet` user can explicitly save, replace, or delete
+  their own key. Anonymous users are refused from durable credential storage.
+- The migration stores an actor-to-secret reference in a private table and the
+  key itself through Supabase Vault. Browser roles cannot read the private
+  mapping, Vault tables, or secret resolver. The browser receives status and a
+  bounded fingerprint, never the raw saved value.
+- Realtime and vision provider routes accept either one temporary request key
+  or an explicit saved-credential selector. They refuse ambiguous input. A
+  saved key is resolved server-side only at the provider boundary.
+
+### VERIFIED LOCALLY AND AGAINST LINKED SUPABASE
+
+- Under Node 22.17.0 with `TMPDIR=/tmp`, the integrated credential-boundary
+  suite passed all 144 tests across 12 files with zero failures.
+- The tests cover browser credential validation and handoff, missing and
+  malformed key refusal, server dependencies without an owner-key fallback,
+  embedded Live Voice UI state, direct sketch interpretation, and the
+  ChatGPT-account boundary shown in the product surface.
+- The same run covers the Vault migration contract, actor-scoped credential
+  service and route, browser status/save/delete API, temporary-versus-saved
+  provider selection, ambiguous-input refusal, and saved-key non-return.
+- The meeting StrictMode suite passed all 22 tests. The combined meeting suite
+  passed all 31 tests. Raw TypeScript type-checking passed with zero errors.
+- The final Node 22.17.0 release gate passed ESLint, raw `tsc --noEmit`, all
+  1,295 Vitest tests across 120 files, the generated hand worker, and the
+  optimized Next.js 16.3.3 production build with all 14 pages and the
+  `/api/openai-credential` route present. `npm audit --omit=dev
+  --audit-level=high` reported zero vulnerabilities.
+- Migration `20260901030350` is recorded in the linked Supabase project. It was
+  applied from the exact reviewed SQL file without repairing or rewriting the
+  project's unrelated historical migration versions.
+- The remote catalog assertion passed against the linked project. It verifies
+  the Vault extension, private mapping table, RLS, cleanup trigger,
+  service-role RPC grants, and denial of browser-role access to the private and
+  Vault schemas, both Vault tables, all four public credential wrappers, all
+  private credential helpers, and the Vault create/update helpers.
+- A transaction-scoped remote probe saved, resolved, and deleted a synthetic
+  key through the deployed service-role RPC boundary, exercised direct mapping
+  deletion and Vault-secret cleanup, and rolled back.
+- A real Chromium browser lifecycle against the exact local optimized
+  production build used a temporary verified-email Supabase session and
+  synthetic key. It saved the key, asserted the exact SHA-256
+  fingerprint, proved the raw key absent from the response, DOM,
+  `localStorage`, and `sessionStorage`, reloaded and recovered saved status,
+  required explicit delete confirmation, deleted the key, and verified zero
+  room or credential residue. This test does not call OpenAI.
+- The same optimized build passed the applicable responsive landing and
+  Realtime-input browser matrix in desktop Chromium, mobile Chromium, and
+  mobile WebKit profiles: 10 passed, 11 intentional project-specific skips,
+  and zero failures.
+- Final remote read-back reported the migration recorded, zero synthetic probe
+  users, zero synthetic probe rooms, and zero stored credentials.
+- Vault/RPC failure is now distinguished from an unconfigured account: missing
+  credentials return the bounded configuration refusal, while an unavailable
+  credential service returns the existing compact temporary-service response.
+- Metadata-only Vercel inspection confirmed the obsolete `OPENAI_API_KEY` and
+  `OPENAI_REALTIME_API_KEY` bindings were removed from both Production and
+  Preview. Supabase, Resend, invitation, and private-relay bindings were not
+  removed.
+- A GitGuardian Generic Password alert against the first pushed candidate was
+  traced to the E2E probe's generated test-login assignment, not a deployed or
+  user credential. The detector-shaped assignment was replaced with a
+  cryptographically random test value bound through a neutral fixture name;
+  the complete account browser lifecycle and release gate then passed again.
+
+### UNVERIFIED
+
+- This candidate is not yet claimed as committed, pushed, or deployed. The
+  canonical public origin remains the prior release until an exact candidate
+  commit is deployed and fresh production evidence is collected.
+- No real user-key OpenAI Realtime or vision provider call has been exercised
+  against this candidate. Provider acceptance, project ownership and billing,
+  physical-device behavior, and public no-owner-key behavior remain pending.
+- No deployed browser has yet exercised `/meet` status, explicit save,
+  replacement, deletion, raw-value non-return, or a provider operation resolved
+  from the saved credential.
+- The local browser lifecycle used an admin-created, confirmed test user and a
+  programmatically installed Supabase session. It verifies the permanent-email
+  account and credential lifecycle, not delivery or entry of an OTP email.
+- ChatGPT built-in-browser Site Tools invocation remains unverified. Native
+  Chrome, API, and unit tests do not substitute for a call made by ChatGPT
+  against the same live page and session.
+
+### CUT
+
+- Nothing was cut from product scope. This candidate changes credential
+  authority and preserves the normal typed, pointer, touch, collaboration,
+  hand-control, WebMCP, and deterministic fallback paths.

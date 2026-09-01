@@ -3199,6 +3199,130 @@ body {
   opacity: 0.48;
 }
 
+.realtime-voice-credential {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 11px;
+  border: 1px solid rgb(91 63 214 / 18%);
+  border-radius: 13px;
+  background: rgb(255 255 255 / 72%);
+}
+
+.realtime-voice-credential label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.realtime-voice-credential label > span {
+  color: #344054;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.realtime-voice-credential input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid rgb(30 41 59 / 20%);
+  border-radius: 10px;
+  background: #fff;
+  color: #111827;
+  font: inherit;
+  font-size: 13px;
+}
+
+.realtime-voice-credential input:focus {
+  border-color: #6d4aff;
+  outline: 3px solid rgb(109 74 255 / 14%);
+}
+
+.realtime-voice-credential > button,
+.realtime-voice-credential-actions button,
+.realtime-voice-saved-credential button {
+  align-self: end;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid rgb(30 41 59 / 16%);
+  border-radius: 10px;
+  background: #fff;
+  color: #344054;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.realtime-voice-credential > button:disabled,
+.realtime-voice-credential-actions button:disabled,
+.realtime-voice-saved-credential button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.realtime-voice-credential-actions {
+  align-self: end;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.realtime-voice-saved-credential {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 9px 10px;
+  border: 1px solid rgb(0 124 107 / 18%);
+  border-radius: 10px;
+  background: rgb(225 250 244 / 72%);
+  color: #075f53;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.realtime-voice-saved-credential strong {
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  letter-spacing: 0.02em;
+}
+
+.realtime-voice-saved-credential button {
+  min-height: 34px;
+  margin-left: auto;
+  padding: 0 10px;
+}
+
+@media (max-width: 560px) {
+  .realtime-voice-credential {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .realtime-voice-credential-actions {
+    justify-content: stretch;
+  }
+
+  .realtime-voice-credential-actions button,
+  .realtime-voice-saved-credential button {
+    flex: 1 1 auto;
+  }
+
+  .realtime-voice-saved-credential button {
+    margin-left: 0;
+  }
+}
+
+.realtime-voice-credential p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #596978;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .realtime-voice-state {
   position: relative;
   grid-template-columns: 10px minmax(0, 1fr);

@@ -6,11 +6,13 @@ CommandCanvas is a shared spatial workspace where people, remote collaborators, 
 
 **Live no-signup demo:** <https://commandcanvas.vercel.app/demo>
 
-No signup, login form, password, third-party account, API key, or configuration is required to use the deployed judge route. Supabase Anonymous Auth creates a scoped authenticated browser identity behind the scenes.
+No signup, login form, password, third-party account, or configuration is required to open the deployed judge route and use the canvas, collaboration, hand input, typed commands, or deterministic fallbacks. Supabase Anonymous Auth creates a scoped authenticated browser identity behind the scenes. Optional embedded Live voice and direct OpenAI sketch interpretation require the person using `/demo` to enter their own OpenAI API key for that tab. CommandCanvas does not use a deployment-owner OpenAI key as a fallback.
 
 **Standard meeting entry:** <https://commandcanvas.vercel.app/meet>
 
 Standard rooms use a six-digit Supabase Email OTP. A host can send an exact-email, 24-hour participant invitation or copy its fragment-token link. The standard path and the no-signup judge path are intentionally separate.
+
+A verified non-anonymous `/meet` user may explicitly save, replace, or delete their own OpenAI API key. Saved keys are encrypted through Supabase Vault. The raw saved value is never returned to the browser; the server resolves it only at the OpenAI provider boundary. Saving is optional, and it never creates a deployment-owner fallback.
 
 ## The product thesis
 
@@ -48,9 +50,9 @@ The current validated output kinds are a generic diagram, architecture diagram, 
 ## One-click judge path
 
 1. Open <https://commandcanvas.vercel.app/demo>.
-2. Open the command drawer, press **Start** under **Live voice**, and say **Bring in our project board**. The `gpt-realtime-2.1` session listens for later commands until the user stops it or the bounded session ends. There is no Run button in this path. If live voice is disabled, typed **Human command** plus **Run** remains the fallback.
+2. Open the command drawer. To use embedded Live voice, enter your own OpenAI API key in **Your OpenAI API key**, press **Start**, and say **Bring in our project board**. The `gpt-realtime-2.1` session listens for later commands until the user stops it or the bounded session ends. There is no Run button in this path. The key remains only in memory for the current tab. If you do not provide a key, typed **Human command** plus **Run** remains the fallback.
    To capture a note without reaching for a mouse, say **Start a new thought**. CommandCanvas creates and selects one **New thought** card only after the canonical create command succeeds. Continue speaking normally: each completed user turn is appended as speech-to-text inside that same card. The start and finish phrases and the assistant's speech are excluded. Say **Finish thought** to close the capture.
-3. Click **Sketch** and draw a rough relationship map, flow, or labeled data chart, or enable Hand input, choose **Draw**, and trace it directly on the main canvas with your index finger. The camera preview is only a sensor check; the complete canvas is the spatial control plane. While drawing, explain its labels or values in Live voice. Multiple lines remain one active sketch instead of spawning objects or drawers. Finish the sketch, select it, and say **Make this sketch professional**.
+3. Click **Sketch** and draw a rough relationship map, flow, or labeled data chart, or enable Hand input, choose **Draw**, and trace it directly on the main canvas with your index finger. The camera preview is only a sensor check; the complete canvas is the spatial control plane. While drawing, explain its labels or values in Live voice. Multiple lines remain one active sketch instead of spawning objects or drawers. Finish the sketch, select it, and say **Make this sketch professional**. Direct OpenAI interpretation uses the same per-tab key and refuses honestly when no valid key is present.
 4. Keep the rough sketch visible beside the auto-selected, schema-validated visual. Move, resize, rotate, pin, minimize, restore, trash, recover, undo, and redo through named controls.
 5. Turn on **Select many**, choose two objects, group them into a semantic frame, move the frame, then ungroup it.
 6. Click **Prepare meeting packet**, review the exact content and recipient, then approve it.
@@ -118,10 +120,12 @@ The compact canvas projection has a hard 32,768-byte envelope. It prioritizes se
 
 These are distinct agent surfaces with different authority:
 
-- **Continuous in-page voice** opens a regular `gpt-realtime-2.1` WebRTC session only after the user presses **Start**. It uses a narrower set of canvas tools for note, board, schedule, sketch, selected-object state, local focus, grouping, ungrouping, rotation, undo, redo, recoverable trash, thought capture, and sketch transformation. Saying **Start a new thought** creates and selects one note card, then completed user turns are serialized into that card as speech-to-text until **Finish thought**. Boundary commands and assistant speech are never appended. Each accepted turn is a version-checked canonical mutation with a receipt and the same Undo behavior as other object edits. While thought capture is active, unrelated canvas tools are refused so command speech cannot leak into the note. Completed user speech outside thought capture is bounded and can accompany the next selected-sketch transformation as untrusted explanatory context. A spoken discard request is explicit and recoverable through the same receipt and Undo path; it never permanently deletes data. Live voice cannot manage rooms, approve packets, stage email, or send email. Except for local-only focus, a successful voice tool result means the action was submitted to the canonical command path; the shared receipt is the completion record.
-- **ChatGPT Site Tools**, where supported by the current ChatGPT host rollout, use the ten WebMCP tools registered on the same live page through `document.modelContext`. They can read current canvas state, mutate semantic objects, organize objects, transform a sketch, prepare a packet, and stage an approved send. Normal room, phase, role, revision, and human-confirmation guards remain authoritative. Native Chrome discovery and in-page Realtime voice are separate verification boundaries.
+- **Continuous in-page voice** opens a regular `gpt-realtime-2.1` WebRTC session only after the user supplies a temporary key or explicitly chooses a saved account key, then presses **Start**. It uses a narrower set of canvas tools for note, board, schedule, sketch, selected-object state, local focus, grouping, ungrouping, rotation, undo, redo, recoverable trash, thought capture, and sketch transformation. Saying **Start a new thought** creates and selects one note card, then completed user turns are serialized into that card as speech-to-text until **Finish thought**. Boundary commands and assistant speech are never appended. Each accepted turn is a version-checked canonical mutation with a receipt and the same Undo behavior as other object edits. While thought capture is active, unrelated canvas tools are refused so command speech cannot leak into the note. Completed user speech outside thought capture is bounded and can accompany the next selected-sketch transformation as untrusted explanatory context. A spoken discard request is explicit and recoverable through the same receipt and Undo path; it never permanently deletes data. Live voice cannot manage rooms, approve packets, stage email, or send email. Except for local-only focus, a successful voice tool result means the action was submitted to the canonical command path; the shared receipt is the completion record.
+- **ChatGPT Site Tools**, where supported by the current ChatGPT host rollout, use the ten WebMCP tools registered on the same live page through `document.modelContext`. They use the ChatGPT account already signed into the surrounding ChatGPT host. CommandCanvas never receives that ChatGPT credential. They can read current canvas state, mutate semantic objects, organize objects, transform a sketch, prepare a packet, and stage an approved send. Normal room, phase, role, revision, and human-confirmation guards remain authoritative. Native Chrome discovery and in-page Realtime voice are separate verification boundaries.
 
-Live voice is an optional paid provider path with a separate server-only key, durable admission limits, and a ten-minute session ceiling. It is not a substitute for WebMCP, and a verified Realtime provider session is not evidence that ChatGPT or Chrome discovered the Site Tools catalog.
+ChatGPT subscription and authentication do not supply or pay for OpenAI API usage inside CommandCanvas. On the no-signup `/demo` route, embedded Live voice and direct sketch interpretation use the person's own key, entered per tab and held only in browser memory. That temporary key is sent transiently to same-origin authenticated routes and is not written to the URL, `localStorage`, `sessionStorage`, Supabase, receipts, or application logs. The server necessarily sees it while forwarding the requested operation.
+
+A verified non-anonymous `/meet` user may explicitly save, replace, or delete their own key. CommandCanvas encrypts that account-owned key through Supabase Vault. The raw saved value is never returned to the browser, and the server resolves it only at the provider boundary. Use a project-scoped key with an appropriate budget. Neither path has a deployment-owner OpenAI key fallback. Live voice retains durable admission limits and a ten-minute client session ceiling. It is not a substitute for WebMCP, and a verified Realtime provider session is not evidence that ChatGPT or Chrome discovered the Site Tools catalog.
 
 ## One command architecture
 
@@ -189,7 +193,7 @@ Hand tracking is local by default. MediaPipe processes camera frames inside the 
 
 A separately operated private CUDA relay may be configured as an explicit opt-in. Only while **Use private GPU hand tracking** is on and Hand input is active may the browser encode one bounded JPEG or WebP frame at a time and send it to the configured relay origin. That separately distributed service runs the pinned GPU hand-pose model, does not retain raw frames, and returns only bounded semantic landmarks. Turning consent off, disabling Hand input, hiding or leaving the page, or a relay failure closes the remote path and restores local MediaPipe processing. Camera frames are never sent to ChatGPT, OpenAI, Supabase, or WebMCP in either mode. Every camera action has pointer and button equivalents. The relay repository is not public at this checkpoint, so public deployments must keep the path disabled until the exact AGPL source commit is published and linked.
 
-Continuous voice has a separate and explicit privacy boundary. Microphone audio travels to OpenAI only while the user-visible **Live voice** session is on, and assistant audio returns over that WebRTC connection. The server creates the provider call with a server-only key; no provider credential reaches the browser. Typed commands remain available when continuous voice is disabled or unavailable. The older reviewed browser-transcription control may use the browser vendor's speech service under that browser's policy, but it never executes a transcript until the user presses **Run**.
+Continuous voice has a separate and explicit privacy boundary. Microphone audio travels to OpenAI only while the user-visible **Live voice** session is on, and assistant audio returns over that WebRTC connection. On `/demo`, the user-entered API key remains in memory for the current tab and is sent transiently to the same-origin authenticated session route. A verified non-anonymous `/meet` user can instead choose to save an account-owned key encrypted through Supabase Vault; the raw saved key never returns to the browser, and the server resolves it only while creating the provider call. Neither route has a deployment-owner fallback. Typed commands remain available when continuous voice is disabled or unavailable. The older reviewed browser-transcription control may use the browser vendor's speech service under that browser's policy, but it never executes a transcript until the user presses **Run**.
 
 Meeting audio and video are separate again. They start only after **Start camera + mic** and travel peer-to-peer between authorized room browsers. Supabase transports bounded signaling messages, not media. **Stop sharing video** detaches the published video track; if Hand input is still consuming the physical source locally, the interface says so rather than claiming that the camera device stopped. Meeting video is never sent to OpenAI. If Live voice is also on, microphone audio is separately sent to OpenAI for that voice session. CommandCanvas does not implement call recording.
 
@@ -275,8 +279,9 @@ Requirements:
 - npm 11.5.2
 - A Supabase project with Anonymous Auth enabled for `/demo` and Email Auth
   enabled for normal `/meet` rooms
-- An OpenAI API key for live sketch interpretation
-- A separately budgeted OpenAI API key only if continuous voice is enabled
+- A project-scoped OpenAI API key owned by the person using optional Live voice
+  or direct sketch interpretation. `/demo` keeps it only for the current tab;
+  a verified non-anonymous `/meet` user may explicitly save it encrypted.
 
 ```bash
 git clone https://github.com/romiteld/commandcanvas.git
@@ -292,10 +297,8 @@ Apply the SQL files in `supabase/migrations/` to a fresh project in filename ord
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_replace_me
 SUPABASE_SECRET_KEY=replace_me
-OPENAI_API_KEY=replace_me
 OPENAI_VISION_MODEL=gpt-5.6-terra
 REALTIME_VOICE_ENABLED=false
-OPENAI_REALTIME_API_KEY=
 NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION=false
 COMMANDCANVAS_PUBLIC_URL=https://your-commandcanvas.example
 COMMANDCANVAS_INVITE_TOKEN_SECRET=
@@ -309,9 +312,9 @@ PRIVATE_HAND_RELAY_SIGNING_KEY=
 PRIVATE_HAND_RELAY_TOKEN_TTL_SECONDS=60
 ```
 
-The Supabase server credential and all provider keys are server-only. Do not prefix them with `NEXT_PUBLIC_`.
+The Supabase server credential, invitation secrets, Resend credentials, and private-relay signing key are server-only. Do not prefix them with `NEXT_PUBLIC_`. OpenAI credentials are user-owned rather than deployment environment variables in this architecture. Verified non-anonymous account storage uses Supabase Vault.
 
-`REALTIME_VOICE_ENABLED=false` keeps the paid voice path off. Enabling it without a separate valid key still fails closed. Eligible no-signup demo rooms and verified standard-room members pass through durable actor, room, and global admission limits before a provider call.
+`REALTIME_VOICE_ENABLED=false` keeps embedded Live voice off. When enabled, a no-signup demo user must enter a valid temporary key for that tab; a verified non-anonymous standard-room user may explicitly save an encrypted account key. Missing credentials fail closed without a deployment-owner fallback. Eligible no-signup demo rooms and verified standard-room members pass through durable actor, room, and global admission limits before a provider call.
 
 Start the app:
 
@@ -429,7 +432,7 @@ npx playwright test --config=playwright.webmcp153.config.ts
 
 The Chrome 153 test refuses to run against another major version, defaults to loopback, and requires `WEBMCP_LIVE_PROBE=true` before it may target a public origin. Its optional local-to-production API proxy accepts only `https://commandcanvas.vercel.app` and only the exact room endpoints used by the probe. Dynamic mode uses the same probe with `WEBMCP_EXPECTED_MODE=dynamic` against a build created with `NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION=true`.
 
-Current browser evidence is narrower than the complete source surface. Two authenticated browser contexts passed Supabase collaboration and peer-to-peer media with live local and remote tracks. A paid `gpt-realtime-2.1` session heard a controlled audio fixture, invoked the narrow `create_board` tool, and produced the canonical voice receipt. The exact `d331ccf565560fffdafb7ba0d5cdab8f97bddf2e` production route completed real OpenAI image interpretation, preserving the selected sketch beside a schema-validated structured visual. Earlier browser YOLO and native CUDA evidence belongs to the superseded combined AGPL build and does not verify the current MIT browser engine. The exact MediaPipe-only production release completed controlled-media desktop and mobile camera lifecycle runs, including worker, model, WASM, labeled desktop recovery, detachment, and track shutdown behavior. Those controlled runs do not verify physical-hand accuracy or ergonomics. A real screen recording previously showed the UI recognizing open-palm state and pinch ratios between 0.22 and 0.28 while also exposing the old preview-boundary usability failure that the full-canvas control plane addresses; that recording is not current-engine proof. A controlled allowlisted packet completed the full approval and explicit-SEND path, received a Resend provider ID, and was reported delivered by Resend. The public no-signup environment remains preview-only to prevent anonymous email abuse. ChatGPT built-in-browser Site Tools, post-fix physical iPhone and real-hand interaction quality, cross-network media, and TURN behavior remain unverified.
+Current browser evidence is narrower than the complete source surface. Two authenticated browser contexts passed Supabase collaboration and peer-to-peer media with live local and remote tracks. Earlier paid `gpt-realtime-2.1` and OpenAI image-interpretation runs verified those provider capabilities under the credential architecture of their named commits. They do not verify the current user-key handoff, absence of an owner-key fallback in a public deployment, or a current BYOK provider session. Earlier browser YOLO and native CUDA evidence belongs to the superseded combined AGPL build and does not verify the current MIT browser engine. The exact MediaPipe-only production release completed controlled-media desktop and mobile camera lifecycle runs, including worker, model, WASM, labeled desktop recovery, detachment, and track shutdown behavior. Those controlled runs do not verify physical-hand accuracy or ergonomics. A real screen recording previously showed the UI recognizing open-palm state and pinch ratios between 0.22 and 0.28 while also exposing the old preview-boundary usability failure that the full-canvas control plane addresses; that recording is not current-engine proof. A controlled allowlisted packet completed the full approval and explicit-SEND path, received a Resend provider ID, and was reported delivered by Resend. The public no-signup environment remains preview-only to prevent anonymous email abuse. ChatGPT built-in-browser Site Tools, a live BYOK provider run on the exact release, post-fix physical iPhone and real-hand interaction quality, cross-network media, and TURN behavior remain unverified.
 
 The [verification ledger](docs/verification-ledger.md) distinguishes:
 
@@ -448,9 +451,10 @@ The [verification ledger](docs/verification-ledger.md) distinguishes:
 - Packet content and recipients are immutable after approval.
 - External delivery requires explicit host authorization and a server-side recipient allowlist.
 - Paid vision work uses actor/room limits, one active room lease, exact-request caching, and compare-and-set completion.
+- Embedded Live voice and direct sketch interpretation require the person's own OpenAI API key. `/demo` keeps the key only in browser memory for the current tab. A verified non-anonymous `/meet` user may explicitly save, replace, or delete an account key encrypted through Supabase Vault. A raw saved key is never returned to the browser; the server resolves it only at the provider boundary. Neither route has a deployment-owner fallback.
 - The complete vision JSON body is capped at 4 MB and decoded PNG data at 2 MB, below Vercel Functions' 4.5 MB payload ceiling.
 - Private-relay sessions require current room membership, explicit camera-upload consent, durable admission, a short-lived HMAC capability, an exact Origin, and one-use replay protection.
-- Raw camera frames and private credentials never enter WebMCP, OpenAI, ChatGPT, or Supabase context. The opt-in relay receives bounded camera frames only while active, does not retain them, and returns semantic landmarks.
+- Raw camera frames and private-relay credentials never enter WebMCP, OpenAI, ChatGPT, or Supabase context. User-owned OpenAI keys follow only the temporary-tab or encrypted-Vault provider boundaries described above. The opt-in relay receives bounded camera frames only while active, does not retain them, and returns semantic landmarks.
 
 ## Deliberate scope cuts
 

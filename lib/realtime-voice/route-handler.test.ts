@@ -10,6 +10,8 @@ import {
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const ACTOR_ID = "22222222-2222-4222-8222-222222222222";
 const AUTHORIZATION = "Bearer header.payload.signature";
+const SESSION_OPENAI_API_KEY =
+  "sk-test-session-only-commandcanvas-key-123456789";
 
 function dependencies(
   overrides: Partial<RealtimeSessionRouteDependencies> = {},
@@ -28,6 +30,7 @@ function dependencies(
       roomMode: "demo" as const,
     })),
     admitSession: vi.fn(async () => ({ ok: true as const })),
+    resolveSavedOpenAiApiKey: vi.fn(async () => null),
     createCall: vi.fn(async () => ({
       ok: true as const,
       sdp: "v=0\no=openai-answer",
@@ -42,6 +45,8 @@ function request(overrides?: {
   roomId?: string | null;
   contentType?: string;
   body?: string;
+  openAiApiKey?: string | null;
+  savedCredential?: boolean;
 }) {
   const headers = new Headers();
   if (overrides?.authorization !== null)
@@ -49,6 +54,13 @@ function request(overrides?: {
   if (overrides?.roomId !== null)
     headers.set("x-commandcanvas-room-id", overrides?.roomId ?? ROOM_ID);
   headers.set("content-type", overrides?.contentType ?? "application/sdp");
+  if (overrides?.openAiApiKey !== null)
+    headers.set(
+      "x-commandcanvas-openai-key",
+      overrides?.openAiApiKey ?? SESSION_OPENAI_API_KEY,
+    );
+  if (overrides?.savedCredential)
+    headers.set("x-commandcanvas-openai-credential", "saved");
   return new Request("https://commandcanvas.example/api/realtime/session", {
     method: "POST",
     headers,
@@ -89,6 +101,33 @@ describe("Realtime session route", () => {
     expect(notMember.createCall).not.toHaveBeenCalled();
   });
 
+  it("requires a bounded plausible session-only OpenAI key before admission", async () => {
+    const missing = dependencies();
+    const missingResponse = await handleRealtimeSessionRequest(
+      request({ openAiApiKey: null }),
+      missing,
+    );
+    expect(missingResponse.status).toBe(400);
+    await expect(missingResponse.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "invalid_openai_api_key",
+        message: "Enter a valid OpenAI API key for this live voice session.",
+      },
+    });
+    expect(missing.admitSession).not.toHaveBeenCalled();
+    expect(missing.createCall).not.toHaveBeenCalled();
+
+    const malformed = dependencies();
+    const malformedResponse = await handleRealtimeSessionRequest(
+      request({ openAiApiKey: "not-a-provider-key" }),
+      malformed,
+    );
+    expect(malformedResponse.status).toBe(400);
+    expect(malformed.admitSession).not.toHaveBeenCalled();
+    expect(malformed.createCall).not.toHaveBeenCalled();
+  });
+
   it("admits a verified permanent member of a standard room through the same provider path", async () => {
     const deps = dependencies({
       verifier: {
@@ -117,6 +156,155 @@ describe("Realtime session route", () => {
     expect(response.status).toBe(200);
     expect(deps.admitSession).toHaveBeenCalledWith(ROOM_ID, ACTOR_ID);
     expect(deps.createCall).toHaveBeenCalledOnce();
+  });
+
+  it("resolves a verified member's saved key only on the server before provider work", async () => {
+    const savedKey = `sk-saved-${"b".repeat(40)}`;
+    const deps = dependencies({
+      verifier: {
+        auth: {
+          getUser: vi.fn(async () => ({
+            data: {
+              user: {
+                id: ACTOR_ID,
+                email: "danny@example.com",
+                email_confirmed_at: "2026-08-28T12:00:00.000Z",
+                is_anonymous: false,
+              },
+            },
+            error: null,
+          })),
+        },
+      },
+      verifyMembership: vi.fn(async () => ({
+        ok: true as const,
+        roomMode: "standard" as const,
+      })),
+      resolveSavedOpenAiApiKey: vi.fn(async () => savedKey),
+    });
+
+    const response = await handleRealtimeSessionRequest(
+      request({ openAiApiKey: null, savedCredential: true }),
+      deps,
+    );
+
+    expect(response.status).toBe(200);
+    expect(deps.resolveSavedOpenAiApiKey).toHaveBeenCalledWith(ACTOR_ID);
+    expect(deps.createCall).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: savedKey }),
+    );
+    expect(await response.text()).not.toContain(savedKey);
+  });
+
+  it("refuses missing or ambiguous saved credentials before admission", async () => {
+    const permanentVerifier = {
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: {
+            user: {
+              id: ACTOR_ID,
+              email: "danny@example.com",
+              email_confirmed_at: "2026-08-28T12:00:00.000Z",
+              is_anonymous: false,
+            },
+          },
+          error: null,
+        })),
+      },
+    };
+    const missing = dependencies({
+      verifier: permanentVerifier,
+      verifyMembership: vi.fn(async () => ({
+        ok: true as const,
+        roomMode: "standard" as const,
+      })),
+    });
+    const missingResponse = await handleRealtimeSessionRequest(
+      request({ openAiApiKey: null, savedCredential: true }),
+      missing,
+    );
+    expect(missingResponse.status).toBe(409);
+    await expect(missingResponse.json()).resolves.toMatchObject({
+      error: { code: "openai_credential_not_configured" },
+    });
+    expect(missing.admitSession).not.toHaveBeenCalled();
+    expect(missing.createCall).not.toHaveBeenCalled();
+
+    const ambiguous = dependencies({
+      verifier: permanentVerifier,
+      verifyMembership: vi.fn(async () => ({
+        ok: true as const,
+        roomMode: "standard" as const,
+      })),
+      resolveSavedOpenAiApiKey: vi.fn(async () => SESSION_OPENAI_API_KEY),
+    });
+    const ambiguousResponse = await handleRealtimeSessionRequest(
+      request({ savedCredential: true }),
+      ambiguous,
+    );
+    expect(ambiguousResponse.status).toBe(400);
+    await expect(ambiguousResponse.json()).resolves.toMatchObject({
+      error: { code: "ambiguous_openai_credential" },
+    });
+    expect(ambiguous.resolveSavedOpenAiApiKey).not.toHaveBeenCalled();
+    expect(ambiguous.admitSession).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes saved-credential storage failure from an unconfigured account", async () => {
+    const deps = dependencies({
+      verifier: {
+        auth: {
+          getUser: vi.fn(async () => ({
+            data: {
+              user: {
+                id: ACTOR_ID,
+                email: "danny@example.com",
+                email_confirmed_at: "2026-08-28T12:00:00.000Z",
+                is_anonymous: false,
+              },
+            },
+            error: null,
+          })),
+        },
+      },
+      verifyMembership: vi.fn(async () => ({
+        ok: true as const,
+        roomMode: "standard" as const,
+      })),
+      resolveSavedOpenAiApiKey: vi.fn(async () => {
+        throw new Error("Vault unavailable");
+      }),
+    });
+
+    const response = await handleRealtimeSessionRequest(
+      request({ openAiApiKey: null, savedCredential: true }),
+      deps,
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "openai_credential_unavailable" },
+    });
+    expect(deps.admitSession).not.toHaveBeenCalled();
+    expect(deps.createCall).not.toHaveBeenCalled();
+  });
+
+  it("does not allow an account-saved credential in a no-signup demo room", async () => {
+    const deps = dependencies({
+      resolveSavedOpenAiApiKey: vi.fn(async () => SESSION_OPENAI_API_KEY),
+    });
+
+    const response = await handleRealtimeSessionRequest(
+      request({ openAiApiKey: null, savedCredential: true }),
+      deps,
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "saved_credential_unavailable" },
+    });
+    expect(deps.resolveSavedOpenAiApiKey).not.toHaveBeenCalled();
+    expect(deps.admitSession).not.toHaveBeenCalled();
   });
 
   it("refuses an anonymous identity in a standard room before admission or paid provider work", async () => {
@@ -149,6 +337,7 @@ describe("Realtime session route", () => {
     expect(deps.safetyIdentifier).toHaveBeenCalledWith(ACTOR_ID);
     expect(deps.admitSession).toHaveBeenCalledWith(ROOM_ID, ACTOR_ID);
     expect(deps.createCall).toHaveBeenCalledWith({
+      apiKey: SESSION_OPENAI_API_KEY,
       sdp: "v=0\no=browser-offer",
       safetyIdentifier: "cc_voice_0123456789abcdef",
       signal: expect.any(AbortSignal),
@@ -157,6 +346,26 @@ describe("Realtime session route", () => {
     expect(response.headers.get("content-type")).toBe("application/sdp");
     expect(response.headers.get("cache-control")).toBe("no-store");
     await expect(response.text()).resolves.toBe("v=0\no=openai-answer");
+  });
+
+  it("never includes the submitted OpenAI key in provider failure responses", async () => {
+    const deps = dependencies({
+      createCall: vi.fn(async () => ({ ok: false as const })),
+    });
+    const response = await handleRealtimeSessionRequest(request(), deps);
+    const serialized = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(serialized).not.toContain(SESSION_OPENAI_API_KEY);
+    expect(serialized).toBe(
+      JSON.stringify({
+        ok: false,
+        error: {
+          code: "realtime_unavailable",
+          message: "Live voice is temporarily unavailable.",
+        },
+      }),
+    );
   });
 
   it("rejects oversized SDP and sanitizes provider failures", async () => {

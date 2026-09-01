@@ -4,6 +4,7 @@ import {
   createRealtimeVoiceController,
   type RealtimeVoiceDataChannel,
   type RealtimeVoiceControllerOptions,
+  type RealtimeVoiceStartOptions,
   type RealtimeVoiceMediaStream,
   type RealtimeVoicePeerConnection,
   type RealtimeVoiceRemoteAudio,
@@ -11,6 +12,8 @@ import {
 
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const AUTHORIZATION = "header.payload.signature";
+const SESSION_OPENAI_API_KEY =
+  "sk-test-session-only-commandcanvas-key-123456789";
 const SEMANTIC_NOTE_OBJECT = {
   id: "note-voice-client",
   type: "note",
@@ -97,13 +100,17 @@ function harness(options?: {
     play: vi.fn(async () => undefined),
     pause: vi.fn(),
   };
-  const fetcher = vi.fn(async () =>
-    options?.fetchResponse ??
-    new Response("v=0\no=openai-answer", {
-      status: 200,
-      headers: { "content-type": "application/sdp" },
-    }),
-  );
+  const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+    void _input;
+    void _init;
+    return (
+      options?.fetchResponse ??
+      new Response("v=0\no=openai-answer", {
+        status: 200,
+        headers: { "content-type": "application/sdp" },
+      })
+    );
+  });
   const statuses: string[] = [];
   const transcripts: string[] = [];
   const transcriptDeltas: Array<{ delta: string; itemId?: string }> = [];
@@ -117,7 +124,7 @@ function harness(options?: {
   const onIntent =
     options?.onIntent ??
     vi.fn(() => ({ ok: true as const, message: "Board command submitted." }));
-  const controller = createRealtimeVoiceController({
+  const voiceController = createRealtimeVoiceController({
     roomId: ROOM_ID,
     getAccessToken: () => AUTHORIZATION,
     onIntent,
@@ -148,6 +155,14 @@ function harness(options?: {
       fetch: fetcher,
     },
   });
+  const controller = {
+    ...voiceController,
+    start: (
+      startOptions: RealtimeVoiceStartOptions = {
+        openAiApiKey: SESSION_OPENAI_API_KEY,
+      },
+    ) => voiceController.start(startOptions),
+  };
 
   return {
     controller,
@@ -298,7 +313,7 @@ describe("Realtime voice WebRTC controller", () => {
   it("posts browser SDP through the authenticated server boundary and waits for the configured session acknowledgement", async () => {
     const setup = harness();
 
-    await setup.controller.start();
+    await setup.controller.start({ openAiApiKey: SESSION_OPENAI_API_KEY });
     setup.channel.open();
 
     expect(setup.fetcher).toHaveBeenCalledWith(
@@ -310,6 +325,7 @@ describe("Realtime voice WebRTC controller", () => {
           authorization: `Bearer ${AUTHORIZATION}`,
           "content-type": "application/sdp",
           "x-commandcanvas-room-id": ROOM_ID,
+          "x-commandcanvas-openai-key": SESSION_OPENAI_API_KEY,
         },
       }),
     );
@@ -325,6 +341,56 @@ describe("Realtime voice WebRTC controller", () => {
     expect(setup.controller.getState()).toEqual({ status: "connecting" });
     setup.channel.message({ type: "session.created", session: { type: "realtime" } });
     expect(setup.statuses).toEqual(["connecting", "listening"]);
+  });
+
+  it("requests an account-saved credential without putting a raw key in the browser request", async () => {
+    const setup = harness();
+
+    await setup.controller.start({ useSavedOpenAiCredential: true });
+
+    expect(setup.fetcher).toHaveBeenCalledWith(
+      "/api/realtime/session",
+      expect.objectContaining({
+        headers: {
+          authorization: `Bearer ${AUTHORIZATION}`,
+          "content-type": "application/sdp",
+          "x-commandcanvas-openai-credential": "saved",
+          "x-commandcanvas-room-id": ROOM_ID,
+        },
+      }),
+    );
+    const init = setup.fetcher.mock.calls[0]?.[1];
+    expect(init?.headers).not.toHaveProperty("x-commandcanvas-openai-key");
+  });
+
+  it("refuses ambiguous saved and session credentials before opening media", async () => {
+    const setup = harness();
+
+    await setup.controller.start({
+      openAiApiKey: SESSION_OPENAI_API_KEY,
+      useSavedOpenAiCredential: true,
+    });
+
+    expect(setup.controller.getState()).toEqual({
+      status: "error",
+      message: "Choose either your saved OpenAI credential or a temporary key.",
+    });
+    expect(setup.fetcher).not.toHaveBeenCalled();
+    expect(setup.peer.createDataChannel).not.toHaveBeenCalled();
+  });
+
+  it("refuses an invalid session key before opening media or transport resources", async () => {
+    const setup = harness();
+
+    await setup.controller.start({ openAiApiKey: "not-a-provider-key" });
+
+    expect(setup.controller.getState()).toEqual({
+      status: "error",
+      message: "Enter a valid OpenAI API key to start live voice.",
+    });
+    expect(setup.fetcher).not.toHaveBeenCalled();
+    expect(setup.peer.createDataChannel).not.toHaveBeenCalled();
+    expect(setup.microphoneTrack.stop).not.toHaveBeenCalled();
   });
 
   it("surfaces listening, thinking, speaking, and transcript events", async () => {

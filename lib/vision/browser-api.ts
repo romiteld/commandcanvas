@@ -7,6 +7,7 @@ import {
 } from "@/lib/vision/diagram-transform";
 
 const jwtPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+const openAiApiKeyPattern = /^sk-[A-Za-z0-9_-]{17,509}$/;
 const MAX_RESPONSE_CHARS = 1_000_000;
 
 const transformValueSchema = z
@@ -68,6 +69,8 @@ export interface BrowserSketchTransformApi {
 
 export interface BrowserSketchTransformApiOptions {
   accessToken: string;
+  getOpenAiApiKey?: () => string;
+  getUseSavedOpenAiCredential?: () => boolean;
   fetcher?: (url: string, init?: RequestInit) => Promise<Response>;
 }
 
@@ -90,6 +93,11 @@ export function createBrowserSketchTransformApi(
       const input = sketchTransformRequestSchema.safeParse(rawInput);
       if (!input.success)
         return failure("invalid_request", "Sketch interpretation request is invalid.");
+      const credential = readOpenAiCredential(
+        options.getOpenAiApiKey,
+        options.getUseSavedOpenAiCredential,
+      );
+      if (!credential.ok) return credential.failure;
 
       let response: Response;
       try {
@@ -101,6 +109,7 @@ export function createBrowserSketchTransformApi(
             headers: {
               authorization: `Bearer ${accessToken}`,
               "content-type": "application/json",
+              ...credential.headers,
             },
             body: JSON.stringify(input.data),
             signal,
@@ -154,6 +163,79 @@ export function createBrowserSketchTransformApi(
         return invalidResponse();
       return { ok: true, value: parsed.data.transform };
     },
+  };
+}
+
+function readOpenAiCredential(
+  getOpenAiApiKey: (() => string) | undefined,
+  getUseSavedOpenAiCredential: (() => boolean) | undefined,
+):
+  | { ok: true; headers: Record<string, string> }
+  | { ok: false; failure: BrowserSketchTransformResult } {
+  let useSaved = false;
+  try {
+    useSaved = getUseSavedOpenAiCredential?.() === true;
+  } catch {
+    return {
+      ok: false,
+      failure: failure(
+        "invalid_openai_credential",
+        "OpenAI credential selection is invalid.",
+      ),
+    };
+  }
+  if (!getOpenAiApiKey && !useSaved)
+    return {
+      ok: false,
+      failure: failure(
+        "openai_key_required",
+        "Enter an OpenAI API key for this browser session.",
+      ),
+    };
+  let value = "";
+  try {
+    value = getOpenAiApiKey?.().trim() ?? "";
+  } catch {
+    return {
+      ok: false,
+      failure: failure(
+        "invalid_openai_key",
+        "The OpenAI API key for this browser session is invalid.",
+      ),
+    };
+  }
+  if (useSaved && value.length > 0)
+    return {
+      ok: false,
+      failure: failure(
+        "ambiguous_openai_credential",
+        "Choose either your saved OpenAI credential or a temporary key.",
+      ),
+    };
+  if (useSaved)
+    return {
+      ok: true,
+      headers: { "x-commandcanvas-openai-credential": "saved" },
+    };
+  if (value.length === 0)
+    return {
+      ok: false,
+      failure: failure(
+        "openai_key_required",
+        "Enter an OpenAI API key for this browser session.",
+      ),
+    };
+  if (!openAiApiKeyPattern.test(value))
+    return {
+      ok: false,
+      failure: failure(
+        "invalid_openai_key",
+        "The OpenAI API key for this browser session is invalid.",
+      ),
+    };
+  return {
+    ok: true,
+    headers: { "x-commandcanvas-openai-key": value },
   };
 }
 

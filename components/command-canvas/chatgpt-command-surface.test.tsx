@@ -94,8 +94,14 @@ describe("ChatGptCommandSurface", () => {
     expect(callbacks.onToggleRealtimeVoice).not.toHaveBeenCalled();
     expect(
       screen.getByText(
-        "Use ChatGPT Voice in the surrounding app. This page cannot press that microphone for you.",
+        /use the ChatGPT account already signed into the surrounding app/i,
       ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/CommandCanvas never receives that ChatGPT credential/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/OpenAI API billing is separate from a ChatGPT subscription/i),
     ).toBeInTheDocument();
   });
 

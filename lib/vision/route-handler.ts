@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { CanvasState } from "@/lib/canvas/command-engine";
 import type { SketchPayload } from "@/lib/canvas/object-model";
 import {
+  authenticatePermanentEmailUser,
   authenticateRequestActor,
   type SupabaseUserVerifier,
 } from "@/lib/supabase/server-auth";
@@ -23,9 +24,14 @@ import type {
 
 // Leaves headroom below Vercel Functions' 4.5 MB request payload ceiling.
 const MAX_TRANSFORM_REQUEST_BYTES = 4 * 1_024 * 1_024;
+const openAiApiKeyPattern = /^sk-[A-Za-z0-9_-]{17,509}$/;
 
 export type SketchTransformMembershipResult =
-  | { ok: true; role: "host" | "participant" }
+  | {
+      ok: true;
+      role: "host" | "participant";
+      roomMode?: "standard" | "demo";
+    }
   | { ok: false };
 
 export type SketchTransformCanvasResult =
@@ -49,8 +55,10 @@ export interface SketchTransformRouteDependencies {
     input: VisionReleaseInput,
   ) => Promise<VisionReleaseResult>;
   safetyIdentifier: (actorUserId: string) => string;
+  resolveSavedOpenAiApiKey: (actorUserId: string) => Promise<string | null>;
   transform: (
     input: OpenAiDiagramTransformInput,
+    openAiApiKey: string,
   ) => Promise<OpenAiDiagramTransformResult>;
 }
 
@@ -128,6 +136,14 @@ export async function handleSketchTransformRequest(
       "The source sketch changed. Rasterize the current version and try again.",
     );
 
+  const credential = await resolveOpenAiCredential(
+    request,
+    membership.roomMode,
+    actor.actorUserId,
+    dependencies,
+  );
+  if (!credential.ok) return credential.response;
+
   let identity: ReturnType<typeof createVisionAdmissionIdentity>;
   try {
     identity = createVisionAdmissionIdentity(input);
@@ -183,7 +199,7 @@ export async function handleSketchTransformRequest(
       sketch: source.payload as SketchPayload,
       safetyIdentifier: dependencies.safetyIdentifier(actor.actorUserId),
       signal: request.signal,
-    });
+    }, credential.value);
   } catch {
     transformed = {
       ok: false,
@@ -224,6 +240,111 @@ export async function handleSketchTransformRequest(
     );
 
   return transformSuccess(input.sketchObjectId, transformed);
+}
+
+async function resolveOpenAiCredential(
+  request: Request,
+  roomMode: "standard" | "demo" | undefined,
+  actorUserId: string,
+  dependencies: SketchTransformRouteDependencies,
+): Promise<
+  | { ok: true; value: string }
+  | { ok: false; response: Response }
+> {
+  const rawKey = request.headers.get("x-commandcanvas-openai-key");
+  const savedHeader = request.headers.get(
+    "x-commandcanvas-openai-credential",
+  );
+  if (savedHeader !== null && savedHeader !== "saved")
+    return {
+      ok: false,
+      response: jsonError(
+        400,
+        "invalid_openai_credential",
+        "OpenAI credential selection is invalid.",
+      ),
+    };
+  const useSaved = savedHeader === "saved";
+  if (useSaved && rawKey !== null)
+    return {
+      ok: false,
+      response: jsonError(
+        400,
+        "ambiguous_openai_credential",
+        "Choose either a saved OpenAI credential or a temporary key.",
+      ),
+    };
+  if (!useSaved) return readSessionOpenAiKey(rawKey);
+  if (roomMode !== "standard")
+    return {
+      ok: false,
+      response: jsonError(
+        403,
+        "saved_credential_unavailable",
+        "Saved credentials are available after email sign-in in a meeting room.",
+      ),
+    };
+  const permanentActor = await authenticatePermanentEmailUser(
+    request.headers.get("authorization"),
+    dependencies.verifier,
+  );
+  if (!permanentActor.ok || permanentActor.actorUserId !== actorUserId)
+    return {
+      ok: false,
+      response: jsonError(
+        403,
+        "permanent_email_auth_required",
+        "Verify your email before using a saved OpenAI credential.",
+      ),
+    };
+  try {
+    const savedKey = await dependencies.resolveSavedOpenAiApiKey(actorUserId);
+    const parsed = savedKey?.trim() ?? "";
+    return openAiApiKeyPattern.test(parsed)
+      ? { ok: true, value: parsed }
+      : {
+          ok: false,
+          response: jsonError(
+            409,
+            "openai_credential_not_configured",
+            "Save an OpenAI API key to your CommandCanvas account first.",
+          ),
+        };
+  } catch {
+    return {
+      ok: false,
+      response: jsonError(
+        503,
+        "openai_credential_unavailable",
+        "Your saved OpenAI credential is temporarily unavailable.",
+      ),
+    };
+  }
+}
+
+function readSessionOpenAiKey(value: string | null):
+  | { ok: true; value: string }
+  | { ok: false; response: Response } {
+  if (value === null || value.trim().length === 0)
+    return {
+      ok: false,
+      response: jsonError(
+        400,
+        "openai_key_required",
+        "Enter an OpenAI API key for this browser session.",
+      ),
+    };
+  const trimmed = value.trim();
+  if (!openAiApiKeyPattern.test(trimmed))
+    return {
+      ok: false,
+      response: jsonError(
+        400,
+        "invalid_openai_key",
+        "The OpenAI API key for this browser session is invalid.",
+      ),
+    };
+  return { ok: true, value: trimmed };
 }
 
 function transformSuccess(

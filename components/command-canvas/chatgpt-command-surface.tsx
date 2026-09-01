@@ -162,8 +162,11 @@ export function ChatGptCommandSurface({
           <p>{surfaceDescription(surfaceState)}</p>
           {siteToolsRegistered ? (
             <p className="chatgpt-host-voice-guidance" role="status">
-              Use ChatGPT Voice in the surrounding app. This page cannot press
-              that microphone for you.
+              Site Tools use the ChatGPT account already signed into the
+              surrounding app. CommandCanvas never receives that ChatGPT
+              credential. Use ChatGPT Voice there; this page cannot press that
+              microphone for you. OpenAI API billing is separate from a
+              ChatGPT subscription.
             </p>
           ) : null}
           {siteToolsRegistered && realtimeAvailable ? (
@@ -285,7 +288,7 @@ function surfaceDescription(state: WebMcpSurfaceState) {
     case "checking":
       return "CommandCanvas is checking the page registration surface.";
     case "unavailable":
-      return "Use CommandCanvas Live Voice or the typed command fallback in this browser.";
+      return "Open this page inside ChatGPT to use Site Tools with your signed-in ChatGPT account. In this browser, use your own OpenAI API key for Live Voice or use the typed fallback.";
     case "registration_failed":
       return "The page could not register Site Tools. Canvas controls still work normally.";
     case "registered_to_page":

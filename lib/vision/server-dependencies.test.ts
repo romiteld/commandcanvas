@@ -9,6 +9,8 @@ const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const ACTOR_ID = "22222222-2222-4222-8222-222222222222";
 const LEASE_TOKEN = "33333333-3333-4333-8333-333333333333";
 const REQUEST_KEY = `vision_v1_${"a".repeat(64)}`;
+const OWNER_OPENAI_API_KEY = `sk-owner-${"o".repeat(40)}`;
+const SESSION_OPENAI_API_KEY = `sk-session-${"s".repeat(40)}`;
 
 const diagramPayload = {
   kind: "architecture" as const,
@@ -94,21 +96,81 @@ function options(
 
   return {
     rpc,
+    transformer,
+    resolveSavedOpenAiApiKey: vi.fn(async () => SESSION_OPENAI_API_KEY),
     value: {
       environment: {
         NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
         NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test",
         SUPABASE_SECRET_KEY: "test-supabase-server-key",
-        OPENAI_API_KEY: "test-openai-key-not-real",
+        OPENAI_API_KEY: OWNER_OPENAI_API_KEY,
       },
       createClient: vi.fn(() => client),
       createTransformer: vi.fn(() => transformer),
       createLeaseToken: vi.fn(() => LEASE_TOKEN),
+      resolveSavedOpenAiApiKey: vi.fn(async () => SESSION_OPENAI_API_KEY),
     },
   };
 }
 
 describe("server sketch transform admission dependencies", () => {
+  it("wires a saved account credential resolver and loads room mode with membership", async () => {
+    const setup = options(() => ({ data: null, error: null }));
+    const result = createServerSketchTransformDependencies(setup.value);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    await expect(
+      result.dependencies.resolveSavedOpenAiApiKey(ACTOR_ID),
+    ).resolves.toBe(SESSION_OPENAI_API_KEY);
+    expect(setup.value.resolveSavedOpenAiApiKey).toHaveBeenCalledWith(ACTOR_ID);
+  });
+  it("constructs vision only from the transient request key and ignores the owner environment key", async () => {
+    const setup = options(() => ({ data: null, error: null }));
+    const result = createServerSketchTransformDependencies(setup.value);
+
+    expect(result.ok).toBe(true);
+    expect(setup.value.createTransformer).not.toHaveBeenCalled();
+    if (!result.ok) return;
+
+    await result.dependencies.transform(
+      {
+        roomId: ROOM_ID,
+        sketchObjectId: "sketch-source",
+        sourceVersion: 1,
+        instruction: "Make that usable",
+        outputKind: "architecture",
+        imageDataUrl:
+          "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        sketch: {
+          strokes: [
+            {
+              id: "stroke-source",
+              color: "#12233d",
+              width: 5,
+              points: [
+                { x: 20, y: 40 },
+                { x: 180, y: 40 },
+              ],
+            },
+          ],
+        },
+        safetyIdentifier: "cc_0123456789abcdef",
+      },
+      SESSION_OPENAI_API_KEY,
+    );
+
+    expect(setup.value.createTransformer).toHaveBeenCalledTimes(1);
+    expect(setup.value.createTransformer).toHaveBeenCalledWith({
+      apiKey: SESSION_OPENAI_API_KEY,
+      model: "gpt-5.6-terra",
+    });
+    expect(setup.value.createTransformer).not.toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: OWNER_OPENAI_API_KEY }),
+    );
+    expect(setup.transformer.transform).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the service-only admission RPC with an unguessable lease token", async () => {
     const setup = options((functionName, args) => {
       expect(functionName).toBe("admit_sketch_transform");

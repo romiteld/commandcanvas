@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -42,6 +43,120 @@ function successfulIntentSpy() {
 }
 
 describe("RealtimeVoiceControl", () => {
+  it("uses a user-supplied session key for Live Voice without rendering or persisting it", async () => {
+    const user = userEvent.setup();
+    const setup = controllerHarness();
+    const apiKey = "sk-user-session-key-1234567890";
+
+    function SessionKeyHarness() {
+      const [openAiApiKey, setOpenAiApiKey] = useState("");
+      return (
+        <RealtimeVoiceControl
+          roomId={ROOM_ID}
+          getAccessToken={() => "header.payload.signature"}
+          openAiApiKey={openAiApiKey}
+          onOpenAiApiKeyChange={setOpenAiApiKey}
+          onIntent={successfulIntentSpy()}
+          createController={() => setup.controller}
+        />
+      );
+    }
+
+    render(<SessionKeyHarness />);
+
+    const input = screen.getByLabelText("Your OpenAI API key");
+    expect(input).toHaveAttribute("type", "password");
+    expect(input).toHaveAttribute("autocomplete", "off");
+    expect(screen.getByText(/never saved/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/sent transiently through CommandCanvas/i),
+    ).toBeInTheDocument();
+
+    await user.type(input, `  ${apiKey}  `);
+    expect(screen.queryByText(apiKey)).not.toBeInTheDocument();
+    expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
+
+    await user.click(
+      screen.getByRole("button", { name: "Start live voice" }),
+    );
+    expect(setup.controller.start).toHaveBeenCalledWith({
+      openAiApiKey: `  ${apiKey}  `,
+    });
+  });
+
+  it("starts from an account-saved credential without returning the raw key to the UI", async () => {
+    const user = userEvent.setup();
+    const setup = controllerHarness();
+    render(
+      <RealtimeVoiceControl
+        roomId={ROOM_ID}
+        getAccessToken={() => "header.payload.signature"}
+        useSavedOpenAiCredential
+        savedOpenAiCredential={{
+          configured: true,
+          fingerprint: "sk-…c4a9",
+          updatedAt: "2026-09-01T03:15:00.000Z",
+          busy: false,
+          onSave: vi.fn(async () => undefined),
+          onDelete: vi.fn(async () => undefined),
+        }}
+        onUseSavedOpenAiCredentialChange={vi.fn()}
+        onIntent={successfulIntentSpy()}
+        createController={() => setup.controller}
+      />,
+    );
+
+    expect(screen.getByText(/saved to your commandcanvas account/i)).toBeInTheDocument();
+    expect(screen.getByText("sk-…c4a9")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue(/sk-/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Start live voice" }));
+    expect(setup.controller.start).toHaveBeenCalledWith({
+      useSavedOpenAiCredential: true,
+    });
+  });
+
+  it("explicitly saves and removes a signed-in user's credential without browser storage", async () => {
+    const user = userEvent.setup();
+    const setup = controllerHarness();
+    const save = vi.fn(async () => undefined);
+    const remove = vi.fn(async () => undefined);
+    const apiKey = `sk-account-${"a".repeat(32)}`;
+    render(
+      <RealtimeVoiceControl
+        roomId={ROOM_ID}
+        getAccessToken={() => "header.payload.signature"}
+        savedOpenAiCredential={{
+          configured: true,
+          fingerprint: "sk-…c4a9",
+          updatedAt: "2026-09-01T03:15:00.000Z",
+          busy: false,
+          onSave: save,
+          onDelete: remove,
+        }}
+        onIntent={successfulIntentSpy()}
+        createController={() => setup.controller}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("Your OpenAI API key"), apiKey);
+    await user.click(screen.getByRole("button", { name: "Save key to my account" }));
+    expect(save).toHaveBeenCalledWith(apiKey);
+    expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
+
+    await user.click(screen.getByRole("button", { name: "Remove saved key" }));
+    expect(remove).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("Remove saved OpenAI key? This cannot be undone."),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Confirm remove saved key" }),
+    );
+    expect(remove).toHaveBeenCalledOnce();
+  });
+
   it("publishes thought transcription deltas provisionally and clears them after one final append", async () => {
     let callbacks: RealtimeVoiceControllerOptions | undefined;
     const setup = controllerHarness();

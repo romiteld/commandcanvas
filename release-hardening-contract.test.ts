@@ -40,8 +40,53 @@ describe("server-only dependency boundaries", () => {
     "lib/vision/server-dependencies.ts",
     "lib/vision/openai-diagram.ts",
     "lib/realtime-voice/server-dependencies.ts",
+    "lib/openai-credentials/service.ts",
+    "lib/openai-credentials/route-handler.ts",
   ])("fences %s from client bundles", (relativePath) => {
     expect(read(relativePath)).toMatch(/^import ["']server-only["'];/);
+  });
+});
+
+describe("user-owned OpenAI credential boundary", () => {
+  it("does not advertise deployment-owned OpenAI keys", () => {
+    const exampleEnvironment = read(".env.example");
+
+    expect(exampleEnvironment).not.toMatch(/^OPENAI_API_KEY=/m);
+    expect(exampleEnvironment).not.toMatch(/^OPENAI_REALTIME_API_KEY=/m);
+  });
+
+  it("keeps the user key out of browser persistence and request bodies", () => {
+    const realtimeClient = read("lib/realtime-voice/client.ts");
+    const visionClient = read("lib/vision/browser-api.ts");
+    const credentialClient = read("lib/openai-credentials/browser-api.ts");
+    const browserSources = `${realtimeClient}\n${visionClient}\n${credentialClient}`;
+
+    expect(browserSources).not.toMatch(/localStorage|sessionStorage/);
+    expect(realtimeClient).toContain('"x-commandcanvas-openai-key": openAiApiKey');
+    expect(realtimeClient).toContain("body: offer.sdp");
+    expect(visionClient).toContain(
+      '"x-commandcanvas-openai-key": value',
+    );
+    expect(visionClient).toContain("body: JSON.stringify(input.data)");
+    expect(credentialClient).toContain('const ENDPOINT = "/api/openai-credential"');
+    expect(credentialClient).not.toMatch(/console\.|indexedDB/i);
+  });
+
+  it("has no production fallback to deployment-owned OpenAI keys", () => {
+    const realtimeDependencies = read(
+      "lib/realtime-voice/server-dependencies.ts",
+    );
+    const visionDependencies = read("lib/vision/server-dependencies.ts");
+    const credentialService = read("lib/openai-credentials/service.ts");
+
+    expect(realtimeDependencies).not.toContain("OPENAI_REALTIME_API_KEY");
+    expect(visionDependencies).not.toMatch(
+      /readOpenAiDiagramConfig\(options\.environment\)/,
+    );
+    expect(visionDependencies).toContain("OPENAI_API_KEY: openAiApiKey");
+    expect(realtimeDependencies).toContain("resolveAccountOpenAiApiKey");
+    expect(visionDependencies).toContain("resolveAccountOpenAiApiKey");
+    expect(credentialService).not.toMatch(/OPENAI_API_KEY|OPENAI_REALTIME_API_KEY/);
   });
 });
 

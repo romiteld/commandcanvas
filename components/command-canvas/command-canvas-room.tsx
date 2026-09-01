@@ -114,6 +114,8 @@ export interface CommandCanvasRoomProps {
   ) => HandTrackingController;
   privateGpuRelayAvailable?: boolean;
   realtimeVoice?: Omit<RealtimeVoiceControlProps, "onIntent">;
+  openAiApiKey?: string;
+  onOpenAiApiKeyChange?: (value: string) => void;
   webMcpSurfaceState?: WebMcpSurfaceState;
   webMcpExecutionActivity?: readonly WebMcpExecutionEvent[];
   meetingMediaPanel?: ReactNode;
@@ -197,6 +199,8 @@ export function CommandCanvasRoom({
   createHandTrackingController,
   privateGpuRelayAvailable = false,
   realtimeVoice,
+  openAiApiKey,
+  onOpenAiApiKeyChange,
   webMcpSurfaceState = { status: "unavailable" },
   webMcpExecutionActivity = [],
   meetingMediaPanel,
@@ -587,6 +591,11 @@ export function CommandCanvasRoom({
           message: result.message,
           sourceSketchId: selectedObject.id,
         });
+        if (
+          result.code === "openai_key_required" ||
+          result.code === "invalid_openai_key"
+        )
+          setOpenDrawer("command");
         return;
       }
       setSketchTransformExecution({ status: "idle" });
@@ -2775,6 +2784,8 @@ export function CommandCanvasRoom({
               <RealtimeVoiceControl
                 ref={realtimeVoiceControlRef}
                 {...realtimeVoice}
+                openAiApiKey={openAiApiKey}
+                onOpenAiApiKeyChange={onOpenAiApiKeyChange}
                 onIntent={handleRealtimeIntent}
                 inspectCanvas={(input, signal) => {
                   signal.throwIfAborted();

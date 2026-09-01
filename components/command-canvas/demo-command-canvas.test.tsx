@@ -257,6 +257,28 @@ function readyEnvironment(options?: {
 }
 
 describe("DemoCommandCanvas", () => {
+  it("shares one in-memory OpenAI key with room providers and clears it on unmount", async () => {
+    const user = userEvent.setup();
+    const harness = readyEnvironment();
+    const originalBootstrap = harness.environment.bootstrap;
+    let readOpenAiApiKey: (() => string) | undefined;
+    harness.environment.bootstrap = (async (...args: unknown[]) => {
+      readOpenAiApiKey = args[0] as (() => string) | undefined;
+      return originalBootstrap();
+    }) as DemoCommandCanvasEnvironment["bootstrap"];
+
+    const view = render(<DemoCommandCanvas environment={harness.environment} />);
+    expect(await screen.findByText("Live demo room")).toBeVisible();
+    expect(readOpenAiApiKey).toBeTypeOf("function");
+
+    const input = screen.getByLabelText("Your OpenAI API key");
+    await user.type(input, "sk-user-session-key-1234567890");
+    expect(readOpenAiApiKey?.()).toBe("sk-user-session-key-1234567890");
+
+    view.unmount();
+    expect(readOpenAiApiKey?.()).toBe("");
+  });
+
   it("bootstraps one no-signup identity and room under React Strict Mode", async () => {
     const harness = readyEnvironment();
     const bootstrap = vi.spyOn(harness.environment, "bootstrap");
@@ -312,6 +334,7 @@ describe("DemoCommandCanvas", () => {
         .toBe(browserApi);
       expect(createBrowserSketchTransformApi).toHaveBeenCalledWith({
         accessToken: "header.payload.signature",
+        getOpenAiApiKey: expect.any(Function),
       });
       expect(dependencies?.createPacketApi?.("header.payload.signature"))
         .toBe(packetApi);

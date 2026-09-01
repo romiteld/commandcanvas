@@ -109,10 +109,15 @@ export interface RealtimeVoiceControllerOptions {
   platform?: RealtimeVoicePlatform;
 }
 
+export interface RealtimeVoiceStartOptions {
+  openAiApiKey?: string;
+  useSavedOpenAiCredential?: boolean;
+}
+
 export interface RealtimeVoiceController {
   getState: () => RealtimeVoiceState;
   subscribe: (listener: () => void) => () => void;
-  start: () => Promise<void>;
+  start: (options: RealtimeVoiceStartOptions) => Promise<void>;
   stop: () => void;
   resumeAudio: () => Promise<boolean>;
 }
@@ -123,6 +128,7 @@ const MAX_SESSION_MILLISECONDS = 10 * 60 * 1_000;
 const MAX_SETUP_MILLISECONDS = 20 * 1_000;
 const MAX_TRACKED_INPUT_TURNS = 16;
 const MAX_TRANSCRIPT_DELTA_CHARS = 2_000;
+const OPENAI_API_KEY_PATTERN = /^sk-[A-Za-z0-9_-]{17,509}$/;
 
 export function createRealtimeVoiceController(
   options: RealtimeVoiceControllerOptions,
@@ -173,9 +179,32 @@ export function createRealtimeVoiceController(
     });
   }
 
-  async function start() {
+  async function start(startOptions: RealtimeVoiceStartOptions) {
     if (["connecting", "listening", "thinking", "speaking"].includes(state.status))
       return;
+    const openAiApiKey = startOptions?.openAiApiKey?.trim() ?? "";
+    const useSavedOpenAiCredential =
+      startOptions?.useSavedOpenAiCredential === true;
+    if (useSavedOpenAiCredential && openAiApiKey.length > 0) {
+      releaseResources();
+      update({
+        status: "error",
+        message: "Choose either your saved OpenAI credential or a temporary key.",
+      });
+      return;
+    }
+    if (
+      !useSavedOpenAiCredential &&
+      (openAiApiKey.length > 512 ||
+        !OPENAI_API_KEY_PATTERN.test(openAiApiKey))
+    ) {
+      releaseResources();
+      update({
+        status: "error",
+        message: "Enter a valid OpenAI API key to start live voice.",
+      });
+      return;
+    }
     releaseResources();
     const activeGeneration = ++generation;
     const activeIntentSession = new AbortController();
@@ -292,11 +321,15 @@ export function createRealtimeVoiceController(
 
       const abortController = new AbortController();
       sessionRequest = abortController;
+      const credentialHeaders: Record<string, string> = useSavedOpenAiCredential
+        ? { "x-commandcanvas-openai-credential": "saved" }
+        : { "x-commandcanvas-openai-key": openAiApiKey };
       const response = await platform.fetch(SESSION_ENDPOINT, {
         method: "POST",
         headers: {
           authorization: `Bearer ${accessToken}`,
           "content-type": "application/sdp",
+          ...credentialHeaders,
           "x-commandcanvas-room-id": options.roomId,
         },
         body: offer.sdp,

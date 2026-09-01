@@ -45,7 +45,9 @@ import {
 import { createBrowserSketchTransformApi } from "@/lib/vision/browser-api";
 
 export interface DemoCommandCanvasEnvironment {
-  bootstrap: () => Promise<DemoRoomBootstrapResult>;
+  bootstrap: (
+    getOpenAiApiKey?: () => string,
+  ) => Promise<DemoRoomBootstrapResult>;
   copyInvite: (inviteUrl: string) => Promise<void>;
   resetDemo: () => void;
   createSketchTransformer?: (
@@ -118,6 +120,8 @@ export function DemoCommandCanvas({
     | { status: "deleting" }
     | { status: "failed"; message: string }
   >({ status: "idle" });
+  const [openAiApiKey, setOpenAiApiKey] = useState("");
+  const openAiApiKeyRef = useRef("");
   const webMcpRegistryRef = useRef<WebMcpRegistry | null>(null);
   const meetingMediaStreamRef = useRef<MediaStream | null>(null);
   const bootstrapOperationRef = useRef<DemoRoomBootstrapOperation | null>(null);
@@ -153,6 +157,10 @@ export function DemoCommandCanvas({
       }),
     [activeRoomId, privateGpuRelayEnabled, readyRoom],
   );
+  const updateOpenAiApiKey = useCallback((value: string) => {
+    openAiApiKeyRef.current = value;
+    setOpenAiApiKey(value);
+  }, []);
   const sketchTransformer = useMemo(() => {
     if (!readyRoom) return null;
     const createTransformer =
@@ -188,7 +196,7 @@ export function DemoCommandCanvas({
     if (!operation || operation.environment !== environment) {
       operation = {
         environment,
-        promise: environment.bootstrap(),
+        promise: environment.bootstrap(() => openAiApiKeyRef.current),
         activeConsumers: 0,
         session: null,
         disposed: false,
@@ -230,6 +238,7 @@ export function DemoCommandCanvas({
     return () => {
       active = false;
       unsubscribe();
+      openAiApiKeyRef.current = "";
       operation.activeConsumers = Math.max(0, operation.activeConsumers - 1);
       if (operation.activeConsumers === 0) void disposeOperation();
     };
@@ -583,6 +592,8 @@ export function DemoCommandCanvas({
           disabled:
             snapshot.status !== "ready" && snapshot.status !== "degraded",
         }}
+        openAiApiKey={openAiApiKey}
+        onOpenAiApiKeyChange={updateOpenAiApiKey}
         meetingMediaPanel={
           room.meetingMediaClient && snapshot.membership ? (
             <MeetingFilmstrip
@@ -602,7 +613,9 @@ export function DemoCommandCanvas({
   );
 }
 
-async function bootstrapBrowserDemoRoom() {
+async function bootstrapBrowserDemoRoom(
+  getOpenAiApiKey: () => string = () => "",
+) {
   const clientResult = createBrowserSupabaseClient({
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
@@ -628,7 +641,7 @@ async function bootstrapBrowserDemoRoom() {
         realtimeClient: client as unknown as DemoRoomRealtimeClient,
         createRoomApi: (accessToken) => createBrowserRoomApi({ accessToken }),
         createSketchTransformApi: (accessToken) =>
-          createBrowserSketchTransformApi({ accessToken }),
+          createBrowserSketchTransformApi({ accessToken, getOpenAiApiKey }),
         createPacketApi: (accessToken) =>
           createBrowserPacketApi({ accessToken }),
         hydrateCanvas,

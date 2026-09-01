@@ -13,6 +13,7 @@ import {
 const ROOM_ID = "d32af6a9-31dd-4dfc-98d5-fcf439b9b106";
 const ACTOR_ID = "96ceecfe-ab18-4fda-9591-9945a73fe709";
 const AUTHORIZATION = "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.signature";
+const OPENAI_API_KEY = `sk-session-${"a".repeat(40)}`;
 const PNG_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const REQUEST_KEY =
@@ -134,6 +135,7 @@ function dependencies(
     })),
     completeTransform: vi.fn(async () => ({ ok: true as const })),
     releaseTransform: vi.fn(async () => ({ ok: true as const })),
+    resolveSavedOpenAiApiKey: vi.fn(async () => null),
     safetyIdentifier: vi.fn(() => "cc_0123456789abcdef"),
     transform: vi.fn(async () => ({
       ok: true as const,
@@ -145,13 +147,22 @@ function dependencies(
   } as SketchTransformRouteDependencies;
 }
 
-function request(body: Record<string, unknown>) {
+function request(
+  body: Record<string, unknown>,
+  openAiApiKey: string | null = OPENAI_API_KEY,
+  savedCredential = false,
+) {
+  const headers = new Headers({
+    authorization: AUTHORIZATION,
+    "content-type": "application/json",
+  });
+  if (openAiApiKey !== null)
+    headers.set("x-commandcanvas-openai-key", openAiApiKey);
+  if (savedCredential)
+    headers.set("x-commandcanvas-openai-credential", "saved");
   return new Request(`https://commandcanvas.example/api/rooms/${ROOM_ID}/transform-sketch`, {
     method: "POST",
-    headers: {
-      authorization: AUTHORIZATION,
-      "content-type": "application/json",
-    },
+    headers,
     body: JSON.stringify(body),
   });
 }
@@ -168,6 +179,188 @@ function validBody() {
 }
 
 describe("sketch transform route", () => {
+  it("requires a session OpenAI key before quota admission or provider execution", async () => {
+    const deps = dependencies();
+
+    const response = await handleSketchTransformRequest(
+      request(validBody(), null),
+      ROOM_ID,
+      deps,
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "openai_key_required",
+        message: "Enter an OpenAI API key for this browser session.",
+      },
+    });
+    expect(deps.admitTransform).not.toHaveBeenCalled();
+    expect(deps.transform).not.toHaveBeenCalled();
+  });
+
+  it("resolves a verified standard-room member's saved key on the server", async () => {
+    const savedKey = `sk-saved-${"b".repeat(40)}`;
+    const deps = dependencies({
+      verifier: {
+        auth: {
+          getUser: vi.fn(async () => ({
+            data: {
+              user: {
+                id: ACTOR_ID,
+                email: "danny@example.com",
+                email_confirmed_at: "2026-08-28T12:00:00.000Z",
+                is_anonymous: false,
+              },
+            },
+            error: null,
+          })),
+        },
+      },
+      verifyMembership: vi.fn(async () => ({
+        ok: true as const,
+        role: "host" as const,
+        roomMode: "standard" as const,
+      })),
+      resolveSavedOpenAiApiKey: vi.fn(async () => savedKey),
+    });
+
+    const response = await handleSketchTransformRequest(
+      request(validBody(), null, true),
+      ROOM_ID,
+      deps,
+    );
+
+    expect(response.status).toBe(200);
+    expect(deps.resolveSavedOpenAiApiKey).toHaveBeenCalledWith(ACTOR_ID);
+    expect(deps.transform).toHaveBeenCalledWith(expect.any(Object), savedKey);
+    expect(await response.text()).not.toContain(savedKey);
+  });
+
+  it("refuses saved credentials in demo rooms and missing saved credentials before admission", async () => {
+    const demo = dependencies({
+      verifyMembership: vi.fn(async () => ({
+        ok: true as const,
+        role: "host" as const,
+        roomMode: "demo" as const,
+      })),
+      resolveSavedOpenAiApiKey: vi.fn(async () => OPENAI_API_KEY),
+    });
+    const demoResponse = await handleSketchTransformRequest(
+      request(validBody(), null, true),
+      ROOM_ID,
+      demo,
+    );
+    expect(demoResponse.status).toBe(403);
+    await expect(demoResponse.json()).resolves.toMatchObject({
+      error: { code: "saved_credential_unavailable" },
+    });
+    expect(demo.resolveSavedOpenAiApiKey).not.toHaveBeenCalled();
+    expect(demo.admitTransform).not.toHaveBeenCalled();
+
+    const missing = dependencies({
+      verifier: {
+        auth: {
+          getUser: vi.fn(async () => ({
+            data: {
+              user: {
+                id: ACTOR_ID,
+                email: "danny@example.com",
+                email_confirmed_at: "2026-08-28T12:00:00.000Z",
+                is_anonymous: false,
+              },
+            },
+            error: null,
+          })),
+        },
+      },
+      verifyMembership: vi.fn(async () => ({
+        ok: true as const,
+        role: "host" as const,
+        roomMode: "standard" as const,
+      })),
+    });
+    const missingResponse = await handleSketchTransformRequest(
+      request(validBody(), null, true),
+      ROOM_ID,
+      missing,
+    );
+    expect(missingResponse.status).toBe(409);
+    await expect(missingResponse.json()).resolves.toMatchObject({
+      error: { code: "openai_credential_not_configured" },
+    });
+    expect(missing.admitTransform).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes saved-credential storage failure from an unconfigured account", async () => {
+    const deps = dependencies({
+      verifier: {
+        auth: {
+          getUser: vi.fn(async () => ({
+            data: {
+              user: {
+                id: ACTOR_ID,
+                email: "danny@example.com",
+                email_confirmed_at: "2026-08-28T12:00:00.000Z",
+                is_anonymous: false,
+              },
+            },
+            error: null,
+          })),
+        },
+      },
+      verifyMembership: vi.fn(async () => ({
+        ok: true as const,
+        role: "host" as const,
+        roomMode: "standard" as const,
+      })),
+      resolveSavedOpenAiApiKey: vi.fn(async () => {
+        throw new Error("Vault unavailable");
+      }),
+    });
+
+    const response = await handleSketchTransformRequest(
+      request(validBody(), null, true),
+      ROOM_ID,
+      deps,
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "openai_credential_unavailable" },
+    });
+    expect(deps.admitTransform).not.toHaveBeenCalled();
+    expect(deps.transform).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["whitespace", "sk-short invalid"],
+    ["wrong-prefix", `not-openai-${"a".repeat(40)}`],
+    ["overlong", "a".repeat(513)],
+  ])("rejects an implausible %s session OpenAI key without echoing it", async (_name, invalidKey) => {
+    const deps = dependencies();
+
+    const response = await handleSketchTransformRequest(
+      request(validBody(), invalidKey),
+      ROOM_ID,
+      deps,
+    );
+    const responseText = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(JSON.parse(responseText)).toEqual({
+      ok: false,
+      error: {
+        code: "invalid_openai_key",
+        message: "The OpenAI API key for this browser session is invalid.",
+      },
+    });
+    expect(responseText).not.toContain(invalidKey);
+    expect(deps.admitTransform).not.toHaveBeenCalled();
+    expect(deps.transform).not.toHaveBeenCalled();
+  });
+
   it("refuses a declared request above the Vercel-safe four-megabyte application limit", async () => {
     const deps = dependencies();
     const oversized = request(validBody());
@@ -224,6 +417,7 @@ describe("sketch transform route", () => {
         safetyIdentifier: "cc_0123456789abcdef",
         sketch: expect.objectContaining({ strokes: expect.any(Array) }),
       }),
+      OPENAI_API_KEY,
     );
     expect(deps.completeTransform).toHaveBeenCalledWith({
       requestKey: REQUEST_KEY,
@@ -276,6 +470,7 @@ describe("sketch transform route", () => {
       expect.objectContaining({
         narration: "The API writes commands to PostgreSQL.",
       }),
+      OPENAI_API_KEY,
     );
   });
 
@@ -335,6 +530,7 @@ describe("sketch transform route", () => {
     );
     expect(deps.transform).toHaveBeenCalledWith(
       expect.objectContaining({ instruction: "Make that usable" }),
+      OPENAI_API_KEY,
     );
   });
 

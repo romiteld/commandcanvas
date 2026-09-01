@@ -27,9 +27,24 @@ import type { RealtimeVoiceIntentResult } from "@/lib/realtime-voice/tools";
 
 export type RealtimeVoiceControlController = RealtimeVoiceController;
 
+export interface SavedOpenAiCredentialControl {
+  configured: boolean;
+  fingerprint?: string;
+  updatedAt?: string;
+  busy: boolean;
+  error?: string;
+  onSave: (apiKey: string) => Promise<void> | void;
+  onDelete: () => Promise<void> | void;
+}
+
 export interface RealtimeVoiceControlProps {
   roomId: string;
   getAccessToken: () => string | null;
+  openAiApiKey?: string;
+  onOpenAiApiKeyChange?: (value: string) => void;
+  useSavedOpenAiCredential?: boolean;
+  onUseSavedOpenAiCredentialChange?: (value: boolean) => void;
+  savedOpenAiCredential?: SavedOpenAiCredentialControl;
   disabled?: boolean;
   onIntent: RealtimeVoiceControllerOptions["onIntent"];
   inspectCanvas?: RealtimeVoiceControllerOptions["inspectCanvas"];
@@ -472,15 +487,25 @@ export const RealtimeVoiceControl = forwardRef<
 >(function RealtimeVoiceControl({
   roomId,
   getAccessToken,
+  openAiApiKey: controlledOpenAiApiKey,
+  onOpenAiApiKeyChange,
+  useSavedOpenAiCredential = false,
+  onUseSavedOpenAiCredentialChange,
+  savedOpenAiCredential,
   disabled = false,
   onIntent,
-    inspectCanvas,
-    onThoughtDraftChange = () => undefined,
-    onActiveChange,
-    createController = createRealtimeVoiceController,
+  inspectCanvas,
+  onThoughtDraftChange = () => undefined,
+  onActiveChange,
+  createController = createRealtimeVoiceController,
 }, ref) {
   const [activity, setActivity] = useState<VoiceActivity[]>([]);
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
+  const [localOpenAiApiKey, setLocalOpenAiApiKey] = useState("");
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
+  const openAiApiKey = controlledOpenAiApiKey ?? localOpenAiApiKey;
+  const updateOpenAiApiKey =
+    onOpenAiApiKeyChange ?? setLocalOpenAiApiKey;
   const [latestHandlers] = useState(
     () =>
       new LatestVoiceHandlers(
@@ -626,8 +651,19 @@ export const RealtimeVoiceControl = forwardRef<
     if (disabled || active) return;
     latestHandlers.resetSessionContext();
     setPlaybackBlocked(false);
-    void controller.start();
-  }, [active, controller, disabled, latestHandlers]);
+    void controller.start(
+      useSavedOpenAiCredential
+        ? { useSavedOpenAiCredential: true }
+        : { openAiApiKey },
+    );
+  }, [
+    active,
+    controller,
+    disabled,
+    latestHandlers,
+    openAiApiKey,
+    useSavedOpenAiCredential,
+  ]);
 
   const stopVoice = useCallback(() => {
     if (!active) return;
@@ -665,6 +701,112 @@ export const RealtimeVoiceControl = forwardRef<
         >
           {active ? "Stop" : "Start"}
         </button>
+      </div>
+      <div className="realtime-voice-credential">
+        <label>
+          <span>Your OpenAI API key</span>
+          <input
+            type="password"
+            name="commandcanvas-openai-api-key"
+            value={openAiApiKey}
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            disabled={active || savedOpenAiCredential?.busy}
+            placeholder="sk-…"
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              updateOpenAiApiKey(value);
+              if (value.length > 0)
+                onUseSavedOpenAiCredentialChange?.(false);
+            }}
+          />
+        </label>
+        {savedOpenAiCredential?.configured ? (
+          <div className="realtime-voice-saved-credential" role="status">
+            <span>Saved to your CommandCanvas account</span>
+            {savedOpenAiCredential.fingerprint ? (
+              <strong>{savedOpenAiCredential.fingerprint}</strong>
+            ) : null}
+            {!useSavedOpenAiCredential ? (
+              <button
+                type="button"
+                disabled={active || savedOpenAiCredential.busy}
+                onClick={() => {
+                  updateOpenAiApiKey("");
+                  onUseSavedOpenAiCredentialChange?.(true);
+                }}
+              >
+                Use saved key
+              </button>
+            ) : null}
+            {deleteConfirmationOpen ? (
+              <div
+                className="realtime-voice-credential-actions"
+                role="alertdialog"
+                aria-label="Confirm saved OpenAI key removal"
+              >
+                <span>Remove saved OpenAI key? This cannot be undone.</span>
+                <button
+                  type="button"
+                  disabled={active || savedOpenAiCredential.busy}
+                  onClick={() => setDeleteConfirmationOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  aria-label="Confirm remove saved key"
+                  disabled={active || savedOpenAiCredential.busy}
+                  onClick={() => {
+                    setDeleteConfirmationOpen(false);
+                    void savedOpenAiCredential.onDelete();
+                  }}
+                >
+                  Remove key
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={active || savedOpenAiCredential.busy}
+                onClick={() => setDeleteConfirmationOpen(true)}
+              >
+                Remove saved key
+              </button>
+            )}
+          </div>
+        ) : null}
+        {openAiApiKey ? (
+          <div className="realtime-voice-credential-actions">
+            <button
+              type="button"
+              aria-label="Clear OpenAI API key"
+              disabled={active || savedOpenAiCredential?.busy}
+              onClick={() => updateOpenAiApiKey("")}
+            >
+              Clear
+            </button>
+            {savedOpenAiCredential ? (
+              <button
+                type="button"
+                aria-label="Save key to my account"
+                disabled={active || savedOpenAiCredential.busy}
+                onClick={() => void savedOpenAiCredential.onSave(openAiApiKey)}
+              >
+                {savedOpenAiCredential.configured ? "Replace saved key" : "Save to account"}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {savedOpenAiCredential?.error ? (
+          <p role="alert">{savedOpenAiCredential.error}</p>
+        ) : null}
+        <p>
+          {savedOpenAiCredential
+            ? "Live Voice and visual interpretation use your own OpenAI API billing. Signed-in users can save an encrypted key to their CommandCanvas account; its raw value is never returned to this browser."
+            : "Optional Live Voice and direct sketch interpretation use your own API billing. The key stays in this tab's memory, is sent transiently through CommandCanvas to OpenAI, and is never saved."}
+        </p>
       </div>
       <div
         className={`realtime-voice-state voice-state-${state.status}`}
@@ -714,8 +856,10 @@ export const RealtimeVoiceControl = forwardRef<
         </ol>
       ) : null}
       <p className="realtime-voice-privacy">
-        Audio travels to OpenAI only while live voice is on. Canvas mutations
-        still pass through the same validated command and receipt pipeline.
+        ChatGPT Site Tools use the account signed into ChatGPT and do not need
+        this key. For embedded Live Voice, audio travels to OpenAI only while
+        voice is on. Canvas mutations still pass through the same validated
+        command and receipt pipeline.
       </p>
     </section>
   );

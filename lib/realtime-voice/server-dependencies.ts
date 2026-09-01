@@ -4,6 +4,7 @@ import { createHmac } from "node:crypto";
 
 import { z } from "zod";
 
+import { resolveSavedOpenAiApiKey as resolveAccountOpenAiApiKey } from "@/lib/openai-credentials/service";
 import type { RealtimeSessionRouteDependencies } from "@/lib/realtime-voice/route-handler";
 import { createRealtimeVoiceSessionConfig } from "@/lib/realtime-voice/tools";
 import type { SupabaseUserVerifier } from "@/lib/supabase/server-auth";
@@ -74,6 +75,7 @@ interface ServerRealtimeDependenciesOptions {
     secretKey: string;
   }) => RealtimeServiceClient;
   fetch?: typeof fetch;
+  resolveSavedOpenAiApiKey?: (actorUserId: string) => Promise<string | null>;
 }
 
 export type ServerRealtimeDependenciesResult =
@@ -86,9 +88,7 @@ export function createServerRealtimeSessionDependencies(
   const environment = options.environment ?? process.env;
   const supabaseConfig = readServerSupabaseConfig(environment);
   const enabled = environment.REALTIME_VOICE_ENABLED?.trim() === "true";
-  const apiKey = environment.OPENAI_REALTIME_API_KEY?.trim() ?? "";
-  if (!enabled || !supabaseConfig.ok || apiKey.length < 20)
-    return { ok: false };
+  if (!enabled || !supabaseConfig.ok) return { ok: false };
 
   let client: RealtimeServiceClient;
   let verifier: SupabaseUserVerifier;
@@ -105,6 +105,8 @@ export function createServerRealtimeSessionDependencies(
     return { ok: false };
   }
   const fetcher = options.fetch ?? fetch;
+  const resolveSavedOpenAiApiKey =
+    options.resolveSavedOpenAiApiKey ?? resolveAccountOpenAiApiKey;
   const safetySecret = supabaseConfig.config.secretKey;
 
   return {
@@ -155,7 +157,8 @@ export function createServerRealtimeSessionDependencies(
           return { ok: false as const, code: "admission_unavailable" as const };
         }
       },
-      createCall: ({ sdp, safetyIdentifier, signal }) =>
+      resolveSavedOpenAiApiKey,
+      createCall: ({ apiKey, sdp, safetyIdentifier, signal }) =>
         createOpenAiRealtimeCall(
           { apiKey, sdp, safetyIdentifier, signal },
           fetcher,

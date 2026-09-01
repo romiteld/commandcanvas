@@ -451,7 +451,7 @@ describe("CommandCanvasRoom", () => {
     expect(controller.start).not.toHaveBeenCalled();
     expect(
       screen.getByText(
-        "Use ChatGPT Voice in the surrounding app. This page cannot press that microphone for you.",
+        /Site Tools use the ChatGPT account already signed into the surrounding app/i,
       ),
     ).toBeVisible();
     expect(
@@ -3142,6 +3142,46 @@ describe("CommandCanvasRoom", () => {
     ).toBeVisible();
     expect(store.getState().selectedObjectId).toBe("sketch-source");
     expect(Object.values(store.getState().canvas.objects)).toHaveLength(1);
+  });
+
+  it("opens the credential drawer when sketch interpretation needs the user's key", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-live", dependencies());
+    seedSketch(store);
+    const idleVoiceState = { status: "idle" as const };
+    render(
+      <CommandCanvasRoom
+        store={store}
+        onTransformSketch={async () => ({
+          ok: false,
+          code: "openai_key_required",
+          message: "Enter an OpenAI API key for this browser session.",
+        })}
+        realtimeVoice={{
+          roomId: "room-live",
+          getAccessToken: () => "header.payload.signature",
+          createController: () => ({
+            getState: () => idleVoiceState,
+            subscribe: () => () => undefined,
+            start: vi.fn(async () => undefined),
+            stop: vi.fn(),
+            resumeAudio: vi.fn(async () => true),
+          }),
+        }}
+      />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Select Rough architecture" }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Make usable" }));
+
+    expect(
+      await screen.findByRole("complementary", {
+        name: "ChatGPT command drawer",
+      }),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Your OpenAI API key")).toBeVisible();
   });
 
   it("offers an explicit prepared interpretation after failure and records it honestly", async () => {

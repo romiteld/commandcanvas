@@ -1,11 +1,17 @@
 import { StrictMode } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const USER_ID = "22222222-2222-4222-8222-222222222222";
 const TOKEN = "a".repeat(43);
+const OPENAI_API_KEY = `sk-proj-${"a".repeat(40)}`;
+const SAVED_OPENAI_CREDENTIAL = {
+  configured: true,
+  fingerprint: "sha256:0123456789abcdef",
+  updatedAt: "2026-09-01T03:12:34.000Z",
+};
 
 const fakes = vi.hoisted(() => {
   const order: string[] = [];
@@ -43,6 +49,35 @@ const fakes = vi.hoisted(() => {
   let roomOnCommand:
     | ((command: unknown, source: unknown) => unknown)
     | null = null;
+  let roomProps: {
+    openAiApiKey?: string;
+    onOpenAiApiKeyChange?: (value: string) => void;
+    realtimeVoice?: {
+      useSavedOpenAiCredential?: boolean;
+      onUseSavedOpenAiCredentialChange?: (value: boolean) => void;
+      savedOpenAiCredential?: {
+        configured: boolean;
+        fingerprint?: string;
+        updatedAt?: string;
+        busy: boolean;
+        error?: string;
+        onSave: (apiKey: string) => Promise<void> | void;
+        onDelete: () => Promise<void> | void;
+      };
+    };
+  } | null = null;
+  let sketchCredentialOptions: {
+    getOpenAiApiKey?: () => string;
+    getUseSavedOpenAiCredential?: () => boolean;
+  } | null = null;
+  const loadOpenAiCredential = vi.fn();
+  const saveOpenAiCredential = vi.fn();
+  const deleteOpenAiCredential = vi.fn();
+  const createOpenAiCredentialApi = vi.fn(() => ({
+    load: loadOpenAiCredential,
+    save: saveOpenAiCredential,
+    clear: deleteOpenAiCredential,
+  }));
   const acceptInvitation = vi.fn(async () => ({
     ok: true as const,
     value: { roomId: ROOM_ID, role: "participant" as const, joined: true },
@@ -132,6 +167,22 @@ const fakes = vi.hoisted(() => {
     ) {
       roomOnCommand = nextOnCommand;
     },
+    setRoomProps(nextRoomProps: typeof roomProps) {
+      roomProps = nextRoomProps;
+    },
+    get roomProps() {
+      return roomProps;
+    },
+    setSketchCredentialOptions(nextOptions: typeof sketchCredentialOptions) {
+      sketchCredentialOptions = nextOptions;
+    },
+    get sketchCredentialOptions() {
+      return sketchCredentialOptions;
+    },
+    loadOpenAiCredential,
+    saveOpenAiCredential,
+    deleteOpenAiCredential,
+    createOpenAiCredentialApi,
     get roomOnCommand() {
       return roomOnCommand;
     },
@@ -161,6 +212,7 @@ vi.mock("@/lib/supabase/meeting-api", () => ({
 
 vi.mock("@/lib/demo/room-session", () => ({
   createDemoRoomSession: vi.fn((dependencies) => {
+    dependencies.createSketchTransformApi("header.payload.signature");
     const snapshot = {
       status: "ready",
       realtimeStatus: "connected",
@@ -211,14 +263,28 @@ vi.mock("@/lib/demo/room-session", () => ({
 }));
 
 vi.mock("@/components/command-canvas/command-canvas-room", () => ({
-  CommandCanvasRoom: ({
-    meetingPacketPanel,
-    onCommand,
-  }: {
+  CommandCanvasRoom: (props: {
     meetingPacketPanel?: React.ReactNode;
     onCommand?: (command: unknown, source: unknown) => unknown;
+    openAiApiKey?: string;
+    onOpenAiApiKeyChange?: (value: string) => void;
+    realtimeVoice?: {
+      useSavedOpenAiCredential?: boolean;
+      onUseSavedOpenAiCredentialChange?: (value: boolean) => void;
+      savedOpenAiCredential?: {
+        configured: boolean;
+        fingerprint?: string;
+        updatedAt?: string;
+        busy: boolean;
+        error?: string;
+        onSave: (apiKey: string) => Promise<void> | void;
+        onDelete: () => Promise<void> | void;
+      };
+    };
   }) => {
+    const { meetingPacketPanel, onCommand } = props;
     fakes.setRoomOnCommand(onCommand ?? null);
+    fakes.setRoomProps(props);
     return (
       <div data-testid="meeting-room">
         Shared canvas
@@ -226,6 +292,15 @@ vi.mock("@/components/command-canvas/command-canvas-room", () => ({
       </div>
     );
   },
+}));
+vi.mock("@/lib/openai-credentials/browser-api", () => ({
+  createBrowserOpenAiCredentialApi: fakes.createOpenAiCredentialApi,
+}));
+vi.mock("@/lib/vision/browser-api", () => ({
+  createBrowserSketchTransformApi: vi.fn((options) => {
+    fakes.setSketchCredentialOptions(options);
+    return { transform: vi.fn() };
+  }),
 }));
 vi.mock("@/components/command-canvas/meeting-filmstrip", () => ({
   MeetingFilmstrip: () => <div>Filmstrip</div>,
@@ -250,6 +325,24 @@ describe("meeting invitation StrictMode handshake", () => {
     fakes.disposeSession.mockClear();
     fakes.submitCommand.mockReset();
     fakes.setRoomOnCommand(null);
+    fakes.setRoomProps(null);
+    fakes.setSketchCredentialOptions(null);
+    fakes.loadOpenAiCredential.mockReset();
+    fakes.loadOpenAiCredential.mockResolvedValue({
+      ok: true,
+      value: { configured: false },
+    });
+    fakes.saveOpenAiCredential.mockReset();
+    fakes.saveOpenAiCredential.mockResolvedValue({
+      ok: true,
+      value: SAVED_OPENAI_CREDENTIAL,
+    });
+    fakes.deleteOpenAiCredential.mockReset();
+    fakes.deleteOpenAiCredential.mockResolvedValue({
+      ok: true,
+      value: { configured: false },
+    });
+    fakes.createOpenAiCredentialApi.mockClear();
     fakes.acceptInvitation.mockClear();
     fakes.createInvitation.mockClear();
     fakes.getSession.mockClear();
@@ -309,6 +402,173 @@ describe("meeting invitation StrictMode handshake", () => {
     expect(fakes.webMcpSignals.every((signal) => signal.aborted)).toBe(true);
     await waitFor(() => expect(fakes.disposeSession).toHaveBeenCalledTimes(1));
     replace.mockRestore();
+  });
+
+  it("loads a saved credential after verified room entry and selects it for voice and vision", async () => {
+    fakes.loadOpenAiCredential.mockResolvedValueOnce({
+      ok: true,
+      value: SAVED_OPENAI_CREDENTIAL,
+    });
+
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    await waitFor(() =>
+      expect(fakes.createOpenAiCredentialApi).toHaveBeenCalledWith({
+        accessToken: "bootstrap.header.signature",
+      }),
+    );
+    expect(fakes.startSession.mock.invocationCallOrder[0]).toBeLessThan(
+      fakes.createOpenAiCredentialApi.mock.invocationCallOrder[0]!,
+    );
+    expect(fakes.loadOpenAiCredential).toHaveBeenCalledWith(
+      expect.any(AbortSignal),
+    );
+    await waitFor(() =>
+      expect(fakes.roomProps?.realtimeVoice).toMatchObject({
+        useSavedOpenAiCredential: true,
+        savedOpenAiCredential: SAVED_OPENAI_CREDENTIAL,
+      }),
+    );
+    expect(
+      fakes.sketchCredentialOptions?.getUseSavedOpenAiCredential?.(),
+    ).toBe(true);
+    expect(fakes.sketchCredentialOptions?.getOpenAiApiKey?.()).toBe("");
+  });
+
+  it("saves a confirmed key, clears its raw state, and selects the saved credential everywhere", async () => {
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    await waitFor(() =>
+      expect(fakes.roomProps?.realtimeVoice?.savedOpenAiCredential).toBeDefined(),
+    );
+    await act(async () => {
+      fakes.roomProps?.onOpenAiApiKeyChange?.(OPENAI_API_KEY);
+    });
+    expect(fakes.roomProps?.openAiApiKey).toBe(OPENAI_API_KEY);
+
+    await act(async () => {
+      await fakes.roomProps?.realtimeVoice?.savedOpenAiCredential?.onSave(
+        OPENAI_API_KEY,
+      );
+    });
+
+    expect(fakes.saveOpenAiCredential).toHaveBeenCalledWith(
+      { apiKey: OPENAI_API_KEY, confirmSave: true },
+      expect.any(AbortSignal),
+    );
+    expect(fakes.createOpenAiCredentialApi).toHaveBeenLastCalledWith({
+      accessToken: "header.payload.signature",
+    });
+    await waitFor(() => expect(fakes.roomProps?.openAiApiKey).toBe(""));
+    expect(fakes.roomProps?.realtimeVoice).toMatchObject({
+      useSavedOpenAiCredential: true,
+      savedOpenAiCredential: SAVED_OPENAI_CREDENTIAL,
+    });
+    expect(fakes.sketchCredentialOptions?.getOpenAiApiKey?.()).toBe("");
+    expect(
+      fakes.sketchCredentialOptions?.getUseSavedOpenAiCredential?.(),
+    ).toBe(true);
+    expect(
+      JSON.stringify({
+        openAiApiKey: fakes.roomProps?.openAiApiKey,
+        useSavedOpenAiCredential:
+          fakes.roomProps?.realtimeVoice?.useSavedOpenAiCredential,
+        savedOpenAiCredential: {
+          configured:
+            fakes.roomProps?.realtimeVoice?.savedOpenAiCredential?.configured,
+          fingerprint:
+            fakes.roomProps?.realtimeVoice?.savedOpenAiCredential?.fingerprint,
+          updatedAt:
+            fakes.roomProps?.realtimeVoice?.savedOpenAiCredential?.updatedAt,
+          error: fakes.roomProps?.realtimeVoice?.savedOpenAiCredential?.error,
+        },
+      }),
+    ).not.toContain(OPENAI_API_KEY);
+  });
+
+  it("preserves a temporary key in tab memory when saving it fails", async () => {
+    fakes.saveOpenAiCredential.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: "credential_unavailable",
+        message: "OpenAI credential could not be saved. Try again.",
+      },
+    });
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    await waitFor(() =>
+      expect(fakes.roomProps?.realtimeVoice?.savedOpenAiCredential).toBeDefined(),
+    );
+    await act(async () => {
+      fakes.roomProps?.onOpenAiApiKeyChange?.(OPENAI_API_KEY);
+    });
+    await act(async () => {
+      await fakes.roomProps?.realtimeVoice?.savedOpenAiCredential?.onSave(
+        OPENAI_API_KEY,
+      );
+    });
+
+    expect(fakes.roomProps?.openAiApiKey).toBe(OPENAI_API_KEY);
+    expect(fakes.sketchCredentialOptions?.getOpenAiApiKey?.()).toBe(
+      OPENAI_API_KEY,
+    );
+    expect(
+      fakes.roomProps?.realtimeVoice?.savedOpenAiCredential?.error,
+    ).toBe("OpenAI credential could not be saved. Try again.");
+    expect(fakes.roomProps?.realtimeVoice?.useSavedOpenAiCredential).toBe(false);
+  });
+
+  it("deletes saved credential state and disables its shared voice and vision selection", async () => {
+    fakes.loadOpenAiCredential.mockResolvedValueOnce({
+      ok: true,
+      value: SAVED_OPENAI_CREDENTIAL,
+    });
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    await waitFor(() =>
+      expect(
+        fakes.roomProps?.realtimeVoice?.useSavedOpenAiCredential,
+      ).toBe(true),
+    );
+    await act(async () => {
+      await fakes.roomProps?.realtimeVoice?.savedOpenAiCredential?.onDelete();
+    });
+
+    expect(fakes.deleteOpenAiCredential).toHaveBeenCalledWith(
+      expect.any(AbortSignal),
+    );
+    await waitFor(() =>
+      expect(fakes.roomProps?.realtimeVoice).toMatchObject({
+        useSavedOpenAiCredential: false,
+        savedOpenAiCredential: { configured: false },
+      }),
+    );
+    expect(
+      fakes.sketchCredentialOptions?.getUseSavedOpenAiCredential?.(),
+    ).toBe(false);
+  });
+
+  it("surfaces a compact credential load failure without blocking the room", async () => {
+    fakes.loadOpenAiCredential.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: "credential_unavailable",
+        message: "OpenAI credential storage is temporarily unavailable.",
+      },
+    });
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    await waitFor(() =>
+      expect(
+        fakes.roomProps?.realtimeVoice?.savedOpenAiCredential?.error,
+      ).toBe("OpenAI credential storage is temporarily unavailable."),
+    );
+    expect(fakes.roomProps?.realtimeVoice?.useSavedOpenAiCredential).toBe(false);
   });
 
   it("renders the reviewed packet workflow only for a standard-room host", async () => {
