@@ -143,4 +143,45 @@ describe("bounded invitation delivery polling", () => {
     });
     expect(onUpdate).not.toHaveBeenCalled();
   });
+
+  it("normalizes a rejected delivery request into a typed request failure", async () => {
+    const result = pollInvitationDelivery({
+      api: {
+        loadInvitationDelivery: vi.fn(async () => {
+          throw new Error("network rejected");
+        }),
+      },
+      roomId: ROOM_ID,
+      invitationId: INVITATION_ID,
+      signal: new AbortController().signal,
+    });
+
+    await expect(result).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "request_failed",
+        message: "Invitation delivery status could not be refreshed.",
+      },
+    });
+  });
+
+  it("normalizes a rejected aborted delivery request into cancellation", async () => {
+    const controller = new AbortController();
+    const result = pollInvitationDelivery({
+      api: {
+        loadInvitationDelivery: vi.fn(async () => {
+          controller.abort();
+          throw new Error("aborted request rejected");
+        }),
+      },
+      roomId: ROOM_ID,
+      invitationId: INVITATION_ID,
+      signal: controller.signal,
+    });
+
+    await expect(result).resolves.toEqual({
+      ok: false,
+      error: { code: "request_cancelled" },
+    });
+  });
 });

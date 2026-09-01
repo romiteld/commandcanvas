@@ -41,6 +41,18 @@ interface FakeOtpRequestResult {
   } | null;
 }
 
+interface FakeOtpVerificationResult {
+  data: {
+    session: { access_token: string } | null;
+    user: {
+      id: string;
+      email: string;
+      is_anonymous: boolean;
+    } | null;
+  };
+  error: { message: string } | null;
+}
+
 const fakes = vi.hoisted(() => {
   const order: string[] = [];
   const meetingApiOptions: Array<{
@@ -117,7 +129,10 @@ const fakes = vi.hoisted(() => {
   const signInWithOtp = vi.fn(
     async (): Promise<FakeOtpRequestResult> => ({ data: {}, error: null }),
   );
-  const verifyOtp = vi.fn(async () => ({
+  let captureLifecycleWrites = false;
+  let lifecycleStateWrites = 0;
+  let lifecycleRefWrites = 0;
+  const verifyOtp = vi.fn(async (): Promise<FakeOtpVerificationResult> => ({
     data: {
       session: { access_token: "invited.header.signature" },
       user: {
@@ -296,11 +311,66 @@ const fakes = vi.hoisted(() => {
     signOut,
     signInWithOtp,
     verifyOtp,
+    beginLifecycleWriteCapture() {
+      lifecycleStateWrites = 0;
+      lifecycleRefWrites = 0;
+      captureLifecycleWrites = true;
+    },
+    endLifecycleWriteCapture() {
+      captureLifecycleWrites = false;
+    },
+    recordLifecycleStateWrite() {
+      if (captureLifecycleWrites) lifecycleStateWrites += 1;
+    },
+    recordLifecycleRefWrite() {
+      if (captureLifecycleWrites) lifecycleRefWrites += 1;
+    },
+    get lifecycleWrites() {
+      return {
+        state: lifecycleStateWrites,
+        ref: lifecycleRefWrites,
+      };
+    },
     get roomOnCommand() {
       return roomOnCommand;
     },
     get role() {
       return role;
+    },
+  };
+});
+
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  const stateSetters = new WeakMap<object, object>();
+  const refProxies = new WeakMap<object, object>();
+
+  return {
+    ...actual,
+    useState: <State,>(initialState: State | (() => State)) => {
+      const [state, setState] = actual.useState(initialState);
+      let trackedSetter = stateSetters.get(setState) as typeof setState | undefined;
+      if (!trackedSetter) {
+        trackedSetter = (nextState) => {
+          fakes.recordLifecycleStateWrite();
+          setState(nextState);
+        };
+        stateSetters.set(setState, trackedSetter);
+      }
+      return [state, trackedSetter] as const;
+    },
+    useRef: <Value,>(initialValue: Value) => {
+      const ref = actual.useRef(initialValue);
+      const existing = refProxies.get(ref);
+      if (existing) return existing as typeof ref;
+      const trackedRef = new Proxy(ref, {
+        set(target, property, value) {
+          if (property === "current") fakes.recordLifecycleRefWrite();
+          return Reflect.set(target, property, value);
+        },
+      });
+      refProxies.set(ref, trackedRef);
+      return trackedRef;
     },
   };
 });
@@ -476,6 +546,8 @@ describe("meeting invitation StrictMode handshake", () => {
     fakes.signOut.mockClear();
     fakes.signInWithOtp.mockClear();
     fakes.verifyOtp.mockClear();
+    fakes.beginLifecycleWriteCapture();
+    fakes.endLifecycleWriteCapture();
     fakes.acceptInvitation.mockClear();
     fakes.createInvitation.mockClear();
     fakes.createMeeting.mockClear();
@@ -736,6 +808,96 @@ describe("meeting invitation StrictMode handshake", () => {
 
     expect(fakes.signInWithOtp).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      outcome: "fails",
+      result: {
+        data: { session: null, user: null },
+        error: { message: "expired" },
+      } satisfies FakeOtpVerificationResult,
+    },
+    {
+      outcome: "succeeds",
+      result: {
+        data: {
+          session: { access_token: "verified.header.signature" },
+          user: {
+            id: "66666666-6666-4666-8666-666666666666",
+            email: "danny@example.com",
+            is_anonymous: false,
+          },
+        },
+        error: null,
+      } satisfies FakeOtpVerificationResult,
+    },
+  ] as const)(
+    "does not mutate abandoned state or recovery refs when deferred OTP verification $outcome after unmount",
+    async ({ result }) => {
+      const user = userEvent.setup();
+      window.history.replaceState(null, "", "/meet");
+      fakes.getSession.mockResolvedValueOnce({
+        data: { session: null },
+        error: null,
+      });
+      let resolveVerification!: (value: FakeOtpVerificationResult) => void;
+      fakes.verifyOtp.mockImplementationOnce(
+        () =>
+          new Promise<FakeOtpVerificationResult>((resolve) => {
+            resolveVerification = resolve;
+          }),
+      );
+
+      const view = render(<MeetingCommandCanvas />);
+      await user.type(await screen.findByLabelText("Email"), "danny@example.com");
+      await user.click(screen.getByRole("button", { name: "Email me a code" }));
+      await user.type(screen.getByLabelText("Verification code"), "123456");
+      await user.click(screen.getByRole("button", { name: "Verify email" }));
+      await waitFor(() => expect(fakes.verifyOtp).toHaveBeenCalledOnce());
+
+      view.unmount();
+      fakes.beginLifecycleWriteCapture();
+      try {
+        await act(async () => {
+          resolveVerification(result);
+          await Promise.resolve();
+        });
+
+        expect(fakes.lifecycleWrites).toEqual({ state: 0, ref: 0 });
+        expect(fakes.loadUserProfile).not.toHaveBeenCalled();
+        expect(fakes.acceptInvitation).not.toHaveBeenCalled();
+        expect(fakes.startSession).not.toHaveBeenCalled();
+      } finally {
+        fakes.endLifecycleWriteCapture();
+      }
+    },
+  );
+
+  it.each(["returns an error", "throws"] as const)(
+    "keeps the active room usable when local Leave sign-out %s",
+    async (behavior) => {
+      const user = userEvent.setup();
+      if (behavior === "returns an error")
+        fakes.signOut.mockResolvedValueOnce({
+          error: { message: "sign-out rejected" },
+        });
+      else
+        fakes.signOut.mockRejectedValueOnce(new Error("sign-out unavailable"));
+
+      render(<MeetingCommandCanvas />);
+      expect(await screen.findByTestId("meeting-room")).toBeVisible();
+      expect(window.location.search).toBe(`?room=${ROOM_ID}`);
+
+      await user.click(screen.getByRole("button", { name: "Leave" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "This account could not be signed out. Try again.",
+      );
+      expect(screen.getByRole("button", { name: "Leave" })).toBeEnabled();
+      expect(fakes.clearMeetingRequestState).not.toHaveBeenCalled();
+      expect(window.location.search).toBe(`?room=${ROOM_ID}`);
+    },
+  );
 
   it("loads a saved credential after verified room entry and selects it for voice and vision", async () => {
     fakes.loadOpenAiCredential.mockResolvedValueOnce({
@@ -1137,6 +1299,46 @@ describe("meeting invitation StrictMode handshake", () => {
       accessToken: "bootstrap.header.signature",
       actorUserId: USER_ID,
     });
+  });
+
+  it("cleans up a rejected delivery poll without a detached rejection", async () => {
+    const user = userEvent.setup();
+    let rejectedSignal: AbortSignal | undefined;
+    fakes.setRole("host");
+    fakes.setInvitationStatus("submitted");
+    fakes.loadInvitationDelivery
+      .mockImplementationOnce((...args: unknown[]) => {
+        rejectedSignal = args[2] as AbortSignal;
+        return Promise.reject(new Error("delivery lookup rejected"));
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          invitationId: "33333333-3333-4333-8333-333333333333",
+          roomId: ROOM_ID,
+          delivery: {
+            status: "delivered",
+            message: "Replacement poll completed.",
+          },
+        },
+      });
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Invite" }));
+    await user.type(screen.getByLabelText("Display name"), "Mike");
+    await user.type(screen.getByLabelText("Email"), "mike@example.com");
+    await user.click(screen.getByRole("button", { name: "Send invitation" }));
+    await waitFor(() => expect(fakes.loadInvitationDelivery).toHaveBeenCalledOnce());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await user.click(screen.getByRole("button", { name: "Send invitation" }));
+
+    expect(await screen.findByText("Email delivered")).toBeVisible();
+    expect(screen.getByText("Replacement poll completed.")).toBeVisible();
+    expect(rejectedSignal?.aborted).toBe(false);
   });
 
   it("aborts the prior delivery poll before a failed replacement send", async () => {

@@ -195,6 +195,21 @@ body {
   cursor: pointer;
 }
 
+.meeting-room-float .meeting-leave-error {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(300px, calc(100vw - 28px));
+  padding: 9px 11px;
+  border: 1px solid rgb(239 68 68 / 28%);
+  border-radius: 11px;
+  background: rgb(255 247 247 / 96%);
+  color: #991b1b;
+  box-shadow: 0 12px 34px rgb(18 35 61 / 14%);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .meeting-overlay {
   position: fixed;
   z-index: 140;

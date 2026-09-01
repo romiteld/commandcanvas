@@ -138,6 +138,8 @@ export function MeetingCommandCanvas({
     useState<BrowserMeetingInvitationValue | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
+  const [leaveBusy, setLeaveBusy] = useState(false);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
   const [copyLabel, setCopyLabel] = useState("Copy secure link");
   const [openAiApiKey, setOpenAiApiKey] = useState("");
   const [savedOpenAiCredential, setSavedOpenAiCredential] =
@@ -606,8 +608,11 @@ export function MeetingCommandCanvas({
     if (!client || lobby.phase !== "otp") return;
     const code = String(form.get("code") ?? "");
     const previous = lobby;
+    const signal = lifecycleAbortRef.current?.signal;
+    if (!signal || signal.aborted) return;
     setLobby({ phase: "working", message: "Verifying your code…" });
     const result = await verifyEmailOtp(client, previous.email, code);
+    if (signal.aborted) return;
     if (!result.ok) {
       setLobby({ ...previous, error: result.message });
       return;
@@ -615,8 +620,6 @@ export function MeetingCommandCanvas({
     authenticatedActorIdRef.current = result.value.user.id;
     const inviteToken = inviteTokenRef.current;
     if (inviteToken) {
-      const signal = lifecycleAbortRef.current?.signal;
-      if (!signal || signal.aborted) return;
       await acceptAndEnter(
         client,
         result.value.session.access_token,
@@ -626,8 +629,6 @@ export function MeetingCommandCanvas({
       );
       return;
     }
-    const signal = lifecycleAbortRef.current?.signal;
-    if (!signal || signal.aborted) return;
     await showHostForm(
       result.value.session.access_token,
       result.value.email,
@@ -755,6 +756,11 @@ export function MeetingCommandCanvas({
       invitationPollAbortRef.current = pollController;
       const abortPoll = () => pollController.abort();
       signal.addEventListener("abort", abortPoll, { once: true });
+      const clearPoll = () => {
+        signal.removeEventListener("abort", abortPoll);
+        if (invitationPollAbortRef.current === pollController)
+          invitationPollAbortRef.current = null;
+      };
       void pollInvitationDelivery({
         api,
         roomId: result.value.roomId,
@@ -768,11 +774,54 @@ export function MeetingCommandCanvas({
               : currentResult,
           );
         },
-      }).finally(() => {
-        signal.removeEventListener("abort", abortPoll);
-        if (invitationPollAbortRef.current === pollController)
-          invitationPollAbortRef.current = null;
-      });
+      }).then(
+        (pollResult) => {
+          if (
+            !pollResult.ok &&
+            pollResult.error.code !== "request_cancelled" &&
+            !pollController.signal.aborted
+          )
+            setInviteError(
+              "Delivery status could not be refreshed. The secure invitation link is still available.",
+            );
+          clearPoll();
+        },
+        () => {
+          if (!pollController.signal.aborted)
+            setInviteError(
+              "Delivery status could not be refreshed. The secure invitation link is still available.",
+            );
+          clearPoll();
+        },
+      );
+    }
+  }
+
+  async function leaveMeeting() {
+    if (!runtime || leaveBusy) return;
+    const activeRuntime = runtime;
+    const signal = lifecycleAbortRef.current?.signal;
+    if (!signal || signal.aborted) return;
+    setLeaveBusy(true);
+    setLeaveError(null);
+    try {
+      const result = await activeRuntime.client.auth.signOut({ scope: "local" });
+      if (signal.aborted) return;
+      if (result.error) {
+        setLeaveBusy(false);
+        setLeaveError("This account could not be signed out. Try again.");
+        return;
+      }
+      await clearAccountScopedState(
+        activeRuntime.snapshot.membership?.userId,
+      );
+      if (signal.aborted) return;
+      window.history.replaceState(null, "", "/meet");
+      window.location.reload();
+    } catch {
+      if (signal.aborted) return;
+      setLeaveBusy(false);
+      setLeaveError("This account could not be signed out. Try again.");
     }
   }
 
@@ -999,15 +1048,21 @@ export function MeetingCommandCanvas({
         ) : null}
         <button
           type="button"
-          onClick={async () => {
-            await runtime.client.auth.signOut({ scope: "local" });
-            await clearAccountScopedState(runtime.snapshot.membership?.userId);
-            window.history.replaceState(null, "", "/meet");
-            window.location.reload();
-          }}
+          disabled={leaveBusy}
+          aria-describedby={leaveError ? "meeting-leave-error" : undefined}
+          onClick={() => void leaveMeeting()}
         >
-          Leave
+          {leaveBusy ? "Leaving…" : "Leave"}
         </button>
+        {leaveError ? (
+          <span
+            id="meeting-leave-error"
+            className="meeting-leave-error"
+            role="alert"
+          >
+            {leaveError}
+          </span>
+        ) : null}
       </div>
       <CommandCanvasRoom
         store={runtime.store}

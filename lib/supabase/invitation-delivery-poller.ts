@@ -34,11 +34,24 @@ export async function pollInvitationDelivery(options: {
   for (let attempt = 0; attempt <= delays.length; attempt += 1) {
     if (options.signal.aborted)
       return { ok: false, error: { code: "request_cancelled" } };
-    const result = await options.api.loadInvitationDelivery(
-      options.roomId,
-      options.invitationId,
-      options.signal,
-    );
+    let result: BrowserMeetingApiResult<BrowserMeetingInvitationDeliveryValue>;
+    try {
+      result = await options.api.loadInvitationDelivery(
+        options.roomId,
+        options.invitationId,
+        options.signal,
+      );
+    } catch {
+      return options.signal.aborted
+        ? { ok: false, error: { code: "request_cancelled" } }
+        : {
+            ok: false,
+            error: {
+              code: "request_failed",
+              message: "Invitation delivery status could not be refreshed.",
+            },
+          };
+    }
     if (options.signal.aborted)
       return { ok: false, error: { code: "request_cancelled" } };
     if (!result.ok) return result;
