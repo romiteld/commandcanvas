@@ -108,19 +108,21 @@ function calibrationSensorFrame(
   pinchRatio: number,
   timestamp: number,
   trackId = "calibration-hand",
+  landmarks = trackedLandmarks(),
+  source: HandTrackingSensorFrame["source"] = "calibration-test",
 ): HandTrackingSensorFrame {
   return {
     timestamp,
-    source: "calibration-test",
+    source,
     receivedAt: timestamp,
     hands: [
       {
         handedness: "right",
         trackId,
         confidence: 0.97,
-        landmarks: trackedLandmarks(),
+        landmarks,
         prediction: { predicted: false },
-        source: "calibration-test",
+        source,
         capturedAt: timestamp,
         receivedAt: timestamp,
         measurements: {
@@ -176,20 +178,75 @@ async function establishOpenPalmBaseline(
   user: ReturnType<typeof userEvent.setup>,
   fake: ReturnType<typeof fakeController>,
   startedAt = 4_000,
+  openPinchRatio = 0.7,
 ) {
   act(() => {
-    for (let sample = 0; sample < 6; sample += 1)
+    for (let sample = 0; sample < 6; sample += 1) {
+      const pointer = { x: 0.5 + (sample % 2) * 0.004, y: 0.5 };
+      const timestamp = startedAt + sample * 16;
+      fake.emitSensor(
+        calibrationSensorFrame(
+          pointer,
+          openPinchRatio,
+          timestamp,
+          "calibration-hand",
+          openPalmLandmarks(),
+        ),
+      );
       fake.emit(
         calibrationObservation(
           "open_palm",
-          { x: 0.5 + (sample % 2) * 0.004, y: 0.5 },
+          pointer,
+          openPinchRatio,
+          timestamp,
+        ),
+      );
+    }
+  });
+  await user.click(
+    screen.getByRole("button", { name: "Continue to reach mapping" }),
+  );
+}
+
+async function advanceToClosedPinch(
+  user: ReturnType<typeof userEvent.setup>,
+  fake: ReturnType<typeof fakeController>,
+  startedAt: number,
+  openRatios: readonly number[] = [0.7, 0.7, 0.7, 0.7, 0.7, 0.7],
+) {
+  await establishOpenPalmBaseline(user, fake, startedAt);
+  const corners = [
+    { x: 0.36, y: 0.34 },
+    { x: 0.64, y: 0.34 },
+    { x: 0.36, y: 0.66 },
+    { x: 0.64, y: 0.66 },
+  ];
+  act(() => {
+    for (let sample = 0; sample < 12; sample += 1)
+      fake.emitSensor(
+        calibrationSensorFrame(
+          corners[sample % corners.length]!,
           0.7,
-          startedAt + sample * 16,
+          startedAt + 500 + sample * 16,
         ),
       );
   });
   await user.click(
-    screen.getByRole("button", { name: "Continue to reach mapping" }),
+    screen.getByRole("button", { name: "Continue to open hand" }),
+  );
+  act(() => {
+    openRatios.forEach((ratio, sample) =>
+      fake.emitSensor(
+        calibrationSensorFrame(
+          { x: 0.5, y: 0.5 },
+          ratio,
+          startedAt + 1_000 + sample * 16,
+        ),
+      ),
+    );
+  });
+  await user.click(
+    screen.getByRole("button", { name: "Continue to closed pinch" }),
   );
 }
 
@@ -252,6 +309,61 @@ describe("SpatialCameraControl", () => {
     expect(screen.getByText(/open-hand scan complete · 6 stable frames/i)).toBeVisible();
     await user.click(next);
     expect(screen.getByText(/2 of 4 · map comfortable reach/i)).toBeVisible();
+  });
+
+  it("counts a co-emitted raw and semantic baseline inference only once", () => {
+    const fake = fakeController({ sensorFrames: true });
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        onCalibrationOpenChange={() => undefined}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    const next = screen.getByRole("button", {
+      name: "Continue to reach mapping",
+    });
+
+    act(() => {
+      for (let sample = 0; sample < 3; sample += 1) {
+        const timestamp = 4_500 + sample * 16;
+        const pointer = { x: 0.5 + (sample % 2) * 0.004, y: 0.5 };
+        fake.emitSensor(
+          calibrationSensorFrame(
+            pointer,
+            0.7,
+            timestamp,
+            "calibration-hand",
+            openPalmLandmarks(),
+          ),
+        );
+        fake.emit(
+          calibrationObservation("open_palm", pointer, 0.7, timestamp),
+        );
+      }
+    });
+    expect(next).toBeDisabled();
+
+    act(() => {
+      for (let sample = 3; sample < 6; sample += 1) {
+        const timestamp = 4_500 + sample * 16;
+        const pointer = { x: 0.5 + (sample % 2) * 0.004, y: 0.5 };
+        fake.emitSensor(
+          calibrationSensorFrame(
+            pointer,
+            0.7,
+            timestamp,
+            "calibration-hand",
+            openPalmLandmarks(),
+          ),
+        );
+        fake.emit(
+          calibrationObservation("open_palm", pointer, 0.7, timestamp),
+        );
+      }
+    });
+    expect(next).toBeEnabled();
   });
 
   it("requires a visible opt-in before the private GPU controller can observe upload consent", async () => {
@@ -1071,15 +1183,32 @@ describe("SpatialCameraControl", () => {
         );
     });
 
-    await user.click(
-      screen.getByRole("button", { name: "Continue to open hand" }),
-    );
-
-    expect(screen.getByRole("alert")).toHaveTextContent(/farther left, right, up, and down/i);
+    const continueToOpen = screen.getByRole("button", {
+      name: "Continue to open hand",
+    });
+    expect(continueToOpen).toBeDisabled();
     expect(screen.getByText(/2 of 4 · map comfortable reach/i)).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "Continue to closed pinch" }),
     ).toBeNull();
+
+    const reach = [
+      { x: 0.18, y: 0.16 },
+      { x: 0.82, y: 0.16 },
+      { x: 0.18, y: 0.82 },
+      { x: 0.82, y: 0.82 },
+    ];
+    act(() => {
+      for (let sample = 0; sample < 12; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            reach[sample % reach.length]!,
+            0.7,
+            15_500 + sample * 16,
+          ),
+        );
+    });
+    expect(continueToOpen).toBeEnabled();
   });
 
   it("calibrates a raw closed pinch above the default cutoff without erasing frozen reach", async () => {
@@ -1152,6 +1281,127 @@ describe("SpatialCameraControl", () => {
     expect(screen.getByText(/calibrated for this camera session/i)).toBeVisible();
   });
 
+  it("does not learn a closed hand as the open-pinch calibration", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        onCalibrationOpenChange={() => undefined}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await establishOpenPalmBaseline(user, fake, 20_700);
+
+    const corners = [
+      { x: 0.36, y: 0.34 },
+      { x: 0.64, y: 0.34 },
+      { x: 0.36, y: 0.66 },
+      { x: 0.64, y: 0.66 },
+    ];
+    act(() => {
+      for (let sample = 0; sample < 12; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            corners[sample % corners.length]!,
+            0.7,
+            21_000 + sample * 16,
+          ),
+        );
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Continue to open hand" }),
+    );
+
+    const continueToClosed = screen.getByRole("button", {
+      name: "Continue to closed pinch",
+    });
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            2.4,
+            21_500 + sample * 16,
+          ),
+        );
+    });
+    expect(continueToClosed).toBeDisabled();
+
+    act(() => {
+      for (let sample = 0; sample < 12; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.22,
+            22_000 + sample * 16,
+          ),
+        );
+    });
+    expect(continueToClosed).toBeDisabled();
+
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.7,
+            23_000 + sample * 16,
+          ),
+        );
+    });
+    expect(continueToClosed).toBeEnabled();
+  });
+
+  it("keeps open-pinch calibration relative to the accepted whole-hand baseline", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        onCalibrationOpenChange={() => undefined}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await establishOpenPalmBaseline(user, fake, 23_700, 0.4);
+
+    const corners = [
+      { x: 0.36, y: 0.34 },
+      { x: 0.64, y: 0.34 },
+      { x: 0.36, y: 0.66 },
+      { x: 0.64, y: 0.66 },
+    ];
+    act(() => {
+      for (let sample = 0; sample < 12; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            corners[sample % corners.length]!,
+            0.4,
+            24_000 + sample * 16,
+          ),
+        );
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Continue to open hand" }),
+    );
+
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.35,
+            25_000 + sample * 16,
+          ),
+        );
+    });
+    expect(
+      screen.getByRole("button", { name: "Continue to closed pinch" }),
+    ).toBeEnabled();
+  });
+
   it("waits for a stable closed pinch instead of learning the closing transition", async () => {
     const user = userEvent.setup();
     const fake = fakeController({ sensorFrames: true });
@@ -1183,7 +1433,7 @@ describe("SpatialCameraControl", () => {
     });
     await user.click(screen.getByRole("button", { name: "Continue to closed pinch" }));
     act(() => {
-      [0.63, 0.61, 0.58, 0.5, 0.4, 0.34].forEach((ratio, sample) =>
+      [0.63, 0.6, 0.57, 0.54, 0.51, 0.48].forEach((ratio, sample) =>
         fake.emitSensor(
           calibrationSensorFrame({ x: 0.5, y: 0.5 }, ratio, 25_000 + sample * 16),
         ),
@@ -1196,6 +1446,391 @@ describe("SpatialCameraControl", () => {
     act(() => {
       for (let sample = 0; sample < 6; sample += 1)
         fake.emitSensor(calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.34, 26_000 + sample * 16));
+    });
+    expect(
+      screen.getByRole("button", { name: "Review hand calibration" }),
+    ).toBeEnabled();
+  });
+
+  it("does not bridge provisional closed-pinch evidence across loss, track replacement, or a long gap", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        onCalibrationOpenChange={() => undefined}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await advanceToClosedPinch(user, fake, 34_000);
+    const review = screen.getByRole("button", {
+      name: "Review hand calibration",
+    });
+
+    act(() => {
+      for (let sample = 0; sample < 3; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.34,
+            35_500 + sample * 16,
+          ),
+        );
+      fake.emitSensor({
+        ...calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.34, 35_600),
+        hands: [],
+      });
+      for (let sample = 0; sample < 3; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.34,
+            35_700 + sample * 16,
+          ),
+        );
+    });
+    expect(review).toBeDisabled();
+
+    act(() => {
+      for (let sample = 0; sample < 3; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.34,
+            35_800 + sample * 16,
+            "replacement-hand",
+          ),
+        );
+    });
+    expect(review).toBeDisabled();
+
+    act(() => {
+      for (let sample = 0; sample < 3; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.34,
+            37_000 + sample * 16,
+            "replacement-hand",
+          ),
+        );
+    });
+    expect(review).toBeDisabled();
+
+    act(() => {
+      for (let sample = 3; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.34,
+            37_000 + sample * 16,
+            "replacement-hand",
+          ),
+        );
+    });
+    expect(review).toBeEnabled();
+  });
+
+  it("restarts calibration when the active vision engine changes", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        onCalibrationOpenChange={() => undefined}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await advanceToClosedPinch(user, fake, 43_000);
+
+    act(() =>
+      fake.emitSensor(
+        calibrationSensorFrame(
+          { x: 0.5, y: 0.5 },
+          0.34,
+          44_500,
+          "calibration-hand",
+          trackedLandmarks(),
+          "alternate-calibration-engine",
+        ),
+      ),
+    );
+
+    expect(screen.getByText(/1 of 4 · scanning open hand/i)).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /hand tracking switched engines/i,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Review hand calibration" }),
+    ).toBeNull();
+  });
+
+  it("replaces a shallow partial-pinch plateau with the later pads-touch plateau", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    const results: SpatialCalibrationResult[] = [];
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        onCalibrationOpenChange={() => undefined}
+        onCalibrationResult={(result) => results.push(result)}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await advanceToClosedPinch(user, fake, 38_000);
+    const review = screen.getByRole("button", {
+      name: "Review hand calibration",
+    });
+
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.55,
+            39_500 + sample * 16,
+          ),
+        );
+    });
+    expect(review).toBeEnabled();
+
+    act(() =>
+      fake.emitSensor(
+        calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.34, 40_000),
+      ),
+    );
+    expect(review).toBeDisabled();
+    act(() => {
+      for (let sample = 1; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.34,
+            40_000 + sample * 16,
+          ),
+        );
+    });
+    expect(review).toBeEnabled();
+    await user.click(review);
+    await user.click(
+      screen.getByRole("button", { name: "Use hand calibration" }),
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      accepted: true,
+      profile: { pinchClosedRatio: 0.34 },
+    });
+  });
+
+  it("keeps accepted closed-pinch calibration ready after the user releases or leaves frame", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        onCalibrationOpenChange={() => undefined}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await advanceToClosedPinch(user, fake, 45_000);
+    const review = screen.getByRole("button", {
+      name: "Review hand calibration",
+    });
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.34,
+            46_500 + sample * 16,
+          ),
+        );
+    });
+    expect(review).toBeEnabled();
+
+    act(() =>
+      fake.emitSensor({
+        ...calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.34, 46_700),
+        hands: [],
+      }),
+    );
+    expect(review).toBeEnabled();
+
+    act(() =>
+      fake.emitSensor(
+        calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.7, 46_900),
+      ),
+    );
+    expect(review).toBeEnabled();
+  });
+
+  it("uses a robust open range so one low open sample does not block a legitimate closed pinch", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        onCalibrationOpenChange={() => undefined}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await advanceToClosedPinch(
+      user,
+      fake,
+      41_000,
+      [0.53, 0.7, 0.7, 0.7, 0.7, 0.7],
+    );
+
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.5,
+            42_500 + sample * 16,
+          ),
+        );
+    });
+    expect(
+      screen.getByRole("button", { name: "Review hand calibration" }),
+    ).toBeEnabled();
+  });
+
+  it("keeps closed-pinch evidence below the lowest accepted open range", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        onCalibrationOpenChange={() => undefined}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await establishOpenPalmBaseline(user, fake, 26_700);
+    const corners = [
+      { x: 0.36, y: 0.34 },
+      { x: 0.64, y: 0.34 },
+      { x: 0.36, y: 0.66 },
+      { x: 0.64, y: 0.66 },
+    ];
+    act(() => {
+      for (let sample = 0; sample < 12; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            corners[sample % corners.length]!,
+            0.7,
+            27_000 + sample * 16,
+          ),
+        );
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Continue to open hand" }),
+    );
+    act(() => {
+      [0.53, 0.7, 0.7, 0.7, 0.7, 0.7].forEach((ratio, sample) =>
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            ratio,
+            28_000 + sample * 16,
+          ),
+        ),
+      );
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Continue to closed pinch" }),
+    );
+
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.58,
+            29_000 + sample * 16,
+          ),
+        );
+    });
+    const review = screen.getByRole("button", {
+      name: "Review hand calibration",
+    });
+    expect(review).toBeDisabled();
+
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.34,
+            30_000 + sample * 16,
+          ),
+        );
+    });
+    expect(review).toBeEnabled();
+  });
+
+  it("accepts a noisy but clearly separated closed pinch", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        onCalibrationOpenChange={() => undefined}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await establishOpenPalmBaseline(user, fake, 30_700);
+    const corners = [
+      { x: 0.36, y: 0.34 },
+      { x: 0.64, y: 0.34 },
+      { x: 0.36, y: 0.66 },
+      { x: 0.64, y: 0.66 },
+    ];
+    act(() => {
+      for (let sample = 0; sample < 12; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            corners[sample % corners.length]!,
+            0.7,
+            31_000 + sample * 16,
+          ),
+        );
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Continue to open hand" }),
+    );
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.7,
+            32_000 + sample * 16,
+          ),
+        );
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Continue to closed pinch" }),
+    );
+
+    act(() => {
+      [0.32, 0.36, 0.29, 0.34, 0.38, 0.31].forEach((ratio, sample) =>
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            ratio,
+            33_000 + sample * 16,
+          ),
+        ),
+      );
     });
     expect(
       screen.getByRole("button", { name: "Review hand calibration" }),
@@ -1262,7 +1897,7 @@ describe("SpatialCameraControl", () => {
     expect(fake.controller.setPinchThresholds).toHaveBeenLastCalledWith(null);
   });
 
-  it("keeps a refused reach in calibration and explains how to recover", async () => {
+  it("keeps an inadequate reach gated and explains how to recover", async () => {
     const user = userEvent.setup();
     const fake = fakeController({ sensorFrames: true });
     const results: SpatialCalibrationResult[] = [];
@@ -1286,14 +1921,12 @@ describe("SpatialCameraControl", () => {
           ),
         );
     });
-    await user.click(
-      screen.getByRole("button", { name: "Continue to open hand" }),
-    );
-
     expect(results).toHaveLength(0);
-    expect(screen.getByRole("alert")).toHaveTextContent(/move your fingertip farther/i);
     expect(
       screen.getByRole("button", { name: "Continue to open hand" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText(/next step unlocks when the comfortable area is wide enough/i),
     ).toBeVisible();
     expect(screen.queryByText(/calibrated for this camera session/i)).toBeNull();
   });
