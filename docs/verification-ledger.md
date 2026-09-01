@@ -1606,3 +1606,73 @@ rewriting their historical evidence:
 - Nothing was cut from product scope. This candidate changes credential
   authority and preserves the normal typed, pointer, touch, collaboration,
   hand-control, WebMCP, and deterministic fallback paths.
+
+## Checkpoint 33: public user-owned credential release
+
+### WORKING
+
+- Public GitHub `main` code commit
+  `f119daba2547ffb9b4a006ca418cede84bbe7249` contains the account-owned
+  credential boundary described in Checkpoint 32. Its sole author is Daniel
+  Romitelli and the commit contains no co-author or AI attribution.
+- GitHub Actions run `33468060716` completed successfully for that exact SHA.
+  The build-and-unit gate used Node 22 and finished with conclusion `success`.
+- Vercel deployment `dpl_D3QzjuUQi6zq6s2KBWK3mT5dGasg` reports `READY`,
+  production target, branch `main`, repository `commandcanvas`, and exact Git
+  SHA `f119daba2547ffb9b4a006ca418cede84bbe7249`.
+- The canonical `https://commandcanvas.vercel.app` alias resolves to that exact
+  deployment. Metadata-only checks confirm `OPENAI_API_KEY` and
+  `OPENAI_REALTIME_API_KEY` are absent from both Vercel Production and Preview.
+- The linked Supabase project records migration `20260901030350`. The expanded
+  live catalog assertion passes and the final read-only residue query reports
+  zero probe users, zero probe rooms, and zero stored credentials.
+
+### VERIFIED IN BROWSER
+
+- A fresh Chromium run against the canonical public origin passed the complete
+  verified-email account lifecycle with a synthetic key: save, exact
+  fingerprint, raw-value non-return, DOM and Web Storage absence, reload,
+  explicit deletion confirmation, deletion, and checked cleanup. It made no
+  OpenAI provider call and passed in 6.2 seconds.
+- The public responsive landing and Realtime-input matrix passed all applicable
+  desktop Chromium, mobile Chromium, and mobile WebKit scenarios: 10 passed,
+  11 intentional project-specific skips, and zero failures.
+- Fresh canonical HTTP checks returned 200 for `/`, `/demo`, and `/meet`. An
+  unauthenticated `GET /api/openai-credential` returned the expected compact
+  401 `authorization_missing` refusal.
+- The first pushed candidate triggered GitGuardian's Generic Password detector
+  because its E2E probe assigned a generated test login string to a variable
+  named `password`. No real credential was present. The detector-shaped source
+  was replaced with a cryptographically random runtime fixture, public `main`
+  was replaced using an exact force-with-lease, and the browser and complete
+  source gates passed again on the replacement.
+
+### UNVERIFIED
+
+- A real user-owned OpenAI API key has not completed a Realtime or vision
+  provider call through the new saved-key resolver on this exact release. The
+  deployed account lifecycle proves storage, retrieval selection, and deletion;
+  it does not prove provider billing or model access.
+- The account browser probe installs a confirmed test session directly. It does
+  not prove delivery or entry of a fresh Supabase OTP email, although the OTP
+  flow remains implemented and separately covered by its existing tests.
+- ChatGPT built-in-browser Site Tools invocation remains a host-rollout check.
+  Native browser tests do not substitute for a tool call made by ChatGPT against
+  the same live page and session.
+- Physical phone hand accuracy, fingertip drawing ergonomics, pinch reliability,
+  two-hand resize, camera occlusion, thermal behavior, and cross-network media
+  still require human-device acceptance. Controlled browser media and device
+  profiles do not turn those boundaries into physical proof.
+- GitGuardian dashboard incident-state dismissal was not automated. The
+  detector-shaped source is absent from public `main`, but the external incident
+  UI may still require marking the superseded synthetic occurrence resolved.
+
+### CUT
+
+- Nothing was cut from the implemented canvas, object creation, hand-control,
+  collaboration, voice, WebMCP, invitation, packet, or Resend behavior in this
+  release.
+- Production conferencing scale, TURN/SFU relaying, recording, screen sharing,
+  enterprise identity, billing, native applications, headset support,
+  marketplaces, desktop automation, and arbitrary physical-object tracking
+  remain outside this release.
