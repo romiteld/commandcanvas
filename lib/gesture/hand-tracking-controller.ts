@@ -61,6 +61,7 @@ export type HandTrackingObservation =
       motionPointer?: { x: number; y: number };
       confidence: number;
       handedness?: TrackedHandedness;
+      handednessConfidence?: number;
       landmarks?: HandLandmarks;
       /** Optional additive physical data; existing consumers can keep using pointer/mode. */
       measurements?: HandPhysicalMeasurements;
@@ -85,6 +86,7 @@ export type HandTrackingObservation =
 
 export interface HandTrackingPointer {
   handedness: TrackedHandedness;
+  handednessConfidence?: number;
   pointer: { x: number; y: number };
   motionPointer?: { x: number; y: number };
   confidence: number;
@@ -120,6 +122,7 @@ interface ResolvedTrackingPinchThresholdSet
 export interface HandTrackingSensorHand {
   readonly trackId: HandTrackId;
   readonly handedness: TrackedHandedness;
+  readonly handednessConfidence?: number;
   readonly confidence: number;
   readonly landmarks: HandLandmarks;
   readonly measurements: HandPhysicalMeasurements;
@@ -242,6 +245,19 @@ const POINT_TRACKING_GRACE_MS = 220;
 const HAND_TRACK_TTL_MS = 360;
 const HAND_TRACK_MAX_DISTANCE = 0.35;
 const MAX_SEMANTIC_RESULT_AGE_MS = 120;
+export const HAND_HANDEDNESS_RELIABILITY_FLOOR = 0.8;
+
+export function isReliableTrackedHandedness(
+  handedness: TrackedHandedness,
+  confidence: number | undefined,
+) {
+  return (
+    handedness !== "unknown" &&
+    typeof confidence === "number" &&
+    Number.isFinite(confidence) &&
+    confidence >= HAND_HANDEDNESS_RELIABILITY_FLOOR
+  );
+}
 
 export function createHandTrackingController(
   provided: HandTrackingControllerDependencies = {},
@@ -790,6 +806,7 @@ export function createHandTrackingController(
           receivedAt,
           trackId: key,
           handedness: hand.handedness,
+          predicted: hand.predicted === true,
         },
         dependencies.now(),
         {
@@ -801,6 +818,7 @@ export function createHandTrackingController(
                   pinchThresholds,
                   key,
                   hand.handedness,
+                  hand.handednessConfidence,
                 ),
               )
             : {}),
@@ -831,6 +849,9 @@ export function createHandTrackingController(
               {
                 trackId,
                 handedness: hand.handedness,
+                ...(hand.handednessConfidence === undefined
+                  ? {}
+                  : { handednessConfidence: hand.handednessConfidence }),
                 confidence: hand.confidence,
                 landmarks: hand.landmarks as HandLandmarks,
                 measurements: transition.measurements,
@@ -889,6 +910,9 @@ export function createHandTrackingController(
         prediction,
       }) => ({
         handedness: hand.handedness,
+        ...(hand.handednessConfidence === undefined
+          ? {}
+          : { handednessConfidence: hand.handednessConfidence }),
         pointer: output.pointer,
         motionPointer: output.motionPointer,
         confidence: output.confidence,
@@ -950,6 +974,9 @@ export function createHandTrackingController(
       motionPointer: output.motionPointer,
       confidence: output.confidence,
       handedness: primary.hand.handedness,
+      ...(primary.hand.handednessConfidence === undefined
+        ? {}
+        : { handednessConfidence: primary.hand.handednessConfidence }),
       landmarks: primary.hand.landmarks,
       measurements: primary.transition.measurements ?? undefined,
       source,
@@ -1620,6 +1647,7 @@ function semanticModeForTrack(
     thresholdSet,
     trackId,
     hand.handedness,
+    hand.handednessConfidence,
   );
   const vote = voteCalibratedPinch(
     run.pinchVoteStates.get(trackId) ?? createInitialPinchVoteState(),
@@ -1650,10 +1678,13 @@ function resolveTrackingPinchThresholds(
   thresholdSet: HandTrackingPinchThresholdSet,
   trackId: HandTrackId,
   handedness: TrackedHandedness,
+  handednessConfidence?: number,
 ): HandTrackingPinchThresholds {
   return (
     thresholdSet.byTrackId[trackId] ??
-    thresholdSet.byHandedness?.[handedness] ??
+    (isReliableTrackedHandedness(handedness, handednessConfidence)
+      ? thresholdSet.byHandedness?.[handedness]
+      : undefined) ??
     thresholdSet.fallback
   );
 }

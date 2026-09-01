@@ -12,6 +12,8 @@ export interface HandDetectorResult {
     categoryName?: string;
     displayName?: string;
   }[])[];
+  /** Optional detector/extrapolator provenance. Predicted hands are render-only. */
+  predicted?: readonly boolean[];
 }
 
 export interface HandDetector {
@@ -64,8 +66,12 @@ export type TrackedHandedness = "left" | "right" | "unknown";
 
 export interface TrackedHandLandmarks {
   handedness: TrackedHandedness;
+  /** Classifier confidence for handedness only; absence means not reliable. */
+  handednessConfidence?: number;
   confidence: number;
   landmarks: HandLandmarks;
+  /** Predicted samples may render but cannot enter semantic gesture state. */
+  predicted?: boolean;
 }
 
 export type HandTrackingWorkerInboundMessage =
@@ -137,13 +143,21 @@ export function createHandTrackingWorkerRuntime(dependencies: {
           const landmarks = parseLandmarks(points);
           if (!landmarks) return [];
           const category = result.handedness[index]?.[0];
+          const handedness = normalizeHandedness(
+            category?.categoryName ?? category?.displayName,
+          );
+          const handednessConfidence = normalizeOptionalConfidence(
+            category?.score,
+          );
           return [
             {
-              handedness: normalizeHandedness(
-                category?.categoryName ?? category?.displayName,
-              ),
+              handedness,
+              ...(handedness !== "unknown" && handednessConfidence !== undefined
+                ? { handednessConfidence }
+                : {}),
               confidence: normalizeConfidence(category?.score),
               landmarks,
+              ...(result.predicted?.[index] === true ? { predicted: true } : {}),
             } satisfies TrackedHandLandmarks,
           ];
         });
@@ -222,6 +236,12 @@ function normalizeConfidence(score: number | undefined) {
   return typeof score === "number" && Number.isFinite(score)
     ? Math.min(1, Math.max(0, score))
     : 1;
+}
+
+function normalizeOptionalConfidence(score: number | undefined) {
+  return typeof score === "number" && Number.isFinite(score)
+    ? Math.min(1, Math.max(0, score))
+    : undefined;
 }
 
 function normalizeHandedness(value: string | undefined): TrackedHandedness {

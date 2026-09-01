@@ -247,7 +247,15 @@ describe("private hand relay worker endpoint", () => {
         frameId: 1,
         capturedAtMs: 100,
         processedAtMs: 124,
-        hands: [{ confidence: 0.97, handedness: "right", landmarks }],
+        hands: [
+          {
+            confidence: 0.97,
+            handedness: "right",
+            handednessConfidence: 0.96,
+            predicted: true,
+            landmarks,
+          },
+        ],
       },
       { relayRoundTripMs: 35, droppedBeforeSend: 0 },
     );
@@ -255,7 +263,15 @@ describe("private hand relay worker endpoint", () => {
     expect(messages).toContainEqual({
       type: "result",
       timestamp: 100,
-      hands: [{ confidence: 0.97, handedness: "right", landmarks }],
+      hands: [
+        {
+          confidence: 0.97,
+          handedness: "right",
+          handednessConfidence: 0.96,
+          predicted: true,
+          landmarks,
+        },
+      ],
       processingLatencyMs: 24,
       relayMetrics: {
         encodeLatencyMs: 5,

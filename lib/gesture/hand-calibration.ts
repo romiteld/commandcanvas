@@ -28,6 +28,8 @@ export interface HandCalibrationProfile {
 export interface HandPinchCalibration {
   readonly trackId: string;
   readonly handedness: "left" | "right" | "unknown";
+  /** Detector evidence for safely reusing this calibration across track IDs. */
+  readonly handednessConfidence?: number;
   readonly closedRatio: number;
   readonly openRatio: number;
 }

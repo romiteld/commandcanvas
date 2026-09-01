@@ -158,6 +158,19 @@ describe("private hand relay contract", () => {
       ],
     };
     expect(privateHandRelayResultSchema.parse(result)).toEqual(result);
+    const predictedResult = {
+      ...result,
+      hands: [
+        {
+          ...result.hands[0],
+          handednessConfidence: 0.97,
+          predicted: true,
+        },
+      ],
+    };
+    expect(privateHandRelayResultSchema.parse(predictedResult)).toEqual(
+      predictedResult,
+    );
     expect(
       privateHandRelayResultSchema.safeParse({
         ...result,

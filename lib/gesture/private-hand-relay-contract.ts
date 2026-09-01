@@ -131,6 +131,8 @@ export const privateHandRelayResultSchema = z
           .object({
             confidence: z.number().finite().min(0).max(1),
             handedness: z.enum(["left", "right", "unknown"]),
+            handednessConfidence: z.number().finite().min(0).max(1).optional(),
+            predicted: z.boolean().optional(),
             landmarks: z.array(relayLandmarkSchema).length(21),
           })
           .strict(),

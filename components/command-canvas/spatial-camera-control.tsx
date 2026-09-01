@@ -18,7 +18,10 @@ import type {
   HandTrackingStatus,
   HandTrackingPinchThresholdSet,
 } from "@/lib/gesture/hand-tracking-controller";
-import { createHandTrackingController } from "@/lib/gesture/hand-tracking-controller";
+import {
+  createHandTrackingController,
+  isReliableTrackedHandedness,
+} from "@/lib/gesture/hand-tracking-controller";
 import {
   assessPinchCalibrationEnvelope,
   assessOpenPalmCalibrationBaseline,
@@ -175,6 +178,9 @@ export function SpatialCameraControl({
   const calibrationHandednessRef = useRef<"left" | "right" | "unknown">(
     "unknown",
   );
+  const calibrationHandednessConfidenceRef = useRef<number | undefined>(
+    undefined,
+  );
   const calibrationSourceRef = useRef<string | null>(null);
   const closedPinchCaptureRef = useRef<ClosedPinchCaptureState>(
     emptyClosedPinchCaptureState(),
@@ -242,6 +248,7 @@ export function SpatialCameraControl({
     calibrationStageRef.current = "baseline";
     calibrationTrackIdRef.current = null;
     calibrationHandednessRef.current = "unknown";
+    calibrationHandednessConfidenceRef.current = undefined;
     calibrationSourceRef.current = null;
     closedPinchCaptureRef.current = emptyClosedPinchCaptureState();
     setLastSensorFrame(null);
@@ -345,6 +352,7 @@ export function SpatialCameraControl({
       if (activeTrackId !== hand.trackId)
         calibrationTrackIdRef.current = hand.trackId;
       calibrationHandednessRef.current = hand.handedness;
+      calibrationHandednessConfidenceRef.current = hand.handednessConfidence;
       const pointer = hand.measurements.indexTip;
       const pinchRatio = normalizedCalibrationPinchRatio(
         hand.measurements.pinchDistance,
@@ -622,6 +630,12 @@ export function SpatialCameraControl({
               {
                 trackId,
                 handedness: calibrationHandednessRef.current,
+                ...(calibrationHandednessConfidenceRef.current === undefined
+                  ? {}
+                  : {
+                      handednessConfidence:
+                        calibrationHandednessConfidenceRef.current,
+                    }),
                 closedRatio: result.profile.pinchClosedRatio,
                 openRatio: result.profile.pinchOpenRatio,
               },
@@ -1528,7 +1542,9 @@ function pinchThresholdSet(
     ),
     byHandedness: Object.fromEntries(
       calibrations
-        .filter(({ handedness }) => handedness !== "unknown")
+        .filter(({ handedness, handednessConfidence }) =>
+          isReliableTrackedHandedness(handedness, handednessConfidence),
+        )
         .map((calibration) => [
           calibration.handedness,
           resolvePinchThresholds({

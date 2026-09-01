@@ -157,9 +157,8 @@ export interface SpatialGestureState {
     readonly previousPointerY: number;
   } | null;
   zoom: {
-    readonly initialSpan: number;
+    readonly initialScreenSpan: number;
     readonly initialScale: number;
-    readonly initialViewport: CanvasViewport;
     readonly worldAnchor: CanvasPoint;
   } | null;
   palm: null;
@@ -987,16 +986,20 @@ function reduceBlankBimanual(
     const selected = acquireSelectedBimanual(input, scene);
     if (selected) return selected;
   }
-  const geometry = bimanualGeometry(input, scene);
-  if (geometry.span < MIN_BIMANUAL_SPAN_PX) return empty();
+  const screenGeometry = bimanualScreenGeometry(input, scene);
+  if (screenGeometry.span < MIN_BIMANUAL_SPAN_PX) return empty();
   if (state.phase === "panning" && state.zoom) {
     const scale = rounded(
-      clamp(state.zoom.initialScale * (geometry.span / state.zoom.initialSpan), 0.35, 2.5),
+      clamp(
+        state.zoom.initialScale *
+          (screenGeometry.span / state.zoom.initialScreenSpan),
+        0.35,
+        2.5,
+      ),
     );
-    const centroid = bimanualScreenCentroid(input, scene);
     const viewport = {
-      x: rounded(centroid.x - state.zoom.worldAnchor.x * scale),
-      y: rounded(centroid.y - state.zoom.worldAnchor.y * scale),
+      x: rounded(screenGeometry.centroid.x - state.zoom.worldAnchor.x * scale),
+      y: rounded(screenGeometry.centroid.y - state.zoom.worldAnchor.y * scale),
       scale,
     };
     return {
@@ -1009,10 +1012,18 @@ function reduceBlankBimanual(
       ...createInitialSpatialGestureState(),
       phase: "panning",
       zoom: {
-        initialSpan: geometry.span,
+        initialScreenSpan: screenGeometry.span,
         initialScale: scene.viewport.scale,
-        initialViewport: scene.viewport,
-        worldAnchor: geometry.centroid,
+        worldAnchor: {
+          x: rounded(
+            (screenGeometry.centroid.x - scene.viewport.x) /
+              scene.viewport.scale,
+          ),
+          y: rounded(
+            (screenGeometry.centroid.y - scene.viewport.y) /
+              scene.viewport.scale,
+          ),
+        },
       },
     },
     effects: [{ type: "viewport.set" as const, viewport: scene.viewport }],
@@ -1092,17 +1103,23 @@ function acquireSelectedBimanual(
   };
 }
 
-function bimanualScreenCentroid(
+function bimanualScreenGeometry(
   input: Extract<SpatialGestureInput, { mode: "bimanual_pinch" }>,
   scene: SpatialGestureScene,
 ) {
   const points = input.hands
     ? input.hands.map((hand) => hand.motionPointer ?? hand.pointer)
     : input.pointers;
-  return {
-    x: rounded(((points[0]!.x + points[1]!.x) / 2) * scene.bounds.width),
-    y: rounded(((points[0]!.y + points[1]!.y) / 2) * scene.bounds.height),
-  };
+  return geometryFromPoints(
+    {
+      x: rounded(points[0]!.x * scene.bounds.width),
+      y: rounded(points[0]!.y * scene.bounds.height),
+    },
+    {
+      x: rounded(points[1]!.x * scene.bounds.width),
+      y: rounded(points[1]!.y * scene.bounds.height),
+    },
+  );
 }
 
 function updateEdgeAction(
@@ -1396,18 +1413,6 @@ function distanceToObjectRectangle(
 
 function heldRectangle(held: SpatialHeldState) {
   return { ...held.currentTransform, minimized: false };
-}
-
-function bimanualGeometry(
-  input: Extract<SpatialGestureInput, { mode: "bimanual_pinch" }>,
-  scene: SpatialGestureScene,
-) {
-  const points = input.hands
-    ? input.hands.map((hand) =>
-        normalizedToWorld(hand.motionPointer ?? hand.pointer, scene),
-      )
-    : input.pointers.map((pointer) => normalizedToWorld(pointer, scene));
-  return geometryFromPoints(points[0]!, points[1]!);
 }
 
 function bimanualGeometryForTracks(

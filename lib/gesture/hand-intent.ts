@@ -243,6 +243,11 @@ export function interpretHandFrame(
       frame.confidence,
     );
 
+  const physical = measureHandLandmarks(
+    frame.landmarks,
+    frame.confidence,
+    config.mirrorX,
+  );
   if (frame.predicted)
     return refuse(
       "predicted_sample",
@@ -251,13 +256,8 @@ export function interpretHandFrame(
       frame.confidence,
       { predicted: true },
       state,
+      roundedMeasurements(physical),
     );
-
-  const physical = measureHandLandmarks(
-    frame.landmarks,
-    frame.confidence,
-    config.mirrorX,
-  );
   const rawIndexTip = physical.indexTip;
   const rawThumbTip = physical.thumbTip;
   const rawPalmCenter = physical.palmMcpCentroid;

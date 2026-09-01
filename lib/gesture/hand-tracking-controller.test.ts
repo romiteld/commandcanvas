@@ -1333,6 +1333,182 @@ describe("hand tracking controller lifecycle", () => {
     ]);
   });
 
+  it("propagates predicted worker provenance to sensor frames without promoting bimanual state", async () => {
+    const { controller, worker, video } = harness();
+    const observations: HandTrackingObservation[] = [];
+    const sensorFrames: Array<{
+      hands: readonly {
+        handedness: string;
+        prediction: { predicted: boolean };
+      }[];
+    }> = [];
+    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeSensorFrames?.((frame) => sensorFrames.push(frame));
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    worker.emit({
+      type: "result",
+      timestamp: 1_000,
+      hands: [
+        {
+          handedness: "left",
+          handednessConfidence: 0.99,
+          confidence: 0.98,
+          predicted: true,
+          landmarks: rawHandLandmarks({ pose: "pinch", offsetX: -0.2 }),
+        },
+        {
+          handedness: "right",
+          handednessConfidence: 0.99,
+          confidence: 0.98,
+          landmarks: rawHandLandmarks({ pose: "pinch", offsetX: 0.2 }),
+        },
+      ],
+    });
+
+    expect(sensorFrames.at(-1)?.hands).toEqual([
+      expect.objectContaining({
+        handedness: "left",
+        prediction: { predicted: true },
+      }),
+      expect.objectContaining({
+        handedness: "right",
+        prediction: { predicted: false },
+      }),
+    ]);
+    expect(observations.some((entry) => entry.mode === "bimanual_pinch")).toBe(
+      false,
+    );
+
+    worker.emit({
+      type: "result",
+      timestamp: 1_016,
+      hands: [
+        {
+          handedness: "left",
+          handednessConfidence: 0.99,
+          confidence: 0.98,
+          landmarks: rawHandLandmarks({ pose: "pinch", offsetX: -0.2 }),
+        },
+        {
+          handedness: "right",
+          handednessConfidence: 0.99,
+          confidence: 0.98,
+          landmarks: rawHandLandmarks({ pose: "pinch", offsetX: 0.2 }),
+        },
+      ],
+    });
+    expect(observations.at(-1)?.mode).toBe("bimanual_pinch");
+  });
+
+  it("does not promote bimanual state when either raw hand is below confidence", async () => {
+    const { controller, worker, video } = harness();
+    const observations: HandTrackingObservation[] = [];
+    controller.subscribeObservations((observation) => observations.push(observation));
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    worker.emit({
+      type: "result",
+      timestamp: 1_000,
+      hands: [
+        {
+          handedness: "left",
+          handednessConfidence: 0.99,
+          confidence: 0.49,
+          landmarks: rawHandLandmarks({ pose: "pinch", offsetX: -0.2 }),
+        },
+        {
+          handedness: "right",
+          handednessConfidence: 0.99,
+          confidence: 0.98,
+          landmarks: rawHandLandmarks({ pose: "pinch", offsetX: 0.2 }),
+        },
+      ],
+    });
+
+    expect(observations.some((entry) => entry.mode === "bimanual_pinch")).toBe(
+      false,
+    );
+  });
+
+  it("keeps a stable track on global calibration after an unreliable handedness flip", async () => {
+    const { controller, worker, video } = harness();
+    const observations: HandTrackingObservation[] = [];
+    const sensorFrames: Array<{
+      hands: readonly { trackId: string; handedness: string }[];
+    }> = [];
+    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeSensorFrames?.((frame) => sensorFrames.push(frame));
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    worker.emit({
+      type: "result",
+      timestamp: 1_000,
+      hands: [
+        {
+          handedness: "left",
+          handednessConfidence: 0.99,
+          confidence: 0.98,
+          landmarks: rawHandLandmarks({ pose: "relaxed_index" }),
+        },
+      ],
+    });
+    const stableTrack = sensorFrames.at(-1)?.hands[0]?.trackId;
+    if (!stableTrack) throw new Error("Expected one stable raw-hand track.");
+
+    controller.setPinchThresholds?.({
+      fallback: { engage: 0.08, release: 0.12 },
+      byTrackId: {},
+      byHandedness: {
+        right: { engage: 0.4, release: 0.6 },
+      },
+    });
+
+    const beforeFlip = observations.length;
+    for (const timestamp of [1_016, 1_032])
+      worker.emit({
+        type: "result",
+        timestamp,
+        hands: [
+          {
+            handedness: "right",
+            confidence: 0.98,
+            landmarks: rawHandLandmarks({ pose: "pinch" }),
+          },
+        ],
+      });
+    expect(sensorFrames.at(-1)?.hands[0]?.trackId).toBe(stableTrack);
+    expect(
+      observations
+        .slice(beforeFlip)
+        .some((entry) => entry.mode === "pinch" || entry.mode === "bimanual_pinch"),
+    ).toBe(false);
+
+    for (const timestamp of [1_048, 1_064])
+      worker.emit({
+        type: "result",
+        timestamp,
+        hands: [
+          {
+            handedness: "right",
+            handednessConfidence: 0.99,
+            confidence: 0.98,
+            landmarks: rawHandLandmarks({ pose: "pinch" }),
+          },
+        ],
+      });
+    expect(observations.at(-1)?.mode).toBe("pinch");
+  });
+
   it("votes each raw hand with its track-specific pinch calibration before bimanual emission", async () => {
     let now = 1_000;
     const { controller, worker, video } = harness(() => now);
@@ -1377,6 +1553,10 @@ describe("hand tracking controller lifecycle", () => {
         [leftTrack]: { engage: 0.4, release: 0.6 },
         [rightTrack]: { engage: 0.08, release: 0.12 },
       },
+      byHandedness: {
+        left: { engage: 0.4, release: 0.6 },
+        right: { engage: 0.4, release: 0.6 },
+      },
     });
     for (const timestamp of [1_016, 1_032]) {
       now = timestamp;
@@ -1386,11 +1566,13 @@ describe("hand tracking controller lifecycle", () => {
         hands: [
           {
             handedness: "right",
+            handednessConfidence: 0.99,
             confidence: 0.98,
             landmarks: rawHandLandmarks({ pose: "pinch", offsetX: 0.2 }),
           },
           {
             handedness: "left",
+            handednessConfidence: 0.99,
             confidence: 0.98,
             landmarks: rawHandLandmarks({ pose: "pinch", offsetX: -0.2 }),
           },
@@ -1405,6 +1587,10 @@ describe("hand tracking controller lifecycle", () => {
         [leftTrack]: { engage: 0.4, release: 0.6 },
         [rightTrack]: { engage: 0.4, release: 0.6 },
       },
+      byHandedness: {
+        left: { engage: 0.4, release: 0.6 },
+        right: { engage: 0.4, release: 0.6 },
+      },
     });
     for (const timestamp of [1_048, 1_064]) {
       now = timestamp;
@@ -1414,11 +1600,13 @@ describe("hand tracking controller lifecycle", () => {
         hands: [
           {
             handedness: "left",
+            handednessConfidence: 0.99,
             confidence: 0.98,
             landmarks: rawHandLandmarks({ pose: "pinch", offsetX: -0.2 }),
           },
           {
             handedness: "right",
+            handednessConfidence: 0.99,
             confidence: 0.98,
             landmarks: rawHandLandmarks({ pose: "pinch", offsetX: 0.2 }),
           },

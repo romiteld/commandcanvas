@@ -134,6 +134,7 @@ function calibrationSensorFrame(
   trackId = "calibration-hand",
   landmarks = trackedLandmarks(),
   source: HandTrackingSensorFrame["source"] = "calibration-test",
+  handednessConfidence: number | undefined = 0.97,
 ): HandTrackingSensorFrame {
   return {
     timestamp,
@@ -142,6 +143,7 @@ function calibrationSensorFrame(
     hands: [
       {
         handedness: "right",
+        ...(handednessConfidence === undefined ? {} : { handednessConfidence }),
         trackId,
         confidence: 0.97,
         landmarks,
@@ -1925,6 +1927,40 @@ describe("SpatialCameraControl", () => {
     );
 
     expect(fake.controller.setPinchThresholds).toHaveBeenLastCalledWith(null);
+  });
+
+  it("does not reuse a handedness calibration without explicit reliability", () => {
+    const fake = fakeController({ sensorFrames: true });
+    render(
+      <SpatialCameraControl
+        calibrationProfile={{
+          deviceKey: "camera-a",
+          cameraBounds: { x: 0.2, y: 0.2, width: 0.6, height: 0.6 },
+          safeCanvasInsetPx: 24,
+          pinchClosedRatio: 0.3,
+          pinchOpenRatio: 0.7,
+          mirrorX: true,
+          createdAt: 1_000,
+          pinchCalibrations: [
+            {
+              trackId: "expired-track",
+              handedness: "right",
+              closedRatio: 0.32,
+              openRatio: 0.7,
+            },
+          ],
+        }}
+        createController={() => fake.controller}
+      />,
+    );
+
+    expect(fake.controller.setPinchThresholds).toHaveBeenCalledWith({
+      fallback: { engage: 0.4, release: 0.54 },
+      byTrackId: {
+        "expired-track": { engage: 0.415, release: 0.548 },
+      },
+      byHandedness: {},
+    });
   });
 
   it("keeps an inadequate reach gated and explains how to recover", async () => {

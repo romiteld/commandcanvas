@@ -271,6 +271,12 @@ describe("private hand relay browser client", () => {
     transport.enqueueFrame(new Blob(["one"], { type: "image/webp" }), 100);
     transport.enqueueFrame(new Blob(["two"], { type: "image/webp" }), 110);
     transport.enqueueFrame(new Blob(["three"], { type: "image/webp" }), 120);
+    const predictedLandmarks = Array.from({ length: 21 }, (_, index) => ({
+      x: index / 40,
+      y: index / 40,
+      z: 0,
+      visibility: 0.95,
+    }));
     now = 1_045;
     socket.message(
       JSON.stringify({
@@ -279,12 +285,30 @@ describe("private hand relay browser client", () => {
         frameId: 1,
         capturedAtMs: 100,
         processedAtMs: 125,
-        hands: [],
+        hands: [
+          {
+            confidence: 0.97,
+            handedness: "left",
+            handednessConfidence: 0.96,
+            predicted: true,
+            landmarks: predictedLandmarks,
+          },
+        ],
       }),
     );
 
     expect(onResult).toHaveBeenCalledWith(
-      expect.objectContaining({ frameId: 1, capturedAtMs: 100 }),
+      expect.objectContaining({
+        frameId: 1,
+        capturedAtMs: 100,
+        hands: [
+          expect.objectContaining({
+            handednessConfidence: 0.96,
+            predicted: true,
+            landmarks: predictedLandmarks,
+          }),
+        ],
+      }),
       { relayRoundTripMs: 45, droppedBeforeSend: 1 },
     );
   });

@@ -240,6 +240,23 @@ describe("raw-landmark spatial recovery", () => {
     expect(
       moved.effects.some((effect) => effect.type.startsWith("object.complete")),
     ).toBe(false);
+
+    const movedViewport = moved.effects.find(
+      (effect) => effect.type === "viewport.set",
+    )?.viewport;
+    if (!movedViewport) throw new Error("Expected the spread to preview a viewport.");
+    const stationary = reduceSpatialGesture(
+      moved.state,
+      movedInput,
+      { ...scene, viewport: movedViewport },
+      manipulation,
+    );
+    expect(stationary.effects).toEqual([
+      { type: "viewport.set", viewport: movedViewport },
+    ]);
+    expect(
+      stationary.effects.some((effect) => effect.type.startsWith("object.complete")),
+    ).toBe(false);
   });
 
   it("keeps the raw-frame side throw staged until a trusted release", () => {

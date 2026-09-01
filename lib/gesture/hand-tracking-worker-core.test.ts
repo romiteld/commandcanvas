@@ -88,6 +88,7 @@ describe("hand tracking worker runtime", () => {
           [{ score: 0.93, categoryName: "Left" }],
           [{ score: 0.91, displayName: "Right" }],
         ],
+        predicted: [true, false],
       })),
       close: vi.fn(),
     };
@@ -111,8 +112,19 @@ describe("hand tracking worker runtime", () => {
       timestamp: 42,
       processingLatencyMs: expect.any(Number),
       hands: [
-        { handedness: "left", confidence: 0.93, landmarks: leftHand },
-        { handedness: "right", confidence: 0.91, landmarks: rightHand },
+        {
+          handedness: "left",
+          handednessConfidence: 0.93,
+          predicted: true,
+          confidence: 0.93,
+          landmarks: leftHand,
+        },
+        {
+          handedness: "right",
+          handednessConfidence: 0.91,
+          confidence: 0.91,
+          landmarks: rightHand,
+        },
       ],
     });
     expect(postMessage.mock.lastCall?.[0]).not.toHaveProperty("frame");
@@ -150,6 +162,7 @@ describe("hand tracking worker runtime", () => {
       hands: [
         {
           handedness: "left",
+          handednessConfidence: 0.903_369_545_936_584_5,
           confidence: 0.903_369_545_936_584_5,
           landmarks: detected.map((point, index) =>
             index === 0 ? { ...point, y: 1 } : point,
