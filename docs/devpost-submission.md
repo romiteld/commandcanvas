@@ -57,29 +57,14 @@ unavailable. The MIT application does not distribute that service, its model,
 or its GPU operations source. Camera frames never enter ChatGPT, OpenAI,
 Supabase, or WebMCP.
 
-All input paths converge on one architecture:
+All supported input paths converge on one compact architecture:
 
 ```text
-Supported agent hosts through WebMCP Site Tools · Collaborator
-Pointer · Touch · Stylus · Typed command · Optional GPT Realtime voice
-Local or consented private-GPU hand landmarks
-                                  │
-                                  ▼
-                         Semantic intent
-                                  │
-                                  ▼
-                    Validated canonical command
-                                  │
-                  ┌───────────────┼───────────────┐
-                  ▼               ▼               ▼
-              Object state     Revision        Receipt
-                  │               │               │
-                  └───────────────┴───────────────┘
-                                  │
-                                  ▼
-                       Supabase persistence
-                         and realtime sync
+Hands / Voice / Pointer / ChatGPT -> semantic intent -> guarded command -> mutation + receipt -> Supabase room
 ```
+
+Collaborator, touch, stylus, typed-command, and accessibility inputs enter the
+same guarded command boundary.
 
 ## WebMCP leverage
 

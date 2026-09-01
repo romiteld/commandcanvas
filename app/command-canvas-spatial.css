@@ -1467,6 +1467,15 @@
   }
 }
 
+/* Keep the conversational control clear of the object dock through the
+   tablet and compact-landscape transition. Small phones already use the
+   taller stacked placement below. */
+@media (min-width: 481px) and (max-width: 900px) {
+  .command-canvas-shell .chatgpt-command-pill {
+    bottom: calc(94px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 @media (max-width: 480px) {
   .command-canvas-shell .header-actions {
     gap: 4px;

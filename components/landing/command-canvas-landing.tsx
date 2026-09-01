@@ -317,7 +317,7 @@ const workflowCards: Array<{ title: string; text: string; visual: ReactNode }> =
   },
   {
     title: "Collaborators join one room",
-    text: "Everyone sees changes live and stays in sync on the same infinite canvas.",
+    text: "Participants see shared updates and cursors in real time while connected.",
     visual: (
       <div className={styles.peopleVisual}>
         <div className={`${styles.videoTile} ${styles.videoLilac}`}><Avatar label="Mina" tone="avatarLavender" /><span>Mina</span></div>
@@ -477,7 +477,7 @@ export function CommandCanvasLanding() {
 
         <section className={styles.finalCta}>
           <div>
-            <span>THE WORKSPACE IS READY</span>
+            <span>ENTER THE WORKSPACE</span>
             <h2>Step into the canvas</h2>
             <p>See how your team can think, plan, and build together with voice, hands, people, and agents.</p>
           </div>
