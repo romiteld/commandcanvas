@@ -19,6 +19,7 @@ import type {
 } from "@/lib/gesture/hand-tracking-controller";
 import type { RealtimeVoiceControllerOptions } from "@/lib/realtime-voice/client";
 import type { HandControlGainState } from "@/lib/gesture/hand-calibration";
+import type { WebMcpExecutionEvent } from "@/lib/webmcp/registry";
 
 function dependencies(): CanvasStoreDependencies {
   let id = 0;
@@ -137,6 +138,15 @@ function fakeHandController() {
     },
   };
 }
+
+const pendingPacketApproval: readonly WebMcpExecutionEvent[] = [
+  {
+    invocationId: "request-packet-send-during-draw",
+    toolName: "request_packet_send",
+    status: "awaiting_human_approval",
+    message: "Host review is required before the packet can be sent.",
+  },
+];
 
 function cameraObservationForCanvasObservation(
   observation: HandTrackingObservation,
@@ -1109,6 +1119,158 @@ describe("CommandCanvasRoom", () => {
       await screen.findByRole("complementary", { name: "ChatGPT command drawer" }),
     ).toBeVisible();
     expect(screen.getByText("Review exact recipients")).toBeVisible();
+  });
+
+  it("defers an agent drawer-request key until a pointer sketch is cancelled", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    const { rerender } = render(
+      <CommandCanvasRoom
+        store={store}
+        meetingPacketPanel={<section>Review exact recipients</section>}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Create sketch" }));
+    rerender(
+      <CommandCanvasRoom
+        store={store}
+        commandDrawerRequestKey="send-request-pointer-draw"
+        meetingPacketPanel={<section>Review exact recipients</section>}
+      />,
+    );
+
+    expect(
+      await screen.findByText("Agent request queued until drawing finishes."),
+    ).toBeVisible();
+    const hiddenDrawer = screen.getByLabelText("ChatGPT command drawer");
+    expect(hiddenDrawer).toHaveAttribute("aria-hidden", "true");
+    expect(hiddenDrawer).toHaveAttribute("inert");
+    expect(hiddenDrawer).not.toHaveClass("is-open");
+
+    await user.click(screen.getByRole("button", { name: "Cancel sketch" }));
+    expect(
+      await screen.findByRole("complementary", {
+        name: "ChatGPT command drawer",
+      }),
+    ).toBeVisible();
+  });
+
+  it("defers an agent drawer-request key until a hand sketch is cancelled", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    const { rerender } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+        meetingPacketPanel={<section>Review exact recipients</section>}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+    await skipHandCalibration(user);
+    await user.click(screen.getByRole("button", { name: "Draw with hand" }));
+    rerender(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+        commandDrawerRequestKey="send-request-hand-draw"
+        meetingPacketPanel={<section>Review exact recipients</section>}
+      />,
+    );
+
+    expect(
+      await screen.findByText("Agent request queued until drawing finishes."),
+    ).toBeVisible();
+    const hiddenDrawer = screen.getByLabelText("ChatGPT command drawer");
+    expect(hiddenDrawer).toHaveAttribute("aria-hidden", "true");
+    expect(hiddenDrawer).toHaveAttribute("inert");
+    expect(hiddenDrawer).not.toHaveClass("is-open");
+
+    await user.click(screen.getByRole("button", { name: "Cancel hand sketch" }));
+    expect(
+      await screen.findByRole("complementary", {
+        name: "ChatGPT command drawer",
+      }),
+    ).toBeVisible();
+  });
+
+  it("defers an awaiting agent approval until a pointer sketch is cancelled", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    const { rerender } = render(
+      <CommandCanvasRoom
+        store={store}
+        meetingPacketPanel={<section>Review exact recipients</section>}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Create sketch" }));
+    rerender(
+      <CommandCanvasRoom
+        store={store}
+        webMcpExecutionActivity={pendingPacketApproval}
+        meetingPacketPanel={<section>Review exact recipients</section>}
+      />,
+    );
+
+    expect(
+      await screen.findByText("Agent request queued until drawing finishes."),
+    ).toBeVisible();
+    expect(
+      screen.getByLabelText("ChatGPT command drawer"),
+    ).toHaveAttribute("inert");
+
+    await user.click(screen.getByRole("button", { name: "Cancel sketch" }));
+    expect(
+      await screen.findByRole("complementary", {
+        name: "ChatGPT command drawer",
+      }),
+    ).toBeVisible();
+  });
+
+  it("defers an awaiting agent approval until a hand sketch is cancelled", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    const { rerender } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+        meetingPacketPanel={<section>Review exact recipients</section>}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+    await skipHandCalibration(user);
+    await user.click(screen.getByRole("button", { name: "Draw with hand" }));
+    rerender(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+        webMcpExecutionActivity={pendingPacketApproval}
+        meetingPacketPanel={<section>Review exact recipients</section>}
+      />,
+    );
+
+    expect(
+      await screen.findByText("Agent request queued until drawing finishes."),
+    ).toBeVisible();
+    expect(
+      screen.getByLabelText("ChatGPT command drawer"),
+    ).toHaveAttribute("inert");
+
+    await user.click(screen.getByRole("button", { name: "Cancel hand sketch" }));
+    expect(
+      await screen.findByRole("complementary", {
+        name: "ChatGPT command drawer",
+      }),
+    ).toBeVisible();
   });
 
   it("shows the current hand mode and grabbed object on the canvas itself", async () => {

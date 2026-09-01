@@ -27,12 +27,15 @@ export interface ChatGptCommandSurfaceProps {
   realtimeActive: boolean;
   realtimeAvailable: boolean;
   onOpenDrawer: () => void;
+  /** Agent-originated requests wait for the room's drawing-safe overlay gate. */
+  onRequestDrawerOpen: () => void;
   onCloseDrawer: () => void;
   onToggleRealtimeVoice: () => void;
   onViewAllActivity: () => void;
   realtimeContent?: ReactNode;
   typedCommandContent?: ReactNode;
   packetPanel?: ReactNode;
+  commandDrawerDeferred?: boolean;
 }
 
 export function ChatGptCommandSurface({
@@ -44,12 +47,14 @@ export function ChatGptCommandSurface({
   realtimeActive,
   realtimeAvailable,
   onOpenDrawer,
+  onRequestDrawerOpen,
   onCloseDrawer,
   onToggleRealtimeVoice,
   onViewAllActivity,
   realtimeContent,
   typedCommandContent,
   packetPanel,
+  commandDrawerDeferred = false,
 }: ChatGptCommandSurfaceProps) {
   const approvalSectionRef = useRef<HTMLElement>(null);
   const revealedApprovalInvocationRef = useRef<string | null>(null);
@@ -65,12 +70,14 @@ export function ChatGptCommandSurface({
     if (revealedApprovalInvocationRef.current !== awaitingApproval.invocationId) {
       revealedApprovalInvocationRef.current = awaitingApproval.invocationId;
       if (!drawerOpen) {
-        onOpenDrawer();
+        onRequestDrawerOpen();
         return;
       }
     }
     if (drawerOpen) approvalSectionRef.current?.focus();
-  }, [awaitingApproval, drawerOpen, onOpenDrawer]);
+  }, [awaitingApproval, drawerOpen, onRequestDrawerOpen]);
+
+  const commandDrawerInteractive = drawerOpen && !drawingActive;
 
   function useVoice() {
     if (realtimeActive) {
@@ -130,13 +137,19 @@ export function ChatGptCommandSurface({
         </button>
       </div>
 
+      {drawingActive && commandDrawerDeferred ? (
+        <p className="chatgpt-deferred-command-notice" role="status">
+          Agent request queued until drawing finishes.
+        </p>
+      ) : null}
+
       <aside
         className={`command-rail overlay-drawer persistent-command-drawer chatgpt-command-drawer${
-          drawerOpen ? " is-open" : ""
+          commandDrawerInteractive ? " is-open" : ""
         }`}
         aria-label="ChatGPT command drawer"
-        aria-hidden={drawerOpen ? undefined : true}
-        inert={drawerOpen ? undefined : true}
+        aria-hidden={commandDrawerInteractive ? undefined : true}
+        inert={commandDrawerInteractive ? undefined : true}
       >
         <div className="rail-heading">
           <div>

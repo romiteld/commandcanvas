@@ -271,6 +271,7 @@ export function CommandCanvasRoom({
   });
   const [latestReceiptVisible, setLatestReceiptVisible] = useState(false);
   const [dockMenu, setDockMenu] = useState<"create" | "more" | null>(null);
+  const [commandDrawerDeferred, setCommandDrawerDeferred] = useState(false);
   const openDrawer: WorkspaceDrawer =
     workspaceOverlay === "header" ? null : workspaceOverlay;
   const headerControlsOpen = workspaceOverlay === "header";
@@ -401,9 +402,24 @@ export function CommandCanvasRoom({
 
   useEffect(() => {
     if (!commandDrawerRequestKey) return;
-    const timeoutId = window.setTimeout(() => setOpenDrawer("command"), 0);
+    const timeoutId = window.setTimeout(
+      () => setCommandDrawerDeferred(true),
+      0,
+    );
     return () => window.clearTimeout(timeoutId);
   }, [commandDrawerRequestKey]);
+
+  // Agent requests must never put a live drawer over a pointer or hand drawing
+  // session. Keep the request until either Finish or Cancel clears Draw mode.
+  useEffect(() => {
+    if (!commandDrawerDeferred || drawingActive) return;
+    const timeoutId = window.setTimeout(() => {
+      setWorkspaceOverlay("command");
+      setDockMenu(null);
+      setCommandDrawerDeferred(false);
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [commandDrawerDeferred, drawingActive]);
 
   useEffect(() => {
     const layer = createCanvasMotionLayer({ root: () => canvasViewportRef.current });
@@ -3020,6 +3036,7 @@ export function CommandCanvasRoom({
             setDockMenu(null);
             setOpenDrawer("command");
           }}
+          onRequestDrawerOpen={() => setCommandDrawerDeferred(true)}
           onCloseDrawer={() => {
             setHandCalibrationOpen(false);
             setOpenDrawer(null);
@@ -3030,6 +3047,7 @@ export function CommandCanvasRoom({
             setDockMenu(null);
             setOpenDrawer("activity");
           }}
+          commandDrawerDeferred={commandDrawerDeferred}
           realtimeContent={
             realtimeVoice ? (
               <RealtimeVoiceControl

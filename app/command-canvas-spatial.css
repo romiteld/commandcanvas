@@ -1079,6 +1079,29 @@
   transform: translateY(14px);
 }
 
+/* Agent work may finish while the human is actively drawing. A status-only
+   notice acknowledges the request without creating another hit target above
+   the drawing surface; the drawer opens after Finish or Cancel. */
+.command-canvas-shell .chatgpt-deferred-command-notice {
+  position: absolute;
+  z-index: 100005;
+  top: calc(70px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  max-width: min(420px, calc(100% - 32px));
+  margin: 0;
+  padding: 9px 13px;
+  border: 1px solid rgb(89 234 213 / 42%);
+  border-radius: 999px;
+  background: rgb(7 24 37 / 94%);
+  box-shadow: 0 14px 38px rgb(0 0 0 / 28%);
+  color: #d8fffa;
+  font-size: 12px;
+  font-weight: 650;
+  pointer-events: none;
+  text-align: center;
+  transform: translateX(-50%);
+}
+
 .command-canvas-shell.is-drawing .room-header,
 .command-canvas-shell.is-drawing > .meeting-media-slot,
 .command-canvas-shell.is-drawing .canvas-world {

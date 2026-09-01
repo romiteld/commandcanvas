@@ -40,6 +40,7 @@ function renderSurface(
   overrides: Partial<React.ComponentProps<typeof ChatGptCommandSurface>> = {},
 ) {
   const onOpenDrawer = vi.fn();
+  const onRequestDrawerOpen = vi.fn();
   const onCloseDrawer = vi.fn();
   const onToggleRealtimeVoice = vi.fn();
   const onViewAllActivity = vi.fn();
@@ -53,6 +54,7 @@ function renderSurface(
       realtimeActive={false}
       realtimeAvailable
       onOpenDrawer={onOpenDrawer}
+      onRequestDrawerOpen={onRequestDrawerOpen}
       onCloseDrawer={onCloseDrawer}
       onToggleRealtimeVoice={onToggleRealtimeVoice}
       onViewAllActivity={onViewAllActivity}
@@ -61,6 +63,7 @@ function renderSurface(
   );
   return {
     onOpenDrawer,
+    onRequestDrawerOpen,
     onCloseDrawer,
     onToggleRealtimeVoice,
     onViewAllActivity,
@@ -169,6 +172,7 @@ describe("ChatGptCommandSurface", () => {
   it("removes surrounding-host guidance if the page registration surface becomes unavailable", () => {
     const callbacks = {
       onOpenDrawer: vi.fn(),
+      onRequestDrawerOpen: vi.fn(),
       onCloseDrawer: vi.fn(),
       onToggleRealtimeVoice: vi.fn(),
       onViewAllActivity: vi.fn(),
@@ -271,7 +275,7 @@ describe("ChatGptCommandSurface", () => {
       packetPanel: <button type="button">Send approved packet</button>,
     });
 
-    await waitFor(() => expect(callbacks.onOpenDrawer).toHaveBeenCalledOnce());
+    await waitFor(() => expect(callbacks.onRequestDrawerOpen).toHaveBeenCalledOnce());
   });
 
   it("keeps the mic operable while drawing without opening a drawer", async () => {
@@ -289,5 +293,21 @@ describe("ChatGptCommandSurface", () => {
 
     expect(callbacks.onToggleRealtimeVoice).toHaveBeenCalledOnce();
     expect(callbacks.onOpenDrawer).not.toHaveBeenCalled();
+  });
+
+  it("keeps a pre-opened command drawer inert while drawing and exposes only a status notice", () => {
+    renderSurface({
+      drawerOpen: true,
+      drawingActive: true,
+      commandDrawerDeferred: true,
+    });
+
+    const drawer = screen.getByLabelText("ChatGPT command drawer");
+    expect(drawer).toHaveAttribute("aria-hidden", "true");
+    expect(drawer).toHaveAttribute("inert");
+    expect(drawer).not.toHaveClass("is-open");
+    expect(
+      screen.getByText("Agent request queued until drawing finishes."),
+    ).toBeVisible();
   });
 });
