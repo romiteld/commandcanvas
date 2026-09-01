@@ -8,6 +8,7 @@ import {
   type RealtimeVoiceControlController,
 } from "@/components/command-canvas/realtime-voice-control";
 import type { RealtimeVoiceControllerOptions } from "@/lib/realtime-voice/client";
+import { createTestOpenAiApiKey } from "@/lib/testing/openai-key-fixture";
 
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -46,7 +47,7 @@ describe("RealtimeVoiceControl", () => {
   it("uses a user-supplied session key for Live Voice without rendering or persisting it", async () => {
     const user = userEvent.setup();
     const setup = controllerHarness();
-    const apiKey = "sk-user-session-key-1234567890";
+    const apiKey = createTestOpenAiApiKey("user-session-key");
 
     function SessionKeyHarness() {
       const [openAiApiKey, setOpenAiApiKey] = useState("");
@@ -109,6 +110,12 @@ describe("RealtimeVoiceControl", () => {
 
     expect(screen.getByText(/saved to your commandcanvas account/i)).toBeInTheDocument();
     expect(screen.getByText("sk-…c4a9")).toBeInTheDocument();
+    expect(
+      screen.getByText(/selected automatically when you sign in/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Your OpenAI API key"),
+    ).not.toBeInTheDocument();
     expect(screen.queryByDisplayValue(/sk-/i)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Start live voice" }));
@@ -140,8 +147,10 @@ describe("RealtimeVoiceControl", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("Your OpenAI API key"), apiKey);
-    await user.click(screen.getByRole("button", { name: "Save key to my account" }));
+    expect(screen.queryByLabelText(/OpenAI API key/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Replace saved key" }));
+    await user.type(screen.getByLabelText("Replacement OpenAI API key"), apiKey);
+    await user.click(screen.getByRole("button", { name: "Save replacement" }));
     expect(save).toHaveBeenCalledWith(apiKey);
     expect(window.localStorage.length).toBe(0);
     expect(window.sessionStorage.length).toBe(0);

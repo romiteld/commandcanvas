@@ -7,6 +7,7 @@ import {
   createRealtimeSafetyIdentifier,
   createServerRealtimeSessionDependencies,
 } from "@/lib/realtime-voice/server-dependencies";
+import { createTestOpenAiApiKey } from "@/lib/testing/openai-key-fixture";
 
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const ACTOR_ID = "22222222-2222-4222-8222-222222222222";
@@ -16,12 +17,15 @@ const serverEnvironment = {
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "publishable-test-key",
   SUPABASE_SECRET_KEY: "server-secret-key-that-stays-private",
   REALTIME_VOICE_ENABLED: "true",
-  OPENAI_REALTIME_API_KEY: "sk-server-key-must-never-be-used-for-public-voice",
+  OPENAI_REALTIME_API_KEY: createTestOpenAiApiKey(
+    "server-key-must-never-be-used-for-public-voice",
+  ),
   OPENAI_API_KEY: "general-openai-key-must-not-enable-realtime",
 };
 
-const SESSION_OPENAI_API_KEY =
-  "sk-test-session-only-commandcanvas-key-123456789";
+const SESSION_OPENAI_API_KEY = createTestOpenAiApiKey(
+  "test-session-only-commandcanvas-key",
+);
 
 describe("OpenAI Realtime unified-interface boundary", () => {
   it("fails closed without server-side Supabase configuration", () => {
@@ -112,7 +116,14 @@ describe("OpenAI Realtime unified-interface boundary", () => {
       error: null,
     }));
     const membershipResult = {
-      data: { role: "host", rooms: { mode: "demo" } },
+      data: {
+        role: "host",
+        rooms: {
+          mode: "demo",
+          created_at: "2026-09-01T00:00:00.000Z",
+          demo_hard_expires_at: "2099-09-02T00:00:00.000Z",
+        },
+      },
       error: null,
     };
     const query = {
@@ -138,7 +149,9 @@ describe("OpenAI Realtime unified-interface boundary", () => {
     await expect(
       result.dependencies.verifyMembership(ROOM_ID, ACTOR_ID),
     ).resolves.toEqual({ ok: true, roomMode: "demo" });
-    expect(query.select).toHaveBeenCalledWith("role, rooms!inner(mode)");
+    expect(query.select).toHaveBeenCalledWith(
+      "role, rooms!inner(mode,created_at,demo_hard_expires_at)",
+    );
 
     await expect(
       result.dependencies.admitSession(ROOM_ID, ACTOR_ID),
@@ -147,6 +160,41 @@ describe("OpenAI Realtime unified-interface boundary", () => {
       p_room_id: ROOM_ID,
       p_actor_user_id: ACTOR_ID,
     });
+  });
+
+  it("fails service-role membership closed after demo hard expiry", async () => {
+    const query = {
+      select: vi.fn(),
+      eq: vi.fn(),
+      maybeSingle: vi.fn(async () => ({
+        data: {
+          role: "host",
+          rooms: {
+            mode: "demo",
+            created_at: "2026-08-30T00:00:00.000Z",
+            demo_hard_expires_at: "2026-08-31T00:00:00.000Z",
+          },
+        },
+        error: null,
+      })),
+    };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+    const result = createServerRealtimeSessionDependencies({
+      environment: serverEnvironment,
+      createClient: () => ({
+        auth: { getUser: vi.fn() },
+        from: vi.fn(() => query),
+        rpc: vi.fn(),
+      }),
+      fetch: vi.fn(),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    await expect(
+      result.dependencies.verifyMembership(ROOM_ID, ACTOR_ID),
+    ).resolves.toEqual({ ok: false });
   });
 
   it("wires the account-owned saved credential resolver without reading owner OpenAI environment keys", async () => {

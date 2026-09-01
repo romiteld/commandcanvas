@@ -26,13 +26,13 @@ test("renders a fluid, scrollable landing page with real destinations", async ({
       name: "Where meetings become the deliverable",
     }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: "Try the demo" }).first()).toHaveAttribute(
-    "href",
-    "/demo",
-  );
-  await expect(page.getByRole("link", { name: "Start a meeting" })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: "Open CommandCanvas" }).first()).toHaveAttribute(
     "href",
     "/meet",
+  );
+  await expect(page.getByRole("link", { name: "View judge preview" })).toHaveAttribute(
+    "href",
+    "/demo",
   );
   await expect(page.locator("h1")).toHaveCount(1);
 
@@ -57,6 +57,21 @@ test("renders a fluid, scrollable landing page with real destinations", async ({
       }),
     ).toBeVisible();
   }
+
+  await page.goto("/");
+  await page.getByRole("link", { name: "Open CommandCanvas" }).first().click();
+  await expect(
+    page.getByRole("heading", { name: "Sign in to CommandCanvas" }),
+  ).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Email" })).toBeVisible();
+
+  await page.goto("/");
+  await page.getByRole("link", { name: "View judge preview" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Choose how to enter CommandCanvas" }),
+  ).toBeVisible();
+  await expect(page.getByText(/temporary Supabase identity/i)).toBeVisible();
+  await expect(page.getByLabel("Spatial command surface")).toHaveCount(0);
 
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);
@@ -106,16 +121,16 @@ test("stays fluid, branded, readable, and touchable across narrow widths", async
         if (!element) throw new Error(`Missing landing text: ${text}`);
         return Number.parseFloat(getComputedStyle(element).fontSize);
       };
-      const demo = Array.from(
-        document.querySelectorAll<HTMLElement>('nav a[href="/demo"]'),
-      ).find((element) => element.textContent?.includes("Try the demo"));
+      const workspace = Array.from(
+        document.querySelectorAll<HTMLElement>('nav a[href="/meet"]'),
+      ).find((element) => element.textContent?.includes("Open CommandCanvas"));
       const wordmark = Array.from(document.querySelectorAll<HTMLElement>("nav span"))
         .find((element) => element.textContent === "CommandCanvas");
-      if (!demo || !wordmark) throw new Error("Landing navigation is incomplete.");
+      if (!workspace || !wordmark) throw new Error("Landing navigation is incomplete.");
       return {
         clientWidth: document.documentElement.clientWidth,
         scrollWidth: document.documentElement.scrollWidth,
-        demoHeight: demo.getBoundingClientRect().height,
+        workspaceHeight: workspace.getBoundingClientRect().height,
         wordmarkVisible: getComputedStyle(wordmark).display !== "none",
         capabilityCopy: fontSize(
           "Speak naturally. Objects, tasks, and content appear on the canvas.",
@@ -130,7 +145,7 @@ test("stays fluid, branded, readable, and touchable across narrow widths", async
     expect(measurements.scrollWidth, `${width}px document width`).toBe(
       measurements.clientWidth,
     );
-    expect(measurements.demoHeight, `${width}px primary touch target`).toBeGreaterThanOrEqual(44);
+    expect(measurements.workspaceHeight, `${width}px primary touch target`).toBeGreaterThanOrEqual(44);
     expect(measurements.wordmarkVisible, `${width}px wordmark`).toBe(true);
     expect(measurements.capabilityCopy, `${width}px capability copy`).toBeGreaterThanOrEqual(13);
     expect(measurements.workflowCopy, `${width}px workflow copy`).toBeGreaterThanOrEqual(13);

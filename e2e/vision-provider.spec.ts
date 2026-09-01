@@ -4,13 +4,19 @@ import {
   captureCreatedRoom,
   deleteHostedRoom,
 } from "./support/hosted-room";
+import { enterLimitedJudgePreview } from "./support/limited-judge-preview";
+
+const providerOpenAiKey = process.env.COMMANDCANVAS_PROVIDER_OPENAI_KEY;
+
+test.use({ trace: "off", screenshot: "off", video: "off" });
 
 test("rasterizes a pointer sketch for real vision and preserves it beside the structured diagram", async ({
   page,
 }, testInfo) => {
   test.skip(
     process.env.RUN_OPENAI_PROVIDER_E2E !== "true" ||
-      testInfo.project.name !== "chromium-desktop",
+      testInfo.project.name !== "chromium-desktop" ||
+      !providerOpenAiKey,
   );
   test.setTimeout(150_000);
 
@@ -48,10 +54,20 @@ test("rasterizes a pointer sketch for real vision and preserves it beside the st
       });
     });
     await page.goto("/demo");
+    await enterLimitedJudgePreview(page);
     await expect(page.getByText("Live demo room")).toBeVisible({
       timeout: 20_000,
     });
     roomId = await roomCapture.resolveRoomId();
+    await page
+      .getByRole("button", { name: "Open ChatGPT command drawer" })
+      .click();
+    await page
+      .getByLabel("Your OpenAI API key")
+      .fill(providerOpenAiKey!);
+    await page
+      .getByRole("button", { name: "Close ChatGPT command drawer" })
+      .click();
     await createArchitectureSketch(page);
 
     const sourceSketch = page.getByRole("button", {

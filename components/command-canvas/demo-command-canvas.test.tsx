@@ -23,6 +23,7 @@ import * as roomSessionModule from "@/lib/demo/room-session";
 import * as browserClientModule from "@/lib/supabase/browser-client";
 import * as browserTransformModule from "@/lib/vision/browser-api";
 import * as browserPacketModule from "@/lib/packets/browser-api";
+import { createTestOpenAiApiKey } from "@/lib/testing/openai-key-fixture";
 
 const ROOM_ID = "d32af6a9-31dd-4dfc-98d5-fcf439b9b106";
 const HOST_ID = "96ceecfe-ab18-4fda-9591-9945a73fe709";
@@ -271,9 +272,10 @@ describe("DemoCommandCanvas", () => {
     expect(await screen.findByText("Live demo room")).toBeVisible();
     expect(readOpenAiApiKey).toBeTypeOf("function");
 
+    const apiKey = createTestOpenAiApiKey("user-session-key");
     const input = screen.getByLabelText("Your OpenAI API key");
-    await user.type(input, "sk-user-session-key-1234567890");
-    expect(readOpenAiApiKey?.()).toBe("sk-user-session-key-1234567890");
+    await user.type(input, apiKey);
+    expect(readOpenAiApiKey?.()).toBe(apiKey);
 
     view.unmount();
     expect(readOpenAiApiKey?.()).toBe("");
@@ -1002,7 +1004,7 @@ describe("DemoCommandCanvas", () => {
     expect(loadLatestPacketWorkflow).toHaveBeenCalledTimes(3);
   });
 
-  it("shows an explicit no-signup loading state before a room is verified", () => {
+  it("shows an explicit limited-preview loading state before a room is verified", () => {
     const environment: DemoCommandCanvasEnvironment = {
       bootstrap: () => new Promise(() => undefined),
       copyInvite: async () => undefined,
@@ -1010,8 +1012,22 @@ describe("DemoCommandCanvas", () => {
     };
     render(<DemoCommandCanvas environment={environment} />);
 
-    expect(screen.getByText("Opening your no-signup demo room…")).toBeVisible();
+    expect(screen.getByText("Opening the limited judge preview…")).toBeVisible();
     expect(screen.queryByRole("textbox", { name: /email|password/i })).toBeNull();
+  });
+
+  it("keeps the signed-account and bounded-preview boundary visible in the ready room", async () => {
+    const { environment } = readyEnvironment();
+    render(<DemoCommandCanvas environment={environment} />);
+
+    expect(await screen.findByText("Live demo room")).toBeVisible();
+    expect(screen.getByText(/limited judge preview/i)).toBeVisible();
+    expect(screen.getByText(/temporary Supabase room/i)).toBeVisible();
+    expect(screen.getByText(/email remains preview-only/i)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute(
+      "href",
+      "/meet",
+    );
   });
 
   it("does not offer private GPU camera upload when the server feature is disabled", async () => {

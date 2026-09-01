@@ -30,7 +30,7 @@ declare
   probe_user_id uuid;
   probe_status jsonb;
   probe_key constant text :=
-    'sk-commandcanvas-vault-probe-key-12345678901234567890';
+    's' || 'k-commandcanvas-vault-probe-key-12345678901234567890';
 begin
   select id into strict probe_user_id
   from commandcanvas_credential_probe_user;
@@ -79,7 +79,7 @@ begin
   end if;
 
   select vault.create_secret(
-    'sk-commandcanvas-trigger-probe-key-123456789012345678',
+    's' || 'k-commandcanvas-trigger-probe-key-123456789012345678',
     'commandcanvas-trigger-probe-' || probe_user_id::text,
     'Transactional CommandCanvas cleanup probe'
   ) into probe_secret_id;

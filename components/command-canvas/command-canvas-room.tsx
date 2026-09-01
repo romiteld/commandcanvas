@@ -41,6 +41,7 @@ import {
 import type { CanvasStoreState } from "@/lib/canvas/canvas-store";
 import {
   NOTE_APPEND_TEXT_MAX_LENGTH,
+  type NewCanvasObject,
   type SketchPayload,
 } from "@/lib/canvas/object-model";
 import type {
@@ -780,7 +781,9 @@ export function CommandCanvasRoom({
   }
 
   function creationAnchor(baseX: number, baseY: number) {
-    const slot = objects.length;
+    const slot = Object.values(store.getState().canvas.objects).filter(
+      (object) => !object.deletedAt,
+    ).length;
     return screenToWorld(
       {
         x: baseX + (slot % 2) * 620,
@@ -833,137 +836,106 @@ export function CommandCanvasRoom({
     source: CanvasCommandSource = "pointer",
     text?: string,
   ) {
-    const objectId = createClientId("note");
-    const anchor = creationAnchor(160, 130);
+    const object = buildNoteObject(text);
     runCommand(
       {
         type: "object.create",
-        object: {
-          id: objectId,
-          type: "note",
-          title: "New thought",
-          x: anchor.x,
-          y: anchor.y,
-          width: 280,
-          height: 190,
-          zIndex: canvas.revision + 1,
-          payload: {
-            text:
-              text ??
-              "Capture the decision while everyone can still see the context.",
-            tone: "coral",
-          },
-        },
+        object,
       },
       source,
-      () => revealObjectOnCompactCanvas(objectId),
+      () => revealObjectOnCompactCanvas(object.id),
     );
+  }
+
+  function buildNoteObject(text?: string): NewCanvasObject {
+    const anchor = creationAnchor(160, 130);
+    return {
+      id: createClientId("note"),
+      type: "note",
+      title: "New thought",
+      x: anchor.x,
+      y: anchor.y,
+      width: 280,
+      height: 190,
+      zIndex: store.getState().canvas.revision + 1,
+      payload: {
+        text:
+          text ??
+          "Capture the decision while everyone can still see the context.",
+        tone: "coral",
+      },
+    };
   }
 
   function createTaskBoard(source: CanvasCommandSource = "pointer") {
-    const objectId = createClientId("board");
-    const anchor = creationAnchor(140, 110);
+    const object = buildTaskBoardObject();
     runCommand(
       {
         type: "object.create",
-        object: {
-          id: objectId,
-          type: "task_board",
-          title: "Launch board",
-          x: anchor.x,
-          y: anchor.y,
-          width: 560,
-          height: 320,
-          zIndex: canvas.revision + 1,
-          payload: {
-            columns: [
-              {
-                id: createClientId("column"),
-                title: "Next",
-                tasks: [
-                  {
-                    id: createClientId("task"),
-                    title: "Confirm launch date",
-                    owner: "Danny",
-                    priority: "high",
-                  },
-                ],
-              },
-              {
-                id: createClientId("column"),
-                title: "In progress",
-                tasks: [
-                  {
-                    id: createClientId("task"),
-                    title: "Polish the demo path",
-                    owner: "Sarah",
-                    priority: "medium",
-                  },
-                ],
-              },
-              {
-                id: createClientId("column"),
-                title: "Done",
-                tasks: [],
-              },
-            ],
-          },
-        },
+        object,
       },
       source,
-      () => revealObjectOnCompactCanvas(objectId),
+      () => revealObjectOnCompactCanvas(object.id),
     );
   }
 
+  function buildTaskBoardObject(): NewCanvasObject {
+    const anchor = creationAnchor(140, 110);
+    return {
+      id: createClientId("board"),
+      type: "task_board",
+      title: "Project board",
+      x: anchor.x,
+      y: anchor.y,
+      width: 560,
+      height: 320,
+      zIndex: store.getState().canvas.revision + 1,
+      payload: {
+        columns: ["Next", "In progress", "Done"].map((title) => ({
+          id: createClientId("column"),
+          title,
+          tasks: [],
+        })),
+      },
+    };
+  }
+
   function createSchedule(source: CanvasCommandSource = "pointer") {
-    const objectId = createClientId("schedule");
-    const anchor = creationAnchor(180, 140);
+    const object = buildScheduleObject();
     runCommand(
       {
         type: "object.create",
-        object: {
-          id: objectId,
-          type: "schedule",
-          title: "Next week",
-          x: anchor.x,
-          y: anchor.y,
-          width: 460,
-          height: 310,
-          zIndex: canvas.revision + 1,
-          payload: {
-            timezone: "America/New_York",
-            days: [
-              {
-                date: "2026-08-31",
-                label: "Mon, Aug 31",
-                entries: [
-                  {
-                    id: createClientId("schedule-entry"),
-                    time: "09:30",
-                    title: "Review WebMCP flow",
-                    owner: "Danny",
-                  },
-                ],
-              },
-              {
-                date: "2026-09-01",
-                label: "Tue, Sep 1",
-                entries: [
-                  {
-                    id: createClientId("schedule-entry"),
-                    time: "14:00",
-                    title: "Record final demo",
-                    owner: "Team",
-                  },
-                ],
-              },
-            ],
-          },
-        },
+        object,
       },
       source,
-      () => revealObjectOnCompactCanvas(objectId),
+      () => revealObjectOnCompactCanvas(object.id),
     );
+  }
+
+  function buildScheduleObject(): NewCanvasObject {
+    const anchor = creationAnchor(180, 140);
+    const now = new Date();
+    const date = now.toISOString().slice(0, 10);
+    const label = new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    }).format(now);
+    return {
+      id: createClientId("schedule"),
+      type: "schedule",
+      title: "Schedule",
+      x: anchor.x,
+      y: anchor.y,
+      width: 460,
+      height: 310,
+      zIndex: store.getState().canvas.revision + 1,
+      payload: {
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+        days: [{ date, label, entries: [] }],
+      },
+    };
   }
 
   function handleObjectSelect(
@@ -1058,15 +1030,112 @@ export function CommandCanvasRoom({
     source: "voice",
   ): Promise<RealtimeVoiceIntentResult> {
     switch (intent.type) {
+      case "create_note":
+        return submitVoiceObjectCreate(buildNoteObject(intent.text), "Note");
+      case "create_semantic_object": {
+        const object =
+          intent.placement === "current_viewport"
+            ? placeObjectInCurrentViewport(intent.object)
+            : intent.object;
+        return submitVoiceObjectCreate(object, "Semantic object");
+      }
+      case "create_board":
+        return submitVoiceObjectCreate(buildTaskBoardObject(), "Board");
+      case "create_schedule":
+        return submitVoiceObjectCreate(buildScheduleObject(), "Schedule");
       case "start_thought":
         return startVoiceThoughtCapture();
       case "append_thought":
         return appendVoiceThoughtTranscript(intent.text);
+      case "append_selected_note":
+        return appendSelectedNoteFromVoice(intent.text);
       case "finish_thought":
         return finishVoiceThoughtCapture();
       default:
         return handleDirectIntent(intent, source);
     }
+  }
+
+  function placeObjectInCurrentViewport(
+    object: NewCanvasObject,
+  ): NewCanvasObject {
+    const anchor = creationAnchor(160, 130);
+    return {
+      ...object,
+      x: anchor.x,
+      y: anchor.y,
+      zIndex: store.getState().canvas.revision + 1,
+    };
+  }
+
+  async function submitVoiceObjectCreate(
+    object: NewCanvasObject,
+    label: string,
+  ): Promise<RealtimeVoiceIntentResult> {
+    const result = await submitConfirmedRealtimeCommand({
+      type: "object.create",
+      object,
+    });
+    if (!result.ok) return result;
+
+    const confirmed = store.getState().canvas.objects[object.id];
+    if (!confirmed || confirmed.deletedAt)
+      return realtimeConfirmationFailure(
+        `The shared canvas did not confirm the ${label.toLowerCase()} creation.`,
+      );
+    selectObject(object.id);
+    revealObjectOnCompactCanvas(object.id);
+    return { ok: true, message: `${label} created and confirmed.` };
+  }
+
+  async function appendSelectedNoteFromVoice(
+    rawText: string,
+  ): Promise<RealtimeVoiceIntentResult> {
+    const text = rawText.replace(/\s+/g, " ").trim();
+    if (!text)
+      return { ok: false, message: "Say what you want to add to the selected note." };
+    if (text.length > NOTE_APPEND_TEXT_MAX_LENGTH)
+      return {
+        ok: false,
+        message: "Keep each dictated note update to 1,000 characters or fewer.",
+      };
+
+    const selectedId = store.getState().selectedObjectId;
+    const current = selectedId
+      ? store.getState().canvas.objects[selectedId]
+      : undefined;
+    if (!current || current.deletedAt)
+      return { ok: false, message: "Select an active note first." };
+    if (current.type !== "note")
+      return {
+        ok: false,
+        message: `Select a note or thought card before adding text. “${current.title}” is a ${current.type.replaceAll("_", " ")}.`,
+      };
+
+    const expectedText = current.payload.text
+      ? `${current.payload.text}\n${text}`
+      : text;
+    const result = await submitConfirmedRealtimeCommand({
+      type: "object.append_note_text",
+      objectId: current.id,
+      expectedVersion: current.version,
+      text,
+    });
+    if (!result.ok) return result;
+
+    const updated = store.getState().canvas.objects[current.id];
+    if (
+      !updated ||
+      updated.deletedAt ||
+      updated.type !== "note" ||
+      updated.version !== current.version + 1 ||
+      updated.payload.text !== expectedText
+    )
+      return realtimeConfirmationFailure(
+        "The shared canvas did not confirm the selected note update.",
+      );
+
+    return { ok: true, message: "Selected note updated." };
   }
 
   async function startVoiceThoughtCapture(): Promise<HumanCommandResult> {
@@ -1212,6 +1281,29 @@ export function CommandCanvasRoom({
           ok: false,
           message: "Thought dictation is available through Live voice.",
         };
+      case "append_selected_note": {
+        const selectedId = store.getState().selectedObjectId;
+        const current = selectedId
+          ? store.getState().canvas.objects[selectedId]
+          : undefined;
+        if (!current || current.deletedAt)
+          return { ok: false, message: "Select an active note first." };
+        if (current.type !== "note")
+          return {
+            ok: false,
+            message: "Select a note or thought card before adding text.",
+          };
+        runCommand(
+          {
+            type: "object.append_note_text",
+            objectId: current.id,
+            expectedVersion: current.version,
+            text: intent.text,
+          },
+          source,
+        );
+        return { ok: true, message: "Selected note update submitted." };
+      }
       case "create_note":
         createNote(source, intent.text);
         return { ok: true, message: "Note command submitted." };

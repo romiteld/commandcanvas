@@ -1036,7 +1036,7 @@ describe("hand tracking controller lifecycle", () => {
     expect(observations[1]).toEqual({ mode: "idle", timestamp: 1_016 });
     expect(observations[2]).toMatchObject({
       mode: "point",
-      pointer: { x: expect.closeTo(0.726778, 5), y: expect.any(Number) },
+      pointer: { x: expect.closeTo(0.797634, 5), y: expect.any(Number) },
       trackingState: "tracked",
     });
     expect(observations[3]).toMatchObject({

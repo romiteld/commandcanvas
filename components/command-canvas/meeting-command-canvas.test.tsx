@@ -15,12 +15,13 @@ import type {
 } from "@/lib/webmcp/registry";
 
 describe("normal meeting lobby", () => {
-  it("uses a compact email OTP gate with no password and preserves the no-signup demo link", () => {
+  it("makes account sign-in explicit and keeps the bounded judge preview secondary", () => {
     render(
       <MeetingLobby
         state={{ phase: "email", invited: false }}
         onRequestCode={vi.fn()}
         onVerifyCode={vi.fn()}
+        onSwitchInvitationAccount={vi.fn()}
         onCreateMeeting={vi.fn()}
       />,
     );
@@ -30,8 +31,17 @@ describe("normal meeting lobby", () => {
       "email",
     );
     expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Sign in to CommandCanvas" }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/protects your rooms, invitations, and saved OpenAI key/i),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/ChatGPT account already signed into that app/i),
+    ).toBeVisible();
     expect(screen.getByRole("button", { name: "Email me a code" })).toBeVisible();
-    expect(screen.getByRole("link", { name: /no-signup demo/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /limited judge preview/i })).toHaveAttribute(
       "href",
       "/demo",
     );
@@ -43,17 +53,19 @@ describe("normal meeting lobby", () => {
         state={{ phase: "email", invited: true }}
         onRequestCode={vi.fn()}
         onVerifyCode={vi.fn()}
+        onSwitchInvitationAccount={vi.fn()}
         onCreateMeeting={vi.fn()}
       />,
     );
     expect(screen.getByRole("heading", { name: "Verify your invitation" })).toBeVisible();
-    expect(screen.queryByRole("link", { name: /no-signup demo/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /limited judge preview/i })).not.toBeInTheDocument();
 
     view.rerender(
       <MeetingLobby
         state={{ phase: "otp", invited: true, email: "sarah@example.com" }}
         onRequestCode={vi.fn()}
         onVerifyCode={vi.fn()}
+        onSwitchInvitationAccount={vi.fn()}
         onCreateMeeting={vi.fn()}
       />,
     );
@@ -62,6 +74,33 @@ describe("normal meeting lobby", () => {
     expect(code).toHaveAttribute("autocomplete", "one-time-code");
     fireEvent.change(code, { target: { value: "123456" } });
     expect(code).toHaveValue("123456");
+  });
+
+  it("offers an explicit account switch without rendering an invitation link", () => {
+    const onSwitchInvitationAccount = vi.fn();
+    render(
+      <MeetingLobby
+        state={{
+          phase: "invite_account",
+          email: "sarah@example.com",
+          message: "This invitation is unavailable for this account.",
+        }}
+        onRequestCode={vi.fn()}
+        onVerifyCode={vi.fn()}
+        onSwitchInvitationAccount={onSwitchInvitationAccount}
+        onCreateMeeting={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Switch to the invited account" }),
+    ).toBeVisible();
+    expect(screen.getByText(/signed in as sarah@example\.com/i)).toBeVisible();
+    expect(screen.queryByText(/[a-z0-9_-]{43}/i)).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Switch account and continue" }),
+    );
+    expect(onSwitchInvitationAccount).toHaveBeenCalledTimes(1);
   });
 });
 

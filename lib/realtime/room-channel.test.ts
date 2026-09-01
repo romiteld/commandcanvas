@@ -154,7 +154,179 @@ function createRetryHarness(maxAttempts = 3) {
   };
 }
 
+function createHardExpiryTimerHarness() {
+  let sequence = 0;
+  const scheduled = new Map<number, { callback: () => void; delayMs: number }>();
+  const cancelled: number[] = [];
+
+  return {
+    timer: {
+      schedule(callback: () => void, delayMs: number) {
+        const handle = ++sequence;
+        scheduled.set(handle, { callback, delayMs });
+        return handle;
+      },
+      cancel(handle: unknown) {
+        const timer = Number(handle);
+        scheduled.delete(timer);
+        cancelled.push(timer);
+      },
+    },
+    cancelled,
+    pendingCount: () => scheduled.size,
+    onlyDelay: () => [...scheduled.values()][0]?.delayMs,
+    fire() {
+      const next = scheduled.entries().next().value as
+        | [number, { callback: () => void; delayMs: number }]
+        | undefined;
+      if (!next) throw new Error("No hard-expiry timer is scheduled.");
+      scheduled.delete(next[0]);
+      next[1].callback();
+    },
+  };
+}
+
 describe("room realtime channel", () => {
+  it("cooperatively untracks and removes the private channel at the room hard expiry", async () => {
+    const harness = createHarness();
+    const expiry = createHardExpiryTimerHarness();
+    const statuses: string[] = [];
+    let now = 1_000;
+    const realtime = createRoomRealtime({
+      client: harness.client,
+      roomId: ROOM_ID,
+      accessToken: "verified-access-token",
+      participant: {
+        participantId: USER_ID,
+        displayName: "Sarah",
+        role: "participant",
+        color: "#7558cf",
+        onlineAt: "2026-08-27T14:00:00.000Z",
+      },
+      getCurrentRevision: () => 3,
+      onPresence: vi.fn(),
+      onCursor: vi.fn(),
+      onRevision: vi.fn(),
+      onStatus: (status) => statuses.push(status),
+      now: () => now,
+      hardExpiresAtEpochMs: 2_000,
+      hardExpiryTimer: expiry.timer,
+    });
+
+    await realtime.connect();
+    harness.subscribed("SUBSCRIBED");
+    await Promise.resolve();
+    expect(expiry.onlyDelay()).toBe(1_000);
+
+    now = 2_000;
+    expiry.fire();
+    await vi.waitFor(() =>
+      expect(harness.client.removeChannel).toHaveBeenCalledWith(harness.channel),
+    );
+    expect(harness.channel.untrack).toHaveBeenCalledOnce();
+    expect(statuses.at(-1)).toBe("closed");
+    await expect(realtime.publishCursor({ x: 20, y: 40 })).resolves.toBe(false);
+  });
+
+  it("cancels the hard-expiry timer when the room channel is disposed early", async () => {
+    const harness = createHarness();
+    const expiry = createHardExpiryTimerHarness();
+    const realtime = createRoomRealtime({
+      client: harness.client,
+      roomId: ROOM_ID,
+      accessToken: "verified-access-token",
+      participant: {
+        participantId: USER_ID,
+        displayName: "Sarah",
+        role: "participant",
+        color: "#7558cf",
+        onlineAt: "2026-08-27T14:00:00.000Z",
+      },
+      getCurrentRevision: () => 3,
+      onPresence: vi.fn(),
+      onCursor: vi.fn(),
+      onRevision: vi.fn(),
+      onStatus: vi.fn(),
+      now: () => 1_000,
+      hardExpiresAtEpochMs: 2_000,
+      hardExpiryTimer: expiry.timer,
+    });
+
+    await realtime.connect();
+    expect(expiry.pendingCount()).toBe(1);
+    await realtime.dispose();
+    expect(expiry.pendingCount()).toBe(0);
+    expect(expiry.cancelled).toEqual([1]);
+    expect(harness.client.removeChannel).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the hard-expiry deadline armed while the browser is offline", async () => {
+    const harness = createRecoveryHarness();
+    const expiry = createHardExpiryTimerHarness();
+    let now = 1_000;
+    const realtime = createRoomRealtime({
+      client: harness.client,
+      roomId: ROOM_ID,
+      accessToken: "verified-access-token",
+      participant: {
+        participantId: USER_ID,
+        displayName: "Sarah",
+        role: "participant",
+        color: "#7558cf",
+        onlineAt: "2026-08-27T14:00:00.000Z",
+      },
+      getCurrentRevision: () => 3,
+      onPresence: vi.fn(),
+      onCursor: vi.fn(),
+      onRevision: vi.fn(),
+      onStatus: vi.fn(),
+      connectivityEvents: harness.connectivityEvents,
+      now: () => now,
+      hardExpiresAtEpochMs: 2_000,
+      hardExpiryTimer: expiry.timer,
+    });
+
+    await realtime.connect();
+    harness.connectivityEvents.dispatch("offline");
+    expect(expiry.pendingCount()).toBe(1);
+
+    now = 2_000;
+    expiry.fire();
+    await vi.waitFor(() =>
+      expect(harness.client.removeChannel).toHaveBeenCalledWith(
+        harness.channels[0],
+      ),
+    );
+  });
+
+  it("does not subscribe when the room is already hard-expired", async () => {
+    const harness = createHarness();
+    const statuses: string[] = [];
+    const realtime = createRoomRealtime({
+      client: harness.client,
+      roomId: ROOM_ID,
+      accessToken: "verified-access-token",
+      participant: {
+        participantId: USER_ID,
+        displayName: "Sarah",
+        role: "participant",
+        color: "#7558cf",
+        onlineAt: "2026-08-27T14:00:00.000Z",
+      },
+      getCurrentRevision: () => 3,
+      onPresence: vi.fn(),
+      onCursor: vi.fn(),
+      onRevision: vi.fn(),
+      onStatus: (status) => statuses.push(status),
+      now: () => 2_000,
+      hardExpiresAtEpochMs: 2_000,
+    });
+
+    await realtime.connect();
+    expect(harness.client.channel).not.toHaveBeenCalled();
+    expect(statuses).toEqual(["closed"]);
+  });
+
   it("joins the exact private room topic and tracks actual connected presence", async () => {
     const harness = createHarness();
     const onStatus = vi.fn();

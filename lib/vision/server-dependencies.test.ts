@@ -67,11 +67,12 @@ function options(
     functionName: string,
     args: Record<string, unknown>,
   ) => { data: unknown; error: unknown },
+  memberData: unknown = null,
 ) {
   const rpc = vi.fn(async (functionName: string, args: Record<string, unknown>) =>
     rpcResponder(functionName, args),
   );
-  const queryPromise = Promise.resolve({ data: null, error: null });
+  const queryPromise = Promise.resolve({ data: memberData, error: null });
   const query = {
     select: vi.fn(() => query),
     eq: vi.fn(() => query),
@@ -114,6 +115,54 @@ function options(
 }
 
 describe("server sketch transform admission dependencies", () => {
+  it("accepts only active persisted room membership before loading pixels", async () => {
+    const active = options(
+      () => ({ data: null, error: null }),
+      {
+        role: "participant",
+        rooms: {
+          mode: "demo",
+          created_at: "2026-09-01T00:00:00.000Z",
+          demo_hard_expires_at: "2099-09-02T00:00:00.000Z",
+        },
+      },
+    );
+    const activeResult = createServerSketchTransformDependencies(active.value);
+    expect(activeResult.ok).toBe(true);
+    if (!activeResult.ok) return;
+    await expect(
+      activeResult.dependencies.verifyMembership(ROOM_ID, ACTOR_ID),
+    ).resolves.toEqual({
+      ok: true,
+      role: "participant",
+      roomMode: "demo",
+    });
+
+    const query = active.value.createClient.mock.results[0]!.value
+      .from("room_members");
+    expect(query.select).toHaveBeenCalledWith(
+      "role, rooms!inner(mode,created_at,demo_hard_expires_at)",
+    );
+
+    const expired = options(
+      () => ({ data: null, error: null }),
+      {
+        role: "participant",
+        rooms: {
+          mode: "demo",
+          created_at: "2026-08-30T00:00:00.000Z",
+          demo_hard_expires_at: "2026-08-31T00:00:00.000Z",
+        },
+      },
+    );
+    const expiredResult = createServerSketchTransformDependencies(expired.value);
+    expect(expiredResult.ok).toBe(true);
+    if (!expiredResult.ok) return;
+    await expect(
+      expiredResult.dependencies.verifyMembership(ROOM_ID, ACTOR_ID),
+    ).resolves.toEqual({ ok: false });
+  });
+
   it("wires a saved account credential resolver and loads room mode with membership", async () => {
     const setup = options(() => ({ data: null, error: null }));
     const result = createServerSketchTransformDependencies(setup.value);

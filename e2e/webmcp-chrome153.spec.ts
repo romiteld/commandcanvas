@@ -4,6 +4,7 @@ import {
   captureCreatedRoom,
   deleteHostedRoom,
 } from "./support/hosted-room";
+import { enterLimitedJudgePreview } from "./support/limited-judge-preview";
 import { requireProductionApiProxyOrigin } from "../lib/testing/live-probe-guards";
 
 type NativeTool = { name: string };
@@ -78,6 +79,7 @@ test("exercises Chrome 153's native WebMCP lifecycle and client-side cancellatio
   try {
     if (apiProxyOrigin) await installApiProxy(page, apiProxyOrigin);
     await page.goto("/demo", { waitUntil: "domcontentloaded" });
+    await enterLimitedJudgePreview(page);
     await expect(page.getByText("Live demo room")).toBeVisible({
       timeout: 30_000,
     });

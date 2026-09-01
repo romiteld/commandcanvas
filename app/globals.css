@@ -94,6 +94,16 @@ body {
   line-height: 1.5;
 }
 
+.meeting-card .meeting-chatgpt-boundary {
+  margin: 12px 0 0;
+  padding: 11px 12px;
+  border: 1px solid rgb(39 94 215 / 16%);
+  border-radius: 12px;
+  background: rgb(231 239 255 / 64%);
+  color: #334b72;
+  font-size: 12px;
+}
+
 .meeting-card form {
   display: grid;
   gap: 14px;
@@ -665,6 +675,70 @@ button:focus-visible {
   min-height: 100dvh;
 }
 
+.demo-preview-boundary {
+  position: fixed;
+  z-index: 40;
+  top: 86px;
+  left: 18px;
+  max-width: min(440px, calc(100vw - 390px));
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid rgb(39 94 215 / 18%);
+  border-radius: 10px;
+  background: rgb(247 250 255 / 94%);
+  box-shadow: 0 11px 30px rgb(29 53 87 / 10%);
+  backdrop-filter: blur(16px);
+  color: #334b72;
+  font-size: 9px;
+}
+
+.demo-preview-boundary strong {
+  color: var(--cobalt);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.demo-preview-boundary span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.demo-preview-boundary a {
+  flex: 0 0 auto;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 7px;
+  background: var(--ink);
+  color: white;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+@media (max-width: 760px) {
+  .demo-preview-boundary {
+    top: calc(106px + env(safe-area-inset-top, 0px));
+    left: 8px;
+    right: 8px;
+    max-width: none;
+  }
+
+  .demo-preview-boundary span {
+    display: none;
+  }
+
+  .demo-preview-boundary a {
+    margin-left: auto;
+  }
+}
+
 .demo-room-controls {
   position: fixed;
   z-index: 40;
@@ -767,6 +841,58 @@ button:focus-visible {
   background: var(--ink);
   color: white;
   cursor: pointer;
+}
+
+.demo-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.demo-entry-actions .demo-entry-primary,
+.demo-entry-actions button {
+  min-height: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0 18px;
+  border: 1px solid var(--ink);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.demo-entry-actions .demo-entry-primary {
+  background: var(--ink);
+  color: white;
+  box-shadow: 0 12px 30px rgb(18 35 61 / 16%);
+}
+
+.demo-entry-actions button {
+  background: white;
+  color: var(--ink);
+}
+
+.demo-entry .demo-entry-boundary {
+  max-width: 520px;
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+@media (max-width: 520px) {
+  .demo-entry-actions {
+    width: 100%;
+  }
+
+  .demo-entry-actions .demo-entry-primary,
+  .demo-entry-actions button {
+    width: 100%;
+  }
 }
 
 .sketch-dialog-backdrop {
@@ -2460,8 +2586,8 @@ button:focus-visible {
     right: 6px;
     bottom: max(6px, env(safe-area-inset-bottom, 0px));
     left: 6px;
-    height: min(48dvh, 430px);
-    max-height: 48dvh;
+    height: min(76dvh, 720px);
+    max-height: 78dvh;
   }
 
   .spatial-camera-control.is-expanded {
@@ -2470,9 +2596,9 @@ button:focus-visible {
   }
 
   .spatial-camera-control.is-expanded .camera-preview {
-    min-height: 0;
-    height: min(27dvh, 240px);
-    max-height: 28dvh;
+    min-height: 220px;
+    height: clamp(220px, 43dvh, 440px);
+    max-height: 48dvh;
   }
 
   .hand-mode-toolbar {

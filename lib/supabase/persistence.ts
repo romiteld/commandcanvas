@@ -61,6 +61,7 @@ export const roomDataRowSchema = z
     created_by: z.uuid(),
     created_at: timestampSchema,
     updated_at: timestampSchema,
+    demo_hard_expires_at: timestampSchema.nullable().optional(),
   })
   .strict();
 

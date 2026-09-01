@@ -503,6 +503,7 @@ export const RealtimeVoiceControl = forwardRef<
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
   const [localOpenAiApiKey, setLocalOpenAiApiKey] = useState("");
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
+  const [replacementOpen, setReplacementOpen] = useState(false);
   const openAiApiKey = controlledOpenAiApiKey ?? localOpenAiApiKey;
   const updateOpenAiApiKey =
     onOpenAiApiKeyChange ?? setLocalOpenAiApiKey;
@@ -703,28 +704,37 @@ export const RealtimeVoiceControl = forwardRef<
         </button>
       </div>
       <div className="realtime-voice-credential">
-        <label>
-          <span>Your OpenAI API key</span>
-          <input
-            type="password"
-            name="commandcanvas-openai-api-key"
-            value={openAiApiKey}
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            disabled={active || savedOpenAiCredential?.busy}
-            placeholder="sk-…"
-            onChange={(event) => {
-              const value = event.currentTarget.value;
-              updateOpenAiApiKey(value);
-              if (value.length > 0)
-                onUseSavedOpenAiCredentialChange?.(false);
-            }}
-          />
-        </label>
+        {!savedOpenAiCredential?.configured || replacementOpen ? (
+          <label>
+            <span>
+              {savedOpenAiCredential?.configured
+                ? "Replacement OpenAI API key"
+                : "Your OpenAI API key"}
+            </span>
+            <input
+              type="password"
+              name="commandcanvas-openai-api-key"
+              value={openAiApiKey}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              disabled={active || savedOpenAiCredential?.busy}
+              placeholder="sk-…"
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                updateOpenAiApiKey(value);
+                if (value.length > 0)
+                  onUseSavedOpenAiCredentialChange?.(false);
+              }}
+            />
+          </label>
+        ) : null}
         {savedOpenAiCredential?.configured ? (
           <div className="realtime-voice-saved-credential" role="status">
-            <span>Saved to your CommandCanvas account</span>
+            <span>
+              Saved to your CommandCanvas account and selected automatically
+              when you sign in
+            </span>
             {savedOpenAiCredential.fingerprint ? (
               <strong>{savedOpenAiCredential.fingerprint}</strong>
             ) : null}
@@ -738,6 +748,18 @@ export const RealtimeVoiceControl = forwardRef<
                 }}
               >
                 Use saved key
+              </button>
+            ) : null}
+            {!replacementOpen ? (
+              <button
+                type="button"
+                disabled={active || savedOpenAiCredential.busy}
+                onClick={() => {
+                  updateOpenAiApiKey("");
+                  setReplacementOpen(true);
+                }}
+              >
+                Replace saved key
               </button>
             ) : null}
             {deleteConfirmationOpen ? (
@@ -777,7 +799,34 @@ export const RealtimeVoiceControl = forwardRef<
             )}
           </div>
         ) : null}
-        {openAiApiKey ? (
+        {replacementOpen ? (
+          <div className="realtime-voice-credential-actions">
+            <button
+              type="button"
+              disabled={active || savedOpenAiCredential?.busy}
+              onClick={() => {
+                updateOpenAiApiKey("");
+                setReplacementOpen(false);
+                onUseSavedOpenAiCredentialChange?.(true);
+              }}
+            >
+              Cancel replacement
+            </button>
+            <button
+              type="button"
+              disabled={
+                active || savedOpenAiCredential?.busy || !openAiApiKey.trim()
+              }
+              onClick={() => {
+                void Promise.resolve(
+                  savedOpenAiCredential?.onSave(openAiApiKey),
+                ).then(() => setReplacementOpen(false));
+              }}
+            >
+              Save replacement
+            </button>
+          </div>
+        ) : openAiApiKey ? (
           <div className="realtime-voice-credential-actions">
             <button
               type="button"
@@ -794,7 +843,7 @@ export const RealtimeVoiceControl = forwardRef<
                 disabled={active || savedOpenAiCredential.busy}
                 onClick={() => void savedOpenAiCredential.onSave(openAiApiKey)}
               >
-                {savedOpenAiCredential.configured ? "Replace saved key" : "Save to account"}
+                Save to account
               </button>
             ) : null}
           </div>

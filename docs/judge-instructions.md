@@ -1,6 +1,6 @@
 # One-click judge instructions
 
-Open **<https://commandcanvas.vercel.app/demo>**. No signup, login form, password, third-party account, or configuration is required. The page creates an anonymous authenticated browser identity behind the scenes and opens a ready room with semantic objects. Canvas, collaboration, hand input, typed commands, and deterministic fallbacks need no OpenAI key. Optional embedded Live voice and direct OpenAI sketch interpretation require your own OpenAI API key for the current tab.
+Open **<https://commandcanvas.vercel.app/demo>**. This is a limited judge preview: temporary, bounded, and secondary to the signed workspace. Review the boundary and choose **Continue limited judge preview**. Only then does the page create an anonymous authenticated browser identity and capped room with semantic objects. Canvas, collaboration, hand input, typed commands, and deterministic fallbacks need no OpenAI key. The preview does not save an OpenAI key and cannot send production email. Optional embedded Live voice and direct OpenAI sketch interpretation require your own OpenAI API key for the current tab.
 
 ## Core path
 
@@ -11,8 +11,8 @@ Open **<https://commandcanvas.vercel.app/demo>**. No signup, login form, passwor
 4. Move, resize, or rotate the result. Pin, minimize, restore, trash, recover, undo, and redo all have visible non-gesture controls.
 5. Turn on **Select many**, choose two objects, click **Group**, move the semantic frame, then click **Ungroup**.
 6. Click **Prepare meeting packet**. Review the exact object snapshot and demo recipient, then click **Approve packet**.
-7. Click **Request email send**. Nothing is sent until you press **SEND** in the explicit confirmation. The no-signup demo is always preview-only, even when a standard-room Resend integration is configured. **Preview only: not sent** means no provider call was made and no email was sent.
-8. Use **Reset demo** at any time to remove the current demo room and create a clean fixture room.
+7. Click **Request email send**. Nothing is sent until you press **SEND** in the explicit confirmation. The limited judge preview is always preview-only, even when a standard-room Resend integration is configured. **Preview only: not sent** means no provider call was made and no email was sent.
+8. Use **Reset demo** to remove the current temporary room and create a clean fixture room. Reset does not reset durable voice or model-use allowances.
 
 The current structured-output surface supports a generic diagram, architecture diagram, flowchart, pie chart, bar chart, and line chart. The quarterly-signups example is a short judge path, not a restriction on meeting type or audience.
 
@@ -24,7 +24,7 @@ Meeting media is optional. In both windows, press **Start camera + mic**. The fi
 
 ## Standard passwordless meeting path
 
-`/demo` is deliberately no-signup. Standard hosted meetings begin at
+The limited judge preview presents no signup form. Standard hosted meetings begin at
 **<https://commandcanvas.vercel.app/meet>** and use a six-digit Supabase Email
 OTP with no password or third-party account. A host can create a room, enter an
 exact participant email, and choose **Send invitation** or **Copy invitation**.
@@ -39,7 +39,7 @@ through its own configured mailer or custom SMTP. An authenticated host can
 submit one exact-email meeting invitation through the server-side Resend API
 path; invitation recipients do not use an address allowlist. Approved meeting
 packets use a separate server-side Resend API path, a packet-recipient
-allowlist, and the explicit host **SEND** gate. The no-signup demo never calls
+allowlist, and the explicit host **SEND** gate. The limited judge preview never calls
 Resend. A copy-link, preview-only, submitted, failed, and delivered result each
 mean different things and are reported separately.
 
@@ -49,7 +49,7 @@ mean different things and are reported separately.
 
 **ChatGPT Site Tools**, where supported by the current ChatGPT host rollout, are the ten WebMCP tools registered through `document.modelContext` on the same live page. They use the ChatGPT account already signed into the surrounding ChatGPT host. CommandCanvas never receives that ChatGPT credential. They include canvas read, object creation and transformation, object state, recoverable discard, grouping and ungrouping, undo and redo, sketch transformation, packet preparation, and approved-send staging. In a supported host, ask **What is on this canvas?**, then **Create a note titled Judge feedback saying The spatial object model is clear.** The final send still requires the host’s explicit **SEND** click.
 
-A ChatGPT subscription does not supply or pay for OpenAI API calls made by embedded Live voice or direct sketch interpretation. On the no-signup `/demo` route, those features use the key entered for the current tab. It is held only in memory, never written to the URL, `localStorage`, `sessionStorage`, Supabase, receipts, or application logs, and has no deployment-owner fallback. The same-origin authenticated server route sees it transiently while creating the requested provider call. Use a project-scoped key with an appropriate budget.
+A ChatGPT subscription does not supply or pay for OpenAI API calls made by embedded Live voice or direct sketch interpretation. In the limited `/demo` judge preview, those features use the key entered for the current tab. It is held only in memory, never written to the URL, `localStorage`, `sessionStorage`, Supabase, receipts, or application logs, and has no deployment-owner fallback. The same-origin authenticated server route sees it transiently while creating the requested provider call. Use a project-scoped key with an appropriate budget.
 
 A verified non-anonymous `/meet` user may explicitly save, replace, or delete their own project-scoped key. CommandCanvas encrypts it through Supabase Vault. The raw saved value is never returned to the browser; the server resolves it only at the provider boundary. Saving is optional and does not introduce a deployment-owner fallback.
 
@@ -59,6 +59,6 @@ Native Chrome 153 discovery is tested separately from ChatGPT built-in-browser i
 
 Hand input is optional. Enable it from the system drawer, then close the drawer and work on the full canvas. The small preview is only a sensor and skeleton check; it is not the movement boundary. A comfortable central camera region maps across the complete canvas. CommandCanvas starts MediaPipe Hand Landmarker in a browser worker and uses a visibly labeled same-model in-page recovery path only if worker initialization or runtime fails. Choose **Draw** and make a deliberate index-finger point to draw repeated strokes directly on the main canvas; open your palm to lift the pen. Choose **Move**, then pinch one hand to grab and move, or pinch both hands over an object and spread to resize. Over blank canvas, drag an open palm to pan the local viewport or use two hands to zoom it around their midpoint. The overlay exposes target, open-hand, pinch, held-object, resizing, panning, and canvas-zoom states so accepted gestures are visible. Throw a held object through either red side edge to move it to recoverable trash, or downward into the blue dock to minimize it. These actions open no confirmation drawer; Undo restores the object.
 
-Local processing is the default and keeps camera frames in the browser. A deployment may configure the optional **Use private GPU hand tracking** control as a separate consent: while it and Hand input are active, one bounded JPEG or WebP frame at a time may go only to the configured private relay; the service returns semantic landmarks and does not retain raw frames. It never sends camera frames to ChatGPT, OpenAI, Supabase, or WebMCP. Disable the option to close the relay and return to local MediaPipe. The GPU service, model weights, and operations source are not distributed by this MIT application. Its separate AGPL repository is not public at this checkpoint, so the public relay path must remain disabled until the exact source commit is published and linked. Do not treat earlier static CUDA measurements, fake media, browser events, or a visible state label as proof of current physical ergonomics. The exact MediaPipe release still needs a physical-camera rehearsal. If that rehearsal does not succeed, use pointer or touch.
+Local processing is the default and keeps camera frames in the browser. Production also exposes **Use private GPU hand tracking** as a separate consent. Only while that option and Hand input are active may one bounded JPEG or WebP frame at a time go to the configured relay; it returns semantic landmarks and retains no raw frames. It never sends camera frames to ChatGPT, OpenAI, Supabase, or WebMCP. Disable the option to close the relay and return to local MediaPipe. The GPU service, model weights, and operations source are not distributed by this MIT application. Their exact AGPL image source is public at commit [`ee5c2afcfbfc8427b39e2f13e170785c87bce2e3`](https://github.com/romiteld/commandcanvas/tree/ee5c2afcfbfc8427b39e2f13e170785c87bce2e3) on the isolated `hand-relay-source` branch. Do not treat static CUDA measurements, fake media, browser events, or a visible state label as proof of current physical ergonomics. The exact release still needs a physical-camera rehearsal across local and relay modes. If that rehearsal does not succeed, use pointer or touch.
 
 The detailed evidence and known unverified boundaries are maintained in `docs/verification-ledger.md`.

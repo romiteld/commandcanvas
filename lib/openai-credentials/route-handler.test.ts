@@ -1,5 +1,7 @@
 // @vitest-environment node
 
+import { createHash } from "node:crypto";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -8,14 +10,19 @@ import {
   handlePutOpenAiCredentialRequest,
   type OpenAiCredentialRouteDependencies,
 } from "@/lib/openai-credentials/route-handler";
+import { createTestOpenAiApiKey } from "@/lib/testing/openai-key-fixture";
 
 const ACTOR_ID = "22222222-2222-4222-8222-222222222222";
 const OTHER_ACTOR_ID = "33333333-3333-4333-8333-333333333333";
 const AUTHORIZATION = "Bearer header.payload.signature";
-const VALID_KEY = "sk-test-saved-user-owned-key-123456789012345";
+const VALID_KEY = createTestOpenAiApiKey("test-saved-user-owned-key");
+const VALID_KEY_FINGERPRINT = `sha256:${createHash("sha256")
+  .update(VALID_KEY)
+  .digest("hex")
+  .slice(0, 16)}`;
 const STATUS = {
   configured: true as const,
-  fingerprint: "sha256:578aea1b31583dee",
+  fingerprint: VALID_KEY_FINGERPRINT,
   updatedAt: "2026-09-01T01:02:03.000Z",
 };
 

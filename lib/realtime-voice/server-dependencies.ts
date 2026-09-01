@@ -9,6 +9,10 @@ import type { RealtimeSessionRouteDependencies } from "@/lib/realtime-voice/rout
 import { createRealtimeVoiceSessionConfig } from "@/lib/realtime-voice/tools";
 import type { SupabaseUserVerifier } from "@/lib/supabase/server-auth";
 import {
+  isPersistedRoomAccessActive,
+  persistedRoomAccessRowSchema,
+} from "@/lib/supabase/room-access";
+import {
   createServerServiceClient,
   createServerUserVerifierClient,
   readServerSupabaseConfig,
@@ -17,7 +21,7 @@ import {
 const memberSchema = z
   .object({
     role: z.enum(["host", "participant"]),
-    rooms: z.object({ mode: z.enum(["standard", "demo"]) }).strict(),
+    rooms: persistedRoomAccessRowSchema,
   })
   .strict();
 
@@ -117,12 +121,16 @@ export function createServerRealtimeSessionDependencies(
         try {
           const response = await client
             .from("room_members")
-            .select("role, rooms!inner(mode)")
+            .select(
+              "role, rooms!inner(mode,created_at,demo_hard_expires_at)",
+            )
             .eq("room_id", roomId)
             .eq("user_id", actorUserId)
             .maybeSingle();
           const member = memberSchema.safeParse(response.data);
-          return !response.error && member.success
+          return !response.error &&
+            member.success &&
+            isPersistedRoomAccessActive(member.data.rooms)
             ? { ok: true, roomMode: member.data.rooms.mode }
             : { ok: false };
         } catch {

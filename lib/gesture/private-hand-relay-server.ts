@@ -10,6 +10,10 @@ import { createPrivateHandRelayToken } from "@/lib/gesture/private-hand-relay-to
 import { readBoundedUtf8Body } from "@/lib/http/read-bounded-body";
 import type { SupabaseUserVerifier } from "@/lib/supabase/server-auth";
 import {
+  isPersistedRoomAccessActive,
+  persistedRoomAccessRowSchema,
+} from "@/lib/supabase/room-access";
+import {
   createServerServiceClient,
   createServerUserVerifierClient,
   readServerSupabaseConfig,
@@ -19,7 +23,10 @@ const MAX_CAPABILITY_RESPONSE_BYTES = 64 * 1_024;
 const CAPABILITY_PROBE_TIMEOUT_MS = 1_500;
 
 const memberSchema = z
-  .object({ role: z.enum(["host", "participant"]) })
+  .object({
+    role: z.enum(["host", "participant"]),
+    rooms: persistedRoomAccessRowSchema,
+  })
   .strict();
 
 interface MembershipQueryResult {
@@ -123,12 +130,16 @@ export function createServerPrivateHandRelayDependencies(
         try {
           const response = await client
             .from("room_members")
-            .select("role")
+            .select(
+              "role, rooms!inner(mode,created_at,demo_hard_expires_at)",
+            )
             .eq("room_id", roomId)
             .eq("user_id", actorUserId)
             .maybeSingle();
           const parsed = memberSchema.safeParse(response.data);
-          return !response.error && parsed.success
+          return !response.error &&
+            parsed.success &&
+            isPersistedRoomAccessActive(parsed.data.rooms)
             ? { ok: true as const }
             : { ok: false as const };
         } catch {

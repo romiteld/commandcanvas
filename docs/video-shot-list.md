@@ -2,7 +2,9 @@
 
 Record this sequence only after the exact public commit passes its release checks. Rehearse with a real second browser. Use a simple three-bar sketch with large Q1, Q2, and Q3 labels so the visual transition reads immediately. The same validated surface supports generic diagrams, architecture diagrams, flowcharts, pie charts, bar charts, and line charts; the video uses one bar chart as a concise example.
 
-The 90-second core uses `/demo` so a judge encounters no signup. Record a
+The 90-second core uses the temporary, bounded judge preview at `/demo`. Show
+the entry boundary, then choose **Continue limited judge preview** before the
+canvas appears. Record a
 separate short supporting shot for the Devpost page, if useful: open `/meet`,
 enter an email, submit a six-digit Supabase OTP, create a standard room, and
 show its exact-email invitation. Do not imply that Supabase OTP mail, the
@@ -12,7 +14,7 @@ Embedded Live voice and direct sketch interpretation use a project-scoped
 OpenAI API key supplied by the presenter for the current tab. Enter it outside
 the captured frame, verify that the password field masks it, and never show or
 paste the credential into narration, developer tools, logs, receipts, or the
-canvas. This is the no-signup `/demo` behavior. A verified non-anonymous
+canvas. This is the limited `/demo` judge-preview behavior. A verified non-anonymous
 `/meet` user can explicitly save, replace, or delete an account-owned key
 encrypted through Supabase Vault. The raw saved key never returns to the
 browser. CommandCanvas has no deployment-owner OpenAI key fallback.
@@ -23,11 +25,11 @@ browser. CommandCanvas has no deployment-owner OpenAI key fallback.
 
 **Line:** “Meetings do not have an idea problem. They have a handoff problem. CommandCanvas lets people and agents turn rough thinking into structured output on the same live canvas.”
 
-## 0:07–0:16: no-signup shared room
+## 0:07–0:16: limited judge preview room
 
 **Picture:** Cut to <https://commandcanvas.vercel.app/demo>. The canvas fills the viewport. The board, schedule, decision, receipt rail, and two real Presence participants are visible.
 
-**Line:** “This is a no-signup Supabase room. Daniel and Sarah are connected in two ordinary browsers.”
+**Line:** “This is a temporary, bounded Supabase judge preview. Daniel and Sarah are connected in two ordinary browsers.”
 
 **Do:** Move Sarah’s cursor from browser B. Briefly show the opt-in peer-to-peer filmstrip only if the same-host two-browser media rehearsal has just passed.
 
@@ -114,7 +116,7 @@ physical-hand latency measurement.
 - Confirm that reloading the tab clears the user-entered key and that missing-key Live voice and sketch interpretation fail honestly. Do not claim the no-owner-key boundary from source tests alone; verify it on the exact deployed release without printing either the user key or deployment environment values.
 - If the authenticated `/meet` credential path is shown, verify explicit save, replacement, deletion, encrypted Vault storage, and server-side provider resolution without displaying the raw value. Do not claim that a saved key is returned to the browser.
 - Do not show ChatGPT Site Tools invocation until the exact deployed build passes that host. Native Chrome 153 and ChatGPT are separate verification boundaries.
-- The controlled backend path has a delivered Resend record, but the public no-signup judge route remains preview-only. Show and describe the result visible in the exact environment being recorded.
+- The controlled backend path has a delivered Resend record, but the public limited judge preview remains preview-only. Show and describe the result visible in the exact environment being recorded.
 - Do not claim post-fix physical-hand or physical-iPhone accuracy unless the exact hardware rehearsal passes immediately before recording. The prior real recording recognized open palm and pinch ratios between 0.22 and 0.28, but it also exposed the old preview-boundary usability failure and does not verify the revised full-canvas plane.
 - If the physical-hand rehearsal passes, keep the MediaPipe skeleton, tracked fingertip, and semantic state overlay in frame so TARGET, OPEN, PINCH, HELD, RESIZING, PAN, and CANVAS ZOOM are legible. Keep the camera preview collapsed after the sensor check. Show blank-canvas pan or zoom only if it passed that exact rehearsal. Throw through either red side edge for recoverable trash and into the blue bottom dock for minimize. Show Undo immediately after the trash gesture. Do not describe recoverable trash as permanent deletion.
 - Show the actual send result from the environment being recorded. Supabase OTP delivery, invitation submission, packet submission, preview-only fallback, and provider delivery are distinct claims.

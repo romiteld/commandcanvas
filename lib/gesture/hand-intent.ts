@@ -129,7 +129,10 @@ export const DEFAULT_HAND_INTENT_CONFIG: HandIntentConfig = Object.freeze({
   fastMotionSmoothingAlpha: 0.9,
   fastMotionThresholdPerSecond: 4,
   oneEuroMinCutoff: 1.0,
-  oneEuroBeta: 0.007,
+  // Normalized image coordinates need materially more speed adaptation than
+  // the scalar reference default: fine jitter stays damped while a deliberate
+  // cross-canvas sweep catches up within the next frame.
+  oneEuroBeta: 4,
   oneEuroDCutoff: 1.0,
   pinchEngageRatio: 0.28,
   pinchReleaseRatio: 0.5,
@@ -333,7 +336,7 @@ export function interpretHandFrame(
       config.minKeypointVisibility,
     ) &&
     isIndexExtended(frame.landmarks) &&
-    areOtherFingersFolded(frame.landmarks);
+    areOtherFingersRelaxedForPoint(frame.landmarks);
   if (!pinchLatched && !openPalm && !deliberatePoint)
     return refuse(
       "no_deliberate_gesture",
@@ -389,11 +392,14 @@ function hasReliableDeliberatePointLandmarks(
   );
 }
 
-function areOtherFingersFolded(landmarks: HandLandmarks) {
+function areOtherFingersRelaxedForPoint(landmarks: HandLandmarks) {
   const wrist = landmarks[WRIST_INDEX];
+  // A drawing hand rarely makes a tight pointing fist. Support fingers may be
+  // partially curled, but each must remain short of the extension ratio that
+  // defines an open palm. This preserves index-led ink without palm ink.
   return OTHER_FINGER_JOINTS.every(
     ({ pip, tip }) =>
-      distance(wrist, landmarks[tip]) <= distance(wrist, landmarks[pip]) * 1.02,
+      distance(wrist, landmarks[tip]) < distance(wrist, landmarks[pip]) * 1.15,
   );
 }
 
@@ -409,6 +415,24 @@ function isOpenPalm(landmarks: HandLandmarks) {
       const pipDistance = distance(wrist, landmarks[pip]);
       return distance(wrist, landmarks[tip]) >= pipDistance * 1.15;
     },
+  );
+}
+
+/** Strict calibration pose: every landmark must be present/reliable and all fingers open. */
+export function isOpenPalmCalibrationPose(
+  landmarks: HandLandmarks,
+  minimumVisibility = DEFAULT_HAND_INTENT_CONFIG.minKeypointVisibility,
+) {
+  return (
+    Array.isArray(landmarks) &&
+    landmarks.length === 21 &&
+    Number.isFinite(minimumVisibility) &&
+    minimumVisibility >= 0 &&
+    minimumVisibility <= 1 &&
+    landmarks.every(
+      (landmark) => landmarkVisibility(landmark) >= minimumVisibility,
+    ) &&
+    isOpenPalm(landmarks)
   );
 }
 

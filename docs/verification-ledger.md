@@ -1676,3 +1676,111 @@ rewriting their historical evidence:
   enterprise identity, billing, native applications, headset support,
   marketplaces, desktop automation, and arbitrary physical-object tracking
   remain outside this release.
+
+## Checkpoint 34: hand-control recovery production candidate
+
+### WORKING
+
+- The application is canvas-first and retains one canonical command and receipt
+  path for pointer, touch, hand landmarks, embedded Realtime voice, ChatGPT Site
+  Tools, and collaborator mutations.
+- Full-hand calibration records open-hand geometry and reach. Calibrated
+  coordinates map to the full visible canvas rather than the camera-preview
+  rectangle. One Euro filtering, confidence hysteresis, magnetic acquisition,
+  pinch dwell, and relaxed index-led drawing are present in the shared gesture
+  pipeline.
+- The private hand-relay path is opt-in and falls back to local browser
+  landmarks when it is disabled or unavailable. The public capability endpoint
+  reports protocol version 1, 21 landmarks, newest-frame-only scheduling,
+  zero raw-frame retention, CUDA FP16, and an NVIDIA RTX 3090 runtime.
+- Realtime voice can create notes, boards, schedules, diagrams, charts, tables,
+  references, and meeting cards through the canonical mutation layer. It can
+  also append speech-to-text to the selected thought card and waits for the
+  resulting persisted receipt before confirming success.
+- `/meet` is account-first and uses Supabase email OTP. Invitations retain their
+  token in memory while a recipient switches to the invited account. The
+  limited `/demo` route creates a no-signup anonymous identity only after an
+  explicit judge-preview gate.
+- Verified non-anonymous users can save, replace, or delete their own OpenAI API
+  key through the server-side Supabase Vault boundary. Production contains no
+  deployment-owner OpenAI API key.
+- Meeting invitations and host-approved packet sends use server-side Resend
+  credentials. Packet approval freezes an exact recipient snapshot, and the
+  external send still requires an explicit host action.
+- Supabase migration `20260901093110` is recorded in the linked project. Its
+  catalog checks confirm the fixed demo deadline, admission ledgers, access
+  predicate, durable mutation guard, and voice, vision, hand-relay, and packet
+  wrappers.
+- Public-demo policy is bounded to a fixed 24-hour lifetime, 64 concurrently
+  active rooms, 100 room admissions per UTC day, and bounded join attempts.
+  Durable state and paid-provider operations fail closed after room expiry.
+- Vercel configuration now has no Preview-only application bindings. Required
+  Supabase, Resend, voice, WebMCP, model-selection, and private-relay values are
+  present in Production. `OPENAI_API_KEY` and `OPENAI_REALTIME_API_KEY` are
+  absent.
+
+### VERIFIED LOCALLY
+
+- Node 22.17.0 `npm run lint`: exit 0.
+- Node 22.17.0 raw `npx tsc --noEmit`: exit 0 with no diagnostics.
+- Node 22.17.0 `npm test -- --run`: 124 files and 1,348 tests passed with zero
+  failures.
+- Node 22.17.0 `npm run build`: the generated hand worker and optimized Next.js
+  16.3.3 build completed, including all 14 static pages and dynamic API routes.
+- `npm audit --omit=dev --audit-level=high`: zero vulnerabilities.
+- The responsive optimized-build matrix passed all eight applicable desktop
+  Chromium, mobile Chromium, and mobile WebKit scenarios. Twelve
+  project-specific scenarios were intentionally skipped and none failed.
+- The linked Supabase project has 34 historical demo-room rows, only two within
+  their fixed active lifetime, and zero creation admissions recorded for the
+  current UTC day at the time of the check. The bounded room failure was not a
+  capacity failure.
+- A controlled camera run could not enter the local demo because the local
+  optimized server intentionally lacked `SUPABASE_SECRET_KEY`. The route failed
+  closed with HTTP 503 before camera initialization. Production has that
+  server-only binding; this local result is not presented as camera acceptance.
+
+### VERIFIED IN BROWSER
+
+- The pre-release optimized build passed its applicable responsive layout and
+  hand-calibration browser matrix in desktop Chromium, mobile Chromium, and
+  mobile WebKit profiles.
+- Previous named-browser evidence remains historical evidence only. Fresh
+  canonical Production checks for this exact candidate are pending its frozen
+  Git SHA and deployment ID.
+
+### UNVERIFIED
+
+- This checkpoint does not yet claim a Git commit, GitHub Actions run, Vercel
+  Production deployment, canonical alias, or public browser acceptance. Those
+  receipts must be added only after the exact source SHA is pushed and deployed.
+- Physical-device acceptance remains required for real index-finger drawing,
+  pinch acquisition, one- and two-hand manipulation, camera occlusion, lighting,
+  thermal behavior, and full-canvas ergonomics. Controlled media and emulated
+  device profiles are not physical proof.
+- A real user-owned key has not yet completed a public Realtime or vision call
+  on this candidate. A real Resend invitation, OTP delivery and entry, approved
+  packet delivery, and webhook reconciliation also require fresh Production
+  acceptance.
+- ChatGPT built-in-browser Site Tools invocation remains a host-rollout check.
+  Native Chrome registration does not substitute for a tool invocation made by
+  ChatGPT against the same live page and session.
+- Supabase Realtime may cache authorization for an already-open WebSocket. The
+  normal client disconnects at the fixed deadline and all durable access and new
+  subscriptions fail closed, but an intentionally modified client is not proven
+  to receive exact wall-clock transport eviction.
+- Public anonymous-auth identities are created before database room admission.
+  Supabase Auth rate limits, CAPTCHA, and orphan-identity cleanup have not been
+  independently exercised in this checkpoint.
+- The superseded GitGuardian synthetic Generic Password incident may still need
+  dismissal in the external dashboard. The detector-shaped test literal is not
+  present on current `main`.
+
+### CUT
+
+- No implemented object-creation, voice, hand-control, WebMCP, collaboration,
+  invitation, packet, or Resend path was removed from this candidate.
+- Production TURN/SFU conferencing infrastructure, recording, screen sharing,
+  enterprise identity, billing, native applications, headset support,
+  marketplaces, desktop automation, and arbitrary physical-object tracking are
+  not claimed by this release.

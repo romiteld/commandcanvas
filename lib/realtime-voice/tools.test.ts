@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { DirectCanvasIntent } from "@/lib/canvas/direct-command";
 import {
   REALTIME_VOICE_INSTRUCTIONS,
   REALTIME_VOICE_TOOL_DEFINITIONS,
@@ -10,10 +11,10 @@ import {
 describe("Realtime voice tools", () => {
   it("requires direct object requests to mutate before any confirmation", () => {
     expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
-      "For a direct creation request, call create_semantic_object without inspecting the canvas first.",
+      "Call that creation tool immediately without inspecting first",
     );
     expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
-      "If you already inspected for a creation request, continue in the same response by calling create_semantic_object before confirming anything to the user.",
+      "If you already inspected for a creation request, continue in the same response by calling the matching creation tool before confirming anything to the user.",
     );
   });
 
@@ -23,6 +24,15 @@ describe("Realtime voice tools", () => {
     ).toEqual([
       "inspect_canvas",
       "create_semantic_object",
+      "create_note",
+      "create_board",
+      "create_schedule",
+      "create_diagram",
+      "create_chart",
+      "create_data_table",
+      "create_reference_card",
+      "create_meeting_card",
+      "append_selected_note",
       "start_thought",
       "finish_thought",
       "open_sketch",
@@ -47,6 +57,311 @@ describe("Realtime voice tools", () => {
     expect(
       JSON.stringify(REALTIME_VOICE_TOOL_DEFINITIONS),
     ).toMatch(/recoverable trash/i);
+  });
+
+  it("maps compact everyday creation tools without requiring model-generated spatial geometry", async () => {
+    const onIntent = vi.fn<RealtimeVoiceIntentHandler>(() => ({
+      ok: true as const,
+      message: "Submitted.",
+    }));
+
+    await executeRealtimeVoiceTool(
+      {
+        name: "create_note",
+        arguments: '{"text":"Confirm the launch date."}',
+      },
+      onIntent,
+    );
+    await executeRealtimeVoiceTool(
+      {
+        name: "create_board",
+        arguments: JSON.stringify({
+          title: "Release readiness",
+          columns: [
+            {
+              title: "Next",
+              tasks: [
+                {
+                  title: "Verify mobile hand input",
+                  owner: "Danny",
+                  priority: "high",
+                },
+              ],
+            },
+          ],
+        }),
+      },
+      onIntent,
+    );
+    await executeRealtimeVoiceTool(
+      {
+        name: "create_schedule",
+        arguments: JSON.stringify({
+          title: "Submission week",
+          timezone: "America/New_York",
+          days: [
+            {
+              date: "2026-09-02",
+              label: "Wed, Sep 2",
+              entries: [
+                {
+                  time: "14:00",
+                  title: "Record final demo",
+                  owner: "Danny",
+                },
+              ],
+            },
+          ],
+        }),
+      },
+      onIntent,
+    );
+
+    expect(onIntent).toHaveBeenNthCalledWith(
+      1,
+      { type: "create_note", text: "Confirm the launch date." },
+      "voice",
+    );
+    expect(onIntent).toHaveBeenNthCalledWith(
+      2,
+      {
+        type: "create_semantic_object",
+        placement: "current_viewport",
+        object: expect.objectContaining({
+          type: "task_board",
+          title: "Release readiness",
+          payload: {
+            columns: [
+              expect.objectContaining({
+                title: "Next",
+                tasks: [
+                  expect.objectContaining({
+                    title: "Verify mobile hand input",
+                    owner: "Danny",
+                    priority: "high",
+                  }),
+                ],
+              }),
+            ],
+          },
+        }),
+      },
+      "voice",
+    );
+    expect(onIntent).toHaveBeenNthCalledWith(
+      3,
+      {
+        type: "create_semantic_object",
+        placement: "current_viewport",
+        object: expect.objectContaining({
+          type: "schedule",
+          title: "Submission week",
+          payload: {
+            timezone: "America/New_York",
+            days: [
+              expect.objectContaining({
+                date: "2026-09-02",
+                entries: [
+                  expect.objectContaining({ title: "Record final demo" }),
+                ],
+              }),
+            ],
+          },
+        }),
+      },
+      "voice",
+    );
+  });
+
+  it("builds compact diagrams, charts, tables, references, and meeting cards into canonical semantic-object intents", async () => {
+    const intents: DirectCanvasIntent[] = [];
+    const onIntent: RealtimeVoiceIntentHandler = (intent) => {
+      intents.push(intent);
+      return { ok: true, message: "Submitted." };
+    };
+
+    const calls = [
+      {
+        name: "create_diagram",
+        arguments: JSON.stringify({
+          title: "Approval flow",
+          kind: "flowchart",
+          summary: "A request moves through review before approval.",
+          nodes: [
+            { key: "request", label: "Request", kind: "process" },
+            { key: "approve", label: "Approve?", kind: "decision" },
+          ],
+          edges: [{ from: "request", to: "approve", label: "review" }],
+        }),
+      },
+      {
+        name: "create_chart",
+        arguments: JSON.stringify({
+          title: "Channel mix",
+          kind: "pie_chart",
+          series: [
+            {
+              label: "Share",
+              points: [
+                { label: "Organic", value: 65 },
+                { label: "Paid", value: 35 },
+              ],
+            },
+          ],
+        }),
+      },
+      {
+        name: "create_data_table",
+        arguments: JSON.stringify({
+          title: "Quarterly results",
+          columns: [
+            { label: "Quarter", kind: "text" },
+            { label: "Revenue", kind: "currency" },
+          ],
+          rows: [["Q1", 125000]],
+        }),
+      },
+      {
+        name: "create_reference_card",
+        arguments: JSON.stringify({
+          title: "Launch research",
+          kind: "article",
+          sourceUrl: "https://example.com/research",
+          summary: "Evidence relevant to the launch decision.",
+        }),
+      },
+      {
+        name: "create_meeting_card",
+        arguments: JSON.stringify({
+          title: "Launch risk",
+          kind: "risk",
+          body: "Supplier lead time may move the launch date.",
+          bullets: ["Confirm inventory by Friday"],
+          owner: "Danny",
+          status: "open",
+        }),
+      },
+    ];
+
+    for (const call of calls)
+      await expect(
+        executeRealtimeVoiceTool(call, onIntent),
+      ).resolves.toMatchObject({ ok: true, outcome: "submitted" });
+
+    expect(intents).toHaveLength(5);
+    expect(intents[0]).toMatchObject({
+      type: "create_semantic_object",
+      placement: "current_viewport",
+      object: {
+        type: "diagram",
+        title: "Approval flow",
+        payload: {
+          kind: "flowchart",
+          nodes: [
+            expect.objectContaining({ id: "request", label: "Request" }),
+            expect.objectContaining({ id: "approve", label: "Approve?" }),
+          ],
+          edges: [{ id: expect.any(String), from: "request", to: "approve", label: "review" }],
+        },
+      },
+    });
+    expect(intents[1]).toMatchObject({
+      type: "create_semantic_object",
+      placement: "current_viewport",
+      object: {
+        type: "diagram",
+        title: "Channel mix",
+        payload: {
+          kind: "pie_chart",
+          chart: {
+            title: "Channel mix",
+            series: [
+              {
+                id: expect.any(String),
+                label: "Share",
+                points: [
+                  { label: "Organic", value: 65 },
+                  { label: "Paid", value: 35 },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(intents[2]).toMatchObject({
+      type: "create_semantic_object",
+      placement: "current_viewport",
+      object: {
+        type: "data_table",
+        title: "Quarterly results",
+        payload: {
+          columns: [
+            { id: expect.any(String), label: "Quarter", kind: "text" },
+            { id: expect.any(String), label: "Revenue", kind: "currency" },
+          ],
+          rows: [{ id: expect.any(String), cells: ["Q1", 125000] }],
+        },
+      },
+    });
+    expect(intents[3]).toMatchObject({
+      type: "create_semantic_object",
+      placement: "current_viewport",
+      object: {
+        type: "reference_card",
+        title: "Launch research",
+        payload: {
+          kind: "article",
+          sourceUrl: "https://example.com/research",
+          summary: "Evidence relevant to the launch decision.",
+          excerpt: null,
+        },
+      },
+    });
+    expect(intents[4]).toMatchObject({
+      type: "create_semantic_object",
+      placement: "current_viewport",
+      object: {
+        type: "meeting_card",
+        title: "Launch risk",
+        payload: {
+          kind: "risk",
+          body: "Supplier lead time may move the launch date.",
+          bullets: ["Confirm inventory by Friday"],
+          owner: "Danny",
+          dueDate: null,
+          status: "open",
+        },
+      },
+    });
+  });
+
+  it("maps selected-note fill requests to a bounded canonical intent", async () => {
+    const onIntent = vi.fn<RealtimeVoiceIntentHandler>(() => ({
+      ok: true as const,
+      message: "Submitted.",
+    }));
+
+    const result = await executeRealtimeVoiceTool(
+      {
+        name: "append_selected_note",
+        arguments: '{"text":"Sarah owns the launch checklist."}',
+      },
+      onIntent,
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      outcome: "submitted",
+      action: "append_selected_note",
+    });
+    expect(onIntent).toHaveBeenCalledWith(
+      {
+        type: "append_selected_note",
+        text: "Sarah owns the launch checklist.",
+      },
+      "voice",
+    );
   });
 
   it("maps every supported standalone semantic object family through one canonical intent", async () => {

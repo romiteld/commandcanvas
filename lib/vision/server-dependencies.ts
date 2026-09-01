@@ -12,6 +12,10 @@ import {
 } from "@/lib/supabase/room-service";
 import type { SupabaseUserVerifier } from "@/lib/supabase/server-auth";
 import {
+  isPersistedRoomAccessActive,
+  persistedRoomAccessRowSchema,
+} from "@/lib/supabase/room-access";
+import {
   createServerServiceClient,
   createServerUserVerifierClient,
   readServerSupabaseConfig,
@@ -37,7 +41,7 @@ import {
 const memberRoleSchema = z
   .object({
     role: z.enum(["host", "participant"]),
-    rooms: z.object({ mode: z.enum(["standard", "demo"]) }).strict(),
+    rooms: persistedRoomAccessRowSchema,
   })
   .strict();
 
@@ -182,13 +186,16 @@ export function createServerSketchTransformDependencies(
         try {
           const response = await client
             .from("room_members")
-            .select("role, rooms!inner(mode)")
+            .select(
+              "role, rooms!inner(mode,created_at,demo_hard_expires_at)",
+            )
             .eq("room_id", roomId)
             .eq("user_id", actorUserId)
             .maybeSingle();
           if (response.error || response.data === null) return { ok: false };
           const member = memberRoleSchema.safeParse(response.data);
-          return member.success
+          return member.success &&
+            isPersistedRoomAccessActive(member.data.rooms)
             ? {
                 ok: true,
                 role: member.data.role,

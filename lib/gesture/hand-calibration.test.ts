@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assessOpenPalmCalibrationBaseline,
   assessHandCalibrationReach,
   buildHandCalibration,
   createInitialHandReliabilityState,
   createInitialPinchVoteState,
   mapCalibratedPointer,
+  normalizePinchDistance,
   reduceHandReliability,
   resolvePinchThresholds,
   voteCalibratedPinch,
@@ -33,6 +35,86 @@ function pinchSample(
 }
 
 describe("hand calibration", () => {
+  it("establishes an open-palm baseline before using hand-scale-normalized pinch evidence", () => {
+    const baseline = assessOpenPalmCalibrationBaseline([
+      {
+        center: { x: 0.49, y: 0.51 },
+        palmScale: 0.2,
+        pinchDistance: 0.14,
+        orientationRadians: -1.5,
+        confidence: 0.96,
+      },
+      {
+        center: { x: 0.5, y: 0.5 },
+        palmScale: 0.21,
+        pinchDistance: 0.147,
+        orientationRadians: -1.5,
+        confidence: 0.94,
+      },
+      {
+        center: { x: 0.51, y: 0.49 },
+        palmScale: 0.19,
+        pinchDistance: 0.133,
+        orientationRadians: -1.5,
+        confidence: 0.95,
+      },
+      {
+        center: { x: 0.5, y: 0.5 },
+        palmScale: 0.2,
+        pinchDistance: 0.14,
+        orientationRadians: -1.5,
+        confidence: 0.97,
+      },
+    ]);
+
+    expect(baseline).toMatchObject({
+      accepted: true,
+      baseline: {
+        center: { x: 0.5, y: 0.5 },
+        palmScale: 0.2,
+        openPinchRatio: 0.7,
+        orientationRadians: -1.5,
+        sampleCount: 4,
+      },
+    });
+    if (!baseline.accepted) throw new Error("Open-palm baseline was refused.");
+
+    expect(
+      normalizePinchDistance(0.05, 0.2, baseline.baseline),
+    ).toBe(0.25);
+    expect(
+      normalizePinchDistance(0.1, 0.4, {
+        ...baseline.baseline,
+        palmScale: 0.4,
+      }),
+    ).toBe(0.25);
+  });
+
+  it("refuses an open-palm window whose center or 2D scale is not stable", () => {
+    expect(
+      assessOpenPalmCalibrationBaseline([
+        { center: { x: 0.2, y: 0.2 }, palmScale: 0.1, pinchDistance: 0.07, orientationRadians: -1.5, confidence: 0.95 },
+        { center: { x: 0.8, y: 0.2 }, palmScale: 0.3, pinchDistance: 0.21, orientationRadians: -1.5, confidence: 0.95 },
+        { center: { x: 0.2, y: 0.8 }, palmScale: 0.1, pinchDistance: 0.07, orientationRadians: -1.5, confidence: 0.95 },
+        { center: { x: 0.8, y: 0.8 }, palmScale: 0.3, pinchDistance: 0.21, orientationRadians: -1.5, confidence: 0.95 },
+      ]),
+    ).toEqual({ accepted: false, reason: "open_palm_not_established" });
+  });
+
+  it("refuses an open-palm window that rotates instead of holding one orientation", () => {
+    expect(
+      assessOpenPalmCalibrationBaseline(
+        [-1.5, -0.5, 0.5, 1.5].map((orientationRadians) => ({
+          center: { x: 0.5, y: 0.5 },
+          palmScale: 0.2,
+          pinchDistance: 0.14,
+          orientationRadians,
+          confidence: 0.95,
+        })),
+      ),
+    ).toEqual({ accepted: false, reason: "open_palm_not_established" });
+  });
+
   it("preflights reach without requiring pinch evidence", () => {
     expect(
       assessHandCalibrationReach([
@@ -258,6 +340,41 @@ describe("hand calibration", () => {
         "two_hand",
       ),
     ).toMatchObject({ point: expected, gain: 1 });
+  });
+
+  it("keeps the calibrated interior linear and extrapolates beyond it to the true viewport edge", () => {
+    const calibration = {
+      deviceKey: "spatial-field-camera",
+      cameraBounds: { x: 0.2, y: 0.2, width: 0.6, height: 0.6 },
+      safeCanvasInsetPx: 24,
+      pinchClosedRatio: 0.25,
+      pinchOpenRatio: 0.7,
+      mirrorX: true,
+      createdAt: 1,
+    } as const;
+    const canvas = { left: 40, top: 20, width: 1_000, height: 500 };
+
+    const quarter = mapCalibratedPointer(
+      calibration,
+      { x: 0.35, y: 0.35 },
+      canvas,
+      "two_hand",
+    );
+    const outsideComfortableReach = mapCalibratedPointer(
+      calibration,
+      { x: 0.14, y: 0.14 },
+      canvas,
+      "two_hand",
+    );
+
+    expect(quarter).toMatchObject({
+      point: { x: 302, y: 157 },
+      normalized: { x: 0.262, y: 0.274 },
+    });
+    expect(outsideComfortableReach).toMatchObject({
+      point: { x: 40, y: 20 },
+      normalized: { x: 0, y: 0 },
+    });
   });
 
   it("uses coarse gain while hovering and lowers it for precise interaction states", () => {

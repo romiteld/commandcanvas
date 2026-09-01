@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createInitialHandIntentState,
   interpretHandFrame,
+  isOpenPalmCalibrationPose,
   type HandFrame,
   type HandLandmark,
   type HandLandmarks,
@@ -103,6 +104,18 @@ function scaleFrameAroundWrist(input: HandFrame, scale: number): HandFrame {
 }
 
 describe("hand intent validation", () => {
+  it("requires all 21 reliable landmarks and open-finger geometry for calibration", () => {
+    const open = openPalmFrame().landmarks;
+    expect(isOpenPalmCalibrationPose(open, 0.5)).toBe(true);
+
+    const occluded = open.map((landmark, index) => ({
+      ...landmark,
+      visibility: index === 20 ? 0.2 : 0.95,
+    })) as unknown as HandLandmarks;
+    expect(isOpenPalmCalibrationPose(occluded, 0.5)).toBe(false);
+    expect(isOpenPalmCalibrationPose(frame().landmarks, 0.5)).toBe(false);
+  });
+
   it("maps a verified 21-landmark frame to a normalized index-tip pointer", () => {
     const transition = interpretHandFrame(
       createInitialHandIntentState(),
@@ -318,6 +331,27 @@ describe("hand intent validation", () => {
 });
 
 describe("pointer smoothing", () => {
+  it("suppresses fine jitter without making a deliberate sweep lag behind the hand", () => {
+    const first = interpretHandFrame(
+      createInitialHandIntentState(),
+      frame({ index: { x: 0.3, y: 0.4 }, timestamp: 1_000 }),
+      1_000,
+    );
+    const jitter = interpretHandFrame(
+      first.state,
+      frame({ index: { x: 0.304, y: 0.396 }, timestamp: 1_016 }),
+      1_016,
+    );
+    const sweep = interpretHandFrame(
+      jitter.state,
+      frame({ index: { x: 0.65, y: 0.4 }, timestamp: 1_032 }),
+      1_032,
+    );
+
+    expect(jitter.output.accepted && jitter.output.pointer.x).toBeLessThan(0.302);
+    expect(sweep.output.accepted && sweep.output.pointer.x).toBeGreaterThan(0.42);
+  });
+
   it("uses capture timestamps to apply the One Euro cutoff to index coordinates", () => {
     const first = interpretHandFrame(
       createInitialHandIntentState(),
@@ -332,7 +366,7 @@ describe("pointer smoothing", () => {
 
     expect(next.output).toMatchObject({
       accepted: true,
-      pointer: { x: expect.closeTo(0.3277, 3), y: 0.4 },
+      pointer: { x: expect.closeTo(0.4323, 3), y: 0.4 },
     });
   });
 
@@ -360,8 +394,8 @@ describe("pointer smoothing", () => {
       accepted: true,
       mode: "point",
       pointer: {
-        x: expect.closeTo(0.5037, 3),
-        y: expect.closeTo(0.4963, 3),
+        x: expect.closeTo(0.5065, 3),
+        y: expect.closeTo(0.4935, 3),
       },
     });
   });
@@ -419,7 +453,7 @@ describe("pointer smoothing", () => {
     expect(point.output).toMatchObject({
       accepted: true,
       mode: "point",
-      pointer: { x: expect.closeTo(0.4722, 3), y: 0.25 },
+      pointer: { x: expect.closeTo(0.3677, 3), y: 0.25 },
     });
   });
 });

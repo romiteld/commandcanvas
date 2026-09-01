@@ -359,18 +359,15 @@ function inverseFallbackAxis(
           ? 1
           : 1.1;
   const safeRatio = Math.min(24, canvasSize / 2) / canvasSize;
-  const softened = Math.min(
-    1,
-    Math.max(0, (canvasRatio - safeRatio) / (1 - safeRatio * 2)),
-  );
-  let low = 0;
-  let high = 1;
-  for (let index = 0; index < 24; index += 1) {
-    const middle = (low + high) / 2;
-    const value = middle * middle * (3 - 2 * middle);
-    if (value < softened) low = middle;
-    else high = middle;
-  }
-  const beforeGain = ((low + high) / 2 - 0.5) / gain + 0.5;
+  const edgeExtrapolation = 0.1;
+  const comfortable =
+    canvasRatio < safeRatio
+      ? -edgeExtrapolation * (1 - canvasRatio / safeRatio)
+      : canvasRatio > 1 - safeRatio
+        ? 1 +
+          edgeExtrapolation *
+            (1 - (1 - canvasRatio) / safeRatio)
+        : (canvasRatio - safeRatio) / (1 - safeRatio * 2);
+  const beforeGain = (comfortable - 0.5) / gain + 0.5;
   return cameraStart + beforeGain * cameraSpan;
 }

@@ -304,6 +304,55 @@ function applyGestureCompletion(
 }
 
 describe("authoritative spatial gesture reducer", () => {
+  it("magnetically acquires an object when pinch begins without a prior POINT dwell", () => {
+    const pending = step(
+      createInitialSpatialGestureState(),
+      pinch(0.19, 0.35, 1_000),
+    );
+
+    expect(pending.state).toMatchObject({
+      phase: "pinch_pending",
+      candidate: { objectId: "note-a" },
+      pinchPending: { objectId: "note-a", ownerTrackId: "hand-a" },
+    });
+
+    const acquired = step(pending.state, pinch(0.19, 0.35, 1_048));
+    expect(acquired.state).toMatchObject({
+      phase: "held_one",
+      held: { objectId: "note-a" },
+    });
+    expect(acquired.effects).toContainEqual({
+      type: "object.select",
+      objectId: "note-a",
+    });
+  });
+
+  it("gives a large spatial object a larger 2D magnetic capture halo", () => {
+    const largeObjectScene: SpatialGestureScene = {
+      ...scene,
+      objects: [
+        {
+          id: "large-board",
+          x: 250,
+          y: 100,
+          width: 500,
+          height: 300,
+          zIndex: 2,
+          pinned: false,
+          minimized: false,
+        },
+      ],
+    };
+
+    const result = step(
+      createInitialSpatialGestureState(),
+      point(0.2, 0.42, 1_000),
+      largeObjectScene,
+    );
+
+    expect(result.state.candidate).toMatchObject({ objectId: "large-board" });
+  });
+
   it("uses the clamped magnetic radius, 100 ms dwell, and an 80 ms 12px contender threshold", () => {
     const unrotatedA = { ...scene.objects[0], rotation: 0 };
     const outside = step(

@@ -1,5 +1,7 @@
 // @vitest-environment node
 
+import { createHash } from "node:crypto";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -8,11 +10,15 @@ import {
   resolveSavedOpenAiApiKey,
   type OpenAiCredentialRpcClient,
 } from "@/lib/openai-credentials/service";
+import { createTestOpenAiApiKey } from "@/lib/testing/openai-key-fixture";
 
 const ACTOR_ID = "22222222-2222-4222-8222-222222222222";
 const OTHER_ACTOR_ID = "33333333-3333-4333-8333-333333333333";
-const VALID_KEY = "sk-test-saved-user-owned-key-123456789012345";
-const FINGERPRINT = "sha256:578aea1b31583dee";
+const VALID_KEY = createTestOpenAiApiKey("test-saved-user-owned-key");
+const FINGERPRINT = `sha256:${createHash("sha256")
+  .update(VALID_KEY)
+  .digest("hex")
+  .slice(0, 16)}`;
 const SERVER_ENVIRONMENT = {
   NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "publishable-test-key",

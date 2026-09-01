@@ -24,6 +24,29 @@ function trackedLandmarks(): HandLandmarks {
   })) as unknown as HandLandmarks;
 }
 
+function openPalmLandmarks(): HandLandmarks {
+  const landmarks = Array.from({ length: 21 }, () => ({
+    x: 0.5,
+    y: 0.7,
+    z: 0,
+    visibility: 0.95,
+  }));
+  landmarks[0] = { x: 0.5, y: 0.9, z: 0, visibility: 0.95 };
+  landmarks[4] = { x: 0.22, y: 0.5, z: 0, visibility: 0.95 };
+  for (const [mcp, pip, dip, tip, x] of [
+    [5, 6, 7, 8, 0.5],
+    [9, 10, 11, 12, 0.58],
+    [13, 14, 15, 16, 0.65],
+    [17, 18, 19, 20, 0.72],
+  ] as const) {
+    landmarks[mcp] = { x, y: 0.67, z: 0, visibility: 0.95 };
+    landmarks[pip] = { x, y: 0.51, z: 0, visibility: 0.95 };
+    landmarks[dip] = { x, y: 0.38, z: 0, visibility: 0.95 };
+    landmarks[tip] = { x, y: 0.24, z: 0, visibility: 0.95 };
+  }
+  return landmarks as unknown as HandLandmarks;
+}
+
 function fakeController(options: { sensorFrames?: boolean } = {}) {
   let status: HandTrackingStatus = { state: "off" };
   const statusListeners = new Set<(next: HandTrackingStatus) => void>();
@@ -118,7 +141,7 @@ function calibrationSensorFrame(
 }
 
 function calibrationObservation(
-  mode: "point" | "pinch",
+  mode: "point" | "pinch" | "open_palm",
   pointer: { x: number; y: number },
   pinchRatio: number,
   timestamp: number,
@@ -131,6 +154,7 @@ function calibrationObservation(
     trackId: "calibration-hand",
     prediction: { predicted: false },
     trackingState: "tracked",
+    ...(mode === "open_palm" ? { landmarks: openPalmLandmarks() } : {}),
     pinchRatio,
     measurements: {
       indexTip: pointer,
@@ -148,7 +172,88 @@ function calibrationObservation(
   };
 }
 
+async function establishOpenPalmBaseline(
+  user: ReturnType<typeof userEvent.setup>,
+  fake: ReturnType<typeof fakeController>,
+  startedAt = 4_000,
+) {
+  act(() => {
+    for (let sample = 0; sample < 6; sample += 1)
+      fake.emit(
+        calibrationObservation(
+          "open_palm",
+          { x: 0.5 + (sample % 2) * 0.004, y: 0.5 },
+          0.7,
+          startedAt + sample * 16,
+        ),
+      );
+  });
+  await user.click(
+    screen.getByRole("button", { name: "Continue to reach mapping" }),
+  );
+}
+
 describe("SpatialCameraControl", () => {
+  it("requires a stable whole open hand before point reach and pinch calibration", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        onCalibrationOpenChange={() => undefined}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+
+    expect(screen.getByText(/scanning open hand — 0\/6 stable frames/i)).toBeVisible();
+    const next = screen.getByRole("button", {
+      name: "Continue to reach mapping",
+    });
+    expect(next).toBeDisabled();
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emit(
+          calibrationObservation(
+            "point",
+            { x: 0.5, y: 0.5 },
+            0.7,
+            3_000 + sample * 16,
+          ),
+        );
+    });
+    expect(next).toBeDisabled();
+
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emit(
+          calibrationObservation(
+            "open_palm",
+            { x: sample % 2 === 0 ? 0.25 : 0.75, y: 0.5 },
+            0.7,
+            3_100 + sample * 16,
+          ),
+        );
+    });
+    expect(next).toBeDisabled();
+    expect(screen.queryByText(/open-hand scan complete/i)).toBeNull();
+
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emit(
+          calibrationObservation(
+            "open_palm",
+            { x: 0.5 + (sample % 2) * 0.004, y: 0.5 },
+            0.7,
+            3_200 + sample * 16,
+          ),
+        );
+    });
+    expect(screen.getByText(/open-hand scan complete · 6 stable frames/i)).toBeVisible();
+    await user.click(next);
+    expect(screen.getByText(/2 of 4 · map comfortable reach/i)).toBeVisible();
+  });
+
   it("requires a visible opt-in before the private GPU controller can observe upload consent", async () => {
     const user = userEvent.setup();
     const fake = fakeController();
@@ -884,6 +989,7 @@ describe("SpatialCameraControl", () => {
     expect(
       screen.getByRole("button", { name: "Skip hand calibration" }),
     ).toBeVisible();
+    await establishOpenPalmBaseline(user, fake, 4_700);
 
     const reach = [
       { x: 0.18, y: 0.16 },
@@ -953,6 +1059,7 @@ describe("SpatialCameraControl", () => {
       />,
     );
     act(() => fake.setStatus({ state: "ready" }));
+    await establishOpenPalmBaseline(user, fake, 14_700);
     act(() => {
       for (let sample = 0; sample < 12; sample += 1)
         fake.emitSensor(
@@ -969,7 +1076,7 @@ describe("SpatialCameraControl", () => {
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent(/farther left, right, up, and down/i);
-    expect(screen.getByText(/1 of 3 · map comfortable reach/i)).toBeVisible();
+    expect(screen.getByText(/2 of 4 · map comfortable reach/i)).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "Continue to closed pinch" }),
     ).toBeNull();
@@ -988,6 +1095,7 @@ describe("SpatialCameraControl", () => {
     );
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => fake.setStatus({ state: "ready" }));
+    await establishOpenPalmBaseline(user, fake, 19_700);
 
     const corners = [
       { x: 0.36, y: 0.34 },
@@ -1055,6 +1163,7 @@ describe("SpatialCameraControl", () => {
       />,
     );
     act(() => fake.setStatus({ state: "ready" }));
+    await establishOpenPalmBaseline(user, fake, 22_700);
     const corners = [
       { x: 0.36, y: 0.34 },
       { x: 0.64, y: 0.34 },
@@ -1165,6 +1274,7 @@ describe("SpatialCameraControl", () => {
     );
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => fake.setStatus({ state: "ready" }));
+    await establishOpenPalmBaseline(user, fake, 29_700);
 
     act(() => {
       for (let sample = 0; sample < 16; sample += 1)
@@ -1188,7 +1298,8 @@ describe("SpatialCameraControl", () => {
     expect(screen.queryByText(/calibrated for this camera session/i)).toBeNull();
   });
 
-  it("resets every sample when controlled calibration is reopened", () => {
+  it("resets every sample when controlled calibration is reopened", async () => {
+    const user = userEvent.setup();
     const fake = fakeController({ sensorFrames: true });
     const view = render(
       <SpatialCameraControl
@@ -1198,6 +1309,7 @@ describe("SpatialCameraControl", () => {
       />,
     );
     act(() => fake.setStatus({ state: "ready" }));
+    await establishOpenPalmBaseline(user, fake, 39_700);
     act(() => {
       for (let sample = 0; sample < 12; sample += 1)
         fake.emitSensor(
@@ -1225,11 +1337,12 @@ describe("SpatialCameraControl", () => {
       />,
     );
 
-    expect(screen.getByText(/map comfortable reach · 0 samples/i)).toBeVisible();
-    expect(screen.getByText(/0 reach · 0 open · 0 closed/i)).toBeVisible();
+    expect(screen.getByText(/scanning open hand — 0\/6 stable frames/i)).toBeVisible();
+    expect(screen.getByText(/0 baseline · 0 reach · 0 open · 0 closed/i)).toBeVisible();
   });
 
-  it("reacquires the only visible hand instead of freezing calibration on an expired track", () => {
+  it("reacquires the only visible hand instead of freezing calibration on an expired track", async () => {
+    const user = userEvent.setup();
     const fake = fakeController({ sensorFrames: true });
     render(
       <SpatialCameraControl
@@ -1239,6 +1352,7 @@ describe("SpatialCameraControl", () => {
       />,
     );
     act(() => fake.setStatus({ state: "ready" }));
+    await establishOpenPalmBaseline(user, fake, 49_700);
     const corners = [
       { x: 0.35, y: 0.35 },
       { x: 0.65, y: 0.35 },
@@ -1339,6 +1453,7 @@ describe("SpatialCameraControl", () => {
 
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => fake.setStatus({ state: "ready" }));
+    await establishOpenPalmBaseline(user, fake, 5_700);
 
     act(() => {
       for (let sample = 0; sample < 300; sample += 1) {

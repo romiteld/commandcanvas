@@ -72,6 +72,11 @@ interface RealtimeRetryOptions {
   cancel?: (handle: unknown) => void;
 }
 
+interface HardExpiryTimerOptions {
+  schedule?: (callback: () => void, delayMs: number) => unknown;
+  cancel?: (handle: unknown) => void;
+}
+
 interface RoomRealtimeOptions {
   client: RoomRealtimeClient;
   roomId: string;
@@ -86,6 +91,8 @@ interface RoomRealtimeOptions {
   isOnline?: () => boolean;
   retry?: RealtimeRetryOptions;
   now?: () => number;
+  hardExpiresAtEpochMs?: number;
+  hardExpiryTimer?: HardExpiryTimerOptions;
 }
 
 export interface RoomRealtimeController {
@@ -117,6 +124,13 @@ export function createRoomRealtime(
       ? browserConnectivityEvents()
       : rawOptions.connectivityEvents;
   const retry = normalizeRetryOptions(rawOptions.retry);
+  const hardExpiresAtEpochMs = z
+    .number()
+    .finite()
+    .nonnegative()
+    .optional()
+    .parse(rawOptions.hardExpiresAtEpochMs);
+  const hardExpiryTimer = normalizeHardExpiryTimer(rawOptions.hardExpiryTimer);
   const getOnline = rawOptions.isOnline ?? browserIsOnline;
   let channel: RoomChannel | null = null;
   let channelEpoch = 0;
@@ -132,6 +146,7 @@ export function createRoomRealtime(
   let retryAfterWork = false;
   let retryImmediatelyAfterWork = false;
   let reconnectWork: Promise<ConnectionAttempt> | null = null;
+  let hardExpiryTimerHandle: unknown = null;
   let cursorSequence = cursorSequenceSeed(now());
   let lastCursorSentAt: number | null = null;
   let remoteCursors: RemoteCursorState = {};
@@ -142,9 +157,47 @@ export function createRoomRealtime(
 
   async function connect() {
     if (disposed || channel) return;
+    if (
+      hardExpiresAtEpochMs !== undefined &&
+      hardExpiresAtEpochMs <= now()
+    ) {
+      await expireRoomAccess();
+      return;
+    }
+    scheduleHardExpiry();
     attachConnectivityListeners();
     const result = await startConnectionAttempt(false);
     if (!result.ok) throw result.error;
+  }
+
+  function scheduleHardExpiry() {
+    if (
+      disposed ||
+      hardExpiresAtEpochMs === undefined ||
+      hardExpiryTimerHandle !== null
+    )
+      return;
+    const delayMs = hardExpiresAtEpochMs - now();
+    if (delayMs <= 0) {
+      void expireRoomAccess();
+      return;
+    }
+    hardExpiryTimerHandle = hardExpiryTimer.schedule(() => {
+      hardExpiryTimerHandle = null;
+      void expireRoomAccess();
+    }, delayMs);
+  }
+
+  async function expireRoomAccess() {
+    if (disposed) return;
+    emitStatus("closed");
+    await dispose();
+  }
+
+  function cancelHardExpiryTimer() {
+    if (hardExpiryTimerHandle === null) return;
+    hardExpiryTimer.cancel(hardExpiryTimerHandle);
+    hardExpiryTimerHandle = null;
   }
 
   async function establishChannel() {
@@ -375,6 +428,7 @@ export function createRoomRealtime(
     retryAfterWork = false;
     retryImmediatelyAfterWork = false;
     cancelRetryTimer();
+    cancelHardExpiryTimer();
     if (connectivityEvents && connectivityListenersAttached) {
       connectivityEvents.removeEventListener("offline", handleOffline);
       connectivityEvents.removeEventListener("online", handleOnline);
@@ -410,6 +464,25 @@ interface NormalizedRetryOptions {
   random: () => number;
   schedule: (callback: () => void, delayMs: number) => unknown;
   cancel: (handle: unknown) => void;
+}
+
+interface NormalizedHardExpiryTimerOptions {
+  schedule: (callback: () => void, delayMs: number) => unknown;
+  cancel: (handle: unknown) => void;
+}
+
+function normalizeHardExpiryTimer(
+  rawOptions: HardExpiryTimerOptions | undefined,
+): NormalizedHardExpiryTimerOptions {
+  return {
+    schedule:
+      rawOptions?.schedule ??
+      ((callback, delayMs) => globalThis.setTimeout(callback, delayMs)),
+    cancel:
+      rawOptions?.cancel ??
+      ((handle) =>
+        globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>)),
+  };
 }
 
 function normalizeRetryOptions(

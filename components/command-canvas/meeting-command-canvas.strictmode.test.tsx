@@ -78,10 +78,35 @@ const fakes = vi.hoisted(() => {
     save: saveOpenAiCredential,
     clear: deleteOpenAiCredential,
   }));
-  const acceptInvitation = vi.fn(async () => ({
-    ok: true as const,
-    value: { roomId: ROOM_ID, role: "participant" as const, joined: true },
+  const signOut = vi.fn(async () => ({ error: null }));
+  const signInWithOtp = vi.fn(async () => ({ data: {}, error: null }));
+  const verifyOtp = vi.fn(async () => ({
+    data: {
+      session: { access_token: "invited.header.signature" },
+      user: {
+        id: "44444444-4444-4444-8444-444444444444",
+        email: "mike@example.com",
+        is_anonymous: false,
+      },
+    },
+    error: null,
   }));
+  const acceptInvitation = vi.fn(
+    async (): Promise<
+      | {
+          ok: true;
+          value: {
+            roomId: string;
+            role: "participant";
+            joined: true;
+          };
+        }
+      | { ok: false; error: { code: string; message: string } }
+    > => ({
+      ok: true,
+      value: { roomId: ROOM_ID, role: "participant", joined: true },
+    }),
+  );
   const createInvitation = vi.fn(
     async (
       requestAccessToken: string,
@@ -123,7 +148,9 @@ const fakes = vi.hoisted(() => {
   const client = {
     auth: {
       getSession,
-      signOut: vi.fn(),
+      signOut,
+      signInWithOtp,
+      verifyOtp,
       onAuthStateChange: vi.fn(() => ({
         data: { subscription: { unsubscribe: vi.fn() } },
       })),
@@ -183,6 +210,9 @@ const fakes = vi.hoisted(() => {
     saveOpenAiCredential,
     deleteOpenAiCredential,
     createOpenAiCredentialApi,
+    signOut,
+    signInWithOtp,
+    verifyOtp,
     get roomOnCommand() {
       return roomOnCommand;
     },
@@ -343,6 +373,9 @@ describe("meeting invitation StrictMode handshake", () => {
       value: { configured: false },
     });
     fakes.createOpenAiCredentialApi.mockClear();
+    fakes.signOut.mockClear();
+    fakes.signInWithOtp.mockClear();
+    fakes.verifyOtp.mockClear();
     fakes.acceptInvitation.mockClear();
     fakes.createInvitation.mockClear();
     fakes.getSession.mockClear();
@@ -402,6 +435,68 @@ describe("meeting invitation StrictMode handshake", () => {
     expect(fakes.webMcpSignals.every((signal) => signal.aborted)).toBe(true);
     await waitFor(() => expect(fakes.disposeSession).toHaveBeenCalledTimes(1));
     replace.mockRestore();
+  });
+
+  it("keeps a rejected invitation in page memory while the user switches to the invited account", async () => {
+    const user = userEvent.setup();
+    fakes.acceptInvitation
+      .mockResolvedValueOnce({
+        ok: false as const,
+        error: {
+          code: "invitation_unavailable",
+          message:
+            "This invitation is unavailable for the signed-in account.",
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: { roomId: ROOM_ID, role: "participant" as const, joined: true },
+      });
+
+    render(<MeetingCommandCanvas />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Switch to the invited account" }),
+    ).toBeVisible();
+    expect(screen.getByText(/signed in as sarah@example\.com/i)).toBeVisible();
+    expect(window.location.hash).toBe("");
+    expect(window.location.href).not.toContain(TOKEN);
+    expect(JSON.stringify(window.localStorage)).not.toContain(TOKEN);
+    expect(JSON.stringify(window.sessionStorage)).not.toContain(TOKEN);
+
+    await user.click(
+      screen.getByRole("button", { name: "Switch account and continue" }),
+    );
+
+    expect(fakes.signOut).toHaveBeenCalledWith({ scope: "local" });
+    expect(
+      await screen.findByRole("heading", { name: "Verify your invitation" }),
+    ).toBeVisible();
+    expect(window.location.href).not.toContain(TOKEN);
+
+    await user.type(screen.getByLabelText("Email"), "mike@example.com");
+    await user.click(screen.getByRole("button", { name: "Email me a code" }));
+    expect(fakes.signInWithOtp).toHaveBeenCalledWith({
+      email: "mike@example.com",
+      options: { shouldCreateUser: true },
+    });
+
+    await user.type(screen.getByLabelText("Verification code"), "123456");
+    await user.click(screen.getByRole("button", { name: "Verify email" }));
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    expect(fakes.verifyOtp).toHaveBeenCalledWith({
+      email: "mike@example.com",
+      token: "123456",
+      type: "email",
+    });
+    expect(fakes.acceptInvitation).toHaveBeenNthCalledWith(
+      2,
+      { token: TOKEN },
+      expect.any(AbortSignal),
+    );
+    expect(window.location.hash).toBe("");
+    expect(window.location.search).toBe(`?room=${ROOM_ID}`);
   });
 
   it("loads a saved credential after verified room entry and selects it for voice and vision", async () => {

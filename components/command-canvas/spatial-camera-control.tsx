@@ -19,21 +19,29 @@ import type {
 } from "@/lib/gesture/hand-tracking-controller";
 import { createHandTrackingController } from "@/lib/gesture/hand-tracking-controller";
 import {
+  assessOpenPalmCalibrationBaseline,
   assessHandCalibrationReach,
   buildHandCalibration,
   createFallbackHandCalibration,
+  normalizePinchDistance,
   resolvePinchThresholds,
   type HandCalibrationProfile,
   type HandCalibrationResult,
   type HandCalibrationSamples,
+  type OpenPalmCalibrationSample,
 } from "@/lib/gesture/hand-calibration";
+import {
+  isOpenPalmCalibrationPose,
+  type HandLandmarks,
+} from "@/lib/gesture/hand-intent";
 
 const MAX_CALIBRATION_REACH_SAMPLES = 240;
 const MAX_CALIBRATION_PINCH_SAMPLES = 120;
+const OPEN_PALM_SCAN_FRAMES = 6;
 const MIN_CALIBRATION_REACH_SAMPLES = 12;
 const MIN_CALIBRATION_PINCH_SAMPLES = 6;
 
-type CalibrationStage = "reach" | "open" | "closed" | "review";
+type CalibrationStage = "baseline" | "reach" | "open" | "closed" | "review";
 
 export type SpatialCalibrationResult =
   | HandCalibrationResult
@@ -114,12 +122,13 @@ export function SpatialCameraControl({
     "calibrated" | "skipped" | null
   >(null);
   const [calibrationCounts, setCalibrationCounts] = useState({
+    baseline: 0,
     reach: 0,
     open: 0,
     closed: 0,
   });
   const [calibrationStage, setCalibrationStage] =
-    useState<CalibrationStage>("reach");
+    useState<CalibrationStage>("baseline");
   const [calibrationError, setCalibrationError] = useState<string | null>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -135,7 +144,7 @@ export function SpatialCameraControl({
   const calibrationSamplesRef = useRef<HandCalibrationSamples>(
     emptyCalibrationSamples(calibrationDeviceKey),
   );
-  const calibrationStageRef = useRef<CalibrationStage>("reach");
+  const calibrationStageRef = useRef<CalibrationStage>("baseline");
   const calibrationTrackIdRef = useRef<string | null>(null);
   const previousCalibrationOpenRef = useRef(false);
   const calibrationDeviceKeyRef = useRef(calibrationDeviceKey);
@@ -197,12 +206,12 @@ export function SpatialCameraControl({
     calibrationSamplesRef.current = emptyCalibrationSamples(
       calibrationDeviceKeyRef.current,
     );
-    calibrationStageRef.current = "reach";
+    calibrationStageRef.current = "baseline";
     calibrationTrackIdRef.current = null;
     setLastSensorFrame(null);
-    setCalibrationStage("reach");
+    setCalibrationStage("baseline");
     setCalibrationError(null);
-    setCalibrationCounts({ reach: 0, open: 0, closed: 0 });
+    setCalibrationCounts({ baseline: 0, reach: 0, open: 0, closed: 0 });
   }, []);
 
   const beginCalibrationCapture = useCallback(() => {
@@ -220,11 +229,15 @@ export function SpatialCameraControl({
     (samples: HandCalibrationSamples) => {
       setCalibrationCounts((counts) => {
         const next = {
+          baseline: stableOpenPalmFrameCount(
+            samples.openPalmSamples ?? [],
+          ),
           reach: samples.reachSamples.length,
           open: samples.openPinchRatios.length,
           closed: samples.closedPinchRatios.length,
         };
-        return counts.reach === next.reach &&
+        return counts.baseline === next.baseline &&
+          counts.reach === next.reach &&
           counts.open === next.open &&
           counts.closed === next.closed
           ? counts
@@ -253,7 +266,13 @@ export function SpatialCameraControl({
       if (activeTrackId !== hand.trackId)
         calibrationTrackIdRef.current = hand.trackId;
       const pointer = hand.measurements.indexTip;
-      const pinchRatio = hand.measurements.pinchRatio;
+      const current = calibrationSamplesRef.current;
+      const pinchRatio = normalizedCalibrationPinchRatio(
+        hand.measurements.pinchDistance,
+        hand.measurements.palmScale,
+        current.openPalmSamples,
+        hand.measurements.pinchRatio,
+      );
       if (
         !Number.isFinite(pointer.x) ||
         !Number.isFinite(pointer.y) ||
@@ -263,9 +282,33 @@ export function SpatialCameraControl({
         pointer.y > 1
       )
         return;
-      const current = calibrationSamplesRef.current;
       let next = current;
-      if (calibrationStageRef.current === "reach")
+      if (
+        calibrationStageRef.current === "baseline" &&
+        hand.measurements.confidence >= 0.5 &&
+        hand.measurements.thumbTipConfidence >= 0.5 &&
+        isOpenPalmCalibrationPose(hand.landmarks, 0.5)
+      )
+        next = {
+          ...current,
+          openPalmSamples: appendRecentCalibrationSample(
+            current.openPalmSamples ?? [],
+            {
+              center: hand.measurements.palmMcpCentroid,
+              palmScale: hand.measurements.palmScale,
+              pinchDistance: hand.measurements.pinchDistance,
+              orientationRadians: openPalmOrientationRadians(hand.landmarks),
+              confidence: Math.min(
+                hand.confidence,
+                hand.measurements.confidence,
+                hand.measurements.indexTipConfidence,
+                hand.measurements.thumbTipConfidence,
+              ),
+            },
+            OPEN_PALM_SCAN_FRAMES,
+          ),
+        };
+      else if (calibrationStageRef.current === "reach")
         next = {
           ...current,
           reachSamples: appendRecentCalibrationSample(
@@ -316,8 +359,15 @@ export function SpatialCameraControl({
     if (observation.mode === "idle" || observation.mode === "bimanual_pinch")
       return;
     const pointer = observation.measurements?.indexTip ?? observation.pointer;
-    const pinchRatio =
-      observation.measurements?.pinchRatio ?? observation.pinchRatio;
+    const current = calibrationSamplesRef.current;
+    const pinchRatio = observation.measurements
+      ? normalizedCalibrationPinchRatio(
+          observation.measurements.pinchDistance,
+          observation.measurements.palmScale,
+          current.openPalmSamples,
+          observation.measurements.pinchRatio,
+        )
+      : observation.pinchRatio;
     if (
       !Number.isFinite(pointer.x) ||
       !Number.isFinite(pointer.y) ||
@@ -327,7 +377,31 @@ export function SpatialCameraControl({
       pointer.y > 1
     )
       return;
-    const current = calibrationSamplesRef.current;
+    const openPalmSamples =
+      calibrationStageRef.current === "baseline" &&
+      observation.mode === "open_palm" &&
+      observation.measurements &&
+      observation.landmarks &&
+      isOpenPalmCalibrationPose(observation.landmarks, 0.5)
+        ? appendRecentCalibrationSample(
+            current.openPalmSamples ?? [],
+            {
+              center: observation.measurements.palmMcpCentroid,
+              palmScale: observation.measurements.palmScale,
+              pinchDistance: observation.measurements.pinchDistance,
+              orientationRadians: openPalmOrientationRadians(
+                observation.landmarks,
+              ),
+              confidence: Math.min(
+                observation.confidence,
+                observation.measurements.confidence,
+                observation.measurements.indexTipConfidence,
+                observation.measurements.thumbTipConfidence,
+              ),
+            },
+            OPEN_PALM_SCAN_FRAMES,
+          )
+        : current.openPalmSamples;
     const reachSamples =
       calibrationStageRef.current === "reach"
         ? appendRecentCalibrationSample(
@@ -357,6 +431,7 @@ export function SpatialCameraControl({
         : current.closedPinchRatios;
     calibrationSamplesRef.current = {
       ...current,
+      openPalmSamples,
       reachSamples,
       openPinchRatios,
       closedPinchRatios,
@@ -368,6 +443,19 @@ export function SpatialCameraControl({
     calibrationStageRef.current = stage;
     setCalibrationStage(stage);
     setCalibrationError(null);
+  }
+
+  function continueFromOpenPalmBaseline() {
+    const result = assessOpenPalmCalibrationBaseline(
+      (calibrationSamplesRef.current.openPalmSamples ?? []).slice(
+        -OPEN_PALM_SCAN_FRAMES,
+      ),
+    );
+    if (!result.accepted) {
+      setCalibrationError(calibrationRefusalMessage(result.reason));
+      return;
+    }
+    setCalibrationCaptureStage("reach");
   }
 
   function continueFromReach() {
@@ -483,7 +571,10 @@ export function SpatialCameraControl({
               ? "pointConfidence"
               : "pinchConfidence"]: observation.confidence,
           }));
-        if (calibrationOpenRef.current && !sensorFramesAvailable)
+        if (
+          calibrationOpenRef.current &&
+          (!sensorFramesAvailable || calibrationStageRef.current === "baseline")
+        )
           captureCalibrationObservation(observation);
         if (spatialModeStartedRef.current && !calibrationOpenRef.current)
           observationHandlerRef.current?.(observation);
@@ -860,7 +951,7 @@ export function SpatialCameraControl({
             {previewExpanded && lastSensorFrame?.hands.length === 0
               ? "READY · show one hand"
               : previewExpanded && calibrationTrackedHands.length > 0
-                ? `TRACKED · ${calibrationStage === "reach" ? "move fingertip around your comfortable area" : calibrationStage === "open" ? "hold fingers apart" : calibrationStage === "closed" ? "touch thumb and index" : "ready to apply"}`
+                ? `TRACKED · ${calibrationStage === "baseline" ? "hold your whole hand open" : calibrationStage === "reach" ? "move fingertip around your comfortable area" : calibrationStage === "open" ? "hold fingers apart" : calibrationStage === "closed" ? "touch thumb and index" : "ready to apply"}`
               : detectedMode === "pinch"
                 ? "PINCH · ready to hold"
                 : detectedMode === "bimanual_pinch"
@@ -1025,17 +1116,23 @@ export function SpatialCameraControl({
         <div className="camera-calibration-actions" aria-label="Hand calibration samples">
           <div className="camera-calibration-progress" role="status">
             <strong>
-              {calibrationStage === "reach"
-                ? `1 of 3 · Map comfortable reach · ${calibrationCounts.reach} samples`
+              {calibrationStage === "baseline"
+                ? calibrationCounts.baseline >= MIN_CALIBRATION_PINCH_SAMPLES
+                  ? `1 of 4 · Open-hand scan complete · ${calibrationCounts.baseline} stable frames`
+                  : `1 of 4 · Scanning open hand — ${calibrationCounts.baseline}/${OPEN_PALM_SCAN_FRAMES} stable frames`
+                : calibrationStage === "reach"
+                ? `2 of 4 · Map comfortable reach · ${calibrationCounts.reach} samples`
                 : calibrationStage === "open"
-                  ? `2 of 3 · Open fingers · ${calibrationCounts.open} samples`
+                  ? `3 of 4 · Open fingers · ${calibrationCounts.open} samples`
                   : calibrationStage === "closed"
-                    ? `3 of 3 · Touch thumb and index · ${calibrationCounts.closed} samples`
+                    ? `4 of 4 · Touch thumb and index · ${calibrationCounts.closed} samples`
                     : "Calibration ready to review"}
             </strong>
-            <span>{calibrationCounts.reach} reach · {calibrationCounts.open} open · {calibrationCounts.closed} closed</span>
+            <span>{calibrationCounts.baseline} baseline · {calibrationCounts.reach} reach · {calibrationCounts.open} open · {calibrationCounts.closed} closed</span>
             <small>
-              {calibrationStage === "reach"
+              {calibrationStage === "baseline"
+                ? "Hold one whole open hand comfortably in frame. All 21 landmarks must remain visible and stable while CommandCanvas learns 2D hand scale, center, envelope, and confidence."
+                : calibrationStage === "reach"
                 ? "Move your index fingertip around a small, comfortable rectangle. You do not need to reach the camera edges; this region maps to the entire canvas."
                 : calibrationStage === "open"
                   ? "Hold one hand naturally open. Raw fingertip distance is recorded even when no gesture label appears."
@@ -1044,7 +1141,20 @@ export function SpatialCameraControl({
                     : "Your reach is frozen, so open and closed samples cannot shrink the usable canvas area."}
             </small>
           </div>
-          {calibrationStage === "reach" ? (
+          {calibrationStage === "baseline" ? (
+            <button
+              type="button"
+              className="camera-calibration-primary"
+              aria-label="Continue to reach mapping"
+              disabled={
+                status.state !== "ready" ||
+                calibrationCounts.baseline < MIN_CALIBRATION_PINCH_SAMPLES
+              }
+              onClick={continueFromOpenPalmBaseline}
+            >
+              Next · map reach
+            </button>
+          ) : calibrationStage === "reach" ? (
             <button
               type="button"
               className="camera-calibration-primary"
@@ -1270,10 +1380,52 @@ function emptyCalibrationSamples(deviceKey: string): HandCalibrationSamples {
     deviceKey,
     mirrorX: true,
     createdAt: Date.now(),
+    openPalmSamples: [],
     reachSamples: [],
     closedPinchRatios: [],
     openPinchRatios: [],
   };
+}
+
+function stableOpenPalmFrameCount(
+  samples: readonly OpenPalmCalibrationSample[],
+) {
+  const recent = samples.slice(-OPEN_PALM_SCAN_FRAMES);
+  if (recent.length < OPEN_PALM_SCAN_FRAMES) return recent.length;
+  if (assessOpenPalmCalibrationBaseline(recent).accepted)
+    return OPEN_PALM_SCAN_FRAMES;
+  // Keep the scan recoverable: discard the moving prefix conceptually and
+  // report a stable suffix while the six-frame sliding window refills.
+  for (let start = 1; start < recent.length; start += 1) {
+    const suffix = recent.slice(start);
+    if (assessOpenPalmCalibrationBaseline(suffix).accepted)
+      return suffix.length;
+  }
+  return 0;
+}
+
+function openPalmOrientationRadians(landmarks: HandLandmarks) {
+  const wrist = landmarks[0];
+  const middleMcp = landmarks[9];
+  return Math.atan2(middleMcp.y - wrist.y, middleMcp.x - wrist.x);
+}
+
+function normalizedCalibrationPinchRatio(
+  pinchDistance: number,
+  palmScale: number,
+  openPalmSamples: readonly OpenPalmCalibrationSample[] | undefined,
+  fallbackRatio: number,
+) {
+  const baseline = assessOpenPalmCalibrationBaseline(openPalmSamples ?? []);
+  try {
+    return normalizePinchDistance(
+      pinchDistance,
+      palmScale,
+      baseline.accepted ? baseline.baseline : null,
+    );
+  } catch {
+    return fallbackRatio;
+  }
 }
 
 function appendRecentCalibrationSample<T>(
@@ -1328,6 +1480,8 @@ function appendStableClosedPinchSample(
 function calibrationRefusalMessage(
   reason: Exclude<HandCalibrationResult, { accepted: true }>["reason"],
 ) {
+  if (reason === "open_palm_not_established")
+    return "Calibration needs one stable whole open hand first. Keep all fingers and the wrist visible and still for a moment.";
   if (reason === "insufficient_reach")
     return "Calibration needs more reach samples. Move your fingertip around a comfortable rectangle, then try again.";
   if (reason === "reach_too_large")

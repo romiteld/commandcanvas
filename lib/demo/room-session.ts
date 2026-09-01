@@ -513,6 +513,12 @@ export function createDemoRoomSession(
           onCursor: handleCursor,
           onRevision: requestRevisionReload,
           onStatus: handleRealtimeStatus,
+          ...(typeof verifiedCanvas.hardExpiresAtEpochMs === "number"
+            ? {
+                hardExpiresAtEpochMs:
+                  verifiedCanvas.hardExpiresAtEpochMs,
+              }
+            : {}),
         };
         realtime = dependencies.createRealtime(realtimeOptions);
         await realtime.connect();

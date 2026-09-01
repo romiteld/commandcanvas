@@ -122,7 +122,7 @@ describe("deliberate index-point pose", () => {
     });
   });
 
-  it("refuses a loose open hand that is neither a palm nor a point", () => {
+  it("accepts a natural index point with relaxed, partially curled support fingers", () => {
     const transition = interpretHandFrame(
       createInitialHandIntentState(),
       frame(LOOSE_OPEN_HAND),
@@ -130,9 +130,9 @@ describe("deliberate index-point pose", () => {
     );
 
     expect(transition.output).toMatchObject({
-      accepted: false,
-      mode: "idle",
-      reason: "no_deliberate_gesture",
+      accepted: true,
+      mode: "point",
+      pointer: { x: 0.31, y: 0.18 },
     });
   });
 

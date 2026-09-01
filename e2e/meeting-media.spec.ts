@@ -4,6 +4,7 @@ import {
   captureCreatedRoom,
   deleteHostedRoom,
 } from "./support/hosted-room";
+import { enterLimitedJudgePreview } from "./support/limited-judge-preview";
 import { requireProductionApiProxyOrigin } from "../lib/testing/live-probe-guards";
 
 test.use({
@@ -33,6 +34,7 @@ test("keeps collapsed meeting controls at least 44px at a 390px viewport", async
 
   try {
     await page.goto("/demo");
+    await enterLimitedJudgePreview(page);
     await expect(page.getByText("Live demo room")).toBeVisible({
       timeout: 20_000,
     });
@@ -95,6 +97,7 @@ test("two no-signup browsers exchange real WebRTC media after both opt in", asyn
 
   try {
     await pageA.goto("/demo");
+    await enterLimitedJudgePreview(pageA);
     await expect(pageA.getByText("Live demo room")).toBeVisible({
       timeout: 20_000,
     });
@@ -103,6 +106,7 @@ test("two no-signup browsers exchange real WebRTC media after both opt in", asyn
     await pageA.getByRole("button", { name: "Copy participant invite" }).click();
     const inviteUrl = await pageA.evaluate(() => navigator.clipboard.readText());
     await pageB.goto(inviteUrl);
+    await enterLimitedJudgePreview(pageB);
     await expect(pageB.getByText("Live demo room")).toBeVisible({
       timeout: 20_000,
     });

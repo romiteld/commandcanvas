@@ -6,12 +6,14 @@ import {
   handleRealtimeSessionRequest,
   type RealtimeSessionRouteDependencies,
 } from "@/lib/realtime-voice/route-handler";
+import { createTestOpenAiApiKey } from "@/lib/testing/openai-key-fixture";
 
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const ACTOR_ID = "22222222-2222-4222-8222-222222222222";
 const AUTHORIZATION = "Bearer header.payload.signature";
-const SESSION_OPENAI_API_KEY =
-  "sk-test-session-only-commandcanvas-key-123456789";
+const SESSION_OPENAI_API_KEY = createTestOpenAiApiKey(
+  "test-session-only-commandcanvas-key",
+);
 
 function dependencies(
   overrides: Partial<RealtimeSessionRouteDependencies> = {},

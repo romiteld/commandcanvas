@@ -19,7 +19,33 @@ export interface HandCalibrationProfile {
   readonly pinchOpenRatio: number;
   readonly mirrorX: boolean;
   readonly createdAt: number;
+  /** Robust 2D open-hand reference. This is geometry, not depth or mass. */
+  readonly openPalmBaseline?: OpenPalmCalibrationBaseline;
 }
+
+export interface OpenPalmCalibrationSample {
+  readonly center: NormalizedPoint;
+  /** Observed palm width in normalized camera coordinates. */
+  readonly palmScale: number;
+  readonly pinchDistance: number;
+  /** Wrist-to-middle-MCP axis in image-space radians. */
+  readonly orientationRadians: number;
+  readonly confidence: number;
+}
+
+export interface OpenPalmCalibrationBaseline {
+  readonly center: NormalizedPoint;
+  readonly palmScale: number;
+  readonly openPinchRatio: number;
+  readonly orientationRadians: number;
+  readonly confidence: number;
+  readonly sampleCount: number;
+  readonly envelope: NormalizedRect;
+}
+
+export type OpenPalmCalibrationResult =
+  | { readonly accepted: true; readonly baseline: OpenPalmCalibrationBaseline }
+  | { readonly accepted: false; readonly reason: "open_palm_not_established" };
 
 export interface HandCalibrationSamples {
   readonly deviceKey: string;
@@ -28,6 +54,8 @@ export interface HandCalibrationSamples {
   readonly reachSamples: readonly NormalizedPoint[];
   readonly closedPinchRatios: readonly number[];
   readonly openPinchRatios: readonly number[];
+  /** Present for the deliberate open-palm-first calibration flow. */
+  readonly openPalmSamples?: readonly OpenPalmCalibrationSample[];
 }
 
 export type HandCalibrationResult =
@@ -38,7 +66,8 @@ export type HandCalibrationResult =
         | "insufficient_reach"
         | "reach_too_small"
         | "reach_too_large"
-        | "pinch_not_separated";
+        | "pinch_not_separated"
+        | "open_palm_not_established";
       readonly profile: HandCalibrationProfile;
     };
 
@@ -198,6 +227,7 @@ const FALLBACK_CAMERA_BOUNDS: NormalizedRect = Object.freeze({
 const FALLBACK_CLOSED_PINCH_RATIO = 0.28;
 const FALLBACK_OPEN_PINCH_RATIO = 0.68;
 const CAMERA_BOUND_EXPANSION = 0.05;
+const DEFAULT_EDGE_EXTRAPOLATION_FRACTION = 0.1;
 // A comfortable central reach should map to the whole canvas. Requiring nearly
 // half of the camera frame forced users to leave the ergonomic interaction zone.
 const MIN_CAMERA_SPAN = 0.18;
@@ -222,6 +252,12 @@ export function buildHandCalibration(
   samples: HandCalibrationSamples,
 ): HandCalibrationResult {
   const fallback = createFallbackHandCalibration(samples);
+  const openPalm =
+    samples.openPalmSamples === undefined
+      ? null
+      : assessOpenPalmCalibrationBaseline(samples.openPalmSamples);
+  if (openPalm && !openPalm.accepted)
+    return { accepted: false, reason: openPalm.reason, profile: fallback };
   const reach = assessHandCalibrationReach(samples.reachSamples);
   if (!reach.accepted)
     return { accepted: false, reason: reach.reason, profile: fallback };
@@ -241,8 +277,114 @@ export function buildHandCalibration(
       pinchOpenRatio: pinch.open,
       mirrorX: samples.mirrorX,
       createdAt: samples.createdAt,
+      ...(openPalm?.accepted
+        ? { openPalmBaseline: openPalm.baseline }
+        : {}),
     },
   };
+}
+
+/**
+ * Establishes a robust 2D scale and center before pointing or pinching. A
+ * monocular camera cannot infer physical mass or reliable metric depth, so the
+ * baseline deliberately contains only normalized image geometry/confidence.
+ */
+export function assessOpenPalmCalibrationBaseline(
+  samples: readonly OpenPalmCalibrationSample[],
+): OpenPalmCalibrationResult {
+  const valid = samples.filter(isValidOpenPalmSample);
+  if (valid.length < 4)
+    return { accepted: false, reason: "open_palm_not_established" };
+  const center = {
+    x: rounded(percentile(valid.map((sample) => sample.center.x), 0.5)),
+    y: rounded(percentile(valid.map((sample) => sample.center.y), 0.5)),
+  };
+  const palmScale = rounded(
+    percentile(valid.map((sample) => sample.palmScale), 0.5),
+  );
+  const centerSpanX =
+    percentile(valid.map((sample) => sample.center.x), 0.9) -
+    percentile(valid.map((sample) => sample.center.x), 0.1);
+  const centerSpanY =
+    percentile(valid.map((sample) => sample.center.y), 0.9) -
+    percentile(valid.map((sample) => sample.center.y), 0.1);
+  const minimumScale = percentile(
+    valid.map((sample) => sample.palmScale),
+    0.1,
+  );
+  const maximumScale = percentile(
+    valid.map((sample) => sample.palmScale),
+    0.9,
+  );
+  const orientationRadians = circularMean(
+    valid.map((sample) => sample.orientationRadians),
+  );
+  const orientationSpread = percentile(
+    valid.map((sample) =>
+      Math.abs(shortestAngle(sample.orientationRadians - orientationRadians)),
+    ),
+    0.9,
+  );
+  const maximumCenterSpan = Math.max(0.08, palmScale * 0.6);
+  if (
+    centerSpanX > maximumCenterSpan ||
+    centerSpanY > maximumCenterSpan ||
+    minimumScale < palmScale * 0.72 ||
+    maximumScale > palmScale * 1.28 ||
+    orientationSpread > Math.PI / 8
+  )
+    return { accepted: false, reason: "open_palm_not_established" };
+  const openPinchRatio = rounded(
+    percentile(
+      valid.map((sample) => sample.pinchDistance / sample.palmScale),
+      0.5,
+    ),
+  );
+  const radius = clamp(palmScale * 1.25, 0.04, 0.45);
+  const left = clamp(center.x - radius, 0, 1);
+  const right = clamp(center.x + radius, 0, 1);
+  const top = clamp(center.y - radius, 0, 1);
+  const bottom = clamp(center.y + radius, 0, 1);
+  return {
+    accepted: true,
+    baseline: {
+      center,
+      palmScale,
+      openPinchRatio,
+      orientationRadians: rounded(orientationRadians),
+      confidence: rounded(
+        percentile(valid.map((sample) => sample.confidence), 0.1),
+      ),
+      sampleCount: valid.length,
+      envelope: {
+        x: rounded(left),
+        y: rounded(top),
+        width: rounded(right - left),
+        height: rounded(bottom - top),
+      },
+    },
+  };
+}
+
+/** Normalizes thumb/index distance by observed 2D palm width. */
+export function normalizePinchDistance(
+  pinchDistance: number,
+  observedPalmScale: number,
+  baseline?: Pick<OpenPalmCalibrationBaseline, "palmScale"> | null,
+) {
+  if (!Number.isFinite(pinchDistance) || pinchDistance < 0)
+    throw new RangeError("Pinch distance must be finite and non-negative.");
+  const baselineScale = baseline?.palmScale;
+  const observedScaleIsPlausible =
+    Number.isFinite(observedPalmScale) &&
+    observedPalmScale > 0 &&
+    (!baselineScale ||
+      (observedPalmScale >= baselineScale * 0.45 &&
+        observedPalmScale <= baselineScale * 2.2));
+  const scale = observedScaleIsPlausible ? observedPalmScale : baselineScale;
+  if (!scale || !Number.isFinite(scale) || scale <= 0)
+    throw new RangeError("Observed palm scale must be finite and positive.");
+  return rounded(pinchDistance / scale);
 }
 
 export function assessHandCalibrationReach(
@@ -508,8 +650,9 @@ function calibratedPinchVoteWindowMs(
 }
 
 /**
- * Maps comfortable camera reach to the canvas interior. Smoothstep reaches the
- * safe boundary with a zero slope, avoiding a hard-clamped edge feel.
+ * Maps comfortable camera reach linearly to a safe interior, then extrapolates
+ * a short calibrated margin to the literal viewport edge. The camera preview
+ * dimensions never participate in this mapping.
  */
 export function mapCalibratedPointer(
   calibration: HandCalibrationProfile,
@@ -519,32 +662,99 @@ export function mapCalibratedPointer(
 ): MappedHandPointer {
   assertFiniteCanvas(canvas);
   const gain = gainFor(state);
+  const insetX = Math.min(calibration.safeCanvasInsetPx, canvas.width / 2);
+  const insetY = Math.min(calibration.safeCanvasInsetPx, canvas.height / 2);
+  const extrapolationFraction = edgeExtrapolationFraction(calibration);
   const normalized = {
-    x: softEdge(
+    x: mapSpatialFieldAxis(
       ((cameraPoint.x - calibration.cameraBounds.x) /
         calibration.cameraBounds.width -
         0.5) *
         gain +
         0.5,
+      insetX / canvas.width,
+      extrapolationFraction,
     ),
-    y: softEdge(
+    y: mapSpatialFieldAxis(
       ((cameraPoint.y - calibration.cameraBounds.y) /
         calibration.cameraBounds.height -
         0.5) *
         gain +
         0.5,
+      insetY / canvas.height,
+      extrapolationFraction,
     ),
   };
-  const insetX = Math.min(calibration.safeCanvasInsetPx, canvas.width / 2);
-  const insetY = Math.min(calibration.safeCanvasInsetPx, canvas.height / 2);
   return {
     point: {
-      x: rounded(canvas.left + insetX + normalized.x * (canvas.width - insetX * 2)),
-      y: rounded(canvas.top + insetY + normalized.y * (canvas.height - insetY * 2)),
+      x: rounded(canvas.left + normalized.x * canvas.width),
+      y: rounded(canvas.top + normalized.y * canvas.height),
     },
     normalized,
     gain,
   };
+}
+
+function isValidOpenPalmSample(sample: OpenPalmCalibrationSample) {
+  return (
+    Number.isFinite(sample.center.x) &&
+    sample.center.x >= 0 &&
+    sample.center.x <= 1 &&
+    Number.isFinite(sample.center.y) &&
+    sample.center.y >= 0 &&
+    sample.center.y <= 1 &&
+    Number.isFinite(sample.palmScale) &&
+    sample.palmScale >= 0.02 &&
+    sample.palmScale <= 0.6 &&
+    Number.isFinite(sample.pinchDistance) &&
+    sample.pinchDistance >= 0 &&
+    sample.pinchDistance <= 1 &&
+    Number.isFinite(sample.orientationRadians) &&
+    sample.orientationRadians >= -Math.PI &&
+    sample.orientationRadians <= Math.PI &&
+    Number.isFinite(sample.confidence) &&
+    sample.confidence >= 0.5 &&
+    sample.confidence <= 1
+  );
+}
+
+function circularMean(angles: readonly number[]) {
+  const sine = angles.reduce((sum, angle) => sum + Math.sin(angle), 0);
+  const cosine = angles.reduce((sum, angle) => sum + Math.cos(angle), 0);
+  return Math.atan2(sine, cosine);
+}
+
+function shortestAngle(angle: number) {
+  return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
+
+function edgeExtrapolationFraction(calibration: HandCalibrationProfile) {
+  const baseline = calibration.openPalmBaseline;
+  if (!baseline) return DEFAULT_EDGE_EXTRAPOLATION_FRACTION;
+  const shortestReach = Math.min(
+    calibration.cameraBounds.width,
+    calibration.cameraBounds.height,
+  );
+  return clamp((baseline.palmScale / shortestReach) * 0.35, 0.06, 0.18);
+}
+
+function mapSpatialFieldAxis(
+  comfortable: number,
+  safeInset: number,
+  extrapolationFraction: number,
+) {
+  if (comfortable < 0)
+    return rounded(
+      safeInset *
+        (1 - clamp(-comfortable / extrapolationFraction, 0, 1)),
+    );
+  if (comfortable > 1)
+    return rounded(
+      1 -
+        safeInset *
+          (1 - clamp((comfortable - 1) / extrapolationFraction, 0, 1)),
+    );
+  return rounded(safeInset + comfortable * (1 - safeInset * 2));
 }
 
 function calibratedPinchRatios(
@@ -875,11 +1085,6 @@ function gainFor(state: HandControlGainState) {
     case "two_hand":
       return 1;
   }
-}
-
-function softEdge(value: number) {
-  const bounded = clamp(value, 0, 1);
-  return bounded * bounded * (3 - 2 * bounded);
 }
 
 function assertFiniteCanvas(canvas: CanvasBounds) {

@@ -5,6 +5,7 @@ import {
   parseCanvasPersistenceRows,
   roomDataRowSchema,
 } from "@/lib/supabase/persistence";
+import { persistedRoomHardExpiryEpochMs } from "@/lib/supabase/room-access";
 
 export interface BrowserRoomQueryResult {
   data: unknown;
@@ -27,7 +28,11 @@ export interface BrowserRoomClient {
 }
 
 export type BrowserCanvasLoadResult =
-  | { ok: true; state: CanvasState }
+  | {
+      ok: true;
+      state: CanvasState;
+      hardExpiresAtEpochMs?: number | null;
+    }
   | {
       ok: false;
       code:
@@ -109,7 +114,13 @@ export async function loadBrowserCanvas(
         receipts: receiptResponse.data,
       });
       if (!parsed.ok) return invalidState();
-      return { ok: true, state: parsed.state };
+      const hardExpiresAtEpochMs = persistedRoomHardExpiryEpochMs({
+        mode: after.data.mode,
+        created_at: after.data.created_at,
+        demo_hard_expires_at: after.data.demo_hard_expires_at ?? null,
+      });
+      if (hardExpiresAtEpochMs === undefined) return invalidState();
+      return { ok: true, state: parsed.state, hardExpiresAtEpochMs };
     } catch {
       return roomUnavailable();
     }

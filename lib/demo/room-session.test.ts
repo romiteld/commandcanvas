@@ -91,6 +91,7 @@ function createHarness(options?: {
     accessToken: string,
     defaultApi: BrowserRoomApi,
   ) => BrowserRoomApi;
+  hardExpiresAtEpochMs?: number | null;
 }) {
   let realtimeOptions:
     | Parameters<DemoRoomSessionDependencies["createRealtime"]>[0]
@@ -188,6 +189,7 @@ function createHarness(options?: {
     vi.fn(async () => ({
       ok: true as const,
       state: options?.initialState ?? canvas(0),
+      hardExpiresAtEpochMs: options?.hardExpiresAtEpochMs,
     }));
   const hydrateCanvas = options?.hydrateCanvas ?? vi.fn(() => true);
   const dependencies = {
@@ -542,7 +544,8 @@ describe("demo room bootstrap", () => {
   });
 
   it("creates a host room with the anonymous identity, then exposes only RLS-verified state", async () => {
-    const harness = createHarness();
+    const hardExpiresAtEpochMs = Date.parse("2026-08-28T12:00:00.000Z");
+    const harness = createHarness({ hardExpiresAtEpochMs });
     const observed: string[] = [];
     harness.session.subscribe(() => observed.push(harness.session.getSnapshot().status));
 
@@ -591,6 +594,7 @@ describe("demo room bootstrap", () => {
 
     const realtime = harness.getRealtimeOptions();
     expect(realtime?.accessToken).toBe(SESSION.access_token);
+    expect(realtime?.hardExpiresAtEpochMs).toBe(hardExpiresAtEpochMs);
     expect(realtime?.participant).toEqual({
       participantId: USER_ID,
       displayName: "Danny",

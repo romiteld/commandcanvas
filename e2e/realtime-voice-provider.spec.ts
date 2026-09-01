@@ -4,11 +4,16 @@ import {
   captureCreatedRoom,
   deleteHostedRoom,
 } from "./support/hosted-room";
+import { enterLimitedJudgePreview } from "./support/limited-judge-preview";
 
 const fakeAudioPath = process.env.PLAYWRIGHT_FAKE_AUDIO_PATH;
+const providerOpenAiKey = process.env.COMMANDCANVAS_PROVIDER_OPENAI_KEY;
 
 test.use({
   permissions: ["microphone"],
+  trace: "off",
+  screenshot: "off",
+  video: "off",
   launchOptions: fakeAudioPath
     ? {
         args: [
@@ -26,7 +31,8 @@ test("regular GPT Realtime hears speech and submits a canonical canvas mutation"
   test.skip(
     process.env.RUN_OPENAI_PROVIDER_E2E !== "true" ||
       testInfo.project.name !== "chromium-desktop" ||
-      !fakeAudioPath,
+      !fakeAudioPath ||
+      !providerOpenAiKey,
   );
   test.setTimeout(90_000);
 
@@ -79,6 +85,7 @@ test("regular GPT Realtime hears speech and submits a canonical canvas mutation"
       });
     });
     await page.goto("/demo");
+    await enterLimitedJudgePreview(page);
     await expect(page.getByText("Live demo room")).toBeVisible({
       timeout: 20_000,
     });
@@ -87,6 +94,9 @@ test("regular GPT Realtime hears speech and submits a canonical canvas mutation"
     await page
       .getByRole("button", { name: "Open ChatGPT command drawer" })
       .click();
+    await page
+      .getByLabel("Your OpenAI API key")
+      .fill(providerOpenAiKey!);
     await page.getByRole("button", { name: "Start live voice" }).click();
 
     await expect(page.getByText("Listening", { exact: true })).toBeVisible({

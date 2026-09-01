@@ -73,11 +73,48 @@ test("uses a large mobile calibration surface then returns to a hideable PiP", a
   expect(geometry.scrollWidth).toBe(geometry.clientWidth);
   expect(geometry.videoObjectFit).toBe("contain");
   expect(geometry.boundaryCount).toBe(0);
-  await expect(page.getByText(/1 of 3 · map comfortable reach/i)).toBeVisible();
+  await expect(page.getByText(/1 of 4 · scanning open hand/i)).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Continue to open hand" }),
+    page.getByRole("button", { name: "Continue to reach mapping" }),
   ).toBeDisabled();
   await expect(page.getByRole("region", { name: "Hand interaction controls" })).toBeHidden();
+
+  for (const size of [
+    { width: 320, height: 568 },
+    { width: 360, height: 800 },
+    { width: 390, height: 844 },
+    { width: 430, height: 932 },
+    { width: 768, height: 1024 },
+    { width: 844, height: 390 },
+  ]) {
+    await page.setViewportSize(size);
+    const responsiveControl = await page
+      .locator(".spatial-camera-control")
+      .boundingBox();
+    const responsiveCamera = await page.locator(".camera-preview").boundingBox();
+    if (!responsiveControl || !responsiveCamera)
+      throw new Error(`Calibration geometry missing at ${size.width}x${size.height}.`);
+    const responsiveGeometry = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(
+      responsiveGeometry.scrollWidth,
+      `${size.width}x${size.height} horizontal overflow`,
+    ).toBe(responsiveGeometry.clientWidth);
+    expect(responsiveControl.x).toBeGreaterThanOrEqual(0);
+    expect(responsiveControl.y).toBeGreaterThanOrEqual(0);
+    expect(responsiveControl.x + responsiveControl.width).toBeLessThanOrEqual(
+      size.width,
+    );
+    expect(responsiveControl.y + responsiveControl.height).toBeLessThanOrEqual(
+      size.height,
+    );
+    expect(responsiveCamera.height).toBeGreaterThanOrEqual(
+      Math.min(220, size.height * 0.42),
+    );
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
 
   await page.getByRole("button", { name: "Skip hand calibration" }).click();
   await expect(page.getByText("Default controls · calibration skipped")).toHaveCount(1);

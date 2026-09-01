@@ -19,6 +19,7 @@ const room = {
   created_by: USER_ID,
   created_at: NOW,
   updated_at: NOW,
+  demo_hard_expires_at: "2026-08-28T16:00:00.000Z",
 };
 
 function fakeClient(responses: Record<string, BrowserRoomQueryResult[]>) {
@@ -68,6 +69,7 @@ describe("browser room state loader", () => {
 
     expect(result).toEqual({
       ok: true,
+      hardExpiresAtEpochMs: Date.parse("2026-08-28T16:00:00.000Z"),
       state: {
         roomId: ROOM_ID,
         revision: 0,
@@ -78,6 +80,23 @@ describe("browser room state loader", () => {
       },
     });
     expect(harness.calls.filter((call) => call.table === "rooms")).toHaveLength(2);
+  });
+
+  it("derives the legacy 24-hour deadline when a demo predates the fixed-expiry column", async () => {
+    const legacyRoom = { ...room, demo_hard_expires_at: null };
+    const harness = fakeClient({
+      rooms: [
+        { data: legacyRoom, error: null },
+        { data: legacyRoom, error: null },
+      ],
+      canvas_objects: [{ data: [], error: null }],
+      receipts: [{ data: [], error: null }],
+    });
+
+    await expect(loadBrowserCanvas(harness.client, ROOM_ID)).resolves.toMatchObject({
+      ok: true,
+      hardExpiresAtEpochMs: Date.parse(NOW) + 24 * 60 * 60 * 1_000,
+    });
   });
 
   it("retries once when a revision changes across the multi-query read", async () => {
@@ -103,6 +122,7 @@ describe("browser room state loader", () => {
 
     expect(result).toEqual({
       ok: true,
+      hardExpiresAtEpochMs: Date.parse("2026-08-28T16:00:00.000Z"),
       state: expect.objectContaining({ roomId: ROOM_ID, revision: 1 }),
     });
     expect(harness.calls.filter((call) => call.table === "rooms")).toHaveLength(4);

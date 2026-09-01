@@ -4,9 +4,14 @@ export const DIRECT_COMMAND_MAX_LENGTH = 280;
 
 export type DirectCanvasIntent =
   | { type: "create_note"; text?: string }
-  | { type: "create_semantic_object"; object: NewCanvasObject }
+  | {
+      type: "create_semantic_object";
+      object: NewCanvasObject;
+      placement?: "current_viewport";
+    }
   | { type: "start_thought" }
   | { type: "append_thought"; text: string }
+  | { type: "append_selected_note"; text: string }
   | { type: "finish_thought" }
   | { type: "create_board" }
   | { type: "create_schedule" }
@@ -73,7 +78,15 @@ export function parseDirectCanvasCommand(
     .replace(/\s+/g, " ")
     .trim();
   const note = noteIntent(transcript, normalized);
+  const selectedNoteText = selectedNoteAppendText(transcript);
   const candidates: IntentCandidate[] = [
+    {
+      intent: {
+        type: "append_selected_note",
+        text: selectedNoteText ?? "",
+      },
+      matches: selectedNoteText !== null,
+    },
     { intent: note, matches: isNoteCommand(normalized) },
     {
       intent: { type: "start_thought" },
@@ -236,4 +249,18 @@ function noteIntent(
     .replace(/\s+/g, " ")
     .trim();
   return content ? { type: "create_note", text: content } : { type: "create_note" };
+}
+
+function selectedNoteAppendText(original: string): string | null {
+  const patterns = [
+    /^(?:please\s+)?fill(?:\s+in)?\s+(?:(?:this|that|selected|new|the(?:\s+selected|\s+new)?)\s+)?(?:note|thought)(?:\s+card)?\s+(?:with|using)\s+(.+)$/i,
+    /^(?:please\s+)?(?:append|add|put)\s+(.+?)\s+(?:to|in|into)\s+(?:(?:this|that|selected|new|the(?:\s+selected|\s+new)?)\s+)?(?:note|thought)(?:\s+card)?$/i,
+    /^(?:please\s+)?update\s+(?:(?:this|that|selected|new|the(?:\s+selected|\s+new)?)\s+)?(?:note|thought)(?:\s+card)?\s+(?:with|to\s+say)\s+(.+)$/i,
+  ] as const;
+
+  for (const pattern of patterns) {
+    const text = original.match(pattern)?.[1]?.replace(/\s+/g, " ").trim();
+    if (text) return text;
+  }
+  return null;
 }

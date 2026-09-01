@@ -11,6 +11,7 @@ import {
   captureCreatedRoom,
   deleteHostedRoom,
 } from "./support/hosted-room";
+import { enterLimitedJudgePreview } from "./support/limited-judge-preview";
 import { requireProductionApiProxyOrigin } from "../lib/testing/live-probe-guards";
 
 const fakeCameraPath = process.env.COMMANDCANVAS_FAKE_CAMERA_PATH;
@@ -60,6 +61,7 @@ test("starts the local hand detector from a real browser camera stream and relea
 
   try {
     await page.goto("/demo");
+    await enterLimitedJudgePreview(page);
     await expect(page.getByText("Live demo room")).toBeVisible({
       timeout: 20_000,
     });
@@ -251,6 +253,7 @@ test("starts the in-page MediaPipe recovery with classic WASM assets", async ({
 
   try {
     await page.goto("/demo");
+    await enterLimitedJudgePreview(page);
     await expect(page.getByText("Live demo room")).toBeVisible({
       timeout: 20_000,
     });

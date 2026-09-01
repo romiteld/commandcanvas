@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -48,6 +48,54 @@ describe("server-only dependency boundaries", () => {
 });
 
 describe("user-owned OpenAI credential boundary", () => {
+  it("keeps credential-shaped literals out of tracked source and test fixtures", () => {
+    const credentialPrefix = ["s", "k", "-"].join("");
+    const credentialPattern = new RegExp(
+      `${credentialPrefix}[A-Za-z0-9_-]{20,}`,
+      "g",
+    );
+    const textExtensions = new Set([
+      ".example",
+      ".js",
+      ".json",
+      ".md",
+      ".mjs",
+      ".sql",
+      ".ts",
+      ".tsx",
+      ".yaml",
+      ".yml",
+    ]);
+    const excludedDirectories = new Set([
+      ".git",
+      ".next",
+      "node_modules",
+      "playwright-report",
+      "test-results",
+    ]);
+    const files: string[] = [];
+    const visit = (directory: string) => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          if (!excludedDirectories.has(entry.name))
+            visit(path.join(directory, entry.name));
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        const absolutePath = path.join(directory, entry.name);
+        if (textExtensions.has(path.extname(entry.name)))
+          files.push(path.relative(root, absolutePath));
+      }
+    };
+    visit(root);
+    const violations = files.flatMap((file) => {
+      const matches = read(file).match(credentialPattern) ?? [];
+      return matches.map(() => file);
+    });
+
+    expect(violations).toEqual([]);
+  });
+
   it("does not advertise deployment-owned OpenAI keys", () => {
     const exampleEnvironment = read(".env.example");
 
@@ -87,6 +135,30 @@ describe("user-owned OpenAI credential boundary", () => {
     expect(realtimeDependencies).toContain("resolveAccountOpenAiApiKey");
     expect(visionDependencies).toContain("resolveAccountOpenAiApiKey");
     expect(credentialService).not.toMatch(/OPENAI_API_KEY|OPENAI_REALTIME_API_KEY/);
+  });
+});
+
+describe("account-first public positioning", () => {
+  it("puts the signed workspace before the limited judge preview", () => {
+    const readme = read("README.md");
+    const signedWorkspace = readme.indexOf("Signed workspace:");
+    const judgePreview = readme.indexOf("Limited judge preview:");
+
+    expect(signedWorkspace).toBeGreaterThanOrEqual(0);
+    expect(judgePreview).toBeGreaterThan(signedWorkspace);
+    expect(readme).not.toMatch(/\bfree demo\b|\bunlimited demo\b/i);
+  });
+
+  it.each([
+    "README.md",
+    "docs/judge-instructions.md",
+    "docs/devpost-submission.md",
+    "docs/video-shot-list.md",
+  ])("describes the public preview boundary in %s", (relativePath) => {
+    const copy = read(relativePath);
+
+    expect(copy).toMatch(/limited judge preview|bounded judge preview/i);
+    expect(copy).toMatch(/temporary/i);
   });
 });
 

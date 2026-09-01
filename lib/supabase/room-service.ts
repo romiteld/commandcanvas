@@ -227,10 +227,19 @@ export function createRoomService(
         p_color: input.data.color,
         p_join_token: joinToken,
       });
-      if (providerErrorMessage(response.error) === "demo_room_limit_reached")
+      const providerMessage = providerErrorMessage(response.error);
+      if (providerMessage === "demo_room_limit_reached")
         return failure(
           "demo_room_limit_reached",
           "Reset one of your demo rooms before creating another.",
+        );
+      if (
+        providerMessage === "demo_room_global_capacity_reached" ||
+        providerMessage === "demo_room_daily_limit_reached"
+      )
+        return failure(
+          "demo_room_limit_reached",
+          "The limited judge preview is at capacity. Sign in to start a workspace or try again later.",
         );
       if (hasError(response))
         return failure("create_unavailable", "Room could not be created.");

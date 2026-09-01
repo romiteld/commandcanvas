@@ -23,7 +23,7 @@ describe("CommandCanvas landing page", () => {
     ).toBeInTheDocument();
   });
 
-  it("routes the primary actions to usable product and source destinations", () => {
+  it("routes the primary actions to the signed workspace and keeps the judge preview secondary", () => {
     render(<Home />);
 
     const navigation = screen.getByRole("navigation", {
@@ -32,23 +32,29 @@ describe("CommandCanvas landing page", () => {
     expect(
       within(navigation).getByRole("link", { name: /commandcanvas home/i }),
     ).toHaveAttribute("href", "/");
-    expect(within(navigation).getByRole("link", { name: /^demo$/i })).toHaveAttribute(
+    expect(within(navigation).getByRole("link", { name: /judge preview/i })).toHaveAttribute(
       "href",
       "/demo",
     );
 
-    const demoLinks = screen.getAllByRole("link", {
-      name: /try the demo|launch demo/i,
+    const workspaceLinks = screen.getAllByRole("link", {
+      name: /open commandcanvas|start a meeting/i,
     });
-    expect(demoLinks).not.toHaveLength(0);
-    for (const link of demoLinks) {
-      expect(link).toHaveAttribute("href", "/demo");
+    expect(workspaceLinks).not.toHaveLength(0);
+    for (const link of workspaceLinks) {
+      expect(link).toHaveAttribute("href", "/meet");
     }
 
-    expect(screen.getByRole("link", { name: /start a meeting/i })).toHaveAttribute(
-      "href",
-      "/meet",
-    );
+    const previewLinks = screen.getAllByRole("link", {
+      name: /judge preview/i,
+    });
+    expect(previewLinks).not.toHaveLength(0);
+    for (const link of previewLinks) {
+      expect(link).toHaveAttribute("href", "/demo");
+    }
+    expect(
+      screen.queryByRole("link", { name: /try the demo|launch demo/i }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /view repository/i })).toHaveAttribute(
       "href",
       "https://github.com/romiteld/commandcanvas",

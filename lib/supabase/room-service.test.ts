@@ -485,6 +485,44 @@ describe("CommandCanvas room service", () => {
     expect(JSON.stringify(result)).not.toContain("provider-only");
   });
 
+  it.each([
+    "demo_room_global_capacity_reached",
+    "demo_room_daily_limit_reached",
+  ])("maps the bounded public-preview refusal %s to one actionable response", async (providerMessage) => {
+    const harness = createClient({
+      rpcResults: [
+        {
+          data: null,
+          error: {
+            code: "P0001",
+            message: providerMessage,
+            details: "private provider capacity detail",
+          },
+        },
+      ],
+    });
+
+    const result = await createRoomService(
+      harness.client,
+      dependencies,
+    ).createRoom(HOST_ID, {
+      mode: "demo",
+      name: "Limited judge preview",
+      displayName: "Danny",
+      color: "#275ed7",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "demo_room_limit_reached",
+        message:
+          "The limited judge preview is at capacity. Sign in to start a workspace or try again later.",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("provider");
+  });
+
   it("deletes one exact demo room through the host-checked RPC", async () => {
     const harness = createClient({
       rpcResults: [

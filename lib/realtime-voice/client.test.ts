@@ -9,11 +9,13 @@ import {
   type RealtimeVoicePeerConnection,
   type RealtimeVoiceRemoteAudio,
 } from "@/lib/realtime-voice/client";
+import { createTestOpenAiApiKey } from "@/lib/testing/openai-key-fixture";
 
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const AUTHORIZATION = "header.payload.signature";
-const SESSION_OPENAI_API_KEY =
-  "sk-test-session-only-commandcanvas-key-123456789";
+const SESSION_OPENAI_API_KEY = createTestOpenAiApiKey(
+  "test-session-only-commandcanvas-key",
+);
 const SEMANTIC_NOTE_OBJECT = {
   id: "note-voice-client",
   type: "note",

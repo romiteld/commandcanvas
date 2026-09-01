@@ -5,6 +5,7 @@ import {
   deleteHostedRoom,
   readSessionRoomId,
 } from "./support/hosted-room";
+import { enterLimitedJudgePreview } from "./support/limited-judge-preview";
 import { requireProductionApiProxyOrigin } from "../lib/testing/live-probe-guards";
 
 test("opens two real no-signup browsers with Presence, cursors, and durable collaboration", async ({
@@ -37,6 +38,7 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
 
   try {
     await pageA.goto("/demo");
+    await enterLimitedJudgePreview(pageA);
     await expect(pageA.getByText("Live demo room")).toBeVisible({ timeout: 20_000 });
     await expect(
       pageA.getByRole("button", { name: "Select Launch readiness" }),
@@ -71,6 +73,7 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
     expect(inviteUrl).toContain("&join=");
 
     await pageB.goto(inviteUrl);
+    await enterLimitedJudgePreview(pageB);
     await expect(pageB.getByText("Live demo room")).toBeVisible({ timeout: 20_000 });
     await expect(pageB).toHaveURL(`${origin}/demo`);
     await expect(pageA.getByLabel("2 participants present")).toBeVisible({
@@ -265,6 +268,7 @@ test("reopens the same recent demo room when a fresh tab retains only the Supaba
 
   try {
     await pageA.goto("/demo");
+    await enterLimitedJudgePreview(pageA);
     await expect(pageA.getByText("Live demo room")).toBeVisible({
       timeout: 20_000,
     });
@@ -311,6 +315,7 @@ test("reopens the same recent demo room when a fresh tab retains only the Supaba
     });
 
     await pageB.goto("/demo");
+    await enterLimitedJudgePreview(pageB);
     const reopenResponse = await reopenResponsePromise;
     const rawBody = (await reopenResponse.json().catch(() => null)) as
       | {

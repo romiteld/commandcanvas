@@ -201,19 +201,16 @@ function inverseFallbackAxis(
           ? 1
           : 1.1;
   const safeRatio = Math.min(24, canvasSize / 2) / canvasSize;
-  const softened = Math.min(
-    1,
-    Math.max(0, (canvasRatio - safeRatio) / (1 - safeRatio * 2)),
-  );
-  let low = 0;
-  let high = 1;
-  for (let index = 0; index < 24; index += 1) {
-    const middle = (low + high) / 2;
-    const value = middle * middle * (3 - 2 * middle);
-    if (value < softened) low = middle;
-    else high = middle;
-  }
-  const beforeGain = ((low + high) / 2 - 0.5) / gain + 0.5;
+  const edgeExtrapolation = 0.1;
+  const comfortable =
+    canvasRatio < safeRatio
+      ? -edgeExtrapolation * (1 - canvasRatio / safeRatio)
+      : canvasRatio > 1 - safeRatio
+        ? 1 +
+          edgeExtrapolation *
+            (1 - (1 - canvasRatio) / safeRatio)
+        : (canvasRatio - safeRatio) / (1 - safeRatio * 2);
+  const beforeGain = (comfortable - 0.5) / gain + 0.5;
   return cameraStart + beforeGain * cameraSpan;
 }
 
@@ -624,13 +621,76 @@ describe("CommandCanvasRoom", () => {
       result = await options?.onIntent({ type: "create_board" }, "voice");
     });
 
-    expect(result).toEqual({ ok: true, message: "Board command submitted." });
+    expect(result).toEqual({ ok: true, message: "Board created and confirmed." });
     expect(
       Object.values(store.getState().canvas.objects).some(
         (object) => object.type === "task_board" && !object.deletedAt,
       ),
     ).toBe(true);
     expect(store.getState().canvas.receipts.at(-1)?.source).toBe("voice");
+  });
+
+  it("appends live speech to the selected note through one confirmed voice mutation", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-local", dependencies());
+    seedNote(store, { id: "selected-thought", title: "Research idea", x: 40 });
+    let options: RealtimeVoiceControllerOptions | undefined;
+    const idleState = { status: "idle" as const };
+
+    render(
+      <CommandCanvasRoom
+        store={store}
+        realtimeVoice={{
+          roomId: "room-local",
+          getAccessToken: () => "header.payload.signature",
+          createController(nextOptions) {
+            options = nextOptions;
+            return {
+              getState: () => idleState,
+              subscribe: () => () => undefined,
+              start: vi.fn(async () => undefined),
+              stop: vi.fn(),
+              resumeAudio: vi.fn(async () => true),
+            };
+          },
+        }}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Select Research idea" }),
+    );
+    const beforeVersion = store.getState().canvas.objects["selected-thought"]
+      ?.version;
+    let result: Awaited<
+      ReturnType<RealtimeVoiceControllerOptions["onIntent"]>
+    >;
+    await act(async () => {
+      result = await options!.onIntent(
+        {
+          type: "append_selected_note",
+          text: "Compare landmark confidence across the full sensor field.",
+        },
+        "voice",
+      );
+    });
+
+    expect(result!).toEqual({
+      ok: true,
+      message: "Selected note updated.",
+    });
+    expect(store.getState().canvas.objects["selected-thought"]).toMatchObject({
+      version: (beforeVersion ?? 0) + 1,
+      payload: {
+        text:
+          "Research idea\nCompare landmark confidence across the full sensor field.",
+      },
+    });
+    expect(store.getState().canvas.receipts.at(-1)).toMatchObject({
+      action: "update",
+      source: "voice",
+      affectedObjectIds: ["selected-thought"],
+    });
   });
 
   it("routes one semantic-object voice intent through exactly one canonical create and receipt", async () => {
@@ -690,7 +750,7 @@ describe("CommandCanvasRoom", () => {
 
     expect(result!).toEqual({
       ok: true,
-      message: "Semantic object command submitted.",
+      message: "Semantic object created and confirmed.",
     });
     expect(received).toEqual([
       { command: { type: "object.create", object }, source: "voice" },
@@ -704,6 +764,108 @@ describe("CommandCanvasRoom", () => {
     expect(
       screen.getByText("The launch date depends on browser verification."),
     ).toBeVisible();
+  });
+
+  it("awaits remote voice creation and lands compact objects in distinct current-viewport slots", async () => {
+    const store = createCanvasStore("room-live", dependencies());
+    store.getState().setViewport({ x: 40, y: -20, scale: 2 });
+    let options: RealtimeVoiceControllerOptions | undefined;
+    let releaseFirst!: () => void;
+    const idleVoiceState = { status: "idle" as const };
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const received: CanvasCommand[] = [];
+    let calls = 0;
+
+    render(
+      <CommandCanvasRoom
+        store={store}
+        onCommand={async (command, source) => {
+          calls += 1;
+          if (calls === 1) await firstGate;
+          received.push(command);
+          return store.getState().dispatch(command, source);
+        }}
+        realtimeVoice={{
+          roomId: "room-live",
+          getAccessToken: () => "header.payload.signature",
+          createController(nextOptions) {
+            options = nextOptions;
+            return {
+              getState: () => idleVoiceState,
+              subscribe: () => () => undefined,
+              start: vi.fn(async () => undefined),
+              stop: vi.fn(),
+              resumeAudio: vi.fn(async () => true),
+            };
+          },
+        }}
+      />,
+    );
+
+    const makeCard = (id: string, title: string) => ({
+      id,
+      type: "meeting_card" as const,
+      title,
+      x: 160,
+      y: 160,
+      width: 380,
+      height: 280,
+      zIndex: 1,
+      payload: {
+        kind: "summary" as const,
+        body: `${title} body`,
+        bullets: [],
+        owner: null,
+        dueDate: null,
+        status: "confirmed" as const,
+      },
+    });
+
+    let firstSettled = false;
+    const first = options!.onIntent(
+      {
+        type: "create_semantic_object",
+        object: makeCard("voice-card-one", "First result"),
+        placement: "current_viewport",
+      },
+      "voice",
+    );
+    void Promise.resolve(first).then(() => {
+      firstSettled = true;
+    });
+    await act(async () => Promise.resolve());
+    expect(firstSettled).toBe(false);
+
+    releaseFirst();
+    await expect(first).resolves.toEqual({
+      ok: true,
+      message: "Semantic object created and confirmed.",
+    });
+    await expect(
+      options!.onIntent(
+        {
+          type: "create_semantic_object",
+          object: makeCard("voice-card-two", "Second result"),
+          placement: "current_viewport",
+        },
+        "voice",
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      message: "Semantic object created and confirmed.",
+    });
+
+    expect(received).toHaveLength(2);
+    expect(received[0]).toMatchObject({
+      type: "object.create",
+      object: { id: "voice-card-one", x: 60, y: 75, zIndex: 1 },
+    });
+    expect(received[1]).toMatchObject({
+      type: "object.create",
+      object: { id: "voice-card-two", x: 370, y: 75, zIndex: 2 },
+    });
   });
 
   it("routes expanded Realtime spatial intents through selection and canonical history", async () => {
@@ -1561,7 +1723,7 @@ describe("CommandCanvasRoom", () => {
 
     expect(recovery).toEqual({
       ok: true,
-      message: "Note command submitted.",
+      message: "Note created and confirmed.",
     });
     expect(
       Object.values(store.getState().canvas.objects).some(
@@ -2592,7 +2754,7 @@ describe("CommandCanvasRoom", () => {
     expect(store.getState().canvas.revision).toBe(1);
   });
 
-  it("creates a task board from the object toolbar and renders its columns and tasks", async () => {
+  it("creates an empty task board fallback without invented people or commitments", async () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     render(<CommandCanvasRoom store={store} />);
@@ -2600,18 +2762,18 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Create task board" }));
 
     expect(
-      screen.getByRole("button", { name: "Select Launch board" }),
+      screen.getByRole("button", { name: "Select Project board" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Next")).toBeInTheDocument();
-    expect(screen.getByText("Confirm launch date")).toBeInTheDocument();
     expect(screen.getByText("In progress")).toBeInTheDocument();
-    expect(screen.getByText("Polish the demo path")).toBeInTheDocument();
+    expect(screen.queryByText("Confirm launch date")).not.toBeInTheDocument();
+    expect(screen.queryByText("Polish the demo path")).not.toBeInTheDocument();
     expect(Object.values(store.getState().canvas.objects)[0]?.type).toBe(
       "task_board",
     );
   });
 
-  it("creates a schedule from the object toolbar and renders dated commitments", async () => {
+  it("creates a current empty schedule fallback without stale fixture commitments", async () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     render(<CommandCanvasRoom store={store} />);
@@ -2619,12 +2781,23 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Create schedule" }));
 
     expect(
-      screen.getByRole("button", { name: "Select Next week" }),
+      screen.getByRole("button", { name: "Select Schedule" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Mon, Aug 31")).toBeInTheDocument();
-    expect(screen.getByText("09:30")).toBeInTheDocument();
-    expect(screen.getByText("Review WebMCP flow")).toBeInTheDocument();
-    expect(screen.getByText("America/New_York")).toBeInTheDocument();
+    expect(screen.queryByText("Review WebMCP flow")).not.toBeInTheDocument();
+    expect(screen.queryByText("Record final demo")).not.toBeInTheDocument();
+    const schedule = Object.values(store.getState().canvas.objects)[0];
+    expect(schedule).toMatchObject({
+      type: "schedule",
+      title: "Schedule",
+      payload: {
+        days: [
+          {
+            date: new Date().toISOString().slice(0, 10),
+            entries: [],
+          },
+        ],
+      },
+    });
     expect(Object.values(store.getState().canvas.objects)[0]?.type).toBe(
       "schedule",
     );
@@ -3620,7 +3793,7 @@ describe("CommandCanvasRoom", () => {
     expect(store.getState().canvas.receipts.at(-1)?.source).toBe("typed");
     expect(screen.getByText("Board command submitted.")).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "Select Launch board" }));
+    await user.click(screen.getByRole("button", { name: "Select Project board" }));
     await user.type(input, "minimize it");
     await user.click(screen.getByRole("button", { name: "Run direct command" }));
 

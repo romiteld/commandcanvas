@@ -15,6 +15,7 @@ import {
   captureCreatedRoom,
   deleteHostedRoom,
 } from "./support/hosted-room";
+import { enterLimitedJudgePreview } from "./support/limited-judge-preview";
 
 const fakeCameraPath = process.env.COMMANDCANVAS_FAKE_CAMERA_PATH;
 test.use({
@@ -88,6 +89,7 @@ test("closes the final public vision, packet, and fake-camera runtime boundaries
 
   try {
     await page.goto("/demo", { waitUntil: "domcontentloaded" });
+    await enterLimitedJudgePreview(page);
     await expect(page.getByText("Live demo room")).toBeVisible({
       timeout: 20_000,
     });

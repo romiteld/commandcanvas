@@ -72,6 +72,205 @@ const emptyArgumentsSchema = z.object({}).strict();
 const semanticObjectArgumentsSchema = z
   .object({ object: newCanvasObjectSchema })
   .strict();
+const compactTitleSchema = z.string().trim().min(1).max(120);
+const compactKeySchema = z
+  .string()
+  .min(2)
+  .max(96)
+  .regex(/^[a-z][a-z0-9-]*$/);
+const compactCreateNoteArgumentsSchema = z
+  .object({ text: z.string().trim().min(1).max(4_000).optional() })
+  .strict();
+const compactBoardTaskSchema = z
+  .object({
+    title: z.string().trim().min(1).max(180),
+    owner: z.string().trim().min(1).max(80).optional(),
+    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    priority: z.enum(["low", "medium", "high"]).optional(),
+  })
+  .strict();
+const compactCreateBoardArgumentsSchema = z
+  .object({
+    title: compactTitleSchema,
+    columns: z
+      .array(
+        z
+          .object({
+            title: z.string().trim().min(1).max(60),
+            tasks: z.array(compactBoardTaskSchema).max(24),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(5),
+  })
+  .strict();
+const compactScheduleEntrySchema = z
+  .object({
+    time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+    title: z.string().trim().min(1).max(180),
+    owner: z.string().trim().min(1).max(80).optional(),
+  })
+  .strict();
+const compactCreateScheduleArgumentsSchema = z
+  .object({
+    title: compactTitleSchema,
+    timezone: z.string().trim().min(1).max(80),
+    days: z
+      .array(
+        z
+          .object({
+            date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+            label: z.string().trim().min(1).max(30),
+            entries: z.array(compactScheduleEntrySchema).max(16),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(14),
+  })
+  .strict();
+const appendSelectedNoteArgumentsSchema = z
+  .object({ text: z.string().trim().min(1).max(1_000) })
+  .strict();
+const compactDiagramArgumentsSchema = z
+  .object({
+    title: compactTitleSchema,
+    kind: z.enum(["architecture", "flowchart", "diagram"]),
+    summary: z.string().trim().min(1).max(600),
+    nodes: z
+      .array(
+        z
+          .object({
+            key: compactKeySchema,
+            label: z.string().trim().min(1).max(120),
+            kind: z.enum([
+              "client",
+              "service",
+              "database",
+              "queue",
+              "external",
+              "concept",
+              "process",
+              "decision",
+            ]),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(30),
+    edges: z
+      .array(
+        z
+          .object({
+            from: compactKeySchema,
+            to: compactKeySchema,
+            label: z.string().trim().min(1).max(100).optional(),
+          })
+          .strict(),
+      )
+      .max(60)
+      .default([]),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const keys = new Set(value.nodes.map((node) => node.key));
+    if (keys.size !== value.nodes.length)
+      context.addIssue({
+        code: "custom",
+        path: ["nodes"],
+        message: "Node keys must be unique.",
+      });
+    value.edges.forEach((edge, index) => {
+      if (!keys.has(edge.from) || !keys.has(edge.to))
+        context.addIssue({
+          code: "custom",
+          path: ["edges", index],
+          message: "Edges must reference node keys from this diagram.",
+        });
+    });
+  });
+const compactChartPointSchema = z
+  .object({
+    label: z.string().trim().min(1).max(80),
+    value: z.number().finite().min(-1_000_000_000_000).max(1_000_000_000_000),
+  })
+  .strict();
+const compactChartArgumentsSchema = z
+  .object({
+    title: compactTitleSchema,
+    kind: z.enum(["pie_chart", "bar_chart", "line_chart"]),
+    summary: z.string().trim().min(1).max(600).optional(),
+    xAxisLabel: z.string().trim().min(1).max(80).nullable().optional(),
+    yAxisLabel: z.string().trim().min(1).max(80).nullable().optional(),
+    series: z
+      .array(
+        z
+          .object({
+            label: z.string().trim().min(1).max(80),
+            points: z.array(compactChartPointSchema).min(1).max(24),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(6),
+  })
+  .strict();
+const compactTableCellSchema = z.union([
+  z.string().max(500),
+  z.number().finite().min(-1_000_000_000_000).max(1_000_000_000_000),
+  z.boolean(),
+  z.null(),
+]);
+const compactDataTableArgumentsSchema = z
+  .object({
+    title: compactTitleSchema,
+    columns: z
+      .array(
+        z
+          .object({
+            label: z.string().trim().min(1).max(80),
+            kind: z.enum(["text", "number", "currency", "percentage", "date"]),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(12),
+    rows: z.array(z.array(compactTableCellSchema).max(12)).max(50),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    value.rows.forEach((row, index) => {
+      if (row.length !== value.columns.length)
+        context.addIssue({
+          code: "custom",
+          path: ["rows", index],
+          message: "Every row needs one cell per column.",
+        });
+    });
+  });
+const compactReferenceArgumentsSchema = z
+  .object({
+    title: compactTitleSchema,
+    kind: z.enum(["article", "document", "image", "link"]),
+    sourceUrl: z.url().max(2_048).nullable().optional(),
+    summary: z.string().trim().min(1).max(1_200),
+    excerpt: z.string().trim().min(1).max(1_200).nullable().optional(),
+  })
+  .strict();
+const compactMeetingCardArgumentsSchema = z
+  .object({
+    title: compactTitleSchema,
+    kind: z.enum(["decision", "action_item", "summary", "risk", "open_question"]),
+    body: z.string().trim().min(1).max(4_000),
+    bullets: z.array(z.string().trim().min(1).max(300)).max(20).default([]),
+    owner: z.string().trim().min(1).max(80).nullable().optional(),
+    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+    status: z
+      .enum(["proposed", "confirmed", "open", "in_progress", "done", "blocked"])
+      .optional(),
+  })
+  .strict();
 const rotationArgumentsSchema = z
   .object({ direction: z.enum(["clockwise", "counterclockwise"]) })
   .strict();
@@ -102,7 +301,7 @@ const toolSpecifications = [
   {
     name: "create_semantic_object",
     description:
-      "Create one fully specified semantic canvas object: note, task board, schedule, diagram, chart, data table, reference card, or meeting card. Use explicit world coordinates and inspect first when placement context is needed.",
+      "Advanced compatibility tool for a caller that already has one fully specified semantic canvas object, including spatial geometry. Prefer the compact type-specific creation tools for ordinary spoken requests.",
     schema: semanticObjectArgumentsSchema,
     parameters: z.toJSONSchema(
       semanticObjectArgumentsSchema,
@@ -110,6 +309,102 @@ const toolSpecifications = [
     intent: (args: { object: NewCanvasObject }): DirectCanvasIntent => ({
       type: "create_semantic_object",
       object: args.object,
+    }),
+  },
+  {
+    name: "create_note",
+    description:
+      "Create one note card. Use for a standalone note with optional initial text. Use start_thought instead when the user wants continuing speech-to-text inside the new card.",
+    schema: compactCreateNoteArgumentsSchema,
+    parameters: z.toJSONSchema(
+      compactCreateNoteArgumentsSchema,
+    ) as RealtimeVoiceToolDefinition["parameters"],
+    intent: (args: z.infer<typeof compactCreateNoteArgumentsSchema>): DirectCanvasIntent =>
+      args.text
+        ? { type: "create_note", text: args.text }
+        : { type: "create_note" },
+  },
+  {
+    name: "create_board",
+    description:
+      "Create a project or task board in the current canvas viewport. Preserve the user's title, columns, tasks, owners, dates, and priorities instead of inventing canned launch content.",
+    schema: compactCreateBoardArgumentsSchema,
+    parameters: z.toJSONSchema(
+      compactCreateBoardArgumentsSchema,
+    ) as RealtimeVoiceToolDefinition["parameters"],
+    intent: compactBoardIntent,
+  },
+  {
+    name: "create_schedule",
+    description:
+      "Create a schedule or calendar in the current canvas viewport. Preserve the requested title, timezone, dates, commitments, times, and owners.",
+    schema: compactCreateScheduleArgumentsSchema,
+    parameters: z.toJSONSchema(
+      compactCreateScheduleArgumentsSchema,
+    ) as RealtimeVoiceToolDefinition["parameters"],
+    intent: compactScheduleIntent,
+  },
+  {
+    name: "create_diagram",
+    description:
+      "Create a structured architecture diagram, flowchart, or general node diagram. Supply semantic nodes and edges; CommandCanvas assigns spatial geometry.",
+    schema: compactDiagramArgumentsSchema,
+    parameters: z.toJSONSchema(
+      compactDiagramArgumentsSchema,
+    ) as RealtimeVoiceToolDefinition["parameters"],
+    intent: compactDiagramIntent,
+  },
+  {
+    name: "create_chart",
+    description:
+      "Create a pie, bar, or line chart from labeled numeric values. CommandCanvas assigns spatial geometry and internal IDs.",
+    schema: compactChartArgumentsSchema,
+    parameters: z.toJSONSchema(
+      compactChartArgumentsSchema,
+    ) as RealtimeVoiceToolDefinition["parameters"],
+    intent: compactChartIntent,
+  },
+  {
+    name: "create_data_table",
+    description:
+      "Create a structured data table from labeled columns and row values. CommandCanvas assigns spatial geometry and internal IDs.",
+    schema: compactDataTableArgumentsSchema,
+    parameters: z.toJSONSchema(
+      compactDataTableArgumentsSchema,
+    ) as RealtimeVoiceToolDefinition["parameters"],
+    intent: compactDataTableIntent,
+  },
+  {
+    name: "create_reference_card",
+    description:
+      "Create an article, document, image, or link reference card from information already present in the conversation. This tool does not browse or retrieve a URL.",
+    schema: compactReferenceArgumentsSchema,
+    parameters: z.toJSONSchema(
+      compactReferenceArgumentsSchema,
+    ) as RealtimeVoiceToolDefinition["parameters"],
+    intent: compactReferenceIntent,
+  },
+  {
+    name: "create_meeting_card",
+    description:
+      "Create a decision, action item, summary, risk, or open-question card from the user's spoken content.",
+    schema: compactMeetingCardArgumentsSchema,
+    parameters: z.toJSONSchema(
+      compactMeetingCardArgumentsSchema,
+    ) as RealtimeVoiceToolDefinition["parameters"],
+    intent: compactMeetingCardIntent,
+  },
+  {
+    name: "append_selected_note",
+    description:
+      "Append the user's dictated text to the currently selected note or thought card. Inspect the selected object first when the user says this or that.",
+    schema: appendSelectedNoteArgumentsSchema,
+    parameters: z.toJSONSchema(
+      appendSelectedNoteArgumentsSchema,
+    ) as RealtimeVoiceToolDefinition["parameters"],
+    intent: (args: z.infer<typeof appendSelectedNoteArgumentsSchema>): DirectCanvasIntent => ({
+      type: "append_selected_note",
+      text: args.text,
     }),
   },
   {
@@ -263,7 +558,7 @@ export const REALTIME_VOICE_TOOL_DEFINITIONS: readonly RealtimeVoiceToolDefiniti
   ];
 
 export const REALTIME_VOICE_INSTRUCTIONS =
-  "You are CommandCanvas live voice. Be brief. Use only the provided bounded canvas tools. Inspect the canvas once when resolving this or that, when asked what is on the canvas, or before choosing open world coordinates. Do not browse the web. Use create_semantic_object for every standalone note, task board, schedule, diagram, chart, data table, reference card, decision, action item, summary, risk, or open-question card. For a direct creation request, call create_semantic_object without inspecting the canvas first. If you already inspected for a creation request, continue in the same response by calling create_semantic_object before confirming anything to the user. Do not force requests into an architecture diagram. When the user explicitly says start a thought or new thought, call start_thought once. After it is submitted, CommandCanvas automatically places later completed user speech inside that selected thought card; do not create another object for each sentence. While thought capture is active, treat all user speech as dictated thought content and do not call any other canvas tool. When the user explicitly says finish thought, call finish_thought once; only then resume normal canvas tools. Never operate rooms, approve packets, or send email. Use discard_selected only when the user explicitly asks to discard, delete, trash, throw away, or get rid of the selected object; it goes to recoverable trash and remains undoable. Except for local viewport focus, a tool result with outcome submitted means the action entered CommandCanvas's canonical mutation pipeline; it is not proof that the change persisted. Say submitted, not created, saved, persisted, or completed. Ask the user to select a target when a selected-object tool is refused.";
+  "You are CommandCanvas live voice. Be brief. Use only the provided bounded canvas tools. Inspect the canvas once when resolving this or that or when asked what is on the canvas. Do not browse the web. For ordinary creation requests, use the matching compact tool: create_note, create_board, create_schedule, create_diagram, create_chart, create_data_table, create_reference_card, or create_meeting_card. Call that creation tool immediately without inspecting first; the compact tool assigns initial canvas geometry. Use create_semantic_object only as an advanced compatibility path when you already have a complete spatial object. If you already inspected for a creation request, continue in the same response by calling the matching creation tool before confirming anything to the user. Do not force requests into an architecture diagram: create the diagram, chart, table, reference, note, board, schedule, decision, action item, summary, risk, or open question the user actually requested. For fill, add, append, or update language about this note or thought, inspect the selected object and then call append_selected_note with only the content to add. When the user explicitly says start a thought or new thought, call start_thought once. After it is submitted, CommandCanvas automatically places later completed user speech inside that selected thought card; do not create another object for each sentence. While thought capture is active, treat all user speech as dictated thought content and do not call any other canvas tool. When the user explicitly says finish thought, call finish_thought once; only then resume normal canvas tools. Never operate rooms, approve packets, or send email. Use discard_selected only when the user explicitly asks to discard, delete, trash, throw away, or get rid of the selected object; it goes to recoverable trash and remains undoable. Except for local viewport focus, a tool result with outcome submitted means the action entered CommandCanvas's canonical mutation pipeline; it is not proof that the change persisted. Say submitted, not created, saved, persisted, or completed. Ask the user to select a target when a selected-object tool is refused.";
 
 export function createRealtimeVoiceSessionConfig() {
   return {
@@ -364,10 +659,17 @@ export async function executeRealtimeVoiceTool(
   const parsed = specification.schema.safeParse(rawArguments);
   if (!parsed.success) return invalidArguments(action);
 
+  let intent: DirectCanvasIntent;
+  try {
+    // The specification's schema and intent factory are kept together above.
+    intent = specification.intent(parsed.data as never);
+  } catch {
+    return invalidArguments(action);
+  }
+
   try {
     const result = await onIntent(
-      // The specification's schema and intent factory are kept together above.
-      specification.intent(parsed.data as never),
+      intent,
       "voice",
       ...(options.signal ? [{ signal: options.signal }] : []),
     );
@@ -430,4 +732,196 @@ function invalidArguments(action: string): RealtimeVoiceToolResult {
 
 function safeActionName(name: string) {
   return /^[a-z][a-z0-9_]{0,63}$/.test(name) ? name : "unknown_action";
+}
+
+function compactDiagramIntent(
+  args: z.infer<typeof compactDiagramArgumentsSchema>,
+): DirectCanvasIntent {
+  const rows = Math.ceil(args.nodes.length / 3);
+  return semanticObjectIntent({
+    ...compactSpatialFields("diagram", args.title, 720, Math.max(420, rows * 130 + 100)),
+    type: "diagram",
+    payload: {
+      kind: args.kind,
+      interpretationSummary: args.summary,
+      nodes: args.nodes.map((node, index) => ({
+        id: node.key,
+        label: node.label,
+        kind: node.kind,
+        x: 60 + (index % 3) * 220,
+        y: 60 + Math.floor(index / 3) * 130,
+        width: 170,
+        height: 72,
+      })),
+      edges: args.edges.map((edge) => ({
+        id: createVoiceObjectId("edge"),
+        from: edge.from,
+        to: edge.to,
+        ...(edge.label ? { label: edge.label } : {}),
+      })),
+    },
+  });
+}
+
+function compactBoardIntent(
+  args: z.infer<typeof compactCreateBoardArgumentsSchema>,
+): DirectCanvasIntent {
+  return semanticObjectIntent({
+    ...compactSpatialFields("board", args.title, 560, 320),
+    type: "task_board",
+    payload: {
+      columns: args.columns.map((column) => ({
+        id: createVoiceObjectId("column"),
+        title: column.title,
+        tasks: column.tasks.map((task) => ({
+          id: createVoiceObjectId("task"),
+          title: task.title,
+          ...(task.owner ? { owner: task.owner } : {}),
+          ...(task.dueDate ? { dueDate: task.dueDate } : {}),
+          ...(task.priority ? { priority: task.priority } : {}),
+        })),
+      })),
+    },
+  });
+}
+
+function compactScheduleIntent(
+  args: z.infer<typeof compactCreateScheduleArgumentsSchema>,
+): DirectCanvasIntent {
+  return semanticObjectIntent({
+    ...compactSpatialFields("schedule", args.title, 460, 310),
+    type: "schedule",
+    payload: {
+      timezone: args.timezone,
+      days: args.days.map((day) => ({
+        date: day.date,
+        label: day.label,
+        entries: day.entries.map((entry) => ({
+          id: createVoiceObjectId("schedule-entry"),
+          time: entry.time,
+          title: entry.title,
+          ...(entry.owner ? { owner: entry.owner } : {}),
+        })),
+      })),
+    },
+  });
+}
+
+function compactChartIntent(
+  args: z.infer<typeof compactChartArgumentsSchema>,
+): DirectCanvasIntent {
+  return semanticObjectIntent({
+    ...compactSpatialFields("chart", args.title, 620, 420),
+    type: "diagram",
+    payload: {
+      kind: args.kind,
+      interpretationSummary:
+        args.summary ?? `${args.title} created from the spoken values.`,
+      chart: {
+        title: args.title,
+        xAxisLabel: args.xAxisLabel ?? null,
+        yAxisLabel: args.yAxisLabel ?? null,
+        series: args.series.map((series) => ({
+          id: createVoiceObjectId("series"),
+          label: series.label,
+          points: series.points,
+        })),
+      },
+    },
+  });
+}
+
+function compactDataTableIntent(
+  args: z.infer<typeof compactDataTableArgumentsSchema>,
+): DirectCanvasIntent {
+  return semanticObjectIntent({
+    ...compactSpatialFields(
+      "table",
+      args.title,
+      Math.min(1_200, Math.max(520, args.columns.length * 150)),
+      Math.min(1_000, Math.max(260, args.rows.length * 44 + 160)),
+    ),
+    type: "data_table",
+    payload: {
+      columns: args.columns.map((column) => ({
+        id: createVoiceObjectId("column"),
+        label: column.label,
+        kind: column.kind,
+      })),
+      rows: args.rows.map((cells) => ({
+        id: createVoiceObjectId("row"),
+        cells,
+      })),
+    },
+  });
+}
+
+function compactReferenceIntent(
+  args: z.infer<typeof compactReferenceArgumentsSchema>,
+): DirectCanvasIntent {
+  return semanticObjectIntent({
+    ...compactSpatialFields("reference", args.title, 440, 300),
+    type: "reference_card",
+    payload: {
+      kind: args.kind,
+      sourceUrl: args.sourceUrl ?? null,
+      summary: args.summary,
+      excerpt: args.excerpt ?? null,
+    },
+  });
+}
+
+function compactMeetingCardIntent(
+  args: z.infer<typeof compactMeetingCardArgumentsSchema>,
+): DirectCanvasIntent {
+  return semanticObjectIntent({
+    ...compactSpatialFields("meeting", args.title, 380, 280),
+    type: "meeting_card",
+    payload: {
+      kind: args.kind,
+      body: args.body,
+      bullets: args.bullets,
+      owner: args.owner ?? null,
+      dueDate: args.dueDate ?? null,
+      status: args.status ?? defaultMeetingCardStatus(args.kind),
+    },
+  });
+}
+
+function semanticObjectIntent(object: unknown): DirectCanvasIntent {
+  return {
+    type: "create_semantic_object",
+    object: newCanvasObjectSchema.parse(object),
+    placement: "current_viewport",
+  };
+}
+
+function compactSpatialFields(
+  prefix: string,
+  title: string,
+  width: number,
+  height: number,
+) {
+  return {
+    id: createVoiceObjectId(prefix),
+    title,
+    x: 160,
+    y: 160,
+    width,
+    height,
+    zIndex: 1,
+  };
+}
+
+function createVoiceObjectId(prefix: string) {
+  const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`;
+  return `${prefix}-${suffix}`;
+}
+
+function defaultMeetingCardStatus(
+  kind: z.infer<typeof compactMeetingCardArgumentsSchema>["kind"],
+) {
+  if (kind === "decision") return "proposed" as const;
+  if (kind === "summary") return "confirmed" as const;
+  return "open" as const;
 }

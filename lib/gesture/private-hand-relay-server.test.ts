@@ -64,7 +64,14 @@ function capability(overrides: Record<string, unknown> = {}) {
 }
 
 function client(
-  member: unknown = { role: "participant" },
+  member: unknown = {
+    role: "participant",
+    rooms: {
+      mode: "demo",
+      created_at: "2026-09-01T00:00:00.000Z",
+      demo_hard_expires_at: "2099-09-02T00:00:00.000Z",
+    },
+  },
   admission: { data: unknown; error: unknown } = {
     data: { outcome: "admitted" },
     error: null,
@@ -169,6 +176,9 @@ describe("private hand relay server dependencies", () => {
     await expect(
       built.dependencies.verifyMembership(ROOM_ID, ACTOR_ID),
     ).resolves.toEqual({ ok: true });
+    expect(fakeClient.query.select).toHaveBeenCalledWith(
+      "role, rooms!inner(mode,created_at,demo_hard_expires_at)",
+    );
     const started = await built.dependencies.startSession({
       roomId: ROOM_ID,
       actorUserId: ACTOR_ID,
@@ -211,6 +221,28 @@ describe("private hand relay server dependencies", () => {
         jti: JTI,
       },
     });
+  });
+
+  it("fails service-role membership closed after demo hard expiry", async () => {
+    const fakeClient = client({
+      role: "participant",
+      rooms: {
+        mode: "demo",
+        created_at: "2026-08-30T00:00:00.000Z",
+        demo_hard_expires_at: "2026-08-31T00:00:00.000Z",
+      },
+    });
+    const built = createServerPrivateHandRelayDependencies({
+      environment: environment(),
+      createClient: () => fakeClient,
+      fetch: vi.fn(),
+    });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+
+    await expect(
+      built.dependencies.verifyMembership(ROOM_ID, ACTOR_ID),
+    ).resolves.toEqual({ ok: false });
   });
 
   it("refuses cold or malformed capability reports instead of minting", async () => {

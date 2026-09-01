@@ -134,6 +134,7 @@ export interface SpatialGestureState {
     readonly objectId: string | null;
     readonly ownerTrackId: string;
     readonly startedAt: number;
+    readonly direct: boolean;
   } | null;
   held: SpatialHeldState | null;
   /** Task 4 migration projection. It is the same object as `held`. */
@@ -275,6 +276,7 @@ export type SpatialGestureEffect =
   | { type: "palm.progress"; objectId: string; progress: number };
 
 const TARGET_DWELL_MS = 100;
+const DIRECT_PINCH_DWELL_MS = 48;
 const CONTENDER_DWELL_MS = 80;
 const CONTENDER_DISTANCE_ADVANTAGE_PX = 12;
 const TARGET_EXIT_HYSTERESIS_PX = 12;
@@ -451,21 +453,35 @@ function reducePinchPendingOrAcquire(
     state.pinchPending.ownerTrackId !== ownerTrackId
   )
     return { state, effects: [] };
-  const objectId = state.pinchPending?.objectId ?? state.candidate?.objectId ?? null;
+  const directCandidate =
+    state.candidate ??
+    updateCandidate(
+      null,
+      normalizedToWorld(input.pointer, scene),
+      timestamp,
+      scene,
+    );
+  const objectId =
+    state.pinchPending?.objectId ?? directCandidate?.objectId ?? null;
   const startedAt = state.pinchPending?.startedAt ?? timestamp;
+  const direct = state.pinchPending?.direct ?? !state.candidate;
+  const dwellMs = direct ? DIRECT_PINCH_DWELL_MS : TARGET_DWELL_MS;
   const stable =
     objectId !== null &&
-    ((state.candidate?.objectId === objectId && state.candidate.stable) ||
-      timestamp - startedAt >= TARGET_DWELL_MS);
+    ((directCandidate?.objectId === objectId && directCandidate.stable) ||
+      timestamp - startedAt >= dwellMs);
   if (!stable || !objectId)
     return {
       state: {
         ...createInitialSpatialGestureState(),
         phase: "pinch_pending",
-        candidate: state.candidate,
-        pinchPending: { objectId, ownerTrackId, startedAt },
+        candidate: directCandidate,
+        pinchPending: { objectId, ownerTrackId, startedAt, direct },
       },
-      effects: [],
+      effects:
+        directCandidate?.objectId !== state.candidate?.objectId
+          ? [{ type: "object.target", objectId: directCandidate?.objectId ?? null }]
+          : [],
     };
   const object = scene.objects.find(({ id }) => id === objectId);
   if (!object) return empty();
@@ -1186,7 +1202,8 @@ function updateCandidate(
   if (!currentObject) return nearest ? newCandidate(nearest, timestamp) : null;
   const currentDistancePx =
     distanceToObjectRectangle(point, currentObject) * scene.viewport.scale;
-  if (currentDistancePx > radius + TARGET_EXIT_HYSTERESIS_PX && !nearest)
+  const currentRadius = objectMagneticRadiusPx(scene, currentObject, radius);
+  if (currentDistancePx > currentRadius + TARGET_EXIT_HYSTERESIS_PX && !nearest)
     return null;
   const stable = current.stable || timestamp - current.enteredAt >= TARGET_DWELL_MS;
   if (
@@ -1250,8 +1267,11 @@ function nearestMagneticObject(
         distancePx: rounded(
           distanceToObjectRectangle(point, object) * scene.viewport.scale,
         ),
+        radiusPx: objectMagneticRadiusPx(scene, object, radiusPx),
       }))
-      .filter(({ distancePx }) => distancePx <= radiusPx)
+      .filter(({ distancePx, radiusPx: objectRadiusPx }) =>
+        distancePx <= objectRadiusPx,
+      )
       .sort(
         (left, right) =>
           left.distancePx - right.distancePx ||
@@ -1608,6 +1628,20 @@ function worldToScreen(point: CanvasPoint, scene: SpatialGestureScene) {
 
 function magneticRadiusPx(scene: SpatialGestureScene) {
   return clamp(Math.min(scene.bounds.width, scene.bounds.height) * 0.04, 28, 56);
+}
+
+function objectMagneticRadiusPx(
+  scene: SpatialGestureScene,
+  object: SpatialGestureScene["objects"][number],
+  baseRadiusPx: number,
+) {
+  if (baseRadiusPx <= 0) return 0;
+  const screenArea =
+    object.width * scene.viewport.scale *
+    (object.minimized ? 62 : object.height) * scene.viewport.scale;
+  const characteristicSize = Math.sqrt(Math.max(0, screenArea));
+  const sizeBonus = clamp((characteristicSize - 240) * 0.2, 0, 36);
+  return rounded(baseRadiusPx + sizeBonus);
 }
 
 function normalizeAngle(angle: number) {

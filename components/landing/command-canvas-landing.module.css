@@ -150,6 +150,10 @@
   font-size: 13px;
 }
 
+.navCtaCompact {
+  display: none;
+}
+
 .navCta:hover,
 .primaryCta:hover,
 .finalPrimary:hover,
@@ -682,6 +686,8 @@
   .voicePill { grid-template-columns: auto 1fr; }
   .listening { display: none !important; }
   .receiptTable { padding: 10px; }
+  .navCtaFull { display: none; }
+  .navCtaCompact { display: inline; }
 }
 
 @media (prefers-reduced-motion: reduce) {

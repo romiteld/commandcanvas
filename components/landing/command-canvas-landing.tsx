@@ -414,10 +414,18 @@ export function CommandCanvasLanding() {
           <div className={styles.navLinks}>
             <a href="#product">Product</a>
             <a href="#how-it-works">How it works</a>
-            <Link href="/demo">Demo</Link>
+            <Link href="/demo">Judge preview</Link>
             <a href={`${repositoryUrl}#readme`} target="_blank" rel="noreferrer noopener">Docs</a>
           </div>
-          <Link className={styles.navCta} href="/demo">Try the demo <Icon name="arrow" size={15} /></Link>
+          <Link
+            aria-label="Open CommandCanvas"
+            className={styles.navCta}
+            href="/meet"
+          >
+            <span className={styles.navCtaFull}>Open CommandCanvas</span>
+            <span className={styles.navCtaCompact} aria-hidden="true">Open</span>
+            <Icon name="arrow" size={15} />
+          </Link>
         </nav>
       </header>
 
@@ -432,8 +440,8 @@ export function CommandCanvasLanding() {
               together, live and on one infinite canvas.
             </p>
             <div className={styles.heroActions}>
-              <Link className={styles.primaryCta} href="/demo">Try the demo <Icon name="arrow" size={17} /></Link>
-              <Link className={styles.secondaryCta} href="/meet"><Icon name="play" size={18} /> Start a meeting</Link>
+              <Link className={styles.primaryCta} href="/meet">Open CommandCanvas <Icon name="arrow" size={17} /></Link>
+              <Link className={styles.secondaryCta} href="/demo"><Icon name="play" size={18} /> View judge preview</Link>
             </div>
             <div className={styles.heroAudience}>
               <div className={styles.avatarStack} aria-hidden="true">
@@ -474,7 +482,7 @@ export function CommandCanvasLanding() {
             <p>See how your team can think, plan, and build together with voice, hands, people, and agents.</p>
           </div>
           <div className={styles.finalActions}>
-            <Link className={styles.finalPrimary} href="/demo"><Icon name="spark" size={18} /> Launch demo</Link>
+            <Link className={styles.finalPrimary} href="/meet"><Icon name="spark" size={18} /> Start a meeting</Link>
             <a className={styles.finalSecondary} href={repositoryUrl} target="_blank" rel="noreferrer noopener">View repository <Icon name="arrow" size={16} /></a>
           </div>
         </section>

@@ -3,8 +3,12 @@
 import { describe, expect, it } from "vitest";
 
 import { parseOpenAiApiKey } from "@/lib/openai-credentials/key";
+import {
+  createMalformedTestOpenAiApiKey,
+  createTestOpenAiApiKey,
+} from "@/lib/testing/openai-key-fixture";
 
-const VALID_KEY = "sk-test-session-owned-key-123456789012345";
+const VALID_KEY = createTestOpenAiApiKey("test-session-owned-key");
 
 describe("saved OpenAI API key validation", () => {
   it("normalizes a plausible key and derives a non-reversible fingerprint", () => {
@@ -23,10 +27,10 @@ describe("saved OpenAI API key validation", () => {
   it.each([
     "",
     "not-an-openai-key",
-    "sk-too-short",
-    `sk-${"a".repeat(510)}`,
-    "sk-valid-looking-but-has.a-dot",
-    "sk-valid-looking-but-has a-space",
+    createMalformedTestOpenAiApiKey("too-short"),
+    createMalformedTestOpenAiApiKey("a".repeat(510)),
+    createMalformedTestOpenAiApiKey("valid-looking-but-has.a-dot"),
+    createMalformedTestOpenAiApiKey("valid-looking-but-has a-space"),
   ])("refuses malformed or unbounded input without echoing it: %s", (input) => {
     expect(parseOpenAiApiKey(input)).toEqual({ ok: false });
   });

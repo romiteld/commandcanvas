@@ -81,6 +81,33 @@ describe("parseDirectCanvasCommand", () => {
     });
   });
 
+  it.each([
+    [
+      "fill this note with Confirm the launch date on Friday",
+      "Confirm the launch date on Friday",
+    ],
+    [
+      "append Sarah owns the browser check to the selected note",
+      "Sarah owns the browser check",
+    ],
+    [
+      "add Verify the recipient list to this thought",
+      "Verify the recipient list",
+    ],
+    [
+      "update this note with The launch review starts at ten",
+      "The launch review starts at ten",
+    ],
+  ] as const)(
+    "parses selected-note dictation without creating a second card: %s",
+    (transcript, text) => {
+      expect(parseDirectCanvasCommand(transcript)).toEqual({
+        ok: true,
+        intent: { type: "append_selected_note", text },
+      });
+    },
+  );
+
   it("refuses empty, oversized, ambiguous, and unsupported language", () => {
     expect(parseDirectCanvasCommand("   ")).toEqual({
       ok: false,

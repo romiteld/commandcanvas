@@ -410,7 +410,7 @@ describe("Realtime thought draft on the spatial canvas", () => {
         { type: "create_note", text: "Continue after terminal refusal." },
         "voice",
       ),
-    ).resolves.toEqual({ ok: true, message: "Note command submitted." });
+    ).resolves.toEqual({ ok: true, message: "Note created and confirmed." });
   });
 
   it("clears uncommitted speech when the turn is interrupted", async () => {
@@ -471,7 +471,7 @@ describe("Realtime thought draft on the spatial canvas", () => {
         "voice",
       );
     });
-    expect(result!).toEqual({ ok: true, message: "Note command submitted." });
+    expect(result!).toEqual({ ok: true, message: "Note created and confirmed." });
     expect(
       Object.values(store.getState().canvas.objects).some(
         (object) =>

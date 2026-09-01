@@ -3,11 +3,15 @@ import { createHash, randomBytes } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { expect, test } from "@playwright/test";
 
+import { createTestOpenAiApiKey } from "../lib/testing/openai-key-fixture";
+
 const enabled = process.env.OPENAI_CREDENTIAL_LIVE_PROBE === "true";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const publishableKey =
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? "";
 const secretKey = process.env.SUPABASE_SECRET_KEY ?? "";
+
+test.use({ trace: "off", screenshot: "off", video: "off" });
 
 test.describe("verified account OpenAI credential", () => {
   test.skip(!enabled, "Set OPENAI_CREDENTIAL_LIVE_PROBE=true for the destructive-cleanup live probe.");
@@ -33,7 +37,9 @@ test.describe("verified account OpenAI credential", () => {
     const suffix = crypto.randomUUID();
     const email = `commandcanvas-probe-${suffix}@example.com`;
     const authInput = `${randomBytes(24).toString("base64url")}aA9!`;
-    const apiKey = `sk-commandcanvas-browser-probe-${suffix.replaceAll("-", "")}`;
+    const apiKey = createTestOpenAiApiKey(
+      `commandcanvas-browser-probe-${suffix.replaceAll("-", "")}`,
+    );
     const expectedFingerprint = `sha256:${createHash("sha256")
       .update(apiKey)
       .digest("hex")

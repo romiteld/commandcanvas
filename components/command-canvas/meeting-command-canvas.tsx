@@ -58,6 +58,12 @@ export type MeetingLobbyState =
   | { phase: "initializing" }
   | { phase: "email"; invited: boolean; error?: string }
   | { phase: "otp"; invited: boolean; email: string; error?: string }
+  | {
+      phase: "invite_account";
+      email: string;
+      message: string;
+      error?: string;
+    }
   | { phase: "host_form"; email: string; error?: string }
   | { phase: "working"; message: string }
   | { phase: "error"; message: string };
@@ -187,7 +193,13 @@ export function MeetingCommandCanvas({
         Boolean(session.user.email_confirmed_at);
       if (permanent && session) {
         if (inviteToken) {
-          await acceptAndEnter(client, session.access_token, inviteToken, signal);
+          await acceptAndEnter(
+            client,
+            session.access_token,
+            inviteToken,
+            signal,
+            session.user.email!,
+          );
           return;
         }
         const roomId = new URL(window.location.href).searchParams.get("room");
@@ -227,6 +239,7 @@ export function MeetingCommandCanvas({
       accessToken: string,
       token: string,
       signal: AbortSignal,
+      signedInEmail: string,
     ) {
       if (signal.aborted) return;
       setLobby({ phase: "working", message: "Verifying your invitation…" });
@@ -234,6 +247,17 @@ export function MeetingCommandCanvas({
       const accepted = await api.acceptInvitation({ token }, signal);
       if (signal.aborted) return;
       if (!accepted.ok) {
+        if (
+          accepted.error.code === "invitation_unavailable" &&
+          inviteTokenRef.current === token
+        ) {
+          setLobby({
+            phase: "invite_account",
+            email: signedInEmail,
+            message: accepted.error.message,
+          });
+          return;
+        }
         setLobby({ phase: "error", message: accepted.error.message });
         return;
       }
@@ -418,6 +442,34 @@ export function MeetingCommandCanvas({
     setLobby({ phase: "otp", invited: lobby.invited, email: result.email });
   }
 
+  async function switchInvitationAccount() {
+    const client = clientRef.current;
+    const invitation = inviteTokenRef.current;
+    if (!client || !invitation || lobby.phase !== "invite_account") return;
+    const previous = lobby;
+    const signal = lifecycleAbortRef.current?.signal;
+    if (!signal || signal.aborted) return;
+    setLobby({ phase: "working", message: "Switching accounts…" });
+    try {
+      const result = await client.auth.signOut({ scope: "local" });
+      if (signal.aborted) return;
+      if (result.error) {
+        setLobby({
+          ...previous,
+          error: "This account could not be signed out. Try again.",
+        });
+        return;
+      }
+      setLobby({ phase: "email", invited: true });
+    } catch {
+      if (!signal.aborted)
+        setLobby({
+          ...previous,
+          error: "This account could not be signed out. Try again.",
+        });
+    }
+  }
+
   async function verifyCode(form: FormData) {
     const client = clientRef.current;
     if (!client || lobby.phase !== "otp") return;
@@ -438,6 +490,7 @@ export function MeetingCommandCanvas({
         result.value.session.access_token,
         inviteToken,
         signal,
+        result.value.email,
       );
       return;
     }
@@ -686,7 +739,7 @@ export function MeetingCommandCanvas({
     [privateGpuRelayEnabled, runtime],
   );
 
-  if (!runtime) return <MeetingLobby state={lobby} onRequestCode={requestCode} onVerifyCode={verifyCode} onCreateMeeting={createMeeting} />;
+  if (!runtime) return <MeetingLobby state={lobby} onRequestCode={requestCode} onVerifyCode={verifyCode} onSwitchInvitationAccount={switchInvitationAccount} onCreateMeeting={createMeeting} />;
 
   const { snapshot } = runtime;
   const participants = snapshot.presence.map((participant) => ({
@@ -1065,11 +1118,13 @@ export function MeetingLobby({
   state,
   onRequestCode,
   onVerifyCode,
+  onSwitchInvitationAccount,
   onCreateMeeting,
 }: {
   state: MeetingLobbyState;
   onRequestCode: (form: FormData) => void | Promise<void>;
   onVerifyCode: (form: FormData) => void | Promise<void>;
+  onSwitchInvitationAccount: () => void | Promise<void>;
   onCreateMeeting: (form: FormData) => void | Promise<void>;
 }) {
   return (
@@ -1079,19 +1134,44 @@ export function MeetingLobby({
         <span className="demo-gate-mark" aria-hidden="true">CC</span>
         {state.phase === "initializing" || state.phase === "working" ? (
           <><p className="eyebrow">CommandCanvas / meeting</p><h1>{state.phase === "working" ? state.message : "Opening the room…"}</h1></>
+        ) : state.phase === "invite_account" ? (
+          <>
+            <p className="eyebrow">Private room invitation</p>
+            <h1>Switch to the invited account</h1>
+            <p>
+              {`You’re signed in as ${state.email}. This invitation could not be accepted as that account. If your host invited another email address, switch accounts and verify that exact email.`}
+            </p>
+            <p role="alert">{state.message}</p>
+            <button type="button" onClick={onSwitchInvitationAccount}>
+              Switch account and continue
+            </button>
+            {state.error ? <p role="alert">{state.error}</p> : null}
+            <a href="/meet">Cancel and return to meeting lobby</a>
+          </>
         ) : state.phase === "error" ? (
           <><p className="eyebrow">Meeting unavailable</p><h1>We couldn’t open this room.</h1><p role="alert">{state.message}</p><a href="/meet">Return to meeting lobby</a></>
         ) : state.phase === "email" ? (
           <>
-            <p className="eyebrow">{state.invited ? "Private room invitation" : "Start a live workspace"}</p>
-            <h1>{state.invited ? "Verify your invitation" : "Meet inside the canvas."}</h1>
-            <p>{state.invited ? "Use the exact email address your host invited." : "No password. We’ll email a six-digit sign-in code."}</p>
+            <p className="eyebrow">{state.invited ? "Private room invitation" : "Your CommandCanvas account"}</p>
+            <h1>{state.invited ? "Verify your invitation" : "Sign in to CommandCanvas"}</h1>
+            <p>
+              {state.invited
+                ? "Use the exact email address your host invited."
+                : "A six-digit email code protects your rooms, invitations, and saved OpenAI key. No password is required."}
+            </p>
+            {!state.invited ? (
+              <p className="meeting-chatgpt-boundary">
+                When this page runs inside ChatGPT, Site Tools use the ChatGPT
+                account already signed into that app. CommandCanvas sign-in is
+                separate and protects this workspace.
+              </p>
+            ) : null}
             <form action={onRequestCode}>
               <label>Email<input name="email" type="email" required autoComplete="email" maxLength={254} autoFocus /></label>
               <button type="submit">Email me a code</button>
             </form>
             {state.error ? <p role="alert">{state.error}</p> : null}
-            {!state.invited ? <a className="meeting-demo-link" href="/demo">Open the no-signup demo instead</a> : null}
+            {!state.invited ? <a className="meeting-demo-link" href="/demo">Open the limited judge preview instead</a> : null}
           </>
         ) : state.phase === "otp" ? (
           <>

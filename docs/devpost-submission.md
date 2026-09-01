@@ -10,7 +10,8 @@ A shared spatial workspace where people and agents turn rough thinking into stru
 
 ## Public links
 
-- Live demo: <https://commandcanvas.vercel.app/demo>
+- Signed workspace: <https://commandcanvas.vercel.app/meet>
+- Limited judge preview: <https://commandcanvas.vercel.app/demo>
 - Source: <https://github.com/romiteld/commandcanvas>
 
 ## Inspiration
@@ -19,7 +20,7 @@ Meetings generate sketches, decisions, tasks, and commitments, but the useful ou
 
 ## What it does
 
-CommandCanvas is an infinite spatial collaboration canvas built from structured objects rather than untyped pixels or documents. A no-signup judge room opens with a project board, schedule, decision, live presence, and an activity trail. Standard meetings use six-digit Supabase Email OTP and exact-email invitations without passwords. Participants can create, move, resize, rotate, pin, minimize, recover, group, ungroup, undo, and redo objects through pointer, touch, stylus, typed commands, optional hand landmarks, or continuous in-page voice.
+CommandCanvas is an infinite spatial collaboration canvas built from structured objects rather than untyped pixels or documents. The account-first standard path uses six-digit Supabase Email OTP and exact-email invitations without passwords. A secondary, temporary and bounded judge preview opens a capped room with a project board, schedule, decision, live presence, and an activity trail only after the visitor explicitly continues. Participants can create, move, resize, rotate, pin, minimize, recover, group, ungroup, undo, and redo objects through pointer, touch, stylus, typed commands, optional hand landmarks, or continuous in-page voice.
 
 The defining workflow begins with a rough sketch and the person’s explanation of what it means. Mouse, touch, stylus, or local finger tracking produces a durable `SketchObject`. CommandCanvas rasterizes the selected strokes to a PNG in the browser and sends that image with the user’s bounded prior narration and instruction to an image-capable model. A strict structured-output schema is validated before a new semantic visual appears beside the preserved original. Auto selection uses the sketch, narration, and instruction to choose among a generic diagram, flowchart, pie chart, bar chart, or line chart; an architecture diagram is also available as an explicit supported kind. Architecture is one example rather than the product’s audience or subject boundary.
 
@@ -27,7 +28,7 @@ CommandCanvas exposes WebMCP Site Tools so supported agent hosts can collaborate
 
 Continuous voice is a separate, narrower surface. After the user presses **Start**, a regular `gpt-realtime-2.1` WebRTC session listens for natural canvas commands without another Run click. Its tools cover safe canvas creation, selected-object operations, local focus, grouping, rotation, history, recoverable trash, bounded thought capture, and sketch transformation. **Start a new thought** creates and selects one note card; later completed user turns are appended to that same card as speech-to-text until **Finish thought**. Those boundary commands and assistant speech are excluded, and unrelated voice tools are refused during capture. Every accepted transcript append is a version-checked canonical mutation with a receipt and Undo. An explicit spoken discard remains undoable and never permanently deletes data. Live voice cannot manage rooms, approve packets, or send email. Except for local-only focus, a tool result reports submission; the shared receipt proves completion.
 
-Meeting packets preserve human control over consequential actions. The host reviews the exact object snapshot, edits recipients, and approves a version that locks both content and recipient hashes. An agent can stage a send, but the site still requires an explicit host click. The no-signup demo always records an honest preview-only outcome and never calls Resend. Eligible standard-room packet recipients must match the server-side allowlist; missing or rejected provider configuration produces a preview-only or failed result rather than a delivery claim. Supabase Auth OTP mail, host-authorized exact-email meeting invitations, and allowlisted Resend packet delivery are separate paths with separate authority and configuration.
+Meeting packets preserve human control over consequential actions. The host reviews the exact object snapshot, edits recipients, and approves a version that locks both content and recipient hashes. An agent can stage a send, but the site still requires an explicit host click. The limited judge preview always records an honest preview-only outcome and never calls Resend. Eligible standard-room packet recipients must match the server-side allowlist; missing or rejected provider configuration produces a preview-only or failed result rather than a delivery claim. Supabase Auth OTP mail, host-authorized exact-email meeting invitations, and allowlisted Resend packet delivery are separate paths with separate authority and configuration.
 
 An optional meeting filmstrip lets up to four room members start peer-to-peer audio and video. Supabase carries schema-validated signaling on a dedicated private media topic, while WebRTC carries the media directly between browsers. It is intentionally not a conferencing replacement and does not include TURN, an SFU, recording, or screen sharing.
 
@@ -35,7 +36,7 @@ An optional meeting filmstrip lets up to four room members start peer-to-peer au
 
 - Next.js 16, React 19, TypeScript, Zustand, Zod, and a custom DOM/SVG infinite-canvas engine
 - `document.modelContext.registerTool(...)` with schemas, annotations, cancellation propagation, lifecycle abort signals, static registration by default, and optional dynamic phase registration
-- Supabase Anonymous Auth for the no-signup `/demo` path and Email OTP for standard `/meet` rooms
+- Supabase Anonymous Auth for the limited `/demo` judge preview and Email OTP for standard `/meet` rooms
 - Supabase Postgres for rooms, semantic objects, immutable receipts, packet snapshots, send requests, and vision-admission records
 - Supabase Realtime Presence for connected participants and Broadcast for high-frequency cursors and compact revision notifications
 - Browser WebRTC for an opt-in small-room meeting filmstrip, with signaling isolated on `room-media:<room-id>`
@@ -110,7 +111,7 @@ The memorable interaction is not gesture control by itself. A person can draw an
 - Object and packet schemas reject unknown or malformed data before mutation.
 - Vision work uses durable leases, rate limits, exact-request caching, and compare-and-set completion so retries do not silently duplicate paid work.
 - Packet approval snapshots exact content and recipients. Cancellation is durable and a cancelled request cannot later execute.
-- Private credentials remain server-side. The public demo uses a browser-created anonymous authenticated identity but presents no signup, login, password, third-party account, or configuration.
+- Private credentials remain server-side. The limited judge preview presents no signup form or password. After explicit entry it reuses a signed CommandCanvas identity or creates a temporary anonymous authenticated identity and a capped room. Canvas, collaboration, hand input, typed commands, and deterministic transformations need no provider configuration; optional embedded Live voice and direct OpenAI image interpretation require the judge's own OpenAI API key for that tab.
 
 ## Challenges
 
@@ -122,7 +123,7 @@ An additional browser constraint was experimental WebMCP lifecycle behavior. Com
 
 - One mutation and receipt pipeline across human, collaborator, and agent inputs
 - A rough-sketch-and-narration transformation into a schema-validated diagram or chart that preserves the source
-- No-signup, two-browser Supabase collaboration with actual Presence and Broadcast
+- Limited judge-preview, two-browser Supabase collaboration with actual Presence and Broadcast
 - Passwordless standard rooms with six-digit Email OTP, 24-hour exact-email invitations, one-time transactional acceptance, and fragment scrubbing
 - No-reload recovery after a browser network outage, with Presence and durable collaboration restored
 - WebMCP tools that operate on the same live React page rather than a detached copy
@@ -132,7 +133,7 @@ An additional browser constraint was experimental WebMCP lifecycle behavior. Com
 - MediaPipe deliberate index-finger drawing, one-hand pinch grab, two-hand pinch resize, open-palm pen-up and blank-canvas pan, side-edge recoverable trash, and bottom-dock minimize
 - A full-canvas hand control plane that maps a comfortable central camera region across the workspace, with the camera preview reduced to a sensor check
 - Local open-palm canvas pan, two-hand canvas zoom, and visible target, open, pinch, held, resizing, panning, and zoom feedback
-- Consent-gated application contracts for an optional separately operated CUDA hand-pose relay, with bounded newest-frame transport, semantic-only results, no raw retention, and automatic local fallback; the relay source is not public at this checkpoint and the public path must remain disabled until its exact AGPL source commit is published and linked
+- Consent-gated application contracts for an optional separately operated CUDA hand-pose relay, with bounded newest-frame transport, semantic-only results, no raw retention, and automatic local fallback; the exact AGPL image source is public at commit [`ee5c2afcfbfc8427b39e2f13e170785c87bce2e3`](https://github.com/romiteld/commandcanvas/tree/ee5c2afcfbfc8427b39e2f13e170785c87bce2e3) on the isolated `hand-relay-source` branch
 - Continuous `gpt-realtime-2.1` voice that submits narrow commands without a Run click
 - No-mouse thought capture that keeps completed user speech inside one selected, receipt-backed note card
 - Opt-in two-browser peer-to-peer meeting media, separate from Supabase Presence and cursor traffic
@@ -149,4 +150,4 @@ The immediate next work is measured real-hand calibration across webcams and lig
 
 ## Honest verification boundary
 
-The repository’s `docs/verification-ledger.md` separates automated evidence, named browser evidence, live-service evidence, unverified integrations, and deliberate cuts. Earlier local YOLO/browser and native CUDA evidence belongs to the superseded combined AGPL build; it does not prove the current MIT browser engine. The exact `d331ccf565560fffdafb7ba0d5cdab8f97bddf2e` release completed controlled-media desktop and mobile camera lifecycle runs through the MediaPipe worker and model, including labeled desktop recovery and exact shutdown behavior. These controlled runs do not verify physical-hand accuracy or ergonomics. Controlled runs separately verified two-browser Supabase collaboration and peer-to-peer media, a paid `gpt-realtime-2.1` provider session, exact-production OpenAI vision that preserved the sketch beside a schema-validated structured visual, and one allowlisted Resend packet through the full approval and explicit-SEND path. The public no-signup environment remains preview-only. ChatGPT built-in-browser Site Tools, post-fix physical iPhone interaction, cross-network media, and TURN behavior remain unverified.
+The repository’s `docs/verification-ledger.md` separates automated evidence, named browser evidence, live-service evidence, unverified integrations, and deliberate cuts. Earlier local YOLO/browser and native CUDA evidence belongs to the superseded combined AGPL build; it does not prove the current MIT browser engine. The exact `d331ccf565560fffdafb7ba0d5cdab8f97bddf2e` release completed controlled-media desktop and mobile camera lifecycle runs through the MediaPipe worker and model, including labeled desktop recovery and exact shutdown behavior. These controlled runs do not verify physical-hand accuracy or ergonomics. Controlled runs separately verified two-browser Supabase collaboration and peer-to-peer media, a paid `gpt-realtime-2.1` provider session, exact-production OpenAI vision that preserved the sketch beside a schema-validated structured visual, and one allowlisted Resend packet through the full approval and explicit-SEND path. The public limited judge preview remains preview-only. ChatGPT built-in-browser Site Tools, post-fix physical iPhone interaction, cross-network media, and TURN behavior remain unverified.

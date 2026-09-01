@@ -453,7 +453,7 @@ export function DemoCommandCanvas({
           CC
         </span>
         <p className="eyebrow">CommandCanvas / judge mode</p>
-        <h1>Opening your no-signup demo room…</h1>
+        <h1>Opening the limited judge preview…</h1>
         <p>
           Creating an anonymous browser identity, verifying room access, and
           arranging deterministic semantic objects.
@@ -519,6 +519,14 @@ export function DemoCommandCanvas({
 
   return (
     <div className="demo-room-stage">
+      <aside
+        className="demo-preview-boundary"
+        aria-label="Limited judge preview"
+      >
+        <strong>Limited judge preview</strong>
+        <span>Temporary Supabase room · email remains preview-only</span>
+        <a href="/meet">Sign in</a>
+      </aside>
       <div className="demo-room-controls" aria-label="Demo room controls">
         <span>{room.role === "host" ? "HOST" : "PARTICIPANT"}</span>
         {room.inviteUrl ? (
