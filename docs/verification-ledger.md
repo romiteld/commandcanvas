@@ -1891,3 +1891,105 @@ rewriting their historical evidence:
   enterprise identity, billing, native applications, headset support,
   marketplaces, desktop automation, and arbitrary physical-object tracking are
   not claimed by this release.
+
+## Checkpoint 36: hydration-safe production and browser-host ratchet
+
+### WORKING
+
+- The no-signup preview entry is now disabled in server-rendered markup and
+  becomes enabled only after React hydration. Its regression test performs an
+  actual `renderToString` to `hydrateRoot` transition, records recoverable
+  hydration errors, proves the post-hydration enablement, and proves that the
+  first click reveals the canvas. This closes the reproduced race in which a
+  browser clicked the SSR button before its handler existed and no room request
+  was made.
+- A production WebKit audit measured the footer **Source** target at 41.28125
+  CSS pixels wide. A browser test was added first and observed that exact
+  failure. The minimal landing-style change gives every footer link a 44 by 44
+  CSS-pixel minimum; the isolated fresh-build Chromium and WebKit matrix then
+  passed.
+- Runtime source commit
+  `c6105f472c09014c25fbe952600a4098fdcd44f7` is authored and committed only by
+  Daniel Romitelli, with no co-author or automated-author attribution.
+- GitHub Actions run `33517036262`, job `99886544358`, completed successfully
+  for that exact SHA. Its integrated gate ran ESLint, TypeScript, 125 Vitest
+  files with 1,386 passing tests, the 152.4 KiB hand-worker build, and the
+  optimized Next.js 16.3.3 production build with 14 of 14 static pages.
+- Vercel deployment `dpl_3FtsMvd3C4FU1rfFgBCJ4XrpziBL`, unique URL
+  `commandcanvas-lxaq7virg-imaginovai.vercel.app`, is `READY`, targets
+  Production, and contains the exact runtime SHA. The canonical
+  `https://commandcanvas.vercel.app` alias, the project alias, and the main
+  branch alias all resolve to that deployment.
+- Production contains the required Supabase and Resend bindings plus the
+  WebMCP, vision-model, voice, and private-relay configuration names. It has no
+  deployment-owner `OPENAI_API_KEY` or `OPENAI_REALTIME_API_KEY`. Preview has
+  zero environment bindings. The private GPU relay remains fail-closed because
+  `PRIVATE_HAND_RELAY_SIGNING_KEY` has not been supplied to Vercel Production.
+
+### VERIFIED IN BROWSER
+
+- The exact Production release passed nine applicable landing, reduced-motion,
+  touch-target, narrow-width, and full-viewport browser scenarios in desktop
+  Chromium, mobile Chromium, and mobile WebKit. Six project-inapplicable cases
+  were intentionally skipped and none failed. Widths from 320 through 1,440
+  CSS pixels had no horizontal overflow, and every mobile footer link met the
+  44 CSS-pixel minimum.
+- Official Chrome for Testing 153.0.8010.5 passed the strict public static-mode
+  WebMCP probe. The browser exposed `document.modelContext`, did not expose the
+  deprecated navigator surface, discovered the eleven-tool catalog, completed
+  native `get_canvas_state` and semantic `create_object`, rendered the
+  Daniel-attributed `webmcp` receipt, preserved static registration lifecycle,
+  honored client-side cancellation, emitted no unexpected page or console
+  error, and deleted its exact temporary room.
+- Two independent Production Chromium contexts passed both Supabase
+  collaboration scenarios. They verified Presence, cursor Broadcast, durable
+  collaborator mutation and receipt sync, grouping, rotation, undo, redo,
+  ungrouping, offline state preservation, reconnect, reload reconstruction,
+  same-identity recent-room recovery, and exact temporary-room cleanup.
+- Production desktop and mobile Chromium passed the synthetic-camera local
+  detector lifecycle. The real browser acquired a fake media track, loaded the
+  same-origin worker, WASM, and MediaPipe hand-landmarker model, reached
+  **Hand input ready · local only**, kept calibration geometry in bounds, and
+  detached and ended the track on disable. Desktop also passed the classic-WASM
+  recovery path. Three applicable scenarios passed, the deliberate
+  desktop-only project mismatch skipped once, and no page error was observed.
+- Querying the exact Vercel deployment after these probes returned no
+  server-side error-level runtime log entry.
+
+### UNVERIFIED OR EXTERNALLY BLOCKED
+
+- A real ChatGPT desktop built-in-browser Site Tools invocation is still
+  required. Chrome 153 proves the browser API and page implementation, but it
+  cannot prove account rollout, model selection, the address-bar Available
+  Site Tools list, ChatGPT safety review, Recently Used/Sources, or a live
+  `get_canvas_state` and `create_object` call made by GPT-5.6 Sol or Terra
+  against this page. No second ChatGPT login should appear inside CommandCanvas;
+  the surrounding desktop application account is the host identity.
+- Physical-camera acceptance remains required for index-finger drawing, pinch
+  acquisition, one- and two-hand manipulation, throw-to-trash, smoothing,
+  latency, lighting, occlusion, thermal behavior, and full-canvas ergonomics.
+  Synthetic media proves runtime lifecycle, not a human hand.
+- The optional RTX 3090 relay has a verified public origin and explicit-consent
+  application contract, but the Production token route remains intentionally
+  disabled until the existing relay signing key is explicitly authorized for
+  the Vercel Production destination. Local MediaPipe remains the automatic
+  fallback.
+- Fresh physical OTP entry, a real Resend invitation or approved packet send,
+  webhook reconciliation, a user-key-funded Realtime microphone session, and a
+  user-key-funded vision transform were not executed on this exact release.
+  Their implementation and historical provider evidence are retained, but no
+  new provider success is claimed.
+- Physical touch and stylus ergonomics remain separate device checks. Browser
+  touch, pen, and WebKit profiles do not prove palm rejection, pressure, tilt,
+  or device-specific comfort.
+
+### CUT
+
+- No implemented object-creation, Site Tools, continuous voice, hand-control,
+  collaboration, participant-media, authentication, invitation, packet, or
+  Resend path was removed.
+- Production TURN/SFU infrastructure, recording, screen sharing, enterprise
+  identity, billing, native applications, headset support, marketplaces,
+  desktop automation, and arbitrary physical-object tracking are not claimed.
+- No Devpost submission has been made. Submission remains blocked on the real
+  ChatGPT-host and physical-hand acceptance capture requested by the owner.
