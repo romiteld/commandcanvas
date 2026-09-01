@@ -21,6 +21,18 @@ function readStoredDemoEntry() {
   }
 }
 
+function subscribeToClientMount() {
+  return () => undefined;
+}
+
+function readMountedClient() {
+  return true;
+}
+
+function readMountedServer() {
+  return false;
+}
+
 export function DemoEntry({ children }: { children: ReactNode }) {
   const storedAccepted = useSyncExternalStore(
     subscribeToDemoEntry,
@@ -28,6 +40,11 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     () => false,
   );
   const [memoryAccepted, setMemoryAccepted] = useState(false);
+  const mounted = useSyncExternalStore(
+    subscribeToClientMount,
+    readMountedClient,
+    readMountedServer,
+  );
   const accepted = storedAccepted || memoryAccepted;
   const siteToolsSurfaceAvailable = useDocumentWebMcpTarget() !== null;
 
@@ -65,6 +82,7 @@ export function DemoEntry({ children }: { children: ReactNode }) {
         <button
           className="demo-entry-primary"
           type="button"
+          disabled={!mounted}
           onClick={acceptPreview}
         >
           Enter no-signup preview

@@ -157,7 +157,7 @@ test("rasterizes a pointer sketch for real vision and preserves it beside the st
     await expect(
       page
         .getByRole("button", {
-          name: "Open activity drawer: Danny created “Structured architecture”.",
+          name: "Open activity drawer: Daniel created “Structured architecture”.",
         })
         .getByText("R5 · webmcp", { exact: true }),
     ).toBeVisible();

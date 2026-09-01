@@ -1,5 +1,7 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { hydrateRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DemoEntry } from "@/components/command-canvas/demo-entry";
@@ -8,6 +10,38 @@ describe("DemoEntry", () => {
   beforeEach(() => window.sessionStorage.clear());
   afterEach(() => {
     delete (document as unknown as { modelContext?: unknown }).modelContext;
+  });
+
+  it("keeps the server-rendered entry control inert until hydration", async () => {
+    const user = userEvent.setup();
+    const container = document.createElement("div");
+    const entry = (
+      <DemoEntry>
+        <div>Hosted preview mounted</div>
+      </DemoEntry>
+    );
+    container.innerHTML = renderToString(entry);
+    document.body.append(container);
+
+    const button = within(container).getByRole("button", {
+      name: "Enter no-signup preview",
+    });
+    expect(button).toBeDisabled();
+
+    const recoverableErrors: unknown[] = [];
+    const root = hydrateRoot(container, entry, {
+      onRecoverableError: (error) => recoverableErrors.push(error),
+    });
+    try {
+      await waitFor(() => expect(button).toBeEnabled());
+      expect(recoverableErrors).toEqual([]);
+
+      await user.click(button);
+      expect(within(container).getByText("Hosted preview mounted")).toBeVisible();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
   });
 
   it("does not allocate the limited Supabase preview until the visitor explicitly continues", async () => {

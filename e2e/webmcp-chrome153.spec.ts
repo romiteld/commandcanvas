@@ -138,7 +138,7 @@ test("exercises Chrome 153's native WebMCP lifecycle and client-side cancellatio
       page.getByRole("button", { name: "Select Chrome 153 native proof" }),
     ).toBeVisible();
     const agentReceipt = page.getByRole("button", {
-      name: "Open activity drawer: Danny created “Chrome 153 native proof”.",
+      name: "Open activity drawer: Daniel created “Chrome 153 native proof”.",
     });
     await expect(agentReceipt).toBeVisible();
     await expect(
