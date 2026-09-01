@@ -176,26 +176,46 @@ function parseLandmarks(
     | readonly { x: number; y: number; z?: number; visibility?: number }[]
     | undefined,
 ): HandLandmarks | null {
+  if (!points || points.length !== 21) return null;
+  const normalized = [];
+  for (const point of points) {
+    const landmark = normalizeLandmark(point);
+    if (!landmark) return null;
+    normalized.push(landmark);
+  }
+  return normalized as unknown as HandLandmarks;
+}
+
+// MediaPipe ROI projection can place an otherwise valid edge landmark just
+// outside the image. Bound that overscan before restoring our [0, 1] contract.
+const MAX_NORMALIZED_LANDMARK_OVERSCAN = 0.25;
+
+function normalizeLandmark(point: {
+  x: number;
+  y: number;
+  z?: number;
+  visibility?: number;
+}) {
   if (
-    !points ||
-    points.length !== 21 ||
-    !points.every(
-      (point) =>
-        Number.isFinite(point.x) &&
-        Number.isFinite(point.y) &&
-        point.x >= 0 &&
-        point.x <= 1 &&
-        point.y >= 0 &&
-        point.y <= 1 &&
-        (point.z === undefined || Number.isFinite(point.z)) &&
-        (point.visibility === undefined ||
-          (Number.isFinite(point.visibility) &&
-            point.visibility >= 0 &&
-            point.visibility <= 1)),
-    )
+    !Number.isFinite(point.x) ||
+    !Number.isFinite(point.y) ||
+    point.x < -MAX_NORMALIZED_LANDMARK_OVERSCAN ||
+    point.x > 1 + MAX_NORMALIZED_LANDMARK_OVERSCAN ||
+    point.y < -MAX_NORMALIZED_LANDMARK_OVERSCAN ||
+    point.y > 1 + MAX_NORMALIZED_LANDMARK_OVERSCAN ||
+    (point.z !== undefined && !Number.isFinite(point.z)) ||
+    (point.visibility !== undefined &&
+      (!Number.isFinite(point.visibility) ||
+        point.visibility < 0 ||
+        point.visibility > 1))
   )
     return null;
-  return points as HandLandmarks;
+  return {
+    ...point,
+    x: Math.min(1, Math.max(0, point.x)),
+    y: Math.min(1, Math.max(0, point.y)),
+    ...(point.visibility === undefined ? {} : { visibility: point.visibility }),
+  };
 }
 
 function normalizeConfidence(score: number | undefined) {

@@ -15,6 +15,8 @@ import { enterLimitedJudgePreview } from "./support/limited-judge-preview";
 import { requireProductionApiProxyOrigin } from "../lib/testing/live-probe-guards";
 
 const fakeCameraPath = process.env.COMMANDCANVAS_FAKE_CAMERA_PATH;
+const assertRecordedHandDetection =
+  process.env.ASSERT_RECORDED_HAND_DETECTION === "true";
 
 test.use({
   permissions: ["camera"],
@@ -76,7 +78,8 @@ test("starts the local hand detector from a real browser camera stream and relea
     await expect(
       handInput.getByText("Hand input ready · local only", { exact: true }),
     ).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText("READY · show one hand")).toBeVisible();
+    if (!assertRecordedHandDetection)
+      await expect(page.getByText("READY · show one hand")).toBeVisible();
     await expect(
       page.getByLabel("Hand runtime diagnostics"),
     ).toContainText("MediaPipe Hand Landmarker");
@@ -167,6 +170,31 @@ test("starts the local hand detector from a real browser camera stream and relea
           status < 400,
       ),
     ).toBe(true);
+
+    if (assertRecordedHandDetection) {
+      await expect(page.locator("[data-hand-skeleton]")).toHaveCount(1, {
+        timeout: 30_000,
+      });
+      await expect(page.locator("[data-hand-keypoint]")).toHaveCount(21);
+      await expect(page.locator("[data-tracked-hand-pointer]")).toHaveCount(1);
+      await expect(page.locator(".camera-preview-label")).toContainText(
+        "TRACKED",
+      );
+      const calibrationProgress = page.locator(
+        "[data-calibration-baseline-count]",
+      );
+      await expect
+        .poll(
+          async () =>
+            Number(
+              await calibrationProgress.getAttribute(
+                "data-calibration-baseline-count",
+              ),
+            ),
+          { timeout: 30_000 },
+        )
+        .toBeGreaterThan(0);
+    }
 
     await page.getByRole("button", { name: "Skip hand calibration" }).click();
     await expect(

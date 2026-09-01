@@ -33,7 +33,7 @@ describe("MediaPipe hand detector adapter", () => {
       minHandPresenceConfidence: 0.75,
       minTrackingConfidence: 0.7,
     });
-    expect(result).toBe(detector);
+    expect(result).not.toBe(detector);
   });
 
   it("loads the module-compatible WASM fileset when explicitly running in a module worker", async () => {
@@ -57,5 +57,51 @@ describe("MediaPipe hand detector adapter", () => {
     );
 
     expect(resolveVisionTasks).toHaveBeenCalledWith("/mediapipe/wasm", true);
+  });
+
+  it("treats MediaPipe's zero-filled landmark visibility as unavailable instead of invisible", async () => {
+    const mediaPipeLandmarks = Array.from({ length: 21 }, (_, index) => ({
+      x: 0.2 + index / 100,
+      y: 0.3 + index / 100,
+      z: 0,
+      visibility: 0,
+    }));
+    const rawDetector = {
+      detectForVideo: vi.fn(() => ({
+        landmarks: [mediaPipeLandmarks],
+        handedness: [[{ score: 0.91, categoryName: "Left" }]],
+      })),
+      close: vi.fn(),
+    };
+    const detector = await loadMediaPipeHandDetector(
+      {
+        wasmBaseUrl: "/mediapipe/wasm",
+        modelAssetUrl: "/mediapipe/hand_landmarker.task",
+        runningMode: "VIDEO",
+        numHands: 2,
+      },
+      {
+        resolveVisionTasks: vi.fn(async () => ({
+          wasmLoaderPath: "/loader.js",
+          wasmBinaryPath: "/binary.wasm",
+        })),
+        createDetector: vi.fn(async () => rawDetector),
+      },
+    );
+    const frame = {} as ImageBitmap;
+
+    const result = await detector.detectForVideo(frame, 42);
+
+    expect(rawDetector.detectForVideo).toHaveBeenCalledWith(frame, 42);
+    expect(result.landmarks[0]).toHaveLength(21);
+    expect(result.landmarks[0]).toEqual(
+      mediaPipeLandmarks.map((point) => ({
+        x: point.x,
+        y: point.y,
+        z: point.z,
+      })),
+    );
+    await detector.close();
+    expect(rawDetector.close).toHaveBeenCalledOnce();
   });
 });

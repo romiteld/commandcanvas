@@ -37,7 +37,7 @@ export async function loadMediaPipeHandDetector(
     options.wasmBaseUrl,
     loader.useModule,
   );
-  return dependencies.createDetector(fileset, {
+  const detector = await dependencies.createDetector(fileset, {
     baseOptions: { modelAssetPath: options.modelAssetUrl },
     runningMode: options.runningMode,
     numHands: options.numHands,
@@ -45,4 +45,23 @@ export async function loadMediaPipeHandDetector(
     minHandPresenceConfidence: 0.75,
     minTrackingConfidence: 0.7,
   });
+  return {
+    async detectForVideo(frame, timestamp) {
+      const result = await detector.detectForVideo(frame, timestamp);
+      return {
+        ...result,
+        landmarks: result.landmarks.map((landmarks) =>
+          landmarks.map((landmark) => ({
+            x: landmark.x,
+            y: landmark.y,
+            ...(landmark.z === undefined ? {} : { z: landmark.z }),
+          })),
+        ),
+      };
+    },
+    close: () => detector.close(),
+    ...(detector.getDiagnostics
+      ? { getDiagnostics: () => detector.getDiagnostics!() }
+      : {}),
+  };
 }

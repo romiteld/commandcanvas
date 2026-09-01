@@ -1114,7 +1114,12 @@ export function SpatialCameraControl({
       ) : null}
       {previewExpanded ? (
         <div className="camera-calibration-actions" aria-label="Hand calibration samples">
-          <div className="camera-calibration-progress" role="status">
+          <div
+            className="camera-calibration-progress"
+            role="status"
+            data-calibration-stage={calibrationStage}
+            data-calibration-baseline-count={calibrationCounts.baseline}
+          >
             <strong>
               {calibrationStage === "baseline"
                 ? calibrationCounts.baseline >= MIN_CALIBRATION_PINCH_SAMPLES
