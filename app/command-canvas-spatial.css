@@ -446,22 +446,6 @@
   color: var(--space-text);
 }
 
-.command-canvas-shell .demo-room-controls {
-  top: 13px;
-  right: 18px;
-  border-color: var(--space-line);
-  background: rgb(10 27 40 / 82%);
-  color: var(--space-text);
-  box-shadow: 0 14px 38px rgb(0 0 0 / 22%);
-  backdrop-filter: blur(22px);
-}
-
-.command-canvas-shell .demo-room-controls button {
-  border-color: var(--space-line);
-  background: rgb(238 248 255 / 7%);
-  color: var(--space-text);
-}
-
 /* Semantic objects stay bright and legible against the deep workspace. */
 .command-canvas-shell .canvas-object {
   border-color: rgb(172 201 216 / 36%);
@@ -1095,6 +1079,12 @@
   transform: translateY(14px);
 }
 
+.command-canvas-shell.is-drawing .room-header,
+.command-canvas-shell.is-drawing > .meeting-media-slot,
+.command-canvas-shell.is-drawing .canvas-world {
+  pointer-events: none;
+}
+
 .command-canvas-shell .overlay-drawer {
   border-color: rgb(151 190 211 / 32%);
   background:
@@ -1374,23 +1364,6 @@
     display: none;
   }
 
-  .command-canvas-shell .demo-room-controls {
-    top: 11px;
-    right: 8px;
-    max-width: 158px;
-    padding: 4px;
-  }
-
-  .command-canvas-shell .demo-room-controls > span {
-    display: none;
-  }
-
-  .command-canvas-shell .demo-room-controls button {
-    min-height: 38px;
-    padding-inline: 9px;
-    font-size: 8px;
-  }
-
   .command-canvas-shell .canvas-status-strip {
     top: auto;
     right: auto;
@@ -1533,6 +1506,15 @@
     display: none;
     max-width: calc(100vw - 16px);
     overflow-x: auto;
+  }
+
+  .command-canvas-shell .tool-dock.is-menu-open {
+    z-index: 40;
+  }
+
+  .command-canvas-shell .chatgpt-command-pill {
+    right: 8px;
+    bottom: calc(148px + env(safe-area-inset-bottom, 0px));
   }
 
   .command-canvas-shell .tool-dock-menu.is-open {

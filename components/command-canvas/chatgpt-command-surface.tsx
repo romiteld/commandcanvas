@@ -99,6 +99,7 @@ export function ChatGptCommandSurface({
           className="chatgpt-command-segment"
           aria-label="Open ChatGPT Site Tools and activity drawer"
           aria-expanded={drawerOpen}
+          disabled={drawingActive}
           onClick={onOpenDrawer}
         >
           <span className="agent-pulse" aria-hidden="true" />

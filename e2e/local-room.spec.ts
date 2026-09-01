@@ -29,6 +29,7 @@ test("creates, pins, and undoes one semantic object with visible receipts", asyn
     .getByRole("button", { name: "Close system status drawer" })
     .click();
 
+  await page.getByRole("button", { name: "Open create menu" }).click();
   await page.getByRole("button", { name: "Create note" }).click();
   await page.getByRole("button", { name: "Select New thought" }).click();
   await expect(
@@ -207,6 +208,7 @@ test("keeps the off-state hand sensor compact and out of mobile object hit testi
   expect(handControlBox.height).toBeLessThanOrEqual(64);
   await expect(page.getByLabel("Local hand tracking preview")).toBeHidden();
 
+  await page.getByRole("button", { name: "Open create menu" }).click();
   await page.getByRole("button", { name: "Create note" }).click();
   const note = page.getByRole("button", { name: "Select New thought" });
   const noteBox = await note.boundingBox();

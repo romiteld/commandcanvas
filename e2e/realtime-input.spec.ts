@@ -383,6 +383,7 @@ test("keeps the ordinary-browser canvas usable under an iPhone WebKit profile", 
 
   // The Next.js development indicator overlaps the dock's lower-left corner;
   // use an unobscured dock target while retaining a trusted WebKit tap.
+  await page.getByRole("button", { name: "Open create menu" }).tap();
   await page.getByRole("button", { name: "Create task board" }).tap();
   await expect(
     page.getByRole("button", { name: "Select Project board" }),

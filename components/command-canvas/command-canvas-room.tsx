@@ -7,6 +7,7 @@ import {
   useState,
   type CSSProperties,
   type ReactNode,
+  type SetStateAction,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -247,7 +248,9 @@ export function CommandCanvasRoom({
     Extract<SpatialGestureEffect, { type: "object.preview_edge_action" }> | null
   >(null);
   const [palmFinishPreview, setPalmFinishPreview] = useState<number | null>(null);
-  const [openDrawer, setOpenDrawer] = useState<WorkspaceDrawer>(null);
+  const [workspaceOverlay, setWorkspaceOverlay] = useState<WorkspaceOverlay>(
+    null,
+  );
   const [handCalibrationOpen, setHandCalibrationOpen] = useState(false);
   const [handCalibrationProfile, setHandCalibrationProfile] =
     useState<HandCalibrationProfile | null>(null);
@@ -268,7 +271,9 @@ export function CommandCanvasRoom({
   });
   const [latestReceiptVisible, setLatestReceiptVisible] = useState(false);
   const [dockMenu, setDockMenu] = useState<"create" | "more" | null>(null);
-  const [headerControlsOpen, setHeaderControlsOpen] = useState(false);
+  const openDrawer: WorkspaceDrawer =
+    workspaceOverlay === "header" ? null : workspaceOverlay;
+  const headerControlsOpen = workspaceOverlay === "header";
   const canvasViewportRef = useRef<HTMLDivElement>(null);
   const spatialGestureState = useRef(createInitialSpatialGestureState());
   const spatialRoomInputState = useRef<SpatialRoomInputState>(
@@ -349,6 +354,26 @@ export function CommandCanvasRoom({
   const interactionPending = commandPending || sketchTransformPending;
   const drawingActive =
     sketchComposerOpen || handInteractionMode === "draw";
+
+  // Header controls and drawers share one state owner. It is deliberately not
+  // an effect: an overlay switch must be atomic, not briefly coexist in a
+  // second render while a user is drawing.
+  function setOpenDrawer(next: SetStateAction<WorkspaceDrawer>) {
+    setWorkspaceOverlay((current) => {
+      const currentDrawer: WorkspaceDrawer =
+        current === "header" ? null : current;
+      return typeof next === "function" ? next(currentDrawer) : next;
+    });
+  }
+
+  function setHeaderControlsOpen(next: SetStateAction<boolean>) {
+    setWorkspaceOverlay((current) => {
+      const currentOpen = current === "header";
+      const shouldOpen =
+        typeof next === "function" ? next(currentOpen) : next;
+      return shouldOpen ? "header" : null;
+    });
+  }
   const chatGptProjection = useMemo(
     () =>
       projectCanvasState(canvas, selectedObjectId, {
@@ -817,6 +842,7 @@ export function CommandCanvasRoom({
     );
     setSketchComposerOpen(true);
     setOpenDrawer(null);
+    setHeaderControlsOpen(false);
     setDockMenu(null);
   }
 
@@ -2139,6 +2165,7 @@ export function CommandCanvasRoom({
     selectObject(null);
     setHandInteractionMode("draw");
     setOpenDrawer(null);
+    setHeaderControlsOpen(false);
     setDockMenu(null);
   }
 
@@ -2344,7 +2371,11 @@ export function CommandCanvasRoom({
       aria-busy={interactionPending}
       onKeyDown={handleCanvasKeyboard}
     >
-      <header className="room-header">
+      <header
+        className="room-header"
+        inert={drawingActive ? true : undefined}
+        aria-hidden={drawingActive || undefined}
+      >
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true">CC</span>
           <div>
@@ -2391,7 +2422,11 @@ export function CommandCanvasRoom({
               className="preview-header-badge"
               aria-label="Open demo preview details"
               aria-expanded={openDrawer === "system"}
-              onClick={() => setOpenDrawer("system")}
+              onClick={() => {
+                setHeaderControlsOpen(false);
+                setDockMenu(null);
+                setOpenDrawer("system");
+              }}
             >
               <span aria-hidden="true" />
               {previewBoundary.label}
@@ -2404,7 +2439,11 @@ export function CommandCanvasRoom({
                 className="workspace-header-overflow-trigger"
                 aria-label="Open workspace menu"
                 aria-expanded={headerControlsOpen}
-                onClick={() => setHeaderControlsOpen((open) => !open)}
+                onClick={() => {
+                  setDockMenu(null);
+                  setOpenDrawer(null);
+                  setHeaderControlsOpen((open) => !open);
+                }}
               >
                 <span aria-hidden="true">•••</span>
               </button>
@@ -2421,7 +2460,11 @@ export function CommandCanvasRoom({
             className="system-status-trigger"
             aria-label="Open system status"
             aria-expanded={openDrawer === "system"}
-            onClick={() => setOpenDrawer(openDrawer === "system" ? null : "system")}
+            onClick={() => {
+              setHeaderControlsOpen(false);
+              setDockMenu(null);
+              setOpenDrawer(openDrawer === "system" ? null : "system");
+            }}
           >
             <CompactStatus
               label={roomStatus === "live" ? "Live" : "Local"}
@@ -2441,7 +2484,11 @@ export function CommandCanvasRoom({
             className="activity-trigger"
             aria-label="Open activity drawer"
             aria-expanded={openDrawer === "activity"}
-            onClick={() => setOpenDrawer(openDrawer === "activity" ? null : "activity")}
+            onClick={() => {
+              setHeaderControlsOpen(false);
+              setDockMenu(null);
+              setOpenDrawer(openDrawer === "activity" ? null : "activity");
+            }}
           >
             <span aria-hidden="true">↗</span>
             <span>Activity</span>
@@ -2451,7 +2498,13 @@ export function CommandCanvasRoom({
       </header>
 
       {meetingMediaPanel ? (
-        <div className="meeting-media-slot">{meetingMediaPanel}</div>
+        <div
+          className="meeting-media-slot"
+          inert={drawingActive ? true : undefined}
+          aria-hidden={drawingActive || undefined}
+        >
+          {meetingMediaPanel}
+        </div>
       ) : null}
 
       <section className="workspace-grid" aria-label="CommandCanvas workspace">
@@ -2500,6 +2553,8 @@ export function CommandCanvasRoom({
             ) : null}
             <div
               className="canvas-world"
+              inert={drawingActive ? true : undefined}
+              aria-hidden={drawingActive || undefined}
               style={
                 {
                   transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
@@ -2787,37 +2842,46 @@ export function CommandCanvasRoom({
           ) : null}
         </section>
 
-        <SpatialCameraControl
-          calibrationOpen={handCalibrationOpen}
-          calibrationDeviceKey="commandcanvas-hand-camera"
-          calibrationKind={handCalibrationKind}
-          calibrationProfile={handCalibrationProfile}
-          createController={createHandTrackingController}
-          privateGpuRelayAvailable={privateGpuRelayAvailable}
-          onCalibrationResult={(result) => {
-            spatialRoomInputState.current = createInitialSpatialRoomInputState();
-            setHandCalibrationProfile(result.profile);
-            setHandCalibrationKind(result.accepted ? "calibrated" : "skipped");
-          }}
-          onCalibrationOpenChange={(open) => {
-            if (open) {
-              openHandCalibration();
-              return;
-            }
-            setHandCalibrationOpen(false);
-          }}
-          onObservation={handleHandObservation}
-          onSpatialModeStarted={() => {
-            setHandCalibrationOpen(false);
-            setOpenDrawer(null);
-          }}
-          onStatusChange={(status) => {
-            setHandTrackingStatus(status);
-            if (status.state !== "ready") setHandFeedback(null);
-          }}
-        />
+        <div
+          className="spatial-camera-surface"
+          inert={drawingActive ? true : undefined}
+          aria-hidden={drawingActive || undefined}
+        >
+          <SpatialCameraControl
+            calibrationOpen={handCalibrationOpen}
+            calibrationDeviceKey="commandcanvas-hand-camera"
+            calibrationKind={handCalibrationKind}
+            calibrationProfile={handCalibrationProfile}
+            createController={createHandTrackingController}
+            privateGpuRelayAvailable={privateGpuRelayAvailable}
+            onCalibrationResult={(result) => {
+              spatialRoomInputState.current = createInitialSpatialRoomInputState();
+              setHandCalibrationProfile(result.profile);
+              setHandCalibrationKind(result.accepted ? "calibrated" : "skipped");
+            }}
+            onCalibrationOpenChange={(open) => {
+              if (open) {
+                openHandCalibration();
+                return;
+              }
+              setHandCalibrationOpen(false);
+            }}
+            onObservation={handleHandObservation}
+            onSpatialModeStarted={() => {
+              setHandCalibrationOpen(false);
+              setOpenDrawer(null);
+            }}
+            onStatusChange={(status) => {
+              setHandTrackingStatus(status);
+              if (status.state !== "ready") setHandFeedback(null);
+            }}
+          />
+        </div>
 
-        <aside className="tool-dock" aria-label="Object tools">
+        <aside
+          className={`tool-dock${dockMenu ? " is-menu-open" : ""}`}
+          aria-label="Object tools"
+        >
           <div className="tool-dock-primary">
           <button
             type="button"
@@ -2951,13 +3015,21 @@ export function CommandCanvasRoom({
           drawingActive={drawingActive}
           realtimeActive={realtimeVoiceActive}
           realtimeAvailable={Boolean(realtimeVoice && !realtimeVoice.disabled)}
-          onOpenDrawer={() => setOpenDrawer("command")}
+          onOpenDrawer={() => {
+            setHeaderControlsOpen(false);
+            setDockMenu(null);
+            setOpenDrawer("command");
+          }}
           onCloseDrawer={() => {
             setHandCalibrationOpen(false);
             setOpenDrawer(null);
           }}
           onToggleRealtimeVoice={() => realtimeVoiceControlRef.current?.toggle()}
-          onViewAllActivity={() => setOpenDrawer("activity")}
+          onViewAllActivity={() => {
+            setHeaderControlsOpen(false);
+            setDockMenu(null);
+            setOpenDrawer("activity");
+          }}
           realtimeContent={
             realtimeVoice ? (
               <RealtimeVoiceControl
@@ -3607,6 +3679,7 @@ function DrawerHeading({
 }
 
 type WorkspaceDrawer = "command" | "activity" | "system" | null;
+type WorkspaceOverlay = Exclude<WorkspaceDrawer, null> | "header" | null;
 type HandInteractionMode = "manipulate" | "draw";
 type HandDrawingTool = "draw" | "erase";
 

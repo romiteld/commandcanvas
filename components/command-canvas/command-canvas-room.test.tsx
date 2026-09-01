@@ -347,6 +347,111 @@ describe("CommandCanvasRoom", () => {
     ).toBeVisible();
   });
 
+  it("keeps a participant-video control clickable without a persistent preview layer", async () => {
+    const user = userEvent.setup();
+    const onOpenParticipantVideo = vi.fn();
+    const store = createCanvasStore("room-meeting-control", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        meetingMediaPanel={
+          <button
+            type="button"
+            aria-label="Open participant video"
+            onClick={onOpenParticipantVideo}
+          >
+            Sarah video
+          </button>
+        }
+      />
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Open participant video" }),
+    );
+
+    expect(onOpenParticipantVideo).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".demo-preview-boundary")).toBeNull();
+  });
+
+  it("coordinates header controls with drawers and makes non-drawing controls inert in Draw mode", async () => {
+    const user = userEvent.setup();
+    const onReset = vi.fn();
+    const store = createCanvasStore("room-overlay-owner", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        headerControls={
+          <button type="button" aria-label="Reset demo" onClick={onReset}>
+            Reset demo
+          </button>
+        }
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Open workspace menu" }));
+    expect(screen.getByLabelText("Workspace controls")).toHaveClass("is-open");
+
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    expect(screen.getByLabelText("Workspace controls")).not.toHaveClass("is-open");
+    expect(
+      screen.getByRole("complementary", { name: "System status drawer" }),
+    ).toHaveClass("is-open");
+
+    await user.click(screen.getByRole("button", { name: "Open workspace menu" }));
+    expect(
+      container.querySelector(".persistent-system-drawer"),
+    ).not.toHaveClass("is-open");
+    expect(screen.getByLabelText("Workspace controls")).toHaveClass("is-open");
+
+    await user.click(screen.getByRole("button", { name: "Create sketch" }));
+
+    expect(container.querySelector(".room-header")).toHaveAttribute("inert");
+    expect(screen.getByLabelText("Workspace controls")).not.toHaveClass("is-open");
+    expect(
+      container.querySelector(".persistent-system-drawer"),
+    ).toHaveAttribute("inert");
+    expect(onReset).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Cancel sketch" }));
+    expect(container.querySelector(".room-header")).not.toHaveAttribute("inert");
+    await user.click(screen.getByRole("button", { name: "Open workspace menu" }));
+    await user.click(screen.getByRole("button", { name: "Reset demo" }));
+    expect(onReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes header overlays and restores them around tracked-hand Draw mode", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-hand-overlay-owner", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+        headerControls={<button type="button">Reset demo</button>}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+    await skipHandCalibration(user);
+    await user.click(screen.getByRole("button", { name: "Open workspace menu" }));
+
+    await user.click(screen.getByRole("button", { name: "Draw with hand" }));
+    expect(container.querySelector(".room-header")).toHaveAttribute("inert");
+    expect(screen.getByLabelText("Workspace controls")).not.toHaveClass("is-open");
+    expect(
+      container.querySelector(".spatial-camera-surface"),
+    ).toHaveAttribute("inert");
+
+    await user.click(screen.getByRole("button", { name: "Cancel hand sketch" }));
+    expect(container.querySelector(".room-header")).not.toHaveAttribute("inert");
+    expect(
+      container.querySelector(".spatial-camera-surface"),
+    ).not.toHaveAttribute("inert");
+  });
+
   it("keeps command, approval, and system scaffolding in an opt-in overlay drawer", async () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
