@@ -121,6 +121,7 @@ export interface BrowserMeetingApi {
 
 export function createBrowserMeetingApi(options: {
   accessToken: string;
+  actorUserId?: string;
   fetcher?: typeof fetch;
   createRequestId?: () => string;
   invitationRequestStorage?: Pick<
@@ -133,6 +134,9 @@ export function createBrowserMeetingApi(options: {
   > | null;
 }): BrowserMeetingApi {
   const bearer = parseBearerJwtHeader(`Bearer ${options.accessToken}`);
+  const actorUserId = z.uuid().safeParse(options.actorUserId).success
+    ? options.actorUserId!
+    : null;
   const fetcher = options.fetcher ?? fetch;
   const createRequestId =
     options.createRequestId ?? (() => globalThis.crypto.randomUUID());
@@ -166,21 +170,27 @@ export function createBrowserMeetingApi(options: {
     createMeeting: async (rawInput: CreateMeetingDraft, signal?: AbortSignal) => {
       const input = createMeetingDraftSchema.safeParse(rawInput);
       if (!input.success) return invalidInput();
-      const identity = JSON.stringify(input.data);
-      const storageKey = await requestStorageKey(
+      const identity = JSON.stringify([actorUserId, input.data]);
+      const storageKeys = await actorScopedRequestStorageKeys(
         MEETING_REQUEST_STORAGE_PREFIX,
+        actorUserId,
         identity,
       );
       let requestId =
         pendingMeetingIds.get(identity) ??
-        readPersistedRequestId(meetingRequestStorage, storageKey);
+        readPersistedRequestId(meetingRequestStorage, storageKeys.requestKey);
       if (!requestId) {
         const candidate = createRequestId();
         if (!z.uuid().safeParse(candidate).success) return invalidInput();
         requestId = candidate;
       }
       pendingMeetingIds.set(identity, requestId);
-      persistRequestId(meetingRequestStorage, storageKey, requestId);
+      persistRequestId(
+        meetingRequestStorage,
+        storageKeys.requestKey,
+        requestId,
+        storageKeys.manifestKey,
+      );
       const result = await call(
         "/api/meetings",
         { requestId, ...input.data },
@@ -191,7 +201,11 @@ export function createBrowserMeetingApi(options: {
       );
       if (result.ok) {
         pendingMeetingIds.delete(identity);
-        removePersistedRequestId(meetingRequestStorage, storageKey);
+        removePersistedRequestId(
+          meetingRequestStorage,
+          storageKeys.requestKey,
+          storageKeys.manifestKey,
+        );
       }
       return result;
     },
@@ -203,21 +217,30 @@ export function createBrowserMeetingApi(options: {
       const parsed = invitationDraftSchema.safeParse(input);
       if (!z.uuid().safeParse(roomId).success || !parsed.success)
         return invalidInput();
-      const inMemoryKey = JSON.stringify([roomId, parsed.data]);
-      const storageKey = await requestStorageKey(
+      const inMemoryKey = JSON.stringify([actorUserId, roomId, parsed.data]);
+      const storageKeys = await actorScopedRequestStorageKeys(
         INVITATION_REQUEST_STORAGE_PREFIX,
+        actorUserId,
         inMemoryKey,
       );
       let requestId =
         pendingInvitationIds.get(inMemoryKey) ??
-        readPersistedRequestId(invitationRequestStorage, storageKey);
+        readPersistedRequestId(
+          invitationRequestStorage,
+          storageKeys.requestKey,
+        );
       if (!requestId) {
         const candidate = createRequestId();
         if (!z.uuid().safeParse(candidate).success) return invalidInput();
         requestId = candidate;
       }
       pendingInvitationIds.set(inMemoryKey, requestId);
-      persistRequestId(invitationRequestStorage, storageKey, requestId);
+      persistRequestId(
+        invitationRequestStorage,
+        storageKeys.requestKey,
+        requestId,
+        storageKeys.manifestKey,
+      );
       const requestInput: CreateMeetingInvitationRequest = {
         requestId,
         ...parsed.data,
@@ -232,7 +255,11 @@ export function createBrowserMeetingApi(options: {
       );
       if (result.ok && result.value.delivery.status !== "reconciling") {
         pendingInvitationIds.delete(inMemoryKey);
-        removePersistedRequestId(invitationRequestStorage, storageKey);
+        removePersistedRequestId(
+          invitationRequestStorage,
+          storageKeys.requestKey,
+          storageKeys.manifestKey,
+        );
       }
       return result;
     },
@@ -336,8 +363,45 @@ export function createBrowserMeetingApi(options: {
 }
 
 const INVITATION_REQUEST_STORAGE_PREFIX =
-  "commandcanvas:invitation-request:v1:";
-const MEETING_REQUEST_STORAGE_PREFIX = "commandcanvas:meeting-request:v1:";
+  "commandcanvas:invitation-request:v2:";
+const MEETING_REQUEST_STORAGE_PREFIX = "commandcanvas:meeting-request:v2:";
+const MAX_ACTOR_REQUEST_KEYS = 64;
+
+export async function clearBrowserMeetingRequestState(options: {
+  actorUserId: string;
+  invitationRequestStorage?: Pick<
+    Storage,
+    "getItem" | "setItem" | "removeItem"
+  > | null;
+  meetingRequestStorage?: Pick<
+    Storage,
+    "getItem" | "setItem" | "removeItem"
+  > | null;
+}) {
+  if (!z.uuid().safeParse(options.actorUserId).success) return;
+  const invitationStorage =
+    options.invitationRequestStorage === undefined
+      ? browserSessionStorage()
+      : options.invitationRequestStorage;
+  const meetingStorage =
+    options.meetingRequestStorage === undefined
+      ? browserSessionStorage()
+      : options.meetingRequestStorage;
+  const [invitationKeys, meetingKeys] = await Promise.all([
+    actorScopedRequestStorageKeys(
+      INVITATION_REQUEST_STORAGE_PREFIX,
+      options.actorUserId,
+      "",
+    ),
+    actorScopedRequestStorageKeys(
+      MEETING_REQUEST_STORAGE_PREFIX,
+      options.actorUserId,
+      "",
+    ),
+  ]);
+  clearPersistedActorRequests(invitationStorage, invitationKeys.manifestKey);
+  clearPersistedActorRequests(meetingStorage, meetingKeys.manifestKey);
+}
 
 function browserSessionStorage(): Pick<
   Storage,
@@ -365,6 +429,20 @@ async function requestStorageKey(prefix: string, identity: string) {
   } catch {
     return null;
   }
+}
+
+async function actorScopedRequestStorageKeys(
+  prefix: string,
+  actorUserId: string | null,
+  identity: string,
+) {
+  if (!actorUserId)
+    return { requestKey: null, manifestKey: null } as const;
+  const [requestKey, manifestKey] = await Promise.all([
+    requestStorageKey(prefix, JSON.stringify([actorUserId, identity])),
+    requestStorageKey(`${prefix}actor:`, actorUserId),
+  ]);
+  return { requestKey, manifestKey } as const;
 }
 
 function parseFailure(raw: unknown, status: number): BrowserMeetingApiResult<never> {
@@ -403,12 +481,17 @@ function readPersistedRequestId(
 }
 
 function persistRequestId(
-  storage: Pick<Storage, "setItem"> | null,
+  storage: Pick<Storage, "getItem" | "setItem"> | null,
   key: string | null,
   requestId: string,
+  manifestKey: string | null,
 ) {
-  if (!storage || !key) return;
+  if (!storage || !key || !manifestKey) return;
   try {
+    const actorKeys = readActorRequestManifest(storage, manifestKey);
+    const nextKeys = [...actorKeys.filter((candidate) => candidate !== key), key]
+      .slice(-MAX_ACTOR_REQUEST_KEYS);
+    storage.setItem(manifestKey, JSON.stringify(nextKeys));
     storage.setItem(key, requestId);
   } catch {
     // Session storage can be disabled; same-page in-memory idempotency remains.
@@ -416,14 +499,55 @@ function persistRequestId(
 }
 
 function removePersistedRequestId(
-  storage: Pick<Storage, "removeItem"> | null,
+  storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null,
   key: string | null,
+  manifestKey: string | null,
 ) {
-  if (!storage || !key) return;
+  if (!storage || !key || !manifestKey) return;
   try {
     storage.removeItem(key);
+    const remaining = readActorRequestManifest(storage, manifestKey).filter(
+      (candidate) => candidate !== key,
+    );
+    if (remaining.length > 0)
+      storage.setItem(manifestKey, JSON.stringify(remaining));
+    else storage.removeItem(manifestKey);
   } catch {
     // A failed cleanup must not turn a completed invitation into a user error.
+  }
+}
+
+function readActorRequestManifest(
+  storage: Pick<Storage, "getItem">,
+  manifestKey: string,
+) {
+  try {
+    const value: unknown = JSON.parse(storage.getItem(manifestKey) ?? "[]");
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter(
+        (candidate): candidate is string =>
+          typeof candidate === "string" &&
+          candidate.startsWith("commandcanvas:") &&
+          candidate.length <= 160,
+      )
+      .slice(-MAX_ACTOR_REQUEST_KEYS);
+  } catch {
+    return [];
+  }
+}
+
+function clearPersistedActorRequests(
+  storage: Pick<Storage, "getItem" | "removeItem"> | null,
+  manifestKey: string | null,
+) {
+  if (!storage || !manifestKey) return;
+  try {
+    for (const key of readActorRequestManifest(storage, manifestKey))
+      storage.removeItem(key);
+    storage.removeItem(manifestKey);
+  } catch {
+    // Browser storage is best-effort; actor scoping still prevents replay.
   }
 }
 

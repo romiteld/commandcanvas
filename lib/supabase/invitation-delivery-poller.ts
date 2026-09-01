@@ -39,6 +39,8 @@ export async function pollInvitationDelivery(options: {
       options.invitationId,
       options.signal,
     );
+    if (options.signal.aborted)
+      return { ok: false, error: { code: "request_cancelled" } };
     if (!result.ok) return result;
     latest = result.value;
     options.onUpdate?.(latest);

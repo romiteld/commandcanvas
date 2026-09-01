@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createMeetingService } from "@/lib/supabase/meeting-service";
 
 const ACTOR_ID = "22222222-2222-4222-8222-222222222222";
+const OTHER_ACTOR_ID = "66666666-6666-4666-8666-666666666666";
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
 const INVITATION_ID = "33333333-3333-4333-8333-333333333333";
 const RETRY_CANDIDATE_ID = "77777777-7777-4777-8777-777777777777";
@@ -51,6 +52,66 @@ describe("meeting service", () => {
       }),
     );
     expect(JSON.stringify(result)).not.toContain("joinToken");
+  });
+
+  it("keeps each actor bound to that actor's exact room request ID at the service boundary", async () => {
+    const otherRoomId = "88888888-8888-4888-8888-888888888888";
+    const client = clientWith([
+      {
+        data: {
+          roomId: ROOM_ID,
+          slug: `room-${"1".repeat(32)}`,
+          role: "host",
+          joined: true,
+        },
+        error: null,
+      },
+      {
+        data: {
+          roomId: otherRoomId,
+          slug: `room-${"2".repeat(32)}`,
+          role: "host",
+          joined: true,
+        },
+        error: null,
+      },
+    ]);
+    const service = createMeetingService(client, {
+      createUuid: () => "99999999-9999-4999-8999-999999999999",
+      randomBytes: (size) => Buffer.alloc(size, 3),
+      now: () => new Date("2026-09-01T20:00:00.000Z"),
+      inviteTokenSecret: INVITE_SECRET,
+    });
+
+    await service.createMeeting(ACTOR_ID, {
+      requestId: ROOM_ID,
+      name: "Same draft",
+      displayName: "Daniel",
+      color: "#0ea5e9",
+    });
+    await service.createMeeting(OTHER_ACTOR_ID, {
+      requestId: otherRoomId,
+      name: "Same draft",
+      displayName: "Daniel",
+      color: "#0ea5e9",
+    });
+
+    expect(client.rpc).toHaveBeenNthCalledWith(
+      1,
+      "create_standard_meeting_with_host",
+      expect.objectContaining({
+        p_room_id: ROOM_ID,
+        p_host_user_id: ACTOR_ID,
+      }),
+    );
+    expect(client.rpc).toHaveBeenNthCalledWith(
+      2,
+      "create_standard_meeting_with_host",
+      expect.objectContaining({
+        p_room_id: otherRoomId,
+        p_host_user_id: OTHER_ACTOR_ID,
+      }),
+    );
   });
 
   it("loads durable invitation delivery only for the host, room, and invitation tuple", async () => {

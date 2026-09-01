@@ -100,4 +100,47 @@ describe("bounded invitation delivery polling", () => {
     expect(result).toEqual({ ok: false, error: { code: "request_cancelled" } });
     expect(loadInvitationDelivery).toHaveBeenCalledTimes(1);
   });
+
+  it("drops an in-flight result when a replacement aborts the poll", async () => {
+    const controller = new AbortController();
+    let resolveDelivery!: (value: {
+      ok: true;
+      value: {
+        invitationId: string;
+        roomId: string;
+        delivery: { status: "delivered"; message: string };
+      };
+    }) => void;
+    const loadInvitationDelivery = vi.fn(
+      () =>
+        new Promise<Parameters<typeof resolveDelivery>[0]>((resolve) => {
+          resolveDelivery = resolve;
+        }),
+    );
+    const onUpdate = vi.fn();
+    const polling = pollInvitationDelivery({
+      api: { loadInvitationDelivery },
+      roomId: ROOM_ID,
+      invitationId: INVITATION_ID,
+      signal: controller.signal,
+      onUpdate,
+    });
+    await vi.waitFor(() => expect(loadInvitationDelivery).toHaveBeenCalledOnce());
+
+    controller.abort();
+    resolveDelivery({
+      ok: true,
+      value: {
+        invitationId: INVITATION_ID,
+        roomId: ROOM_ID,
+        delivery: { status: "delivered", message: "Stale result" },
+      },
+    });
+
+    await expect(polling).resolves.toEqual({
+      ok: false,
+      error: { code: "request_cancelled" },
+    });
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
 });

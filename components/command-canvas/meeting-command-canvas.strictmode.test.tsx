@@ -28,8 +28,25 @@ interface FakeSessionResult {
   error: { message: string } | null;
 }
 
+interface FakeSignOutResult {
+  error: { message: string } | null;
+}
+
+interface FakeOtpRequestResult {
+  data: Record<string, never>;
+  error: {
+    code?: string;
+    message: string;
+    status?: number;
+  } | null;
+}
+
 const fakes = vi.hoisted(() => {
   const order: string[] = [];
+  const meetingApiOptions: Array<{
+    accessToken: string;
+    actorUserId?: string;
+  }> = [];
   const webMcpSignals: AbortSignal[] = [];
   const disposeSession = vi.fn(async () => undefined);
   const submitCommand = vi.fn();
@@ -96,8 +113,10 @@ const fakes = vi.hoisted(() => {
     save: saveOpenAiCredential,
     clear: deleteOpenAiCredential,
   }));
-  const signOut = vi.fn(async () => ({ error: null }));
-  const signInWithOtp = vi.fn(async () => ({ data: {}, error: null }));
+  const signOut = vi.fn(async (): Promise<FakeSignOutResult> => ({ error: null }));
+  const signInWithOtp = vi.fn(
+    async (): Promise<FakeOtpRequestResult> => ({ data: {}, error: null }),
+  );
   const verifyOtp = vi.fn(async () => ({
     data: {
       session: { access_token: "invited.header.signature" },
@@ -169,6 +188,7 @@ const fakes = vi.hoisted(() => {
     load: loadUserProfile,
     save: vi.fn(),
   }));
+  const clearMeetingRequestState = vi.fn(async () => undefined);
   const getSession = vi.fn(async (): Promise<FakeSessionResult> => ({
     data: {
       session: {
@@ -211,6 +231,8 @@ const fakes = vi.hoisted(() => {
   };
   return {
     order,
+    meetingApiOptions,
+    clearMeetingRequestState,
     acceptInvitation,
     createInvitation,
     createMeeting,
@@ -291,19 +313,25 @@ vi.mock("@/lib/supabase/browser-client", () => ({
 }));
 
 vi.mock("@/lib/supabase/meeting-api", () => ({
-  createBrowserMeetingApi: vi.fn(({ accessToken }: { accessToken: string }) => ({
-    acceptInvitation: fakes.acceptInvitation,
-    createMeeting: (input: {
-      name: string;
-      displayName: string;
-      color: string;
-    }) => fakes.createMeeting(accessToken, input),
-    createInvitation: (
-      roomId: string,
-      input: { email: string; displayName: string },
-    ) => fakes.createInvitation(accessToken, roomId, input),
-    loadInvitationDelivery: fakes.loadInvitationDelivery,
-  })),
+  clearBrowserMeetingRequestState: fakes.clearMeetingRequestState,
+  createBrowserMeetingApi: vi.fn(
+    (options: { accessToken: string; actorUserId?: string }) => {
+      fakes.meetingApiOptions.push(options);
+      return {
+        acceptInvitation: fakes.acceptInvitation,
+        createMeeting: (input: {
+          name: string;
+          displayName: string;
+          color: string;
+        }) => fakes.createMeeting(options.accessToken, input),
+        createInvitation: (
+          roomId: string,
+          input: { email: string; displayName: string },
+        ) => fakes.createInvitation(options.accessToken, roomId, input),
+        loadInvitationDelivery: fakes.loadInvitationDelivery,
+      };
+    },
+  ),
 }));
 
 vi.mock("@/lib/user-profiles/browser-api", () => ({
@@ -421,6 +449,8 @@ import { MeetingCommandCanvas } from "@/components/command-canvas/meeting-comman
 describe("meeting invitation StrictMode handshake", () => {
   beforeEach(() => {
     fakes.order.length = 0;
+    fakes.meetingApiOptions.length = 0;
+    fakes.clearMeetingRequestState.mockClear();
     fakes.webMcpSignals.length = 0;
     fakes.disposeSession.mockClear();
     fakes.submitCommand.mockReset();
@@ -553,6 +583,9 @@ describe("meeting invitation StrictMode handshake", () => {
     );
 
     expect(fakes.signOut).toHaveBeenCalledWith({ scope: "local" });
+    expect(fakes.clearMeetingRequestState).toHaveBeenCalledWith({
+      actorUserId: USER_ID,
+    });
     expect(
       await screen.findByRole("heading", { name: "Verify your invitation" }),
     ).toBeVisible();
@@ -581,6 +614,127 @@ describe("meeting invitation StrictMode handshake", () => {
     );
     expect(window.location.hash).toBe("");
     expect(window.location.search).toBe(`?room=${ROOM_ID}`);
+  });
+
+  it("preserves the submitted email after an OTP provider failure and retries without retyping it", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/meet");
+    fakes.getSession.mockResolvedValueOnce({
+      data: { session: null },
+      error: null,
+    });
+    fakes.signInWithOtp
+      .mockResolvedValueOnce({
+        data: {},
+        error: {
+          code: "over_email_send_rate_limit",
+          message: "provider detail must stay bounded",
+          status: 429,
+        },
+      })
+      .mockResolvedValueOnce({ data: {}, error: null });
+
+    render(<MeetingCommandCanvas />);
+    const email = await screen.findByLabelText("Email");
+    await user.type(email, "Danny@Example.com");
+    await user.click(screen.getByRole("button", { name: "Email me a code" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Email limit reached. Please wait before requesting another code.",
+    );
+    expect(screen.getByLabelText("Email")).toHaveValue("Danny@Example.com");
+
+    await user.click(screen.getByRole("button", { name: "Email me a code" }));
+    expect(
+      await screen.findByRole("heading", { name: "Enter your six-digit code" }),
+    ).toBeVisible();
+    expect(fakes.signInWithOtp).toHaveBeenCalledTimes(2);
+    expect(fakes.signInWithOtp).toHaveBeenLastCalledWith({
+      email: "danny@example.com",
+      options: { shouldCreateUser: true },
+    });
+  });
+
+  it("restores the email form when OTP session lookup throws", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/meet");
+    fakes.getSession
+      .mockResolvedValueOnce({ data: { session: null }, error: null })
+      .mockRejectedValueOnce(new Error("session store unavailable"));
+
+    render(<MeetingCommandCanvas />);
+    await user.type(await screen.findByLabelText("Email"), "danny@example.com");
+    await user.click(screen.getByRole("button", { name: "Email me a code" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Your sign-in session could not be prepared. Try again.",
+    );
+    expect(screen.getByLabelText("Email")).toHaveValue("danny@example.com");
+    expect(fakes.signInWithOtp).not.toHaveBeenCalled();
+  });
+
+  it.each(["returns an error", "throws"] as const)(
+    "restores the retained email when anonymous sign-out %s",
+    async (behavior) => {
+      const user = userEvent.setup();
+      window.history.replaceState(null, "", "/meet");
+      fakes.getSession
+        .mockResolvedValueOnce({ data: { session: null }, error: null })
+        .mockResolvedValueOnce({
+          data: {
+            session: {
+              access_token: "anonymous.header.signature",
+              user: {
+                id: "55555555-5555-4555-8555-555555555555",
+                email: "anonymous@example.invalid",
+                email_confirmed_at: "2026-09-01T12:00:00.000Z",
+                is_anonymous: true,
+              },
+            },
+          },
+          error: null,
+        });
+      if (behavior === "returns an error")
+        fakes.signOut.mockResolvedValueOnce({
+          error: { message: "sign-out rejected" },
+        });
+      else
+        fakes.signOut.mockRejectedValueOnce(new Error("sign-out unavailable"));
+
+      render(<MeetingCommandCanvas />);
+      await user.type(await screen.findByLabelText("Email"), "danny@example.com");
+      await user.click(screen.getByRole("button", { name: "Email me a code" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Your sign-in session could not be prepared. Try again.",
+      );
+      expect(screen.getByLabelText("Email")).toHaveValue("danny@example.com");
+      expect(fakes.signInWithOtp).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not request an OTP when session lookup resolves after unmount", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/meet");
+    let resolveLookup!: (result: FakeSessionResult) => void;
+    fakes.getSession
+      .mockResolvedValueOnce({ data: { session: null }, error: null })
+      .mockImplementationOnce(
+        () =>
+          new Promise<FakeSessionResult>((resolve) => {
+            resolveLookup = resolve;
+          }),
+      );
+
+    const view = render(<MeetingCommandCanvas />);
+    await user.type(await screen.findByLabelText("Email"), "danny@example.com");
+    await user.click(screen.getByRole("button", { name: "Email me a code" }));
+    await waitFor(() => expect(fakes.getSession).toHaveBeenCalledTimes(2));
+    view.unmount();
+    resolveLookup({ data: { session: null }, error: null });
+    await Promise.resolve();
+
+    expect(fakes.signInWithOtp).not.toHaveBeenCalled();
   });
 
   it("loads a saved credential after verified room entry and selects it for voice and vision", async () => {
@@ -681,6 +835,10 @@ describe("meeting invitation StrictMode handshake", () => {
     expect(screen.getByLabelText("Your display name")).toHaveValue(
       "Daniel Romitelli",
     );
+    expect(fakes.meetingApiOptions).toContainEqual({
+      accessToken: "bootstrap.header.signature",
+      actorUserId: USER_ID,
+    });
   });
 
   it("preserves the entered values when session lookup throws before creation", async () => {
@@ -975,6 +1133,113 @@ describe("meeting invitation StrictMode handshake", () => {
       "33333333-3333-4333-8333-333333333333",
       expect.any(AbortSignal),
     );
+    expect(fakes.meetingApiOptions).toContainEqual({
+      accessToken: "bootstrap.header.signature",
+      actorUserId: USER_ID,
+    });
+  });
+
+  it("aborts the prior delivery poll before a failed replacement send", async () => {
+    const user = userEvent.setup();
+    let priorSignal: AbortSignal | undefined;
+    fakes.setRole("host");
+    fakes.setInvitationStatus("submitted");
+    fakes.loadInvitationDelivery.mockImplementationOnce(
+      (...args: unknown[]) => {
+        priorSignal = args[2] as AbortSignal;
+        return new Promise(() => undefined);
+      },
+    );
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Invite" }));
+    await user.type(screen.getByLabelText("Display name"), "Mike");
+    await user.type(screen.getByLabelText("Email"), "mike@example.com");
+    await user.click(screen.getByRole("button", { name: "Send invitation" }));
+    await waitFor(() => expect(priorSignal).toBeDefined());
+
+    fakes.setInvitationFailure({
+      code: "request_failed",
+      message: "Replacement send failed.",
+    });
+    await user.click(screen.getByRole("button", { name: "Send invitation" }));
+
+    expect(priorSignal?.aborted).toBe(true);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Replacement send failed.",
+    );
+  });
+
+  it("aborts the prior delivery poll before a terminal replacement result", async () => {
+    const user = userEvent.setup();
+    let priorSignal: AbortSignal | undefined;
+    fakes.setRole("host");
+    fakes.setInvitationStatus("submitted");
+    fakes.loadInvitationDelivery.mockImplementationOnce(
+      (...args: unknown[]) => {
+        priorSignal = args[2] as AbortSignal;
+        return new Promise(() => undefined);
+      },
+    );
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Invite" }));
+    await user.type(screen.getByLabelText("Display name"), "Mike");
+    await user.type(screen.getByLabelText("Email"), "mike@example.com");
+    await user.click(screen.getByRole("button", { name: "Send invitation" }));
+    await waitFor(() => expect(priorSignal).toBeDefined());
+
+    fakes.setInvitationStatus("preview_only");
+    await user.click(screen.getByRole("button", { name: "Send invitation" }));
+
+    expect(priorSignal?.aborted).toBe(true);
+    expect(
+      await screen.findByText("Preview only: email not sent"),
+    ).toBeVisible();
+  });
+
+  it("replaces a nonterminal delivery poll without allowing the stale poll to update", async () => {
+    const user = userEvent.setup();
+    const pollSignals: AbortSignal[] = [];
+    fakes.setRole("host");
+    fakes.setInvitationStatus("submitted");
+    fakes.loadInvitationDelivery
+      .mockImplementationOnce((...args: unknown[]) => {
+        pollSignals.push(args[2] as AbortSignal);
+        return new Promise(() => undefined);
+      })
+      .mockImplementationOnce((...args: unknown[]) => {
+        pollSignals.push(args[2] as AbortSignal);
+        return Promise.resolve({
+          ok: true,
+          value: {
+            invitationId: "33333333-3333-4333-8333-333333333333",
+            roomId: ROOM_ID,
+            delivery: {
+              status: "delivered",
+              message: "Replacement delivered.",
+            },
+          },
+        });
+      });
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Invite" }));
+    await user.type(screen.getByLabelText("Display name"), "Mike");
+    await user.type(screen.getByLabelText("Email"), "mike@example.com");
+    await user.click(screen.getByRole("button", { name: "Send invitation" }));
+    await waitFor(() => expect(pollSignals).toHaveLength(1));
+
+    await user.click(screen.getByRole("button", { name: "Send invitation" }));
+
+    expect(await screen.findByText("Email delivered")).toBeVisible();
+    expect(screen.getByText("Replacement delivered.")).toBeVisible();
+    expect(pollSignals).toHaveLength(2);
+    expect(pollSignals[0]?.aborted).toBe(true);
+    expect(pollSignals[1]?.aborted).toBe(false);
   });
 
   it("renders an invitation request failure inside the open dialog", async () => {

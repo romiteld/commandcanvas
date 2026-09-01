@@ -35,6 +35,7 @@ import type { BrowserRoomClient } from "@/lib/supabase/browser-room";
 import { loadOwnRoomMembership } from "@/lib/supabase/browser-room";
 import { createBrowserSupabaseClient } from "@/lib/supabase/browser-client";
 import {
+  clearBrowserMeetingRequestState,
   createBrowserMeetingApi,
   type BrowserMeetingInvitationValue,
 } from "@/lib/supabase/meeting-api";
@@ -58,7 +59,7 @@ type BrowserClient = SupabaseClient;
 
 export type MeetingLobbyState =
   | { phase: "initializing" }
-  | { phase: "email"; invited: boolean; error?: string }
+  | { phase: "email"; invited: boolean; email?: string; error?: string }
   | { phase: "otp"; invited: boolean; email: string; error?: string }
   | {
       phase: "invite_account";
@@ -159,6 +160,7 @@ export function MeetingCommandCanvas({
   const roomUnsubscribeRef = useRef<(() => void) | null>(null);
   const meetingMediaStreamRef = useRef<MediaStream | null>(null);
   const activeRuntimeSessionRef = useRef<DemoRoomSession | null>(null);
+  const authenticatedActorIdRef = useRef<string | null>(null);
   const disposedRuntimeSessionsRef = useRef(new WeakSet<DemoRoomSession>());
   const webMcpRegistryRef = useRef<WebMcpRegistry | null>(null);
   const webMcpTarget = useDocumentWebMcpTarget();
@@ -236,6 +238,7 @@ export function MeetingCommandCanvas({
         typeof session?.user?.email === "string" &&
         Boolean(session.user.email_confirmed_at);
       if (permanent && session) {
+        authenticatedActorIdRef.current = session.user.id;
         if (inviteToken) {
           await acceptAndEnter(
             client,
@@ -311,13 +314,17 @@ export function MeetingCommandCanvas({
     });
   }
 
-  function clearAccountScopedCredentialState() {
+  async function clearAccountScopedState(actorUserId?: string | null) {
+    const actorId = actorUserId ?? authenticatedActorIdRef.current;
+    authenticatedActorIdRef.current = null;
     openAiApiKeyRef.current = "";
     setOpenAiApiKey("");
     openAiCredentialApiRef.current = null;
     setSavedOpenAiCredential({ configured: false });
     setSavedOpenAiCredentialError(null);
     selectSavedOpenAiCredential(false);
+    if (actorId)
+      await clearBrowserMeetingRequestState({ actorUserId: actorId });
   }
 
   async function acceptAndEnter(
@@ -515,17 +522,53 @@ export function MeetingCommandCanvas({
   async function requestCode(form: FormData) {
     const client = clientRef.current;
     if (!client || lobby.phase !== "email") return;
-    const email = String(form.get("email") ?? "");
+    const previous = lobby;
+    const email = String(form.get("email") ?? "").trim();
+    const signal = lifecycleAbortRef.current?.signal;
+    if (!signal || signal.aborted) return;
+    const restoreEmail = (error: string) => {
+      if (!signal.aborted)
+        setLobby({
+          phase: "email",
+          invited: previous.invited,
+          email,
+          error,
+        });
+    };
     setLobby({ phase: "working", message: "Sending a six-digit code…" });
-    const current = await client.auth.getSession();
-    if (current.data.session?.user?.is_anonymous === true)
-      await client.auth.signOut({ scope: "local" });
-    const result = await requestEmailOtp(client, email);
-    if (!result.ok) {
-      setLobby({ phase: "email", invited: lobby.invited, error: result.message });
+    let current: Awaited<ReturnType<typeof client.auth.getSession>>;
+    try {
+      current = await client.auth.getSession();
+    } catch {
+      restoreEmail("Your sign-in session could not be prepared. Try again.");
       return;
     }
-    setLobby({ phase: "otp", invited: lobby.invited, email: result.email });
+    if (signal.aborted) return;
+    if (current.error) {
+      restoreEmail("Your sign-in session could not be prepared. Try again.");
+      return;
+    }
+    if (current.data.session?.user?.is_anonymous === true) {
+      try {
+        const signOut = await client.auth.signOut({ scope: "local" });
+        if (signal.aborted) return;
+        if (signOut.error) {
+          restoreEmail("Your sign-in session could not be prepared. Try again.");
+          return;
+        }
+      } catch {
+        restoreEmail("Your sign-in session could not be prepared. Try again.");
+        return;
+      }
+    }
+    if (signal.aborted) return;
+    const result = await requestEmailOtp(client, email);
+    if (signal.aborted) return;
+    if (!result.ok) {
+      restoreEmail(result.message);
+      return;
+    }
+    setLobby({ phase: "otp", invited: previous.invited, email: result.email });
   }
 
   async function switchInvitationAccount() {
@@ -546,7 +589,8 @@ export function MeetingCommandCanvas({
         });
         return;
       }
-      clearAccountScopedCredentialState();
+      await clearAccountScopedState();
+      if (signal.aborted) return;
       setLobby({ phase: "email", invited: true });
     } catch {
       if (!signal.aborted)
@@ -568,6 +612,7 @@ export function MeetingCommandCanvas({
       setLobby({ ...previous, error: result.message });
       return;
     }
+    authenticatedActorIdRef.current = result.value.user.id;
     const inviteToken = inviteTokenRef.current;
     if (inviteToken) {
       const signal = lifecycleAbortRef.current?.signal;
@@ -606,10 +651,9 @@ export function MeetingCommandCanvas({
       refreshAfterThrown: false,
     });
     if (signal.aborted) return;
-    const accessToken = recovered.ok
-      ? recovered.session?.access_token
-      : undefined;
-    if (!accessToken) {
+    const recoveredSession = recovered.ok ? recovered.session : null;
+    const accessToken = recoveredSession?.access_token;
+    if (!accessToken || !recoveredSession?.user?.id) {
       setLobby({
         phase: "host_form",
         email: previousEmail,
@@ -619,7 +663,11 @@ export function MeetingCommandCanvas({
       return;
     }
     try {
-      const api = createBrowserMeetingApi({ accessToken });
+      authenticatedActorIdRef.current = recoveredSession.user.id;
+      const api = createBrowserMeetingApi({
+        accessToken,
+        actorUserId: recoveredSession.user.id,
+      });
       const result = await api.createMeeting(
         {
           name: draft.roomName,
@@ -654,6 +702,8 @@ export function MeetingCommandCanvas({
     if (!runtime || runtime.snapshot.membership?.role !== "host") return;
     const signal = lifecycleAbortRef.current?.signal;
     if (!signal || signal.aborted) return;
+    invitationPollAbortRef.current?.abort();
+    invitationPollAbortRef.current = null;
     setInviteBusy(true);
     setInviteResult(null);
     setInviteError(null);
@@ -678,7 +728,10 @@ export function MeetingCommandCanvas({
       setInviteError("Your verified session expired.");
       return;
     }
-    const api = createBrowserMeetingApi({ accessToken });
+    const api = createBrowserMeetingApi({
+      accessToken,
+      actorUserId: runtime.snapshot.membership.userId,
+    });
     const result = await api.createInvitation(runtime.snapshot.roomId!, {
       email: String(form.get("email") ?? ""),
       displayName: String(form.get("displayName") ?? ""),
@@ -698,7 +751,6 @@ export function MeetingCommandCanvas({
         result.value.delivery.status,
       )
     ) {
-      invitationPollAbortRef.current?.abort();
       const pollController = new AbortController();
       invitationPollAbortRef.current = pollController;
       const abortPoll = () => pollController.abort();
@@ -949,7 +1001,7 @@ export function MeetingCommandCanvas({
           type="button"
           onClick={async () => {
             await runtime.client.auth.signOut({ scope: "local" });
-            clearAccountScopedCredentialState();
+            await clearAccountScopedState(runtime.snapshot.membership?.userId);
             window.history.replaceState(null, "", "/meet");
             window.location.reload();
           }}
@@ -1337,7 +1389,7 @@ export function MeetingLobby({
                 void onRequestCode(new FormData(event.currentTarget));
               }}
             >
-              <label>Email<input name="email" type="email" required autoComplete="email" maxLength={254} autoFocus /></label>
+              <label>Email<input name="email" type="email" required autoComplete="email" maxLength={254} autoFocus defaultValue={state.email ?? ""} /></label>
               <button type="submit">Email me a code</button>
             </form>
             {state.error ? <p role="alert">{state.error}</p> : null}

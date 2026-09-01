@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createBrowserMeetingApi } from "@/lib/supabase/meeting-api";
+import {
+  clearBrowserMeetingRequestState,
+  createBrowserMeetingApi,
+} from "@/lib/supabase/meeting-api";
 
 const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJob3N0In0.signature";
 const ROOM_ID = "11111111-1111-4111-8111-111111111111";
+const ACTOR_A = "22222222-2222-4222-8222-222222222222";
+const ACTOR_B = "33333333-3333-4333-8333-333333333333";
 
 describe("browser meeting API", () => {
   it("authenticates and validates standard meeting responses", async () => {
@@ -53,6 +58,7 @@ describe("browser meeting API", () => {
     );
     const firstApi = createBrowserMeetingApi({
       accessToken: JWT,
+      actorUserId: ACTOR_A,
       fetcher: firstFetch,
       createRequestId: () => "55555555-5555-4555-8555-555555555555",
       meetingRequestStorage: requestStorage,
@@ -78,6 +84,7 @@ describe("browser meeting API", () => {
     );
     const recreated = createBrowserMeetingApi({
       accessToken: JWT,
+      actorUserId: ACTOR_A,
       fetcher: secondFetch,
       createRequestId: createAnotherId,
       meetingRequestStorage: requestStorage,
@@ -91,6 +98,104 @@ describe("browser meeting API", () => {
     expect(retryBody.requestId).toBe(firstBody.requestId);
     expect(createAnotherId).not.toHaveBeenCalled();
     expect(persisted.size).toBe(0);
+  });
+
+  it("isolates lost-response room request IDs by actor and clears only the actor who signs out", async () => {
+    const persisted = new Map<string, string>();
+    const requestStorage = {
+      getItem: vi.fn((key: string) => persisted.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => persisted.set(key, value)),
+      removeItem: vi.fn((key: string) => persisted.delete(key)),
+    };
+    const draft = {
+      name: "Shared default room",
+      displayName: "Same visible name",
+      color: "#0ea5e9",
+    };
+    const actorAFetch = vi.fn<typeof fetch>(async () => {
+      throw new TypeError("lost actor A response");
+    });
+    const actorBFetch = vi.fn<typeof fetch>(async () => {
+      throw new TypeError("lost actor B response");
+    });
+    const actorA = createBrowserMeetingApi({
+      accessToken: JWT,
+      actorUserId: ACTOR_A,
+      fetcher: actorAFetch,
+      createRequestId: () => "44444444-4444-4444-8444-444444444444",
+      meetingRequestStorage: requestStorage,
+    });
+    const actorB = createBrowserMeetingApi({
+      accessToken: JWT,
+      actorUserId: ACTOR_B,
+      fetcher: actorBFetch,
+      createRequestId: () => "55555555-5555-4555-8555-555555555555",
+      meetingRequestStorage: requestStorage,
+    });
+
+    await actorA.createMeeting(draft);
+    await actorB.createMeeting(draft);
+    const actorARequest = JSON.parse(
+      String(actorAFetch.mock.calls[0]?.[1]?.body),
+    );
+    const actorBRequest = JSON.parse(
+      String(actorBFetch.mock.calls[0]?.[1]?.body),
+    );
+    expect(actorARequest.requestId).not.toBe(actorBRequest.requestId);
+    expect(JSON.stringify([...persisted.entries()])).not.toContain(
+      "Shared default room",
+    );
+    expect(JSON.stringify([...persisted.entries()])).not.toContain(
+      "Same visible name",
+    );
+
+    const createReplacementId = vi.fn(
+      () => "66666666-6666-4666-8666-666666666666",
+    );
+    const actorARecreatedFetch = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        ok: true,
+        meeting: {
+          roomId: actorARequest.requestId,
+          role: "host",
+          joined: true,
+        },
+      }),
+    );
+    const actorARecreated = createBrowserMeetingApi({
+      accessToken: JWT,
+      actorUserId: ACTOR_A,
+      fetcher: actorARecreatedFetch,
+      createRequestId: createReplacementId,
+      meetingRequestStorage: requestStorage,
+    });
+    await actorARecreated.createMeeting(draft);
+    expect(
+      JSON.parse(String(actorARecreatedFetch.mock.calls[0]?.[1]?.body))
+        .requestId,
+    ).toBe(actorARequest.requestId);
+    expect(createReplacementId).not.toHaveBeenCalled();
+
+    await clearBrowserMeetingRequestState({
+      actorUserId: ACTOR_B,
+      meetingRequestStorage: requestStorage,
+      invitationRequestStorage: requestStorage,
+    });
+    const actorBAfterSignOutFetch = vi.fn<typeof fetch>(async () => {
+      throw new TypeError("lost replacement response");
+    });
+    const actorBAfterSignOut = createBrowserMeetingApi({
+      accessToken: JWT,
+      actorUserId: ACTOR_B,
+      fetcher: actorBAfterSignOutFetch,
+      createRequestId: () => "77777777-7777-4777-8777-777777777777",
+      meetingRequestStorage: requestStorage,
+    });
+    await actorBAfterSignOut.createMeeting(draft);
+    expect(
+      JSON.parse(String(actorBAfterSignOutFetch.mock.calls[0]?.[1]?.body))
+        .requestId,
+    ).toBe("77777777-7777-4777-8777-777777777777");
   });
 
   it("retains one invitation request UUID across a lost response retry", async () => {
@@ -127,6 +232,7 @@ describe("browser meeting API", () => {
       .mockReturnValueOnce("55555555-5555-4555-8555-555555555555");
     const api = createBrowserMeetingApi({
       accessToken: JWT,
+      actorUserId: ACTOR_A,
       fetcher,
       createRequestId,
     });
@@ -182,6 +288,7 @@ describe("browser meeting API", () => {
     const firstFetch = vi.fn().mockRejectedValueOnce(new TypeError("lost response"));
     const firstApi = createBrowserMeetingApi({
       accessToken: JWT,
+      actorUserId: ACTOR_A,
       fetcher: firstFetch,
       createRequestId: () => "44444444-4444-4444-8444-444444444444",
       invitationRequestStorage,
@@ -197,7 +304,8 @@ describe("browser meeting API", () => {
       ok: false,
       error: { code: "request_failed" },
     });
-    expect(persisted.size).toBe(1);
+    // One hashed request key plus one hashed actor manifest; neither stores PII.
+    expect(persisted.size).toBe(2);
     const persistedText = JSON.stringify([...persisted.entries()]);
     expect(persistedText).not.toContain("sarah@example.com");
     expect(persistedText).not.toContain("Sarah Person");
@@ -215,6 +323,7 @@ describe("browser meeting API", () => {
     );
     const recreatedApi = createBrowserMeetingApi({
       accessToken: JWT,
+      actorUserId: ACTOR_A,
       fetcher: secondFetch,
       createRequestId: secondCreateRequestId,
       invitationRequestStorage,
@@ -228,6 +337,52 @@ describe("browser meeting API", () => {
     expect(retriedBody.requestId).toBe(firstBody.requestId);
     expect(secondCreateRequestId).not.toHaveBeenCalled();
     expect(persisted.size).toBe(0);
+  });
+
+  it("does not share persisted invitation request IDs between actors", async () => {
+    const persisted = new Map<string, string>();
+    const requestStorage = {
+      getItem: vi.fn((key: string) => persisted.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => persisted.set(key, value)),
+      removeItem: vi.fn((key: string) => persisted.delete(key)),
+    };
+    const firstFetch = vi.fn<typeof fetch>(async () => {
+      throw new TypeError("lost actor A response");
+    });
+    const secondFetch = vi.fn<typeof fetch>(async () => {
+      throw new TypeError("lost actor B response");
+    });
+    const input = {
+      email: "sarah@example.com",
+      displayName: "Sarah",
+      color: "#a855f7",
+      expiresInHours: 24,
+    };
+    const first = createBrowserMeetingApi({
+      accessToken: JWT,
+      actorUserId: ACTOR_A,
+      fetcher: firstFetch,
+      createRequestId: () => "44444444-4444-4444-8444-444444444444",
+      invitationRequestStorage: requestStorage,
+    });
+    const second = createBrowserMeetingApi({
+      accessToken: JWT,
+      actorUserId: ACTOR_B,
+      fetcher: secondFetch,
+      createRequestId: () => "55555555-5555-4555-8555-555555555555",
+      invitationRequestStorage: requestStorage,
+    });
+
+    await first.createInvitation(ROOM_ID, input);
+    await second.createInvitation(ROOM_ID, input);
+
+    const firstBody = JSON.parse(String(firstFetch.mock.calls[0]?.[1]?.body));
+    const secondBody = JSON.parse(String(secondFetch.mock.calls[0]?.[1]?.body));
+    expect(firstBody.requestId).not.toBe(secondBody.requestId);
+    expect(JSON.stringify([...persisted.entries()])).not.toContain(
+      "sarah@example.com",
+    );
+    expect(JSON.stringify([...persisted.entries()])).not.toContain("Sarah");
   });
 
   it("does not trust malformed success envelopes", async () => {
