@@ -657,7 +657,10 @@ function reduceOwnedBimanual(
   }
   const second = input.hands.find(({ trackId }) => trackId !== state.held?.ownerTrackId);
   if (!second) return enterLostGrace(state, timestamp, true);
-  const secondWorld = normalizedToWorld(second.pointer, scene);
+  const secondWorld = normalizedToWorld(
+    second.motionPointer ?? second.pointer,
+    scene,
+  );
   if (
     distanceToObjectRectangle(secondWorld, heldRectangle(state.held)) *
       scene.viewport.scale >
@@ -688,7 +691,7 @@ function reduceOwnedBimanual(
     second.trackId,
   );
   if (!geometry) return enterLostGrace(state, timestamp, true);
-  if (geometry.span < MIN_BIMANUAL_SPAN_PX)
+  if (geometry.span * scene.viewport.scale < MIN_BIMANUAL_SPAN_PX)
     return { state: { ...state, phase: "two_hand_pending", secondHand }, effects: [] };
   const transform: SpatialTwoHandTransform = {
     ownerTrackId: owner.trackId,
@@ -1044,7 +1047,7 @@ function acquireSelectedBimanual(
   const firstWorld = normalizedToWorld(first.motionPointer ?? first.pointer, scene);
   const secondWorld = normalizedToWorld(second.motionPointer ?? second.pointer, scene);
   const geometry = geometryFromPoints(firstWorld, secondWorld);
-  if (geometry.span < MIN_BIMANUAL_SPAN_PX) return null;
+  if (geometry.span * scene.viewport.scale < MIN_BIMANUAL_SPAN_PX) return null;
   if (distanceToObjectRectangle(geometry.centroid, object) > 0) return null;
   if (
     [firstWorld, secondWorld].some(

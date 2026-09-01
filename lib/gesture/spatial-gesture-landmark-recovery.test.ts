@@ -137,6 +137,144 @@ function rawSingleInput(
 }
 
 describe("raw-landmark spatial recovery", () => {
+  it.each([0.35, 2.5])(
+    "keeps direct two-hand acquisition in CSS pixels at viewport scale %s",
+    (scale) => {
+      const object = {
+        id: "selected-card",
+        x: 300,
+        y: 260,
+        width: 400,
+        height: 220,
+        rotation: 0,
+        zIndex: 5,
+        pinned: false,
+        minimized: false,
+      };
+      const scene: SpatialGestureScene = {
+        bounds: { left: 0, top: 0, width: 1_000, height: 600 },
+        viewport: {
+          x: 532 - (object.x + object.width / 2) * scale,
+          y: 440.4 - (object.y + object.height / 2) * scale,
+          scale,
+        },
+        selectedObjectId: object.id,
+        objects: [object],
+      };
+
+      const wideEnough = reduceSpatialGesture(
+        createInitialSpatialGestureState(),
+        rawBimanualInput(900, -0.006, 0.006),
+        scene,
+        manipulation,
+      );
+      expect(wideEnough.state.phase).toBe("transforming_two");
+      expect(wideEnough.state.held?.objectId).toBe(object.id);
+      expect(
+        wideEnough.effects.some(
+          (effect) => effect.type === "object.preview_transform",
+        ),
+      ).toBe(true);
+
+      const tooNarrow = reduceSpatialGesture(
+        createInitialSpatialGestureState(),
+        rawBimanualInput(916, -0.002, 0.002),
+        scene,
+        manipulation,
+      );
+      expect(tooNarrow.state.phase).not.toBe("transforming_two");
+      expect(
+        tooNarrow.effects.some(
+          (effect) => effect.type === "object.preview_transform",
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it.each([0.35, 2.5])(
+    "keeps held-object two-hand upgrade in CSS pixels at viewport scale %s",
+    (scale) => {
+      const object = {
+        id: "held-card",
+        x: 300,
+        y: 260,
+        width: 400,
+        height: 220,
+        rotation: 0,
+        zIndex: 5,
+        pinned: false,
+        minimized: false,
+      };
+      const scene: SpatialGestureScene = {
+        bounds: { left: 0, top: 0, width: 1_000, height: 600 },
+        viewport: {
+          x: 532 - (object.x + object.width / 2) * scale,
+          y: 440.4 - (object.y + object.height / 2) * scale,
+          scale,
+        },
+        selectedObjectId: object.id,
+        objects: [object],
+      };
+      const acquireHeld = (timestamp: number) => {
+        const pending = reduceSpatialGesture(
+          createInitialSpatialGestureState(),
+          rawSingleInput("pinch", "left-track", timestamp, {
+            x: 0.526,
+            y: 0.734,
+          }),
+          scene,
+          manipulation,
+        );
+        const held = reduceSpatialGesture(
+          pending.state,
+          rawSingleInput("pinch", "left-track", timestamp + 48, {
+            x: 0.526,
+            y: 0.734,
+          }),
+          scene,
+          manipulation,
+        );
+        expect(held.state.phase).toBe("held_one");
+        return held.state;
+      };
+      const upgrade = (
+        heldState: ReturnType<typeof acquireHeld>,
+        timestamp: number,
+        offset: number,
+      ) => {
+        const pending = reduceSpatialGesture(
+          heldState,
+          rawBimanualInput(timestamp, -offset, offset),
+          scene,
+          manipulation,
+        );
+        expect(pending.state.phase).toBe("two_hand_pending");
+        return reduceSpatialGesture(
+          pending.state,
+          rawBimanualInput(timestamp + 100, -offset, offset),
+          scene,
+          manipulation,
+        );
+      };
+
+      const wideEnough = upgrade(acquireHeld(1_100), 1_200, 0.006);
+      expect(wideEnough.state.phase).toBe("transforming_two");
+      expect(
+        wideEnough.effects.some(
+          (effect) => effect.type === "object.preview_transform",
+        ),
+      ).toBe(true);
+
+      const tooNarrow = upgrade(acquireHeld(2_100), 2_200, 0.002);
+      expect(tooNarrow.state.phase).toBe("two_hand_pending");
+      expect(
+        tooNarrow.effects.some(
+          (effect) => effect.type === "object.complete_transform",
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("directly acquires the selected object with two trusted pinches and commits once", () => {
     const scene: SpatialGestureScene = {
       bounds: { left: 0, top: 0, width: 1_000, height: 600 },
