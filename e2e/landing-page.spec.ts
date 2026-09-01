@@ -12,8 +12,18 @@ test("renders a fluid, scrollable landing page with real destinations", async ({
     if (message.type() === "error") consoleErrors.push(message.text());
   });
   page.on("requestfailed", (request) => {
+    const failure = request.failure()?.errorText ?? "unknown";
+    // WebKit cancels speculative chunks and fonts when this test deliberately
+    // navigates from the landing page to /meet and /demo. A cancelled
+    // non-document request during navigation is not a failed destination;
+    // document failures and every other network error remain visible.
+    if (
+      failure === "Load request cancelled" &&
+      request.resourceType() !== "document"
+    )
+      return;
     failedRequests.push(
-      `${request.method()} ${request.url()} ${request.failure()?.errorText ?? "unknown"}`,
+      `${request.method()} ${request.url()} ${failure}`,
     );
   });
 

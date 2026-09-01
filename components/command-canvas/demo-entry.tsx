@@ -1,10 +1,42 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
+
+const DEMO_ENTRY_ACCEPTED_KEY = "commandcanvas.demo-entry.accepted.v1";
+const DEMO_ENTRY_ACCEPTED_EVENT = "commandcanvas:demo-entry-accepted";
+
+function subscribeToDemoEntry(onChange: () => void) {
+  window.addEventListener(DEMO_ENTRY_ACCEPTED_EVENT, onChange);
+  return () => window.removeEventListener(DEMO_ENTRY_ACCEPTED_EVENT, onChange);
+}
+
+function readStoredDemoEntry() {
+  try {
+    return window.sessionStorage.getItem(DEMO_ENTRY_ACCEPTED_KEY) === "accepted";
+  } catch {
+    return false;
+  }
+}
 
 export function DemoEntry({ children }: { children: ReactNode }) {
-  const [accepted, setAccepted] = useState(false);
+  const storedAccepted = useSyncExternalStore(
+    subscribeToDemoEntry,
+    readStoredDemoEntry,
+    () => false,
+  );
+  const [memoryAccepted, setMemoryAccepted] = useState(false);
+  const accepted = storedAccepted || memoryAccepted;
+
+  function acceptPreview() {
+    try {
+      window.sessionStorage.setItem(DEMO_ENTRY_ACCEPTED_KEY, "accepted");
+      window.dispatchEvent(new Event(DEMO_ENTRY_ACCEPTED_EVENT));
+    } catch {
+      // The current in-memory entry still works when storage is unavailable.
+      setMemoryAccepted(true);
+    }
+  }
 
   if (accepted) return children;
 
@@ -26,7 +58,7 @@ export function DemoEntry({ children }: { children: ReactNode }) {
         </Link>
         <button
           type="button"
-          onClick={() => setAccepted(true)}
+          onClick={acceptPreview}
         >
           Continue limited judge preview
         </button>

@@ -177,10 +177,10 @@ test("keeps the canvas and primary action usable at a mobile viewport", async ({
   await page.getByRole("button", { name: "Create task board" }).click();
 
   await expect(
-    page.getByRole("button", { name: "Select Launch board" }),
+    page.getByRole("button", { name: "Select Project board" }),
   ).toBeVisible();
   const boardBox = await page
-    .getByRole("button", { name: "Select Launch board" })
+    .getByRole("button", { name: "Select Project board" })
     .boundingBox();
   const canvasBox = await page
     .getByRole("region", { name: "Infinite canvas" })
@@ -192,7 +192,7 @@ test("keeps the canvas and primary action usable at a mobile viewport", async ({
   );
   await expect(
     page.getByRole("button", {
-      name: "Open activity drawer: Danny created “Launch board”.",
+      name: "Open activity drawer: Danny created “Project board”.",
     }),
   ).toBeVisible();
 });
@@ -311,27 +311,26 @@ test("creates semantic project-board and schedule objects from the toolbar", asy
   await page.goto("/local");
   await page.getByRole("button", { name: "Create task board" }).click();
   await expect(
-    page.getByRole("button", { name: "Select Launch board" }),
+    page.getByRole("button", { name: "Select Project board" }),
   ).toBeVisible();
-  await expect(page.getByText("Confirm launch date")).toBeVisible();
-  await expect(page.getByText("Polish the demo path")).toBeVisible();
+  await expect(page.getByText("Confirm launch date")).toHaveCount(0);
+  await expect(page.getByText("Polish the demo path")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Create schedule" }).click();
   await expect(
-    page.getByRole("button", { name: "Select Next week" }),
+    page.getByRole("button", { name: "Select Schedule" }),
   ).toBeVisible();
-  await expect(page.getByText("Review WebMCP flow")).toBeVisible();
-  await expect(page.getByText("America/New_York")).toBeVisible();
+  await expect(page.getByText("Review WebMCP flow")).toHaveCount(0);
   await expect(
     page
       .getByLabel("Canvas coordinates")
       .getByText("Revision 2", { exact: true }),
   ).toBeVisible();
   const board = await page
-    .getByRole("button", { name: "Select Launch board" })
+    .getByRole("button", { name: "Select Project board" })
     .boundingBox();
   const schedule = await page
-    .getByRole("button", { name: "Select Next week" })
+    .getByRole("button", { name: "Select Schedule" })
     .boundingBox();
   if (!board || !schedule) throw new Error("semantic object geometry unavailable");
   expect(schedule.x).toBeGreaterThanOrEqual(board.x + board.width + 80);
@@ -420,17 +419,17 @@ test("reviews a deterministic browser speech transcript before a canonical voice
     page.getByText("Transcript ready. Review it, then run the direct command."),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Select Launch board" }),
+    page.getByRole("button", { name: "Select Project board" }),
   ).toHaveCount(0);
 
   await page.getByRole("button", { name: "Run direct command" }).click();
   await expect(
-    page.getByRole("button", { name: "Select Launch board" }),
+    page.getByRole("button", { name: "Select Project board" }),
   ).toBeVisible();
   await expect(
     page
       .getByRole("button", {
-        name: "Open activity drawer: Danny created “Launch board”.",
+        name: "Open activity drawer: Danny created “Project board”.",
       })
       .getByText("R1 · voice", { exact: true }),
   ).toBeVisible();

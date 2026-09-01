@@ -104,7 +104,8 @@ describe("normal meeting lobby", () => {
   });
 
   it("submits the verified host profile without a native page-navigation fallback", async () => {
-    const onCreateMeeting = vi.fn(async (_form: FormData) => undefined);
+    const onCreateMeeting = vi.fn<(form: FormData) => Promise<void>>();
+    onCreateMeeting.mockResolvedValue(undefined);
     render(
       <MeetingLobby
         state={{ phase: "host_form", email: "danny@example.com" }}
