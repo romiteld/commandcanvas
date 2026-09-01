@@ -1435,3 +1435,59 @@ rewriting their historical evidence:
   gesture-only deletion; TURN/SFU conferencing scale; recording; screen
   sharing; enterprise identity; billing; native applications; headset support;
   marketplaces; and desktop automation remain outside this release.
+
+## Checkpoint 31: public hand-calibration recovery release
+
+### WORKING
+
+- Public GitHub `main` commit
+  `e02957f4d6e3117f6c62162e3814f85e42a46d93` contains the raw-sensor staged
+  calibration, calibrated classifier thresholds, single-hand reacquisition,
+  stale-overlay clearing, controlled Skip state, and camera/overlay aspect-ratio
+  correction described in Checkpoint 30.
+- Vercel deployment `dpl_4cw4VgZKaqpCJRUZDUeV4vegvTgj` reports `READY` with
+  production target, GitHub repository `romiteld/commandcanvas`, branch `main`,
+  and that exact commit SHA. Its aliases include the canonical
+  `https://commandcanvas.vercel.app` origin.
+- Fresh canonical HTTP requests to `/`, `/demo`, and `/meet` each returned
+  HTTP 200 with `text/html` content after the production alias was assigned.
+
+### VERIFIED IN BROWSER
+
+- The fresh public calibration layout matrix passed its applicable
+  Chromium-mobile and Chromium-desktop scenarios: 2 passed, 2
+  project-specific skips, and zero failures. The mobile path measured the large
+  calibration surface, aligned intrinsic video and landmark overlays, completed
+  the controlled Skip round-trip, and reopened the collapsed preview with the
+  default-controls label. The desktop path remained bounded over a visible
+  canvas.
+- A separate fresh public Chromium-mobile camera lifecycle run used a real
+  browser media track with a deterministic Y4M source. The deployed application
+  loaded the same-origin worker, WASM, and detector model, reached ready,
+  returned to the canvas, disabled input, ended the exact media track, and
+  deleted its temporary production demo room. The applicable scenario passed
+  in 10.1 seconds.
+- A final read-only calibration review found no release blocker after both
+  prior findings were corrected. The intentionally unsupported pre-container-
+  unit fallback can distort, but every declared Next.js 16.3.3 minimum browser
+  target supports the container units used by the released alignment path.
+
+### UNVERIFIED
+
+- Physical-hand acceptance remains explicitly unclaimed. Deterministic camera
+  media proves the deployed permission, stream, worker, WASM, model-loading,
+  layout, and shutdown path; it does not prove fingertip drawing accuracy,
+  learned pinch ergonomics, full-canvas reach, two-hand behavior, device heat,
+  occlusion tolerance, or latency on the user's phone and camera.
+- ChatGPT built-in-browser Site Tools invocation remains a distinct host-rollout
+  boundary. The public Chromium checks do not substitute for a Site Tools call
+  made by ChatGPT against the same live page and session.
+
+### CUT
+
+- Nothing from the approved hand-control, object-creation, collaboration,
+  voice, WebMCP, packet, invitation, or email behavior was cut in this release.
+- Physical pencil or arbitrary-object tracking, unrecoverable gesture deletion,
+  TURN/SFU conferencing scale, recording, screen sharing, enterprise identity,
+  billing, native applications, headset support, marketplaces, and desktop
+  automation remain outside the public application release.

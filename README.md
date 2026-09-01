@@ -18,25 +18,29 @@ The canvas is not a document and the agent is not a detached chat panel. Notes, 
 
 That makes the core interaction possible:
 
-```text
-Finger / mouse / touch / stylus strokes
-                  │
-                  ▼
-             SketchObject
-                  │
-       browser renders selected strokes
-                  ▼
-                PNG
-                  │
- image input + strict structured output
-                  ▼
-    validated structured visual payload
-                  │
-                  ▼
- new structured object beside preserved source
-                  │
-                  ▼
-        revision + immutable receipt
+```mermaid
+flowchart TB
+    input["Finger, mouse, touch, or stylus"]
+    sketch["SketchObject<br/>Original strokes preserved"]
+    render["Browser render<br/>Selected sketch to PNG"]
+    vision["Visual interpretation<br/>Image + bounded instruction"]
+    validate["Schema validation<br/>Typed visual payload"]
+    result["Structured object<br/>Placed beside the source"]
+    receipt["Revision + immutable receipt"]
+
+    input --> sketch --> render --> vision --> validate --> result --> receipt
+
+    classDef human fill:#eef2ff,stroke:#4f46e5,color:#172554,stroke-width:1.5px;
+    classDef object fill:#ecfeff,stroke:#0891b2,color:#164e63,stroke-width:1.5px;
+    classDef agent fill:#faf5ff,stroke:#9333ea,color:#581c87,stroke-width:1.5px;
+    classDef guard fill:#fff7ed,stroke:#ea580c,color:#7c2d12,stroke-width:1.5px;
+    classDef audit fill:#ecfdf5,stroke:#059669,color:#064e3b,stroke-width:1.5px;
+
+    class input human;
+    class sketch,result object;
+    class render,vision agent;
+    class validate guard;
+    class receipt audit;
 ```
 
 The current validated output kinds are a generic diagram, architecture diagram, flowchart, pie chart, bar chart, and line chart. In auto mode, the transformation selects the best supported kind from the sketch image, the user’s bounded spoken explanation, and the instruction. Architecture is one possible subject, not a product or audience boundary.
@@ -59,20 +63,52 @@ Detailed instructions are in [docs/judge-instructions.md](docs/judge-instruction
 
 ## WebMCP tool catalog
 
-The site registers ten stable tools through `document.modelContext.registerTool(...)`:
+The site registers ten stable tools through
+`document.modelContext.registerTool(...)`. The catalog is grouped by authority so
+it remains scannable on narrow screens.
 
-| Tool | Capability | Human control |
-| --- | --- | --- |
-| `get_canvas_state` | Read a bounded semantic projection of current objects, selection, and recent receipts | Read-only |
-| `create_object` | Create one validated note, task board, schedule, sketch, diagram or chart, frame, data table, reference card, or meeting card | Canonical mutation + receipt |
-| `transform_object` | Move, resize, or rotate one unpinned object | Canonical mutation + receipt |
-| `set_object_state` | Pin, unpin, minimize, or restore | Canonical mutation + receipt |
-| `discard_object` | Move an object to recoverable trash | Reversible; no permanent delete |
-| `organize_objects` | Group explicit objects into a semantic frame, or ungroup a frame | Reversible canonical mutation + receipt |
-| `history_action` | Undo or redo the latest reversible shared mutation | Canonical history mutation + receipt |
-| `transform_sketch` | Interpret the selected sketch and optional narration into a new structured visual | Source is preserved |
-| `prepare_meeting_packet` | Create or refresh a reviewable packet draft | Does not approve or send |
-| `request_packet_send` | Stage an approved packet for site confirmation | Explicit host **SEND** still required |
+### Observe
+
+- **`get_canvas_state`** (**Read only**): Returns a bounded semantic projection
+  of current objects, selection, and
+  recent receipts. It cannot mutate the room.
+
+### Create and transform
+
+- **`create_object`** (**Write**): Creates one validated note, task board,
+  schedule, sketch, structured visual,
+  frame, data table, reference card, or meeting card through the canonical
+  mutation path and records a receipt.
+- **`transform_object`** (**Write**): Moves, resizes, or rotates one unpinned
+  object through the canonical mutation
+  path and records a receipt.
+- **`set_object_state`** (**Write**): Pins, unpins, minimizes, or restores an
+  object through the canonical mutation
+  path and records a receipt.
+- **`discard_object`** (**Reversible write**): Moves an object to recoverable
+  trash. It never permanently deletes the
+  object.
+- **`organize_objects`** (**Reversible write**): Groups explicit objects into a
+  semantic frame or ungroups one frame, then
+  records the canonical receipt.
+- **`history_action`** (**Reversible write**): Undoes or redoes the latest
+  eligible shared mutation through the same history
+  boundary.
+
+### Interpret
+
+- **`transform_sketch`** (**Write; source preserved**): Interprets the selected
+  sketch and optional narration into a new structured
+  visual beside the original.
+
+### Prepare and deliver
+
+- **`prepare_meeting_packet`** (**Draft write**): Creates or refreshes a
+  reviewable packet draft. It cannot approve or send the
+  packet.
+- **`request_packet_send`** (**Consequential request**): Stages an approved
+  packet for site confirmation. The external effect still
+  requires the host to press **SEND**.
 
 Descriptors use strict input schemas, `readOnlyHint`, `untrustedContentHint`, invocation cancellation signals, and registration lifecycle abort signals. Static registration is the default. Dynamic phase registration is available behind `NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION=true`; both modes use the same execute-time room, phase, schema, selection, membership, and role guards.
 
@@ -89,26 +125,43 @@ Live voice is an optional paid provider path with a separate server-only key, du
 
 ## One command architecture
 
-```text
-Pointer · Touch · Stylus · Typed command · Continuous GPT Realtime voice
-Local or consented private-GPU hand landmarks · Collaborator
-Supported agent hosts through WebMCP Site Tools
-                                  │
-                                  ▼
-                         Semantic intent
-                                  │
-                                  ▼
-                    Validated canonical command
-                                  │
-                  ┌───────────────┼───────────────┐
-                  ▼               ▼               ▼
-              Object state     Revision        Receipt
-                  │               │               │
-                  └───────────────┴───────────────┘
-                                  │
-                                  ▼
-                       Supabase persistence
-                         and realtime sync
+```mermaid
+flowchart TB
+    human["Human input<br/>Pointer · touch · stylus · hands"]
+    voice["Spoken and typed intent<br/>Continuous voice · typed command"]
+    people["Collaborators<br/>Shared room actions"]
+    agent["Agent hosts<br/>WebMCP Site Tools"]
+
+    intent["Semantic canvas intent"]
+    policy["Policy boundary<br/>Schema · role · phase · expected revision"]
+    mutation["Canonical command + mutation"]
+    state["Object state + room revision"]
+    receipt["Immutable activity receipt"]
+    sync["Supabase persistence<br/>Presence + Broadcast synchronization"]
+    room["Every authorized participant<br/>One reconstructed room state"]
+
+    human --> intent
+    voice --> intent
+    people --> intent
+    agent --> intent
+    intent --> policy --> mutation
+    mutation --> state
+    mutation --> receipt
+    state --> sync
+    receipt --> sync
+    sync --> room
+
+    classDef source fill:#eef2ff,stroke:#4f46e5,color:#172554,stroke-width:1.5px;
+    classDef command fill:#faf5ff,stroke:#9333ea,color:#581c87,stroke-width:1.5px;
+    classDef guard fill:#fff7ed,stroke:#ea580c,color:#7c2d12,stroke-width:1.5px;
+    classDef record fill:#ecfdf5,stroke:#059669,color:#064e3b,stroke-width:1.5px;
+    classDef shared fill:#ecfeff,stroke:#0891b2,color:#164e63,stroke-width:1.5px;
+
+    class human,voice,people,agent source;
+    class intent,mutation command;
+    class policy guard;
+    class state,receipt record;
+    class sync,room shared;
 ```
 
 Pointer previews, hand landmarks, and remote cursors remain ephemeral. A stable spatial operation commits once through the same expected-revision mutation boundary used by WebMCP and collaborator actions.
@@ -154,11 +207,38 @@ Supabase Realtime authorization proves that a signaling publisher is an authenti
 
 Packet preparation snapshots the exact semantic content. Approval snapshots exact recipients and hashes both content and recipients. WebMCP can stage an approved send but cannot change recipients or perform the external effect by itself.
 
-```text
-Prepare → edit recipients → inspect exact content → approve
-        → agent/site stages request → host confirms SEND
-        → Resend submission or honest preview-only outcome
-        → immutable packet activity receipt
+```mermaid
+flowchart TB
+    prepare["Prepare packet<br/>Snapshot semantic content"]
+    recipients["Host edits recipients"]
+    review["Host reviews exact content<br/>and exact recipient list"]
+    approve["Approve immutable snapshot<br/>Content hash + recipient hash"]
+    stage["Agent or site stages<br/>a send request"]
+    confirm{"Host presses SEND?"}
+    cancel["Cancel request<br/>Durable, idempotent outcome"]
+    guard["Server checks<br/>role · approved version · configuration · allowlist"]
+    outcome{"Delivery path available?"}
+    resend["Submit to Resend<br/>Record provider response"]
+    fallback["Preview-only or failed outcome<br/>Never claim delivery"]
+    activity["Immutable packet activity receipt"]
+
+    prepare --> recipients --> review --> approve --> stage --> confirm
+    confirm -- No --> cancel --> activity
+    confirm -- Yes --> guard --> outcome
+    outcome -- Yes --> resend --> activity
+    outcome -- No --> fallback --> activity
+
+    classDef author fill:#eef2ff,stroke:#4f46e5,color:#172554,stroke-width:1.5px;
+    classDef gate fill:#fff7ed,stroke:#ea580c,color:#7c2d12,stroke-width:1.5px;
+    classDef effect fill:#faf5ff,stroke:#9333ea,color:#581c87,stroke-width:1.5px;
+    classDef safe fill:#ecfdf5,stroke:#059669,color:#064e3b,stroke-width:1.5px;
+    classDef fallbackState fill:#f8fafc,stroke:#64748b,color:#334155,stroke-width:1.5px;
+
+    class prepare,recipients,review,approve author;
+    class confirm,guard,outcome gate;
+    class stage,resend effect;
+    class activity safe;
+    class cancel,fallback fallbackState;
 ```
 
 Cancellation is durable and idempotent. A cancelled request cannot later execute. The no-signup `/demo` room is always preview-only and never calls Resend. Eligible standard rooms can submit a packet only when the API key, verified sender, approved recipient snapshot, exact recipient allowlist, and explicit host authorization are all present; otherwise the application records an honest preview-only or failed outcome without a delivery claim.
