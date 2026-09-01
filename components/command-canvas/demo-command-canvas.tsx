@@ -676,50 +676,6 @@ export function DemoCommandCanvas({
 
   return (
     <div className="demo-room-stage">
-      <aside
-        className="demo-preview-boundary"
-        aria-label="No-signup judge preview"
-      >
-        <strong>No-signup judge preview</strong>
-        <span>Temporary Supabase room · email remains preview-only</span>
-        <a href="/meet">Workspace sign-in</a>
-      </aside>
-      <div className="demo-room-controls" aria-label="Demo room controls">
-        <span>{room.role === "host" ? "HOST" : "PARTICIPANT"}</span>
-        {room.inviteUrl ? (
-          <button
-            type="button"
-            aria-label="Copy participant invite"
-            disabled={copyState === "copying"}
-            onClick={async () => {
-              setCopyState("copying");
-              try {
-                await environment.copyInvite(room.inviteUrl!);
-                setCopyState("copied");
-              } catch {
-                setCopyState("failed");
-              }
-            }}
-          >
-            {copyState === "copied"
-              ? "Invite copied"
-              : copyState === "failed"
-                ? "Copy unavailable"
-                : "Copy invite"}
-          </button>
-        ) : null}
-        <button
-          type="button"
-          aria-label="Reset demo"
-          disabled={resetState.status === "deleting"}
-          onClick={() => void resetCurrentDemoRoom()}
-        >
-          {resetState.status === "deleting" ? "Resetting…" : "Reset demo"}
-        </button>
-        {resetState.status === "failed" ? (
-          <p role="alert">{resetState.message}</p>
-        ) : null}
-      </div>
       <CommandCanvasRoom
         store={room.store}
         roomLabel="Live demo room"
@@ -739,6 +695,55 @@ export function DemoCommandCanvas({
         }}
         webMcpSurfaceState={webMcpSurfaceState}
         webMcpExecutionActivity={webMcpExecutionActivity}
+        previewBoundary={{
+          label: "Preview",
+          description: (
+            <>
+              <p>Temporary Supabase room · email remains preview-only.</p>
+              <a href="/meet">Workspace sign-in</a>
+            </>
+          ),
+        }}
+        headerControls={
+          <>
+            <span className="demo-role-label">
+              {room.role === "host" ? "HOST" : "PARTICIPANT"}
+            </span>
+            {room.inviteUrl ? (
+              <button
+                type="button"
+                aria-label="Copy participant invite"
+                disabled={copyState === "copying"}
+                onClick={async () => {
+                  setCopyState("copying");
+                  try {
+                    await environment.copyInvite(room.inviteUrl!);
+                    setCopyState("copied");
+                  } catch {
+                    setCopyState("failed");
+                  }
+                }}
+              >
+                {copyState === "copied"
+                  ? "Invite copied"
+                  : copyState === "failed"
+                    ? "Copy unavailable"
+                    : "Copy invite"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              aria-label="Reset demo"
+              disabled={resetState.status === "deleting"}
+              onClick={() => void resetCurrentDemoRoom()}
+            >
+              {resetState.status === "deleting" ? "Resetting…" : "Reset demo"}
+            </button>
+            {resetState.status === "failed" ? (
+              <span className="demo-header-error" role="alert">{resetState.message}</span>
+            ) : null}
+          </>
+        }
         onCommand={async (command, source) => {
           const result = await room.session.submitCommand(command, source);
           if (!result.ok) throw new Error(result.message);

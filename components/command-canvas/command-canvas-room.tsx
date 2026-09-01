@@ -122,6 +122,13 @@ export interface CommandCanvasRoomProps {
   meetingMediaPanel?: ReactNode;
   commandDrawerRequestKey?: string;
   meetingPacketPanel?: ReactNode;
+  /** Compact controls that belong in the workspace header, never over the canvas. */
+  headerControls?: ReactNode;
+  /** A small, honest preview marker whose explanatory copy stays in System. */
+  previewBoundary?: {
+    label: string;
+    description: ReactNode;
+  };
 }
 
 export type CommandCanvasRoomStatus =
@@ -207,6 +214,8 @@ export function CommandCanvasRoom({
   meetingMediaPanel,
   commandDrawerRequestKey,
   meetingPacketPanel,
+  headerControls,
+  previewBoundary,
 }: CommandCanvasRoomProps) {
   const [objectPreviews, setObjectPreviews] = useState<
     Record<string, ObjectTransformPreview>
@@ -258,6 +267,8 @@ export function CommandCanvasRoom({
     height: POINTER_SKETCH_HEIGHT,
   });
   const [latestReceiptVisible, setLatestReceiptVisible] = useState(false);
+  const [dockMenu, setDockMenu] = useState<"create" | "more" | null>(null);
+  const [headerControlsOpen, setHeaderControlsOpen] = useState(false);
   const canvasViewportRef = useRef<HTMLDivElement>(null);
   const spatialGestureState = useRef(createInitialSpatialGestureState());
   const spatialRoomInputState = useRef<SpatialRoomInputState>(
@@ -806,6 +817,7 @@ export function CommandCanvasRoom({
     );
     setSketchComposerOpen(true);
     setOpenDrawer(null);
+    setDockMenu(null);
   }
 
   function revealObjectOnCompactCanvas(objectId: string) {
@@ -2127,6 +2139,7 @@ export function CommandCanvasRoom({
     selectObject(null);
     setHandInteractionMode("draw");
     setOpenDrawer(null);
+    setDockMenu(null);
   }
 
   function cancelHandDrawing() {
@@ -2141,6 +2154,7 @@ export function CommandCanvasRoom({
     setHandDrawingTool("draw");
     handEraseLatchedRef.current = false;
     setHandFeedback(null);
+    setDockMenu(null);
   }
 
   function finishHandDrawing() {
@@ -2371,6 +2385,37 @@ export function CommandCanvasRoom({
         ) : null}
 
         <div className="header-actions">
+          {previewBoundary ? (
+            <button
+              type="button"
+              className="preview-header-badge"
+              aria-label="Open demo preview details"
+              aria-expanded={openDrawer === "system"}
+              onClick={() => setOpenDrawer("system")}
+            >
+              <span aria-hidden="true" />
+              {previewBoundary.label}
+            </button>
+          ) : null}
+          {headerControls ? (
+            <>
+              <button
+                type="button"
+                className="workspace-header-overflow-trigger"
+                aria-label="Open workspace menu"
+                aria-expanded={headerControlsOpen}
+                onClick={() => setHeaderControlsOpen((open) => !open)}
+              >
+                <span aria-hidden="true">•••</span>
+              </button>
+              <div
+                className={`workspace-header-controls${headerControlsOpen ? " is-open" : ""}`}
+                aria-label="Workspace controls"
+              >
+                {headerControls}
+              </div>
+            </>
+          ) : null}
           <button
             type="button"
             className="system-status-trigger"
@@ -2773,15 +2818,16 @@ export function CommandCanvasRoom({
         />
 
         <aside className="tool-dock" aria-label="Object tools">
-          <span className="dock-label">Canvas</span>
-          <button type="button" onClick={() => createNote()} aria-label="Create note" disabled={interactionPending || drawingActive}>
-            <span aria-hidden="true">＋</span><small>Note</small>
-          </button>
-          <button type="button" onClick={() => createTaskBoard()} aria-label="Create task board" disabled={interactionPending || drawingActive}>
-            <span aria-hidden="true">▦</span><small>Board</small>
-          </button>
-          <button type="button" onClick={() => createSchedule()} aria-label="Create schedule" disabled={interactionPending || drawingActive}>
-            <span aria-hidden="true">31</span><small>Schedule</small>
+          <div className="tool-dock-primary">
+          <button
+            type="button"
+            aria-label="Open create menu"
+            aria-expanded={dockMenu === "create"}
+            className={dockMenu === "create" ? "is-active" : undefined}
+            disabled={interactionPending || drawingActive}
+            onClick={() => setDockMenu((current) => current === "create" ? null : "create")}
+          >
+            <span aria-hidden="true">＋</span><small>Create</small>
           </button>
           <button
             type="button"
@@ -2798,19 +2844,27 @@ export function CommandCanvasRoom({
             <span aria-hidden="true">⌁</span>
             <small>Draw</small>
           </button>
-          {handTrackingStatus.state === "ready" ? (
-            <button
-              type="button"
-              onClick={beginHandDrawing}
-              aria-label="Draw with hand"
-              aria-pressed={handInteractionMode === "draw"}
-              className={handInteractionMode === "draw" ? "is-active" : undefined}
-              disabled={interactionPending || drawingActive}
-            >
-              <span aria-hidden="true">☝</span>
-              <small>Hand</small>
-            </button>
-          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              if (handTrackingStatus.state === "ready") {
+                beginHandDrawing();
+                return;
+              }
+              openHandCalibration();
+            }}
+            aria-label={
+              handTrackingStatus.state === "ready"
+                ? "Draw with hand"
+                : "Start hand interaction"
+            }
+            aria-pressed={handTrackingStatus.state === "ready"}
+            className={handTrackingStatus.state === "ready" ? "is-active" : undefined}
+            disabled={interactionPending || drawingActive}
+          >
+            <span aria-hidden="true">☝</span>
+            <small>Hand</small>
+          </button>
           <button
             type="button"
             aria-label="Undo last change"
@@ -2819,6 +2873,35 @@ export function CommandCanvasRoom({
           >
             <span aria-hidden="true">↶</span><small>Undo</small>
           </button>
+          <button
+            type="button"
+            aria-label="Open more canvas actions"
+            aria-expanded={dockMenu === "more"}
+            className={dockMenu === "more" ? "is-active" : undefined}
+            disabled={interactionPending || drawingActive}
+            onClick={() => setDockMenu((current) => current === "more" ? null : "more")}
+          >
+            <span aria-hidden="true">•••</span><small>More</small>
+          </button>
+          </div>
+          <div
+            className={`tool-dock-menu${dockMenu === "create" ? " is-open" : ""}`}
+            aria-label="Create objects"
+          >
+              <button type="button" onClick={() => { createNote(); setDockMenu(null); }} aria-label="Create note" disabled={interactionPending || drawingActive}>
+                <span aria-hidden="true">＋</span><small>Note</small>
+              </button>
+              <button type="button" onClick={() => { createTaskBoard(); setDockMenu(null); }} aria-label="Create task board" disabled={interactionPending || drawingActive}>
+                <span aria-hidden="true">▦</span><small>Board</small>
+              </button>
+              <button type="button" onClick={() => { createSchedule(); setDockMenu(null); }} aria-label="Create schedule" disabled={interactionPending || drawingActive}>
+                <span aria-hidden="true">31</span><small>Schedule</small>
+              </button>
+          </div>
+          <div
+            className={`tool-dock-menu${dockMenu === "more" ? " is-open" : ""}`}
+            aria-label="More canvas actions"
+          >
           <button
             type="button"
             aria-label={
@@ -2857,6 +2940,7 @@ export function CommandCanvasRoom({
           >
             <span aria-hidden="true">↷</span><small>Redo</small>
           </button>
+          </div>
         </aside>
 
         <ChatGptCommandSurface
@@ -3007,6 +3091,12 @@ export function CommandCanvasRoom({
               />
               <ServiceState label="Spatial input" value={spatialServiceState.value} tone={spatialServiceState.tone} />
             </section>
+            {previewBoundary ? (
+              <section className="preview-system-notice" aria-label="Demo preview details">
+                <strong>{previewBoundary.label}</strong>
+                <div>{previewBoundary.description}</div>
+              </section>
+            ) : null}
             <a
               className="source-offer"
               href={correspondingSourceUrl}

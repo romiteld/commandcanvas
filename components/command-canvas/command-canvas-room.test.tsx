@@ -1900,7 +1900,7 @@ describe("CommandCanvasRoom", () => {
     ).toBeNull();
   });
 
-  it("keeps Undo among the first persistent canvas actions", () => {
+  it("keeps the mobile dock to five ergonomic primary actions", () => {
     const store = createCanvasStore("room-local", dependencies());
     render(<CommandCanvasRoom store={store} />);
 
@@ -1908,16 +1908,20 @@ describe("CommandCanvasRoom", () => {
     expect(
       within(dock)
         .getAllByRole("button")
-        .slice(0, 6)
+        .filter((button) => !button.closest(".tool-dock-menu"))
         .map((button) => button.getAttribute("aria-label")),
     ).toEqual([
-      "Create note",
-      "Create task board",
-      "Create schedule",
+      "Open create menu",
       "Create sketch",
+      "Start hand interaction",
       "Undo last change",
-      "Enable multiple selection",
+      "Open more canvas actions",
     ]);
+    expect(
+      within(dock)
+        .getByRole("button", { name: "Open create menu" })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
   });
 
   it("locks background canvas actions while the pointer sketch surface is active", async () => {

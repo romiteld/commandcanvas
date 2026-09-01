@@ -83,6 +83,109 @@
   box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
 }
 
+/* Header ownership keeps demo affordances out of the spatial interaction plane. */
+.command-canvas-shell .preview-header-badge,
+.command-canvas-shell .workspace-header-controls {
+  flex: 0 0 auto;
+}
+
+.command-canvas-shell .header-actions {
+  position: relative;
+}
+
+.command-canvas-shell .preview-header-badge {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid rgb(89 234 213 / 35%);
+  border-radius: 999px;
+  background: rgb(89 234 213 / 8%);
+  color: var(--space-cyan);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.command-canvas-shell .preview-header-badge > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--space-cyan);
+  box-shadow: 0 0 12px rgb(89 234 213 / 70%);
+}
+
+.command-canvas-shell .workspace-header-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.command-canvas-shell .workspace-header-overflow-trigger {
+  display: none;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--space-line);
+  border-radius: 9px;
+  background: rgb(17 36 51 / 74%);
+  color: var(--space-text);
+}
+
+.command-canvas-shell .workspace-header-controls button {
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--space-line);
+  border-radius: 9px;
+  background: rgb(17 36 51 / 74%);
+  color: var(--space-text);
+  font-size: 10px;
+  font-weight: 680;
+}
+
+.command-canvas-shell .demo-role-label {
+  color: var(--space-muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+}
+
+.command-canvas-shell .demo-header-error {
+  max-width: 180px;
+  color: #ffb0ae;
+  font-size: 10px;
+}
+
+.command-canvas-shell .preview-system-notice {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgb(89 234 213 / 26%);
+  border-radius: 12px;
+  background: rgb(89 234 213 / 7%);
+  color: #183344;
+}
+
+.command-canvas-shell .preview-system-notice strong {
+  color: #0a6570;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.command-canvas-shell .preview-system-notice p {
+  margin: 0;
+}
+
+.command-canvas-shell .preview-system-notice a {
+  color: #0d6176;
+  font-weight: 720;
+}
+
 .command-canvas-shell :is(button, a, summary, [tabindex]):focus-visible {
   outline: 3px solid #b9fff5;
   outline-offset: 3px;
@@ -936,6 +1039,30 @@
   color: var(--space-cyan);
 }
 
+.command-canvas-shell .tool-dock {
+  overflow: visible;
+}
+
+.command-canvas-shell .tool-dock-primary,
+.command-canvas-shell .tool-dock-menu {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.command-canvas-shell .tool-dock-menu {
+  padding: 6px;
+  border: 1px solid rgb(151 190 211 / 30%);
+  border-radius: 15px;
+  background: rgb(7 21 32 / 96%);
+  box-shadow: 0 20px 55px rgb(0 0 0 / 44%);
+  backdrop-filter: blur(22px);
+}
+
+.command-canvas-shell .tool-dock-menu button {
+  min-width: 52px;
+}
+
 .command-canvas-shell .command-drawer-trigger {
   border-color: rgb(89 234 213 / 48%);
   background: linear-gradient(135deg, #103a40, #0a252f 70%);
@@ -1345,6 +1472,73 @@
 }
 
 @media (max-width: 480px) {
+  .command-canvas-shell .header-actions {
+    gap: 4px;
+  }
+
+  .command-canvas-shell .preview-header-badge {
+    min-width: 34px;
+    padding: 0 9px;
+    font-size: 0;
+  }
+
+  .command-canvas-shell .workspace-header-overflow-trigger {
+    display: inline-grid;
+    place-items: center;
+  }
+
+  .command-canvas-shell .workspace-header-controls {
+    position: absolute;
+    z-index: 102;
+    top: calc(100% + 6px);
+    right: 8px;
+    display: none;
+    padding: 7px;
+    border: 1px solid var(--space-line);
+    border-radius: 12px;
+    background: rgb(7 20 32 / 97%);
+    box-shadow: 0 18px 48px rgb(0 0 0 / 36%);
+  }
+
+  .command-canvas-shell .workspace-header-controls.is-open {
+    display: inline-flex;
+  }
+
+  .command-canvas-shell .workspace-header-controls .demo-role-label {
+    display: none;
+  }
+
+  .command-canvas-shell .tool-dock {
+    right: 8px;
+    left: 8px;
+    max-width: none;
+    justify-content: center;
+  }
+
+  .command-canvas-shell .tool-dock-primary {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .command-canvas-shell .tool-dock-primary button {
+    width: min(18vw, 58px);
+    min-width: 0;
+  }
+
+  .command-canvas-shell .tool-dock-menu {
+    position: absolute;
+    bottom: calc(100% + 9px);
+    right: 0;
+    left: auto;
+    display: none;
+    max-width: calc(100vw - 16px);
+    overflow-x: auto;
+  }
+
+  .command-canvas-shell .tool-dock-menu.is-open {
+    display: flex;
+  }
+
   .command-canvas-shell .room-identity strong {
     max-width: 118px;
     font-size: 12px;

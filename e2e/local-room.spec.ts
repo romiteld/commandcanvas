@@ -145,10 +145,16 @@ test("keeps the canvas and primary action usable at a mobile viewport", async ({
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-mobile");
 
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 320, height: 568 });
   await page.goto("/local");
   await expect(page.getByRole("region", { name: "Infinite canvas" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Create note" })).toBeVisible();
+  const dock = page.getByRole("complementary", { name: "Object tools" });
+  await expect(dock.locator(".tool-dock-primary > button")).toHaveCount(5);
+  await expect(page.getByRole("button", { name: "Open create menu" })).toBeVisible();
+  const dockBox = await dock.boundingBox();
+  if (!dockBox) throw new Error("mobile dock geometry unavailable");
+  expect(dockBox.x).toBeGreaterThanOrEqual(0);
+  expect(dockBox.x + dockBox.width).toBeLessThanOrEqual(320);
   await expect
     .poll(() =>
       page.evaluate(() => ({
@@ -162,8 +168,8 @@ test("keeps the canvas and primary action usable at a mobile viewport", async ({
     )
     .toEqual({ documentOverflow: 0, shellDelta: 0 });
 
-  // The Next.js development indicator occupies the dock's lower-left corner;
-  // exercise an unobscured primary dock action while preserving a real click.
+  await page.getByRole("button", { name: "Open create menu" }).click();
+  await expect(page.getByRole("button", { name: "Create task board" })).toBeVisible();
   await page.getByRole("button", { name: "Create task board" }).click();
 
   await expect(

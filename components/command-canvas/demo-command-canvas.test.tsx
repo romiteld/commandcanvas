@@ -1174,17 +1174,23 @@ describe("DemoCommandCanvas", () => {
     expect(screen.queryByRole("textbox", { name: /email|password/i })).toBeNull();
   });
 
-  it("keeps the signed-account and bounded-preview boundary visible in the ready room", async () => {
+  it("keeps demo provenance in the workspace header instead of an interaction-plane banner", async () => {
     const { environment } = readyEnvironment();
-    render(<DemoCommandCanvas environment={environment} />);
+    const { container } = render(<DemoCommandCanvas environment={environment} />);
 
     expect(await screen.findByText("Live demo room")).toBeVisible();
-    expect(screen.getByText(/no-signup judge preview/i)).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Open demo preview details" }),
+    ).toBeVisible();
+    expect(container.querySelector(".demo-preview-boundary")).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "Workspace sign-in" }),
+    ).toBeNull();
+    await userEvent.setup().click(
+      screen.getByRole("button", { name: "Open system status" }),
+    );
     expect(screen.getByText(/temporary Supabase room/i)).toBeVisible();
     expect(screen.getByText(/email remains preview-only/i)).toBeVisible();
-    expect(
-      screen.getByRole("link", { name: "Workspace sign-in" }),
-    ).toHaveAttribute("href", "/meet");
   });
 
   it("does not offer private GPU camera upload when the server feature is disabled", async () => {
