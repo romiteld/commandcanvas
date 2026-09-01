@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assessPinchCalibrationEnvelope,
   assessOpenPalmCalibrationBaseline,
   assessHandCalibrationReach,
   buildHandCalibration,
@@ -272,6 +273,39 @@ describe("hand calibration", () => {
       openPinchRatios: [0.49, 0.52, 0.55],
     });
 
+    expect(result).toMatchObject({
+      accepted: false,
+      reason: "pinch_not_separated",
+    });
+  });
+
+  it("uses one robust separation envelope for closed-pinch admission and the final profile", () => {
+    expect(
+      assessPinchCalibrationEnvelope(
+        [],
+        [0.53, 0.7, 0.7, 0.7, 0.7, 0.7],
+      ),
+    ).toEqual({
+      accepted: false,
+      closedUpper: null,
+      openLower: 0.5725,
+      minimumSeparation: 0.05,
+      maximumClosed: 0.5225,
+    });
+
+    const result = buildHandCalibration({
+      deviceKey: "pinch-margin",
+      mirrorX: true,
+      createdAt: 2_550,
+      reachSamples: [
+        { x: 0.35, y: 0.35 },
+        { x: 0.65, y: 0.35 },
+        { x: 0.35, y: 0.65 },
+        { x: 0.65, y: 0.65 },
+      ],
+      closedPinchRatios: [0.56, 0.56, 0.56, 0.56, 0.56, 0.56],
+      openPinchRatios: [0.6, 0.6, 0.6, 0.6, 0.6, 0.6],
+    });
     expect(result).toMatchObject({
       accepted: false,
       reason: "pinch_not_separated",

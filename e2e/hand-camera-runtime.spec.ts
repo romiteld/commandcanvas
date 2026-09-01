@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
@@ -17,6 +18,18 @@ import { requireProductionApiProxyOrigin } from "../lib/testing/live-probe-guard
 const fakeCameraPath = process.env.COMMANDCANVAS_FAKE_CAMERA_PATH;
 const assertRecordedHandDetection =
   process.env.ASSERT_RECORDED_HAND_DETECTION === "true";
+const assertRecordedHandGestures =
+  process.env.ASSERT_RECORDED_HAND_GESTURES === "true";
+const assertRecordedHandCalibration =
+  process.env.ASSERT_RECORDED_HAND_CALIBRATION === "true";
+const expectedFakeCameraSha256 =
+  process.env.COMMANDCANVAS_FAKE_CAMERA_SHA256?.toLowerCase();
+
+async function sha256File(path: string) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest("hex");
+}
 
 test.use({
   permissions: ["camera"],
@@ -31,14 +44,14 @@ test.use({
     : undefined,
 });
 
-test("starts the local hand detector from a real browser camera stream and releases it", async ({
+test("processes a recorded human-hand MediaStream with the local detector and releases it", async ({
   page,
 }, testInfo) => {
   test.skip(
     process.env.RUN_CAMERA_E2E !== "true" ||
       !["chromium-desktop", "chromium-mobile"].includes(testInfo.project.name),
   );
-  test.setTimeout(90_000);
+  test.setTimeout(150_000);
   if (
     !fakeCameraPath ||
     !isAbsolute(fakeCameraPath) ||
@@ -48,6 +61,22 @@ test("starts the local hand detector from a real browser camera stream and relea
     throw new Error(
       "COMMANDCANVAS_FAKE_CAMERA_PATH must name an existing absolute .y4m fixture.",
     );
+  if (
+    (assertRecordedHandDetection ||
+      assertRecordedHandGestures ||
+      assertRecordedHandCalibration) &&
+    !expectedFakeCameraSha256
+  )
+    throw new Error(
+      "COMMANDCANVAS_FAKE_CAMERA_SHA256 is required for recorded-hand acceptance.",
+    );
+  if (expectedFakeCameraSha256) {
+    const actualSha256 = await sha256File(fakeCameraPath);
+    if (actualSha256 !== expectedFakeCameraSha256)
+      throw new Error(
+        `Recorded-hand fixture SHA-256 mismatch: expected ${expectedFakeCameraSha256}, received ${actualSha256}.`,
+      );
+  }
 
   const roomCapture = captureCreatedRoom(page);
   await installApiProxyIfConfigured(page);
@@ -196,13 +225,79 @@ test("starts the local hand detector from a real browser camera stream and relea
         .toBeGreaterThan(0);
     }
 
-    await page.getByRole("button", { name: "Skip hand calibration" }).click();
+    if (assertRecordedHandCalibration) {
+      const continueToReach = page.getByRole("button", {
+        name: "Continue to reach mapping",
+      });
+      await expect(continueToReach).toBeEnabled({ timeout: 30_000 });
+      await continueToReach.click();
+      const continueToOpen = page.getByRole("button", {
+        name: "Continue to open hand",
+      });
+      await expect(continueToOpen).toBeEnabled({ timeout: 30_000 });
+      await continueToOpen.click();
+      const continueToClosed = page.getByRole("button", {
+        name: "Continue to closed pinch",
+      });
+      await expect(continueToClosed).toBeEnabled({ timeout: 30_000 });
+      await continueToClosed.click();
+      const reviewCalibration = page.getByRole("button", {
+        name: "Review hand calibration",
+      });
+      await expect(reviewCalibration).toBeEnabled({ timeout: 30_000 });
+      await reviewCalibration.click();
+      await page
+        .getByRole("button", { name: "Use hand calibration" })
+        .click();
+      await expect(
+        handInput.getByText("Calibrated for this camera session", {
+          exact: true,
+        }),
+      ).toHaveText("Calibrated for this camera session");
+      await expect(handInput.getByRole("alert")).toHaveCount(0);
+    } else {
+      await page.getByRole("button", { name: "Skip hand calibration" }).click();
+    }
     await expect(
       page.getByRole("complementary", { name: "System status drawer" }),
     ).toBeHidden();
     await expect(
       page.getByRole("region", { name: "Hand interaction controls" }),
     ).toBeVisible();
+
+    if (assertRecordedHandGestures) {
+      if (!(await page.locator(".camera-preview").isVisible()))
+        await handInput
+          .getByRole("button", { name: "Show hand sensor preview" })
+          .click();
+      const observedLabels = await page.evaluate(async () => {
+        const maximumConsecutive: Record<string, number> = {};
+        let previousKind = "";
+        let consecutive = 0;
+        const deadline = performance.now() + 20_000;
+        while (performance.now() < deadline) {
+          const label = document
+            .querySelector(".camera-preview-label")
+            ?.textContent?.trim();
+          const kind = label?.split(" ·", 1)[0] ?? "";
+          if (kind && kind === previousKind) consecutive += 1;
+          else {
+            previousKind = kind;
+            consecutive = kind ? 1 : 0;
+          }
+          if (kind)
+            maximumConsecutive[kind] = Math.max(
+              maximumConsecutive[kind] ?? 0,
+              consecutive,
+            );
+          await new Promise((resolve) => setTimeout(resolve, 80));
+        }
+        return maximumConsecutive;
+      });
+      expect(observedLabels.OPEN ?? 0).toBeGreaterThanOrEqual(3);
+      expect(observedLabels.POINT ?? 0).toBeGreaterThanOrEqual(3);
+      expect(observedLabels.PINCH ?? 0).toBeGreaterThanOrEqual(3);
+    }
 
     const disableHandInput = handInput.getByRole("button", {
       name: "Disable hand input",

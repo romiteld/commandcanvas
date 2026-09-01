@@ -1993,3 +1993,168 @@ rewriting their historical evidence:
   desktop automation, and arbitrary physical-object tracking are not claimed.
 - No Devpost submission has been made. Submission remains blocked on the real
   ChatGPT-host and physical-hand acceptance capture requested by the owner.
+
+## Checkpoint 37: superseded recorded-hand calibration candidate
+
+This checkpoint records the earlier candidate. It is retained as historical
+evidence and is superseded by Checkpoint 38; its browser runs and 1,401-test
+count do not verify the later calibration-lifecycle source.
+
+### WORKING
+
+- Calibration no longer advances from reach mapping on sample count alone.
+  **Continue to open hand** remains disabled until the collected fingertip path
+  passes the existing two-dimensional reach-envelope assessment; the UI
+  explains which directions still need coverage.
+- Open-pinch capture is relative to the accepted whole-hand baseline and
+  rejects non-finite, negative, implausibly large, or clearly closed ratios.
+  Closed-pinch evidence must remain below the lowest accepted open range while
+  tolerating bounded detector noise. This prevents a closing transition or
+  fist from being learned as the open pose without requiring an unnaturally
+  motionless pinch.
+- Recorded-hand acceptance pins the input artifact by SHA-256 before detector,
+  gesture, or calibration assertions run. A mismatched or omitted digest
+  refuses the acceptance run instead of silently exercising different media.
+
+### VERIFIED LOCALLY
+
+- Node 22.17.0 `npm run lint`: exit 0.
+- Node 22.17.0 raw `npm run typecheck`: exit 0 with no diagnostics.
+- Node 22.17.0 `npm test -- --reporter=dot`: 125 files and 1,401 tests passed
+  with zero failures.
+- Node 22.17.0 `npm run build`: the generated hand worker and optimized Next.js
+  production build completed successfully, including all 14 static pages and
+  dynamic API routes.
+
+### VERIFIED IN BROWSER
+
+- The acceptance fixture was recorded human-hand Y4M media with SHA-256
+  `a67ec776a837b820803abca524e367131ced530cce7ca4bf909de41515270f39`.
+  The browser test verifies that exact digest before opening the camera stream.
+- Three independent mobile Chromium runs passed with retries disabled. Each
+  loaded the real worker, WASM runtime, and MediaPipe model; completed the
+  whole-hand baseline, accepted reach mapping, open-hand capture, closed-pinch
+  capture, review, and **Use hand calibration**; rendered all 21 landmarks and
+  the tracked pointer; observed `OPEN`, `POINT`, and `PINCH` for at least three
+  consecutive samples; ended with no page error; detached and ended the media
+  track; and cleaned up its exact temporary room.
+- One desktop Chromium run passed the same full recorded-hand calibration path
+  with retries disabled. The same invocation also passed the explicit
+  classic-WASM recovery scenario for the non-OffscreenCanvas MediaPipe path.
+- These runs exercised a freshly built local application origin. They are
+  local browser acceptance for this candidate, not evidence that the canonical
+  public Production deployment contains it.
+
+### UNVERIFIED OR EXTERNALLY BLOCKED
+
+- Chromium replayed recorded human-hand pixels through controlled media. This
+  proves repeatable detector, calibration, classification, lifecycle, and
+  layout behavior for those exact pixels; it does not prove current
+  physical-camera ergonomics, real-time latency, edge reach, index drawing
+  continuity, pinch acquisition and release, two-hand manipulation, throw
+  behavior, lighting, occlusion, thermals, or device-specific comfort.
+- These runs used the local MediaPipe path. They did not exercise the private
+  RTX 3090 relay or relay-to-local fallback.
+- This candidate is not yet deployed. No Production, ChatGPT built-in-browser
+  Site Tools, physical-device, provider, OTP, invitation, or Resend claim is
+  inferred from this checkpoint.
+
+### CUT
+
+- No approved hand-control, object-creation, Site Tools, voice, collaboration,
+  authentication, invitation, packet, or Resend capability was removed by this
+  hardening work.
+- No Devpost submission has been made. Submission remains blocked on the
+  owner's physical-hand acceptance and a real ChatGPT-host Site Tools
+  invocation.
+
+## Checkpoint 38: continuity-safe recorded-hand calibration candidate
+
+### WORKING
+
+- Raw sensor frames are the single calibration source when the controller
+  exposes them, so the matching semantic observation cannot count the same
+  inference twice. Semantic observations remain the fallback for controllers
+  without raw sensor subscriptions.
+- Closed-pinch calibration now owns one continuity state containing detector
+  source, ephemeral hand track, capture timestamp, provisional evidence,
+  plateau stability, and lower-plateau replacement status. Provisional samples
+  cannot bridge missing or unreliable evidence, a track replacement,
+  non-increasing time, a gap above 250 ms, or a detector-source change.
+- A source change restarts the complete four-stage calibration with a visible
+  explanation instead of mixing measurement distributions from two engines.
+- A six-sample closing transition is not accepted as a stable pinch. A later
+  materially lower pads-touch plateau replaces an earlier shallow partial
+  pinch instead of contaminating its closed P95. An ordinary hand release or
+  temporary loss preserves an already accepted plateau, so the user can open
+  the hand and press **Review calibration**.
+- Capture admission and the stored profile use the same robust envelope: open
+  P05, closed P95, and a minimum separation of `max(0.05, openP05 * 0.08)`.
+  One low open-hand outlier therefore cannot create a permanent pinch dead
+  zone while the final profile still refuses inadequately separated poses.
+- The E2E fixture hash is computed as an incremental stream rather than a
+  synchronous 171 MB allocation. Recorded-hand acceptance still refuses an
+  omitted or mismatched SHA-256.
+
+### VERIFIED LOCALLY
+
+- Node 22.17.0 `npm run lint`: exit 0 with no diagnostics.
+- Node 22.17.0 raw `npx tsc --noEmit --pretty false`: exit 0 with no
+  diagnostics.
+- Node 22.17.0 `npm test -- --run --reporter=dot`: 125 files and 1,408 tests
+  passed with zero failures.
+- The focused calibration suites passed 77 of 77 tests, including red-first
+  regressions for raw/semantic deduplication, gradual closing, detector loss,
+  track replacement, long gaps, detector-source changes, robust open outliers,
+  lower-plateau replacement, and accepted-pinch release persistence.
+- `git diff --check`: exit 0.
+- Node 22.17.0 `npm run build`: the hand worker and optimized Next.js 16.3.3
+  production bundle completed successfully, including all 14 static pages and
+  the dynamic API routes.
+
+### VERIFIED IN BROWSER
+
+- The exact recorded human-hand Y4M fixture had SHA-256
+  `a67ec776a837b820803abca524e367131ced530cce7ca4bf909de41515270f39`.
+  Every acceptance run verified that digest before camera initialization.
+- Three independent mobile Chromium runs passed with retries disabled against
+  the exact Checkpoint 38 production build. Each loaded the real same-origin
+  hand worker, WASM runtime, and MediaPipe model; completed baseline, reach,
+  open, closed, review, and apply stages; rendered 21 landmarks and the tracked
+  pointer; observed stable `OPEN`, `POINT`, and `PINCH` classifications; emitted
+  no page error; detached and ended the media track; and deleted its temporary
+  room. The three runs completed in 44.8, 37.7, and 43.7 seconds.
+- Desktop Chromium passed the same full recorded-hand path with retries
+  disabled in 45.1 seconds. The same invocation passed the explicit classic
+  WASM recovery scenario in 5.3 seconds. Two tests passed and none failed.
+- These are browser-controlled recorded-media receipts for the exact local
+  bundle. They do not prove physical-camera behavior or a public deployment.
+
+### UNVERIFIED OR EXTERNALLY BLOCKED
+
+- The exact candidate has not yet been committed, pushed, or deployed to the
+  canonical Production URL. Its successful local browser runs are not a claim
+  about the currently public bundle.
+- A physical human-hand pass is still required for index-finger drawing,
+  acquire/hold/release, one- and two-hand movement and resizing, throw-to-trash,
+  comfortable full-canvas reach, smoothing, lighting, occlusion, latency, and
+  device ergonomics. Recorded pixels cannot prove those properties.
+- A real ChatGPT built-in-browser Site Tools invocation is still required.
+  Native Chrome evidence cannot prove the ChatGPT account rollout, model host,
+  Available Site Tools surface, or a tool call initiated by GPT-5.6 Sol or
+  Terra against the same live page.
+- The optional private RTX 3090 relay remains disabled in Vercel Production
+  until the owner explicitly authorizes copying the existing relay signing key
+  to that destination. These runs used the local MediaPipe fallback.
+- No fresh physical OTP, real invitation delivery, approved packet email,
+  user-funded Realtime microphone session, or user-funded vision transform is
+  claimed by this checkpoint.
+
+### CUT
+
+- No approved hand-control, object-creation, Site Tools, continuous voice,
+  collaboration, authentication, invitation, packet, or Resend capability was
+  removed.
+- No Devpost submission has been made. Submission remains blocked on the
+  owner's physical-hand acceptance and a real ChatGPT-host Site Tools
+  invocation.

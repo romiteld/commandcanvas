@@ -106,6 +106,14 @@ export interface CalibratedPinchThresholds {
   readonly release: number;
 }
 
+export interface PinchCalibrationEnvelope {
+  readonly accepted: boolean;
+  readonly closedUpper: number | null;
+  readonly openLower: number | null;
+  readonly minimumSeparation: number | null;
+  readonly maximumClosed: number | null;
+}
+
 export interface PinchVoteInput {
   readonly timestamp: number;
   readonly confidence: number;
@@ -761,11 +769,53 @@ function calibratedPinchRatios(
   closedSamples: readonly number[],
   openSamples: readonly number[],
 ) {
-  if (!validRatios(closedSamples) || !validRatios(openSamples))
-    return null;
-  const closed = percentile(closedSamples, 0.95);
-  const open = percentile(openSamples, 0.05);
-  return closed < open ? { closed, open } : null;
+  const envelope = assessPinchCalibrationEnvelope(
+    closedSamples,
+    openSamples,
+  );
+  return envelope.accepted &&
+    envelope.closedUpper !== null &&
+    envelope.openLower !== null
+    ? { closed: envelope.closedUpper, open: envelope.openLower }
+    : null;
+}
+
+/**
+ * One robust pinch-separation contract shared by calibration admission and the
+ * final stored profile. Open uses P05, closed uses P95, and the required gap
+ * prevents a barely-below-open pose from becoming the runtime grab threshold.
+ */
+export function assessPinchCalibrationEnvelope(
+  closedSamples: readonly number[],
+  openSamples: readonly number[],
+): PinchCalibrationEnvelope {
+  const openValid = validRatios(openSamples);
+  const closedValid =
+    closedSamples.length === 0 || validRatios(closedSamples);
+  if (!openValid || !closedValid)
+    return {
+      accepted: false,
+      closedUpper: null,
+      openLower: null,
+      minimumSeparation: null,
+      maximumClosed: null,
+    };
+  const openLower = rounded(percentile(openSamples, 0.05));
+  const minimumSeparation = rounded(
+    Math.max(0.05, openLower * 0.08),
+  );
+  const maximumClosed = rounded(openLower - minimumSeparation);
+  const closedUpper =
+    closedSamples.length > 0
+      ? rounded(percentile(closedSamples, 0.95))
+      : null;
+  return {
+    accepted: closedUpper !== null && closedUpper <= maximumClosed,
+    closedUpper,
+    openLower,
+    minimumSeparation,
+    maximumClosed,
+  };
 }
 
 function expandCameraBounds(bounds: {
