@@ -17,6 +17,7 @@ import {
   MEDIA_PIPE_IN_PAGE_RECOVERY_ENGINE_ID,
   MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
 } from "@/lib/gesture/spatial-vision-engine";
+import { rawHandLandmarks } from "@/lib/testing/hand-landmark-fixtures";
 
 function hand(index = { x: 0.3, y: 0.4 }, thumb = { x: 0.1, y: 0.4 }) {
   const points = Array.from({ length: 21 }, () => ({ x: 0.3, y: 0.78, z: 0 }));
@@ -1330,6 +1331,107 @@ describe("hand tracking controller lifecycle", () => {
         timestamp: 1_000,
       }),
     ]);
+  });
+
+  it("votes each raw hand with its track-specific pinch calibration before bimanual emission", async () => {
+    let now = 1_000;
+    const { controller, worker, video } = harness(() => now);
+    const observations: HandTrackingObservation[] = [];
+    const sensorFrames: Array<{
+      hands: readonly { trackId: string; handedness: string }[];
+    }> = [];
+    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeSensorFrames?.((frame) => sensorFrames.push(frame));
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    worker.emit({
+      type: "result",
+      timestamp: 1_000,
+      hands: [
+        {
+          handedness: "left",
+          confidence: 0.98,
+          landmarks: rawHandLandmarks({ pose: "relaxed_index", offsetX: -0.2 }),
+        },
+        {
+          handedness: "right",
+          confidence: 0.98,
+          landmarks: rawHandLandmarks({ pose: "relaxed_index", offsetX: 0.2 }),
+        },
+      ],
+    });
+    const tracked = sensorFrames.at(-1)?.hands;
+    expect(tracked).toHaveLength(2);
+    const leftTrack = tracked?.find((entry) => entry.handedness === "left")?.trackId;
+    const rightTrack = tracked?.find((entry) => entry.handedness === "right")?.trackId;
+    expect(leftTrack).toBeTruthy();
+    expect(rightTrack).toBeTruthy();
+    if (!leftTrack || !rightTrack) throw new Error("Expected two stable raw-hand tracks.");
+
+    controller.setPinchThresholds?.({
+      fallback: { engage: 0.08, release: 0.12 },
+      byTrackId: {
+        [leftTrack]: { engage: 0.4, release: 0.6 },
+        [rightTrack]: { engage: 0.08, release: 0.12 },
+      },
+    });
+    for (const timestamp of [1_016, 1_032]) {
+      now = timestamp;
+      worker.emit({
+        type: "result",
+        timestamp,
+        hands: [
+          {
+            handedness: "right",
+            confidence: 0.98,
+            landmarks: rawHandLandmarks({ pose: "pinch", offsetX: 0.2 }),
+          },
+          {
+            handedness: "left",
+            confidence: 0.98,
+            landmarks: rawHandLandmarks({ pose: "pinch", offsetX: -0.2 }),
+          },
+        ],
+      });
+    }
+    expect(observations.some((entry) => entry.mode === "bimanual_pinch")).toBe(false);
+
+    controller.setPinchThresholds?.({
+      fallback: { engage: 0.08, release: 0.12 },
+      byTrackId: {
+        [leftTrack]: { engage: 0.4, release: 0.6 },
+        [rightTrack]: { engage: 0.4, release: 0.6 },
+      },
+    });
+    for (const timestamp of [1_048, 1_064]) {
+      now = timestamp;
+      worker.emit({
+        type: "result",
+        timestamp,
+        hands: [
+          {
+            handedness: "left",
+            confidence: 0.98,
+            landmarks: rawHandLandmarks({ pose: "pinch", offsetX: -0.2 }),
+          },
+          {
+            handedness: "right",
+            confidence: 0.98,
+            landmarks: rawHandLandmarks({ pose: "pinch", offsetX: 0.2 }),
+          },
+        ],
+      });
+    }
+    expect(observations.at(-1)).toMatchObject({
+      mode: "bimanual_pinch",
+      hands: [
+        expect.objectContaining({ trackId: leftTrack }),
+        expect.objectContaining({ trackId: rightTrack }),
+      ],
+    });
   });
 
   it("bridges one brief missing frame while pinched, then reports lost tracking", async () => {

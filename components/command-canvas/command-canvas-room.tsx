@@ -1970,6 +1970,9 @@ export function CommandCanvasRoom({
         setViewport(zoomViewportAt(current, effect.screenPoint, effect.scale));
         return;
       }
+      case "viewport.set":
+        setViewport(effect.viewport);
+        return;
       case "object.stage_action": {
         const target = store.getState().canvas.objects[effect.objectId];
         if (!target || target.deletedAt) return;
@@ -2869,6 +2872,9 @@ export function CommandCanvasRoom({
             calibrationProfile={handCalibrationProfile}
             createController={createHandTrackingController}
             privateGpuRelayAvailable={privateGpuRelayAvailable}
+            pointPolicy={
+              handInteractionMode === "draw" ? "draw-index-led" : "deliberate"
+            }
             onCalibrationResult={(result) => {
               spatialRoomInputState.current = createInitialSpatialRoomInputState();
               setHandCalibrationProfile(result.profile);

@@ -3,12 +3,20 @@ import {
   interpretHandFrame,
   type HandEngineSource,
   type HandIntentState,
+  type HandIntentTransition,
   type HandLandmarks,
   type HandPhysicalMeasurements,
   type HandPredictionMarker,
+  type HandPointPolicy,
   type HandReceiveTimestamp,
   type HandTrackId,
 } from "@/lib/gesture/hand-intent";
+import {
+  createInitialPinchVoteState,
+  voteCalibratedPinch,
+  type CalibratedPinchThresholds,
+  type PinchVoteState,
+} from "@/lib/gesture/hand-calibration";
 import type {
   HandDetector,
   HandDetectorLoadOptions,
@@ -95,6 +103,19 @@ export interface HandTrackingPinchThresholds {
   readonly release: number;
 }
 
+export interface HandTrackingPinchThresholdSet {
+  readonly fallback: HandTrackingPinchThresholds;
+  readonly byTrackId: Readonly<Record<HandTrackId, HandTrackingPinchThresholds>>;
+  readonly byHandedness?: Readonly<
+    Partial<Record<TrackedHandedness, HandTrackingPinchThresholds>>
+  >;
+}
+
+interface ResolvedTrackingPinchThresholdSet
+  extends HandTrackingPinchThresholdSet {
+  readonly votePerTrack: boolean;
+}
+
 /** Local, ephemeral detector evidence. It never represents a canvas command. */
 export interface HandTrackingSensorHand {
   readonly trackId: HandTrackId;
@@ -133,8 +154,12 @@ export interface HandTrackingController {
     listener: (frame: HandTrackingSensorFrame) => void,
   ): () => void;
   setPinchThresholds?(
-    thresholds: HandTrackingPinchThresholds | null,
+    thresholds:
+      | HandTrackingPinchThresholds
+      | HandTrackingPinchThresholdSet
+      | null,
   ): void;
+  setPointPolicy?(policy: HandPointPolicy): void;
   getEngineStatus?(): HandTrackingEngineStatus | null;
   subscribeEngineStatus?(
     listener: (engine: HandTrackingEngineStatus | null) => void,
@@ -236,7 +261,8 @@ export function createHandTrackingController(
   let engineStatus: HandTrackingEngineStatus | null = null;
   let nextRunId = 0;
   let activeRun: HandTrackingRun | null = null;
-  let pinchThresholds: HandTrackingPinchThresholds | null = null;
+  let pinchThresholds: ResolvedTrackingPinchThresholdSet | null = null;
+  let pointPolicy: HandPointPolicy = "deliberate";
 
   function setStatus(next: HandTrackingStatus) {
     status = next;
@@ -397,6 +423,7 @@ export function createHandTrackingController(
     run.stream = null;
     run.ownsStream = false;
     run.intentStates.clear();
+    run.pinchVoteStates.clear();
     run.handTracks.clear();
     run.lastSingleObservation = null;
     run.captureLatencies.clear();
@@ -498,6 +525,7 @@ export function createHandTrackingController(
     worker.terminate();
     run.worker = null;
     run.intentStates.clear();
+    run.pinchVoteStates.clear();
     run.lastSingleObservation = null;
     const failedEngine = run.visionEngines[run.engineIndex];
     run.pendingFallbackReason = message;
@@ -766,11 +794,15 @@ export function createHandTrackingController(
         dependencies.now(),
         {
           mirrorX: true,
+          pointPolicy,
           ...(pinchThresholds
-            ? {
-                pinchEngageRatio: pinchThresholds.engage,
-                pinchReleaseRatio: pinchThresholds.release,
-              }
+            ? pinchIntentOverrides(
+                resolveTrackingPinchThresholds(
+                  pinchThresholds,
+                  key,
+                  hand.handedness,
+                ),
+              )
             : {}),
         },
       );
@@ -779,7 +811,15 @@ export function createHandTrackingController(
         transition.output.reason === "no_deliberate_gesture"
       )
         run.intentStates.set(key, transition.state);
-      return { hand, trackId: key, transition };
+      const semanticMode = semanticModeForTrack(
+        run,
+        key,
+        hand,
+        transition,
+        message.timestamp,
+        pinchThresholds,
+      );
+      return { hand, trackId: key, transition, semanticMode };
     });
     emitSensorFrame({
       timestamp: message.timestamp,
@@ -804,8 +844,10 @@ export function createHandTrackingController(
       ),
     });
     for (const key of run.intentStates.keys()) {
-      if (!activeKeys.has(key) && !run.handTracks.has(key))
+      if (!activeKeys.has(key) && !run.handTracks.has(key)) {
         run.intentStates.delete(key);
+        run.pinchVoteStates.delete(key);
+      }
     }
     const previous = run.lastSingleObservation;
     const visibleHeldOwnerNeutral =
@@ -826,7 +868,7 @@ export function createHandTrackingController(
     );
     const pinches = accepted.flatMap((entry) => {
       const output = entry.transition.output;
-      return output.accepted && output.mode === "pinch"
+      return output.accepted && entry.semanticMode === "pinch"
         ? [
             {
               hand: entry.hand,
@@ -879,8 +921,8 @@ export function createHandTrackingController(
     }
     const primary = accepted.sort(
       (left, right) =>
-        handModePriority(right.transition.output.mode) -
-        handModePriority(left.transition.output.mode),
+        handModePriority(right.semanticMode ?? right.transition.output.mode) -
+        handModePriority(left.semanticMode ?? left.transition.output.mode),
     )[0];
     if (!primary || !primary.transition.output.accepted) {
       const ownerTrackId = previous?.trackId;
@@ -903,7 +945,7 @@ export function createHandTrackingController(
       HandTrackingObservation,
       { mode: "point" | "pinch" | "open_palm" }
     > = {
-      mode: output.mode,
+      mode: primary.semanticMode ?? output.mode,
       pointer: output.pointer,
       motionPointer: output.motionPointer,
       confidence: output.confidence,
@@ -966,6 +1008,7 @@ export function createHandTrackingController(
     }
     run.lastSingleObservation = null;
     run.intentStates.clear();
+    run.pinchVoteStates.clear();
     emit({ mode: "idle", timestamp, trackingState: "lost" });
   }
 
@@ -1155,20 +1198,21 @@ export function createHandTrackingController(
       return () => sensorListeners.delete(listener);
     },
     setPinchThresholds(next) {
-      if (
-        next &&
-        (!Number.isFinite(next.engage) ||
-          !Number.isFinite(next.release) ||
-          next.engage <= 0 ||
-          next.engage >= next.release ||
-          next.release > 2)
-      )
-        throw new RangeError(
-          "Pinch thresholds must satisfy 0 < engage < release <= 2.",
-        );
-      pinchThresholds = next;
+      pinchThresholds = normalizeTrackingPinchThresholds(next);
       if (activeRun) {
         activeRun.intentStates.clear();
+        activeRun.pinchVoteStates.clear();
+        activeRun.lastSingleObservation = null;
+      }
+    },
+    setPointPolicy(next) {
+      if (next !== "deliberate" && next !== "draw-index-led")
+        throw new RangeError("Hand point policy is invalid.");
+      if (pointPolicy === next) return;
+      pointPolicy = next;
+      if (activeRun) {
+        activeRun.intentStates.clear();
+        activeRun.pinchVoteStates.clear();
         activeRun.lastSingleObservation = null;
       }
     },
@@ -1300,6 +1344,7 @@ interface HandTrackingRun {
   pendingBitmap: PendingCapturedBitmap | null;
   lastVideoCurrentTime: number | null;
   intentStates: Map<string, HandIntentState>;
+  pinchVoteStates: Map<string, PinchVoteState>;
   handTracks: Map<string, HandTrack>;
   nextHandTrackId: number;
   lastSingleObservation: Extract<
@@ -1361,6 +1406,7 @@ function createRun(
     pendingBitmap: null,
     lastVideoCurrentTime: null,
     intentStates: new Map(),
+    pinchVoteStates: new Map(),
     handTracks: new Map(),
     nextHandTrackId: 0,
     lastSingleObservation: null,
@@ -1424,6 +1470,7 @@ function assignHandStateKeys(
       if (!evicted) break;
       run.handTracks.delete(evicted.key);
       run.intentStates.delete(evicted.key);
+      run.pinchVoteStates.delete(evicted.key);
     }
     const key = `hand-track-${++run.nextHandTrackId}`;
     run.handTracks.set(key, {
@@ -1492,6 +1539,7 @@ function pruneHandTracks(run: HandTrackingRun, timestamp: number) {
     if (timestamp - track.lastSeenAt <= HAND_TRACK_TTL_MS) continue;
     run.handTracks.delete(track.key);
     run.intentStates.delete(track.key);
+    run.pinchVoteStates.delete(track.key);
   }
 }
 
@@ -1553,6 +1601,93 @@ function pointDistance(
   right: { x: number; y: number },
 ) {
   return Math.hypot(left.x - right.x, left.y - right.y);
+}
+
+function semanticModeForTrack(
+  run: HandTrackingRun,
+  trackId: HandTrackId,
+  hand: TrackedHandLandmarks,
+  transition: HandIntentTransition,
+  timestamp: number,
+  thresholdSet: ResolvedTrackingPinchThresholdSet | null,
+): "point" | "pinch" | "open_palm" | null {
+  if (!thresholdSet || !thresholdSet.votePerTrack)
+    return transition.output.accepted ? transition.output.mode : null;
+  const measurements = transition.measurements;
+  if (!measurements)
+    return transition.output.accepted ? transition.output.mode : null;
+  const thresholds = resolveTrackingPinchThresholds(
+    thresholdSet,
+    trackId,
+    hand.handedness,
+  );
+  const vote = voteCalibratedPinch(
+    run.pinchVoteStates.get(trackId) ?? createInitialPinchVoteState(),
+    {
+      timestamp,
+      confidence: hand.confidence,
+      indexTipConfidence: measurements.indexTipConfidence,
+      thumbTipConfidence: measurements.thumbTipConfidence,
+      predicted: transition.prediction.predicted,
+      pinchRatio: measurements.pinchRatio,
+    },
+    thresholds,
+  );
+  run.pinchVoteStates.set(trackId, vote.state);
+  if (!transition.output.accepted) return null;
+  if (transition.output.mode === "open_palm") return "open_palm";
+  return vote.snapshot.pinched ? "pinch" : "point";
+}
+
+function pinchIntentOverrides(thresholds: CalibratedPinchThresholds) {
+  return {
+    pinchEngageRatio: thresholds.engage,
+    pinchReleaseRatio: thresholds.release,
+  };
+}
+
+function resolveTrackingPinchThresholds(
+  thresholdSet: HandTrackingPinchThresholdSet,
+  trackId: HandTrackId,
+  handedness: TrackedHandedness,
+): HandTrackingPinchThresholds {
+  return (
+    thresholdSet.byTrackId[trackId] ??
+    thresholdSet.byHandedness?.[handedness] ??
+    thresholdSet.fallback
+  );
+}
+
+function normalizeTrackingPinchThresholds(
+  input:
+    | HandTrackingPinchThresholds
+    | HandTrackingPinchThresholdSet
+    | null,
+): ResolvedTrackingPinchThresholdSet | null {
+  if (!input) return null;
+  const normalized: ResolvedTrackingPinchThresholdSet =
+    "fallback" in input
+      ? { ...input, votePerTrack: true }
+      : { fallback: input, byTrackId: {}, votePerTrack: false };
+  assertPinchThresholds(normalized.fallback);
+  Object.values(normalized.byTrackId).forEach(assertPinchThresholds);
+  Object.values(normalized.byHandedness ?? {}).forEach((thresholds) => {
+    if (thresholds) assertPinchThresholds(thresholds);
+  });
+  return normalized;
+}
+
+function assertPinchThresholds(thresholds: HandTrackingPinchThresholds) {
+  if (
+    !Number.isFinite(thresholds.engage) ||
+    !Number.isFinite(thresholds.release) ||
+    thresholds.engage <= 0 ||
+    thresholds.engage >= thresholds.release ||
+    thresholds.release > 2
+  )
+    throw new RangeError(
+      "Pinch thresholds must satisfy 0 < engage < release <= 2.",
+    );
 }
 
 function handModePriority(mode: string) {

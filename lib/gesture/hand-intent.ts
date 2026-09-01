@@ -46,6 +46,7 @@ export interface HandFrame {
 export type NormalizedHandPointer = NormalizedHandPoint;
 
 export type HandIntentMode = "idle" | "point" | "pinch" | "open_palm";
+export type HandPointPolicy = "deliberate" | "draw-index-led";
 
 export type HandFrameRefusal =
   | "malformed_frame"
@@ -122,6 +123,8 @@ export interface HandIntentConfig {
   readonly maxFrameAgeMs: number;
   readonly maxFutureSkewMs: number;
   readonly mirrorX: boolean;
+  /** Draw mode accepts a reliable extended index without policing support fingers. */
+  readonly pointPolicy: HandPointPolicy;
 }
 
 export const DEFAULT_HAND_INTENT_CONFIG: HandIntentConfig = Object.freeze({
@@ -141,6 +144,7 @@ export const DEFAULT_HAND_INTENT_CONFIG: HandIntentConfig = Object.freeze({
   maxFrameAgeMs: 160,
   maxFutureSkewMs: 50,
   mirrorX: false,
+  pointPolicy: "deliberate",
 });
 
 const THUMB_TIP_INDEX = 4;
@@ -331,12 +335,16 @@ export function interpretHandFrame(
     lastAcceptedTimestamp: frame.timestamp,
   };
   const deliberatePoint =
-    hasReliableDeliberatePointLandmarks(
-      frame.landmarks,
-      config.minKeypointVisibility,
-    ) &&
     isIndexExtended(frame.landmarks) &&
-    areOtherFingersRelaxedForPoint(frame.landmarks);
+    (config.pointPolicy === "draw-index-led"
+      ? hasReliableIndexPointLandmarks(
+          frame.landmarks,
+          config.minKeypointVisibility,
+        )
+      : hasReliableDeliberatePointLandmarks(
+          frame.landmarks,
+          config.minKeypointVisibility,
+        ) && areOtherFingersRelaxedForPoint(frame.landmarks));
   if (!pinchLatched && !openPalm && !deliberatePoint)
     return refuse(
       "no_deliberate_gesture",
@@ -388,6 +396,15 @@ function hasReliableDeliberatePointLandmarks(
   minimumVisibility: number,
 ) {
   return DELIBERATE_POINT_LANDMARK_INDICES.every(
+    (index) => landmarkVisibility(landmarks[index]) >= minimumVisibility,
+  );
+}
+
+function hasReliableIndexPointLandmarks(
+  landmarks: HandLandmarks,
+  minimumVisibility: number,
+) {
+  return [WRIST_INDEX, ...INDEX_FINGER_JOINTS].every(
     (index) => landmarkVisibility(landmarks[index]) >= minimumVisibility,
   );
 }
@@ -471,7 +488,9 @@ function resolveConfig(overrides: Partial<HandIntentConfig>): HandIntentConfig {
     config.maxFrameAgeMs < 0 ||
     !Number.isFinite(config.maxFutureSkewMs) ||
     config.maxFutureSkewMs < 0 ||
-    typeof config.mirrorX !== "boolean"
+    typeof config.mirrorX !== "boolean" ||
+    (config.pointPolicy !== "deliberate" &&
+      config.pointPolicy !== "draw-index-led")
   )
     throw new RangeError("Hand intent configuration is invalid.");
   return config;

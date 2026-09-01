@@ -16,6 +16,7 @@ import type {
   HandTrackingObservation,
   HandTrackingSensorFrame,
   HandTrackingStatus,
+  HandTrackingPinchThresholdSet,
 } from "@/lib/gesture/hand-tracking-controller";
 import { createHandTrackingController } from "@/lib/gesture/hand-tracking-controller";
 import {
@@ -33,6 +34,7 @@ import {
 } from "@/lib/gesture/hand-calibration";
 import {
   isOpenPalmCalibrationPose,
+  type HandPointPolicy,
   type HandLandmarks,
 } from "@/lib/gesture/hand-intent";
 
@@ -85,6 +87,7 @@ export interface SpatialCameraControlProps {
   onObservation?: (observation: HandTrackingObservation) => void;
   onStatusChange?: (status: HandTrackingStatus) => void;
   onSpatialModeStarted?: () => void;
+  pointPolicy?: HandPointPolicy;
 }
 
 export interface SpatialCameraControllerPreferences {
@@ -103,6 +106,7 @@ export function SpatialCameraControl({
   onObservation,
   onStatusChange,
   onSpatialModeStarted,
+  pointPolicy = "deliberate",
 }: SpatialCameraControlProps) {
   const [uploadConsent] = useState(() => createMutableConsentState());
   const [privateGpuConsent, setPrivateGpuConsent] = useState(false);
@@ -168,6 +172,9 @@ export function SpatialCameraControl({
   );
   const calibrationStageRef = useRef<CalibrationStage>("baseline");
   const calibrationTrackIdRef = useRef<string | null>(null);
+  const calibrationHandednessRef = useRef<"left" | "right" | "unknown">(
+    "unknown",
+  );
   const calibrationSourceRef = useRef<string | null>(null);
   const closedPinchCaptureRef = useRef<ClosedPinchCaptureState>(
     emptyClosedPinchCaptureState(),
@@ -234,6 +241,7 @@ export function SpatialCameraControl({
     );
     calibrationStageRef.current = "baseline";
     calibrationTrackIdRef.current = null;
+    calibrationHandednessRef.current = "unknown";
     calibrationSourceRef.current = null;
     closedPinchCaptureRef.current = emptyClosedPinchCaptureState();
     setLastSensorFrame(null);
@@ -336,6 +344,7 @@ export function SpatialCameraControl({
       }
       if (activeTrackId !== hand.trackId)
         calibrationTrackIdRef.current = hand.trackId;
+      calibrationHandednessRef.current = hand.handedness;
       const pointer = hand.measurements.indexTip;
       const pinchRatio = normalizedCalibrationPinchRatio(
         hand.measurements.pinchDistance,
@@ -604,11 +613,27 @@ export function SpatialCameraControl({
       setCalibrationError(calibrationRefusalMessage(result.reason));
       return;
     }
-    retainedCalibrationRef.current = result.profile;
-    setCapturedCalibration(result.profile);
+    const trackId = calibrationTrackIdRef.current;
+    const profile: HandCalibrationProfile = {
+      ...result.profile,
+      ...(trackId
+        ? {
+            pinchCalibrations: [
+              {
+                trackId,
+                handedness: calibrationHandednessRef.current,
+                closedRatio: result.profile.pinchClosedRatio,
+                openRatio: result.profile.pinchOpenRatio,
+              },
+            ],
+          }
+        : {}),
+    };
+    retainedCalibrationRef.current = profile;
+    setCapturedCalibration(profile);
     setCapturedCalibrationKind("calibrated");
-    controller.setPinchThresholds?.(resolvePinchThresholds(result.profile));
-    calibrationResultHandlerRef.current?.(result);
+    controller.setPinchThresholds?.(pinchThresholdSet(profile));
+    calibrationResultHandlerRef.current?.({ accepted: true, profile });
     startSpatialMode();
   }
 
@@ -626,7 +651,7 @@ export function SpatialCameraControl({
     retainedCalibrationRef.current = profile;
     setCapturedCalibration(profile);
     setCapturedCalibrationKind("skipped");
-    controller.setPinchThresholds?.(resolvePinchThresholds(profile));
+    controller.setPinchThresholds?.(pinchThresholdSet(profile));
     calibrationResultHandlerRef.current?.(result);
     startSpatialMode();
   }
@@ -653,9 +678,13 @@ export function SpatialCameraControl({
 
   useEffect(() => {
     controller.setPinchThresholds?.(
-      retainedCalibration ? resolvePinchThresholds(retainedCalibration) : null,
+      retainedCalibration ? pinchThresholdSet(retainedCalibration) : null,
     );
   }, [controller, retainedCalibration]);
+
+  useEffect(() => {
+    controller.setPointPolicy?.(pointPolicy);
+  }, [controller, pointPolicy]);
 
   useEffect(() => {
     const unsubscribeStatus = controller.subscribeStatus((next) => {
@@ -1479,6 +1508,36 @@ export function SpatialCameraControl({
         controlBounds.top,
     };
   }
+}
+
+function pinchThresholdSet(
+  profile: HandCalibrationProfile,
+): HandTrackingPinchThresholdSet {
+  const fallback = resolvePinchThresholds(profile);
+  const calibrations = profile.pinchCalibrations ?? [];
+  return {
+    fallback,
+    byTrackId: Object.fromEntries(
+      calibrations.map((calibration) => [
+        calibration.trackId,
+        resolvePinchThresholds({
+          pinchClosedRatio: calibration.closedRatio,
+          pinchOpenRatio: calibration.openRatio,
+        }),
+      ]),
+    ),
+    byHandedness: Object.fromEntries(
+      calibrations
+        .filter(({ handedness }) => handedness !== "unknown")
+        .map((calibration) => [
+          calibration.handedness,
+          resolvePinchThresholds({
+            pinchClosedRatio: calibration.closedRatio,
+            pinchOpenRatio: calibration.openRatio,
+          }),
+        ]),
+    ),
+  };
 }
 
 function prefersCollapsedSensorPreview() {

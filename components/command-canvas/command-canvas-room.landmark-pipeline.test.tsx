@@ -46,6 +46,7 @@ interface TestLandmarkFrameSource {
     readonly gain: HandControlGainState;
     readonly mode: LandmarkMode;
     readonly timestamp: number;
+    readonly supportVisibility?: number;
   }): void;
 }
 
@@ -86,6 +87,7 @@ function createTestLandmarkFrameSource(): TestLandmarkFrameSource {
               input.y,
               input.gain,
               input.mode,
+              input.supportVisibility,
             ),
           },
         ],
@@ -156,6 +158,52 @@ beforeEach(() => {
 });
 
 describe("production landmark frames through the canonical room pipeline", () => {
+  it("threads explicit Draw mode to relaxed index-led raw landmark interpretation", async () => {
+    const user = userEvent.setup();
+    const source = createTestLandmarkFrameSource();
+    const store = createCanvasStore("room-relaxed-index-draw", storeDependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => source.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await startCalibratedHandInput(user);
+    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+
+    act(() => {
+      source.emit({
+        x: 0.3,
+        y: 0.3,
+        gain: "draw",
+        mode: "point",
+        timestamp: 1_050,
+        supportVisibility: 0.2,
+      });
+      source.emit({
+        x: 0.4,
+        y: 0.4,
+        gain: "draw",
+        mode: "point",
+        timestamp: 1_066,
+        supportVisibility: 0.2,
+      });
+      source.emit({
+        x: 0.4,
+        y: 0.4,
+        gain: "draw",
+        mode: "neutral",
+        timestamp: 1_082,
+        supportVisibility: 0.2,
+      });
+    });
+
+    expect(source.observations).toEqual(["point", "point", "idle"]);
+    expect(screen.getByText("1 stroke ready")).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: /drawer/i })).toBeNull();
+  });
+
   it("keeps multiple index-finger strokes in one sketch while opening zero panels", async () => {
     const user = userEvent.setup();
     const source = createTestLandmarkFrameSource();
@@ -288,6 +336,7 @@ function productionLandmarks(
   canvasY: number,
   gain: HandControlGainState,
   mode: LandmarkMode,
+  supportVisibility = 0.99,
 ): HandLandmarks {
   const points = Array.from({ length: 21 }, () => ({
     x: 0.3,
@@ -308,6 +357,8 @@ function productionLandmarks(
   points[17] = { x: 0.42, y: 0.65, z: 0, visibility: 0.99 };
   points[18] = { x: 0.4, y: 0.72, z: 0, visibility: 0.99 };
   points[20] = { x: 0.37, y: 0.79, z: 0, visibility: 0.99 };
+  for (const index of [10, 12, 14, 16, 18, 20] as const)
+    points[index] = { ...points[index], visibility: supportVisibility };
 
   const cameraX = inverseFallbackAxis(canvasX, 1_000, gain, 0.15, 0.7);
   const cameraY = inverseFallbackAxis(canvasY, 500, gain, 0.12, 0.76);

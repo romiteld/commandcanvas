@@ -21,6 +21,15 @@ export interface HandCalibrationProfile {
   readonly createdAt: number;
   /** Robust 2D open-hand reference. This is geometry, not depth or mass. */
   readonly openPalmBaseline?: OpenPalmCalibrationBaseline;
+  /** Session-scoped hand-specific pinch evidence; global ratios remain fallback. */
+  readonly pinchCalibrations?: readonly HandPinchCalibration[];
+}
+
+export interface HandPinchCalibration {
+  readonly trackId: string;
+  readonly handedness: "left" | "right" | "unknown";
+  readonly closedRatio: number;
+  readonly openRatio: number;
 }
 
 export interface OpenPalmCalibrationSample {

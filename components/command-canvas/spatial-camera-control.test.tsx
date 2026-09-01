@@ -59,6 +59,7 @@ function fakeController(options: { sensorFrames?: boolean } = {}) {
     (next: HandTrackingEngineStatus | null) => void
   >();
   const setPinchThresholds = vi.fn();
+  const setPointPolicy = vi.fn();
   const controller: HandTrackingController = {
     getStatus: () => status,
     subscribeStatus(listener) {
@@ -70,6 +71,7 @@ function fakeController(options: { sensorFrames?: boolean } = {}) {
       return () => observationListeners.delete(listener);
     },
     setPinchThresholds,
+    setPointPolicy,
     getEngineStatus: () => engineStatus,
     subscribeEngineStatus(listener) {
       engineListeners.add(listener);
@@ -86,6 +88,7 @@ function fakeController(options: { sensorFrames?: boolean } = {}) {
     };
   return {
     controller,
+    setPointPolicy,
     setStatus(next: HandTrackingStatus) {
       status = next;
       statusListeners.forEach((listener) => listener(next));
@@ -102,6 +105,27 @@ function fakeController(options: { sensorFrames?: boolean } = {}) {
     },
   };
 }
+
+describe("hand point-policy wiring", () => {
+  it("switches the detector to index-led pointing only while Draw is explicit", () => {
+    const fake = fakeController();
+    const view = render(
+      <SpatialCameraControl
+        pointPolicy="deliberate"
+        createController={() => fake.controller}
+      />,
+    );
+    expect(fake.setPointPolicy).toHaveBeenLastCalledWith("deliberate");
+
+    view.rerender(
+      <SpatialCameraControl
+        pointPolicy="draw-index-led"
+        createController={() => fake.controller}
+      />,
+    );
+    expect(fake.setPointPolicy).toHaveBeenLastCalledWith("draw-index-led");
+  });
+});
 
 function calibrationSensorFrame(
   pointer: { x: number; y: number },
@@ -1275,8 +1299,13 @@ describe("SpatialCameraControl", () => {
       },
     });
     expect(fake.controller.setPinchThresholds).toHaveBeenCalledWith({
-      engage: 0.43,
-      release: 0.556,
+      fallback: { engage: 0.43, release: 0.556 },
+      byTrackId: {
+        "calibration-hand": { engage: 0.43, release: 0.556 },
+      },
+      byHandedness: {
+        right: { engage: 0.43, release: 0.556 },
+      },
     });
     expect(screen.getByText(/calibrated for this camera session/i)).toBeVisible();
   });
@@ -1883,8 +1912,9 @@ describe("SpatialCameraControl", () => {
       />,
     );
     expect(fake.controller.setPinchThresholds).toHaveBeenCalledWith({
-      engage: 0.4,
-      release: 0.54,
+      fallback: { engage: 0.4, release: 0.54 },
+      byTrackId: {},
+      byHandedness: {},
     });
 
     view.rerender(

@@ -96,9 +96,8 @@ describe("spatial gesture geometry and retained fallbacks", () => {
     expect(started.state.phase).toBe("panning");
     expect(started.effects).toEqual([
       {
-        type: "viewport.zoom_at",
-        scale: 1,
-        screenPoint: { x: 800, y: 200 },
+        type: "viewport.set",
+        viewport: { x: 0, y: 0, scale: 1 },
       },
     ]);
 
@@ -118,9 +117,8 @@ describe("spatial gesture geometry and retained fallbacks", () => {
     );
     expect(spread.effects).toEqual([
       {
-        type: "viewport.zoom_at",
-        scale: 1.5,
-        screenPoint: { x: 800, y: 200 },
+        type: "viewport.set",
+        viewport: { x: -400, y: -100, scale: 1.5 },
       },
     ]);
   });
