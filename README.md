@@ -52,14 +52,12 @@ The dated hybrid verification record is
 
 ## Publication boundary
 
-This checkout is local and unpublished. No public corresponding-source
-repository or public source-commit link exists yet.
-
-The public service must remain disabled until a public corresponding-source
-repository exists and both this README and [`SOURCE.md`](SOURCE.md) link the
-exact source commit used to build the image that would be served publicly. A
-local commit hash or dated local verification record is not a substitute for
-that public source link.
+The exact AGPL corresponding source used to build the current YOLO26 CUDA
+image is public at
+[`ee5c2afcfbfc8427b39e2f13e170785c87bce2e3`](https://github.com/romiteld/commandcanvas/tree/ee5c2afcfbfc8427b39e2f13e170785c87bce2e3)
+on the isolated `hand-relay-source` branch of the public CommandCanvas
+repository. The branch has a separate root history and AGPL-3.0-only license;
+it is not part of the MIT web-application distribution.
 
 Runtime credentials, host configuration, and deployment state are
 intentionally not stored in this repository.
