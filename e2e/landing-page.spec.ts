@@ -165,6 +165,31 @@ test("stays fluid, branded, readable, and touchable across narrow widths", async
   }
 });
 
+test("keeps every mobile footer link at least 44 CSS pixels wide", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const linkWidths = await page
+    .getByRole("contentinfo")
+    .getByRole("link")
+    .evaluateAll((links) =>
+      links.map((link) => ({
+        label: link.textContent?.trim() ?? "",
+        width: link.getBoundingClientRect().width,
+      })),
+    );
+
+  expect(linkWidths).not.toEqual([]);
+  for (const link of linkWidths) {
+    expect(
+      link.width,
+      `${link.label} mobile footer touch width`,
+    ).toBeGreaterThanOrEqual(44);
+  }
+});
+
 test("preserves the full-viewport local workspace after document scrolling is restored", async ({
   page,
 }, testInfo) => {
