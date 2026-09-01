@@ -384,6 +384,30 @@ describe("CommandCanvasRoom", () => {
     expect(container.querySelector(".demo-preview-boundary")).toBeNull();
   });
 
+  it("closes the workspace overflow with its own trigger", async () => {
+    const user = userEvent.setup();
+    const store = createCanvasStore("room-overflow-toggle", dependencies());
+    render(
+      <CommandCanvasRoom
+        store={store}
+        headerControls={<button type="button">Reset demo</button>}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Open workspace menu" });
+    const controls = screen.getByLabelText("Workspace controls");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(controls).not.toHaveClass("is-open");
+
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(controls).toHaveClass("is-open");
+
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(controls).not.toHaveClass("is-open");
+  });
+
   it("coordinates header controls with drawers and makes non-drawing controls inert in Draw mode", async () => {
     const user = userEvent.setup();
     const onReset = vi.fn();
@@ -2157,11 +2181,18 @@ describe("CommandCanvasRoom", () => {
     act(() => hand.setStatus({ state: "ready" }));
     await skipHandCalibration(user);
 
+    const handAction = screen.getByRole("button", { name: "Draw with hand" });
+    expect(handAction).toHaveAttribute("aria-pressed", "false");
+    expect(handAction).not.toHaveClass("is-active");
+
     await user.click(
-      screen.getByRole("button", { name: "Draw with hand" }),
+      handAction,
     );
 
     expect(screen.getByText("DRAW MODE")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Drawing with hand" }),
+    ).toHaveAttribute("aria-pressed", "true");
     expect(
       screen.queryByRole("region", { name: "Draw directly on the canvas" }),
     ).toBeNull();

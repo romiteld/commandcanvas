@@ -2457,7 +2457,6 @@ export function CommandCanvasRoom({
                 aria-expanded={headerControlsOpen}
                 onClick={() => {
                   setDockMenu(null);
-                  setOpenDrawer(null);
                   setHeaderControlsOpen((open) => !open);
                 }}
               >
@@ -2934,12 +2933,14 @@ export function CommandCanvasRoom({
               openHandCalibration();
             }}
             aria-label={
-              handTrackingStatus.state === "ready"
+              handInteractionMode === "draw"
+                ? "Drawing with hand"
+                : handTrackingStatus.state === "ready"
                 ? "Draw with hand"
                 : "Start hand interaction"
             }
-            aria-pressed={handTrackingStatus.state === "ready"}
-            className={handTrackingStatus.state === "ready" ? "is-active" : undefined}
+            aria-pressed={handInteractionMode === "draw"}
+            className={handInteractionMode === "draw" ? "is-active" : undefined}
             disabled={interactionPending || drawingActive}
           >
             <span aria-hidden="true">☝</span>
