@@ -889,7 +889,12 @@ export function MeetingCommandCanvas({
             <button className="meeting-close" type="button" aria-label="Close invite" onClick={() => setInviteOpen(false)}>×</button>
             <p className="eyebrow">Email-bound invitation</p>
             <h2>Bring someone into the room</h2>
-            <form action={createInvitation}>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void createInvitation(new FormData(event.currentTarget));
+              }}
+            >
               <label>Display name<input name="displayName" required maxLength={64} autoComplete="name" /></label>
               <label>Email<input name="email" type="email" required maxLength={254} autoComplete="email" /></label>
               <button type="submit" disabled={inviteBusy}>{inviteBusy ? "Creating…" : "Create invitation"}</button>
@@ -1166,7 +1171,12 @@ export function MeetingLobby({
                 separate and protects this workspace.
               </p>
             ) : null}
-            <form action={onRequestCode}>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void onRequestCode(new FormData(event.currentTarget));
+              }}
+            >
               <label>Email<input name="email" type="email" required autoComplete="email" maxLength={254} autoFocus /></label>
               <button type="submit">Email me a code</button>
             </form>
@@ -1177,7 +1187,12 @@ export function MeetingLobby({
           <>
             <p className="eyebrow">Code sent to {state.email}</p>
             <h1>Enter your six-digit code</h1>
-            <form action={onVerifyCode}>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void onVerifyCode(new FormData(event.currentTarget));
+              }}
+            >
               <label>Verification code<input name="code" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} autoComplete="one-time-code" required autoFocus /></label>
               <button type="submit">Verify email</button>
             </form>
@@ -1187,7 +1202,12 @@ export function MeetingLobby({
           <>
             <p className="eyebrow">Verified as {state.email}</p>
             <h1>Create a shared spatial room</h1>
-            <form action={onCreateMeeting}>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void onCreateMeeting(new FormData(event.currentTarget));
+              }}
+            >
               <label>Room name<input name="roomName" required maxLength={120} defaultValue="Project working session" /></label>
               <label>Your display name<input name="displayName" required maxLength={64} autoComplete="name" /></label>
               <button type="submit">Enter CommandCanvas</button>

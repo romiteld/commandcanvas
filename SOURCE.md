@@ -51,11 +51,10 @@ That external service is a distinct deployment and source distribution. Its
 model, native inference service, container definitions, and edge operations do
 not enter the application package or browser bundle.
 
-### Source-link follow-up
+### Published relay source
 
-The relay repository has been isolated locally as `commandcanvas-hand-relay`
-but is intentionally not published by this checkpoint. Before promoting a
-release that offers the external relay, publish that repository and replace
-this follow-up with the exact public relay source commit. Until that link
-exists, public documentation must describe relay source publication as pending
-rather than claiming a remote repository is available.
+The exact AGPL corresponding source for the current relay image is published at
+[`ee5c2afcfbfc8427b39e2f13e170785c87bce2e3`](https://github.com/romiteld/commandcanvas/tree/ee5c2afcfbfc8427b39e2f13e170785c87bce2e3)
+on the isolated `hand-relay-source` branch. That unrelated branch is a separate
+source distribution from the MIT web application on `main`; its AGPL terms do
+not change the application license.

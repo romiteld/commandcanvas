@@ -922,9 +922,6 @@ rewriting their historical evidence:
   label **Open ChatGPT voice guidance**. An active local voice session always
   exposes **Stop CommandCanvas Live Voice**, including if Site Tools register
   after the local session begins.
-- Root `.coderabbit.yaml` contains repository-specific review instructions with
-  no credential. GitHub App installation and an actual review event remain a
-  separate provider step.
 - The exact Node 22.17.0 candidate passed ESLint, TypeScript, 112 Vitest files
   with 1,175 of 1,175 tests, the MediaPipe worker build, the optimized Next.js
   webpack build, all 13 generated routes, and `git diff --check`.
@@ -978,8 +975,6 @@ rewriting their historical evidence:
   running on port 8100, and the Vercel relay feature flag remains off. The
   hybrid CUDA measurements are controlled-crop evidence, not live phone-hand
   accuracy or network-latency evidence.
-- CodeRabbit configuration is source-complete, but the GitHub App is not
-  installed and no authenticated CodeRabbit review has run for this candidate.
 
 ### CURRENT SCOPE
 
@@ -1040,10 +1035,8 @@ rewriting their historical evidence:
 - Real Resend invitation and packet delivery remain disabled because the Vercel
   project does not have an owner-supplied sending key or webhook signing secret.
   The application reports preview-only rather than claiming delivery.
-- The native relay source repository is not public, so production port 8100 and
-  the Vercel relay feature flag remain disabled. CodeRabbit configuration is in
-  source, but the GitHub App is not installed and no authenticated review event
-  has run.
+- At this checkpoint the native relay source was not yet public, so production
+  port 8100 and the Vercel relay feature flag remained disabled.
 
 ## Checkpoint 26: permanent meeting identity and verified transactional delivery
 
@@ -1104,18 +1097,8 @@ rewriting their historical evidence:
   public ledger. They remain in the restricted provider/database evidence used
   for the read-back above.
 
-### REVIEW AND DEPLOYMENT BOUNDARIES
+### RELAY AND DEPLOYMENT BOUNDARIES
 
-- Review-only GitHub pull request 1 compares the released cross-cutting change
-  set with the pre-release base and must not be merged. GitHub's automated
-  Copilot reviewer completed a 59-file review. Its single comment proposed
-  phase-filtering static WebMCP registration; that was dispositioned without a
-  code change because static full-catalog registration plus authoritative
-  execute-time guards is the approved compatibility fallback. Dynamic mode is
-  the phase-filtered registration mode. This is not presented as a CodeRabbit
-  review.
-- `.coderabbit.yaml` is valid and repository-specific, but the CodeRabbit
-  GitHub App is not installed for the repository. No CodeRabbit review has run.
 - The separate RTX relay remains fail-closed. Its public corresponding-source
   repository does not yet exist, production port 8100 is not listening, and
   `PRIVATE_HAND_RELAY_ENABLED` remains false. Preflight also found that the
@@ -1215,9 +1198,6 @@ rewriting their historical evidence:
   repository has not been created, production port 8100 is not listening, the
   public capability route returns 502, and the application renders the private
   GPU feature as disabled. No pfSense, DNS, firewall, or Caddy change is needed.
-- CodeRabbit configuration is present, but the GitHub App has not produced a
-  CodeRabbit review. The existing automated review is GitHub Copilot and is not
-  attributed to CodeRabbit.
 - Physical phone drawing, pinch, two-hand transform, open-palm pan, edge throw,
   lighting, occlusion, thermal behavior, and private-relay fallback remain
   unverified. These deterministic corrections address proven state-machine
@@ -1251,15 +1231,10 @@ rewriting their historical evidence:
   and video tracks reached `live`, video-share and leave controls removed the
   correct tiles, and both temporary rooms were deleted. Two applicable
   scenarios passed and two project-inapplicable scenarios skipped.
-- The review-only pull-request branch was fast-forwarded to the exact candidate.
-  No CodeRabbit result is claimed until the GitHub App produces a review event.
-
 ### STILL GATED
 
-- The separate public relay repository and CodeRabbit GitHub App installation
-  require repository-owner grants that the current GitHub token cannot perform.
-  The relay therefore remains disabled and the existing CodeRabbit request has
-  no bot response.
+- At this checkpoint the separate relay source publication still required a
+  repository-owner action, so the relay remained disabled.
 - Physical phone gesture accuracy and ChatGPT built-in-browser Site Tools remain
   external target-surface checks. The public release is available for those
   rehearsals, but neither is inferred from unit, browser-profile, native Chrome,

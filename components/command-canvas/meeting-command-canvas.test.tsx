@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -101,6 +101,40 @@ describe("normal meeting lobby", () => {
       screen.getByRole("button", { name: "Switch account and continue" }),
     );
     expect(onSwitchInvitationAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("submits the verified host profile without a native page-navigation fallback", async () => {
+    const onCreateMeeting = vi.fn(async (_form: FormData) => undefined);
+    render(
+      <MeetingLobby
+        state={{ phase: "host_form", email: "danny@example.com" }}
+        onRequestCode={vi.fn()}
+        onVerifyCode={vi.fn()}
+        onSwitchInvitationAccount={vi.fn()}
+        onCreateMeeting={onCreateMeeting}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Room name"), {
+      target: { value: "Product review" },
+    });
+    fireEvent.change(screen.getByLabelText("Your display name"), {
+      target: { value: "Daniel" },
+    });
+    const form = screen
+      .getByRole("button", { name: "Enter CommandCanvas" })
+      .closest("form");
+    if (!form) throw new Error("Host form was not rendered");
+
+    expect(form).not.toHaveAttribute("action");
+    const submit = new Event("submit", { bubbles: true, cancelable: true });
+    expect(form.dispatchEvent(submit)).toBe(false);
+    expect(submit.defaultPrevented).toBe(true);
+    await waitFor(() => expect(onCreateMeeting).toHaveBeenCalledTimes(1));
+    const submitted = onCreateMeeting.mock.calls[0]?.[0];
+    expect(submitted).toBeInstanceOf(FormData);
+    expect(submitted?.get("roomName")).toBe("Product review");
+    expect(submitted?.get("displayName")).toBe("Daniel");
   });
 });
 

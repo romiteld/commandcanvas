@@ -61,20 +61,33 @@ describe("MIT application and external AGPL relay boundary", () => {
     expect(read("scripts/build-hand-worker.mjs")).not.toMatch(/yolo|onnx/i);
   });
 
-  it("documents the MIT source boundary and an explicit relay-source follow-up", () => {
+  it("documents the MIT boundary and exact published relay source", () => {
     const readme = read("README.md");
     const source = read("SOURCE.md");
+    const relayDocumentation = read("docs/private-hand-relay.md");
     const notices = read("THIRD_PARTY_NOTICES.md");
+    const relaySourceUrl =
+      "https://github.com/romiteld/commandcanvas/tree/ee5c2afcfbfc8427b39e2f13e170785c87bce2e3";
 
     expect(readme).toContain("[MIT License](LICENSE)");
     expect(source).toContain(
       "The optional private GPU relay is not distributed in this repository.",
     );
-    expect(source).toContain("Source-link follow-up");
+    expect(source).toContain(relaySourceUrl);
+    expect(relayDocumentation).toContain(relaySourceUrl);
+    expect(source).not.toMatch(/not published|publication as pending/i);
+    expect(relayDocumentation).not.toMatch(
+      /public URL is intentionally not listed|source-link follow-up/i,
+    );
     expect(notices).toContain("## MediaPipe Tasks Vision");
     expect(notices).not.toContain("## ONNX Runtime Web");
     expect(notices).not.toContain("## Native CUDA relay runtime");
     expect(notices).not.toContain("## YOLO26 Hand Pose runtime models");
+  });
+
+  it("keeps internal execution reports out of the public repository", () => {
+    expect(existsSync(path.join(root, ".superpowers"))).toBe(false);
+    expect(read(".gitignore")).toContain("/.superpowers/");
   });
 
   it("does not leave a hidden model under the public model directory", () => {

@@ -31,10 +31,10 @@ session/token authorization, server route, and failure-to-local behavior. It
 does not distribute the relay service, CUDA operations, model weights, model
 detector, ONNX Runtime, or GPU deployment source.
 
-The AGPL relay/service material has been isolated in the sibling local
-repository `commandcanvas-hand-relay`. A public URL is intentionally not
-listed until that separate repository is published and its exact public commit
-is verified. This is a source-link follow-up, not evidence of a public release.
+The exact AGPL corresponding source for the current relay image is published at
+[`ee5c2afcfbfc8427b39e2f13e170785c87bce2e3`](https://github.com/romiteld/commandcanvas/tree/ee5c2afcfbfc8427b39e2f13e170785c87bce2e3)
+on the isolated `hand-relay-source` branch. That unrelated branch is a separate
+source distribution from the MIT web application on `main`.
 
 ## Privacy and authorization
 
@@ -74,8 +74,8 @@ provider, or deployment credential belongs in either repository.
 ## Verification boundary
 
 Prior static-image CUDA measurements belong to the earlier combined release
-and to the separately operated relay. They do not verify the current MIT
-browser build, live end-to-end latency, physical-hand ergonomics, or a public
-relay source release. The current application requires a fresh target-browser
-camera lifecycle and real-hand rehearsal before any smoothness or accuracy
-claim is made.
+and to the separately operated relay. Public source availability does not
+verify the current MIT browser build, live end-to-end latency, or physical-hand
+ergonomics. The current application requires a fresh target-browser camera
+lifecycle and real-hand rehearsal before any smoothness or accuracy claim is
+made.
