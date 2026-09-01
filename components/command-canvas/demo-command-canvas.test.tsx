@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -461,7 +461,7 @@ describe("DemoCommandCanvas", () => {
       render(<DemoCommandCanvas environment={harness.environment} />);
       await screen.findByText("Live demo room");
       await user.click(
-        screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
+        screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
       );
       await waitFor(() => {
         expect(
@@ -576,7 +576,7 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
+      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
     );
     await user.click(
       screen.getByRole("button", { name: "Prepare meeting packet" }),
@@ -587,6 +587,38 @@ describe("DemoCommandCanvas", () => {
       undefined,
     );
     expect(await screen.findByText("Draft v1")).toBeVisible();
+  });
+
+  it("recovers one Site Tool catalog when the document surface arrives after the demo room", async () => {
+    delete (document as unknown as { modelContext?: unknown }).modelContext;
+    const signals: AbortSignal[] = [];
+    const registerTool = vi.fn(
+      async (_tool: RegisteredWebMcpTool, options: { signal: AbortSignal }) => {
+        signals.push(options.signal);
+      },
+    );
+    const harness = readyEnvironment();
+    const view = render(
+      <DemoCommandCanvas environment={harness.environment} />,
+    );
+
+    await screen.findByText("Live demo room");
+    await screen.findAllByText("Site Tools unavailable");
+    Object.defineProperty(document, "modelContext", {
+      configurable: true,
+      value: { registerTool },
+    });
+    act(() => window.dispatchEvent(new Event("focus")));
+
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(11));
+    act(() => window.dispatchEvent(new Event("focus")));
+    await Promise.resolve();
+    expect(registerTool).toHaveBeenCalledTimes(11);
+
+    view.unmount();
+    expect(signals).toHaveLength(11);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    delete (document as unknown as { modelContext?: unknown }).modelContext;
   });
 
   it("reconstructs the persisted packet workflow and immutable receipts after reload", async () => {
@@ -649,7 +681,7 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
+      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
     );
 
     expect(await screen.findByText("Approved packet v2")).toBeVisible();
@@ -742,7 +774,7 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
+      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
     );
     await user.click(
       screen.getByRole("button", { name: "Prepare meeting packet" }),
@@ -846,7 +878,7 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
+      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
     );
     await user.click(
       screen.getByRole("button", { name: "Prepare meeting packet" }),
@@ -1012,7 +1044,7 @@ describe("DemoCommandCanvas", () => {
     };
     render(<DemoCommandCanvas environment={environment} />);
 
-    expect(screen.getByText("Opening the limited judge preview…")).toBeVisible();
+    expect(screen.getByText("Opening the no-signup judge preview…")).toBeVisible();
     expect(screen.queryByRole("textbox", { name: /email|password/i })).toBeNull();
   });
 
@@ -1021,13 +1053,12 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={environment} />);
 
     expect(await screen.findByText("Live demo room")).toBeVisible();
-    expect(screen.getByText(/limited judge preview/i)).toBeVisible();
+    expect(screen.getByText(/no-signup judge preview/i)).toBeVisible();
     expect(screen.getByText(/temporary Supabase room/i)).toBeVisible();
     expect(screen.getByText(/email remains preview-only/i)).toBeVisible();
-    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute(
-      "href",
-      "/meet",
-    );
+    expect(
+      screen.getByRole("link", { name: "Workspace sign-in" }),
+    ).toHaveAttribute("href", "/meet");
   });
 
   it("does not offer private GPU camera upload when the server feature is disabled", async () => {
@@ -1064,7 +1095,7 @@ describe("DemoCommandCanvas", () => {
     ).not.toBeNull();
     expect(screen.queryByText(/fixture collaborator/i)).toBeNull();
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
+      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
     );
     expect(screen.getByRole("button", { name: "Start live voice" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Run direct command" })).toBeNull();
@@ -1140,6 +1171,9 @@ describe("DemoCommandCanvas", () => {
 
     expect(await screen.findByText("Demo room unavailable")).toBeVisible();
     expect(screen.getByText("The shared demo service is unavailable.")).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "Open local canvas fallback" }),
+    ).toHaveAttribute("href", "/local");
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(resetDemo).toHaveBeenCalledOnce();
   });

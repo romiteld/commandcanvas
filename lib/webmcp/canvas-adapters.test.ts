@@ -645,17 +645,10 @@ describe("canvas WebMCP adapters", () => {
     const result = await adapters.executeTool({
       toolName: "create_object",
       input: {
-        object: {
-          id: "note-agent-created",
-          type: "note",
-          title: "Agent proposal",
-          x: 320,
-          y: 180,
-          width: 280,
-          height: 190,
-          zIndex: 1,
-          payload: { text: "Review this proposed decision.", tone: "sky" },
-        },
+        type: "note",
+        title: "Agent proposal",
+        text: "Review this proposed decision.",
+        tone: "sky",
       },
       signal: new AbortController().signal,
       context,
@@ -664,15 +657,227 @@ describe("canvas WebMCP adapters", () => {
     expect(result).toMatchObject({
       ok: true,
       status: "completed",
-      message: "ChatGPT created “Agent proposal”.",
+      message: "Site Tools agent created “Agent proposal”.",
     });
     expect(store.getState().canvas.receipts[0]).toMatchObject({
       source: "webmcp",
       actor: {
-        id: "agent-chatgpt",
-        displayName: "ChatGPT",
+        id: "agent-site-tools",
+        displayName: "Site Tools agent",
         type: "agent",
       },
+    });
+    const created = Object.values(store.getState().canvas.objects)[0];
+    expect(created).toMatchObject({
+      type: "note",
+      title: "Agent proposal",
+      payload: { text: "Review this proposed decision.", tone: "sky" },
+    });
+    expect(created?.id).toMatch(/^note-/);
+  });
+
+  it("creates a spoken-context diagram beside an explicitly selected source sketch", async () => {
+    const { store, adapters } = fixture();
+    seedSelectedSketch(store);
+
+    const result = await adapters.executeTool({
+      toolName: "create_object",
+      input: {
+        type: "diagram",
+        title: "Clean architecture",
+        kind: "architecture",
+        sourceSketchId: "sketch-source",
+        summary: "Mobile client calls the API, which stores data.",
+        nodes: [
+          { key: "client", label: "Mobile client", kind: "client" },
+          { key: "api", label: "API", kind: "service" },
+          { key: "db", label: "Database", kind: "database" },
+        ],
+        edges: [
+          { from: "client", to: "api", label: "HTTPS" },
+          { from: "api", to: "db" },
+        ],
+      },
+      signal: new AbortController().signal,
+      context: {
+        ...context,
+        phase: { ...context.phase, hasContent: true, selection: "sketch" },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, status: "completed" });
+    const diagram = Object.values(store.getState().canvas.objects).find(
+      (object) => object.type === "diagram",
+    );
+    expect(diagram).toMatchObject({
+      x: 444,
+      y: 30,
+      payload: { sourceSketchId: "sketch-source" },
+    });
+    expect(store.getState().canvas.objects["sketch-source"]?.deletedAt).toBeNull();
+  });
+
+  it("refuses a source-sketch link unless that exact active sketch is selected", async () => {
+    const { store, adapters } = fixture();
+    seedSelectedSketch(store);
+    store.getState().selectObject(null);
+
+    const result = await adapters.executeTool({
+      toolName: "create_object",
+      input: {
+        type: "diagram",
+        title: "Do not infer target",
+        kind: "diagram",
+        sourceSketchId: "sketch-source",
+        nodes: [{ key: "idea", label: "Idea", kind: "concept" }],
+        edges: [],
+      },
+      signal: new AbortController().signal,
+      context: {
+        ...context,
+        phase: { ...context.phase, hasContent: true },
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      code: "invalid_input",
+      message: "Select the source sketch before creating a linked visual.",
+    });
+  });
+
+  it("refuses beside-selection placement instead of silently guessing a location", async () => {
+    const { adapters } = fixture();
+
+    const result = await adapters.executeTool({
+      toolName: "create_object",
+      input: {
+        type: "note",
+        title: "Needs a target",
+        placement: "right_of_selection",
+      },
+      signal: new AbortController().signal,
+      context,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      code: "invalid_input",
+      message:
+        "Select an active canvas object before placing new content beside it.",
+    });
+  });
+
+  it("appends text to the selected thought through the canonical versioned mutation", async () => {
+    const { store, adapters } = fixture();
+    store.getState().dispatch(
+      {
+        type: "object.create",
+        object: {
+          id: "note-thought",
+          type: "note",
+          title: "Research thought",
+          x: 100,
+          y: 100,
+          width: 320,
+          height: 220,
+          zIndex: 1,
+          payload: { text: "Start here.", tone: "violet" },
+        },
+      },
+      "pointer",
+    );
+    store.getState().selectObject("note-thought");
+
+    const result = await adapters.executeTool({
+      toolName: "update_object_content",
+      input: { text: "Then compare the alternatives." },
+      signal: new AbortController().signal,
+      context: {
+        ...context,
+        phase: { ...context.phase, hasContent: true, selection: "object" },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: "completed",
+      message: "Site Tools agent added text to “Research thought”.",
+    });
+    expect(store.getState().canvas.objects["note-thought"]).toMatchObject({
+      version: 2,
+      payload: { text: "Start here.\nThen compare the alternatives." },
+    });
+    expect(store.getState().canvas.receipts.at(-1)).toMatchObject({
+      action: "update",
+      source: "webmcp",
+      affectedObjectIds: ["note-thought"],
+    });
+  });
+
+  it("updates a stable-ID note without silently editing another selected object", async () => {
+    const { store, adapters } = fixture();
+    for (const [id, title] of [
+      ["note-target", "Target thought"],
+      ["note-selected", "Other thought"],
+    ] as const)
+      store.getState().dispatch(
+        {
+          type: "object.create",
+          object: {
+            id,
+            type: "note",
+            title,
+            x: 100,
+            y: 100,
+            width: 320,
+            height: 220,
+            zIndex: 1,
+            payload: { text: "", tone: "sand" },
+          },
+        },
+        "pointer",
+      );
+    store.getState().selectObject("note-selected");
+
+    await adapters.executeTool({
+      toolName: "update_object_content",
+      input: { objectId: "note-target", text: "Stable target text." },
+      signal: new AbortController().signal,
+      context: {
+        ...context,
+        phase: { ...context.phase, hasContent: true, selection: "object" },
+      },
+    });
+
+    expect(store.getState().canvas.objects["note-target"]?.payload).toEqual({
+      text: "Stable target text.",
+      tone: "sand",
+    });
+    expect(store.getState().canvas.objects["note-selected"]?.payload).toEqual({
+      text: "",
+      tone: "sand",
+    });
+  });
+
+  it("refuses a deictic content update when no note or thought is selected", async () => {
+    const { adapters } = fixture();
+
+    await expect(
+      adapters.executeTool({
+        toolName: "update_object_content",
+        input: { text: "Do not guess the target." },
+        signal: new AbortController().signal,
+        context: {
+          ...context,
+          phase: { ...context.phase, hasContent: true },
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "invalid_input",
+      message:
+        "Select a note or thought, or provide its stable object ID before adding text.",
     });
   });
 
@@ -755,7 +960,7 @@ describe("canvas WebMCP adapters", () => {
     expect(result).toMatchObject({
       ok: true,
       status: "completed",
-      message: "ChatGPT transformed “Rotate me” spatially.",
+      message: "Site Tools agent transformed “Rotate me” spatially.",
     });
     expect(store.getState().canvas.objects["note-rotate"]).toMatchObject({
       rotation: -45,
@@ -818,7 +1023,7 @@ describe("canvas WebMCP adapters", () => {
     expect(grouped).toMatchObject({
       ok: true,
       status: "completed",
-      message: "ChatGPT grouped 2 objects in “Launch notes”.",
+      message: "Site Tools agent grouped 2 objects in “Launch notes”.",
     });
     expect(store.getState().canvas.objects["frame-notes"]).toMatchObject({
       type: "frame",
@@ -846,7 +1051,7 @@ describe("canvas WebMCP adapters", () => {
     expect(ungrouped).toMatchObject({
       ok: true,
       status: "completed",
-      message: "ChatGPT ungrouped “Launch notes”.",
+      message: "Site Tools agent ungrouped “Launch notes”.",
     });
     expect(store.getState().canvas.objects["frame-notes"].deletedAt).not.toBeNull();
     expect(store.getState().canvas.objects["note-one"].parentId).toBeNull();
@@ -885,7 +1090,7 @@ describe("canvas WebMCP adapters", () => {
     expect(undone).toMatchObject({
       ok: true,
       status: "completed",
-      message: "ChatGPT undid: Danny created “History note”.",
+      message: "Site Tools agent undid: Danny created “History note”.",
     });
     expect(store.getState().canvas.objects["note-history"]).toBeUndefined();
 
@@ -898,7 +1103,7 @@ describe("canvas WebMCP adapters", () => {
     expect(redone).toMatchObject({
       ok: true,
       status: "completed",
-      message: "ChatGPT redid: Danny created “History note”.",
+      message: "Site Tools agent redid: Danny created “History note”.",
     });
     expect(store.getState().canvas.objects["note-history"]).toMatchObject({
       title: "History note",
@@ -941,17 +1146,10 @@ describe("canvas WebMCP adapters", () => {
     const result = await adapters.executeTool({
       toolName: "create_object",
       input: {
-        object: {
-          id: "note-durable",
-          type: "note",
-          title: "Durable proposal",
-          x: 420,
-          y: 220,
-          width: 280,
-          height: 190,
-          zIndex: 7,
-          payload: { text: "Persist this through the room API.", tone: "sky" },
-        },
+        type: "note",
+        title: "Durable proposal",
+        text: "Persist this through the room API.",
+        tone: "sky",
       },
       signal,
       context,
@@ -960,7 +1158,15 @@ describe("canvas WebMCP adapters", () => {
     expect(dispatchMutation).toHaveBeenCalledWith(
       {
         type: "object.create",
-        object: expect.objectContaining({ id: "note-durable" }),
+        object: expect.objectContaining({
+          id: expect.stringMatching(/^note-/),
+          type: "note",
+          title: "Durable proposal",
+          payload: {
+            text: "Persist this through the room API.",
+            tone: "sky",
+          },
+        }),
       },
       signal,
     );

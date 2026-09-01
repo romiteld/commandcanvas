@@ -420,7 +420,7 @@ describe("meeting invitation StrictMode handshake", () => {
     await waitFor(() =>
       expect(
         fakes.webMcpSignals.filter((signal) => !signal.aborted),
-      ).toHaveLength(10),
+      ).toHaveLength(11),
     );
     const registrationCount = fakes.webMcpSignals.length;
     fakes.roomListener?.();
@@ -429,7 +429,7 @@ describe("meeting invitation StrictMode handshake", () => {
     );
     expect(
       fakes.webMcpSignals.filter((signal) => !signal.aborted),
-    ).toHaveLength(10);
+    ).toHaveLength(11);
     expect(fakes.disposeSession).not.toHaveBeenCalled();
     view.unmount();
     expect(fakes.webMcpSignals.every((signal) => signal.aborted)).toBe(true);

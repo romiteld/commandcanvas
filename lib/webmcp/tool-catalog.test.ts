@@ -7,14 +7,66 @@ import {
 
 describe("WebMCP live canvas state contract", () => {
   it("describes only state that the read adapter actually returns", () => {
-    expect(WEBMCP_TOOL_CATALOG.get_canvas_state.description).toBe(
-      "Read a compact semantic projection of the live canvas, selection, and recent activity receipts without changing the room.",
+    expect(WEBMCP_TOOL_CATALOG.get_canvas_state.description).toContain(
+      "this, that, or the selected object",
     );
+  });
+
+  it("accepts compact semantic creation input and rejects persistence-shaped objects", () => {
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.create_object.safeParse({
+        type: "note",
+        title: "Launch thought",
+        text: "Confirm the launch date.",
+      }).success,
+    ).toBe(true);
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.create_object.safeParse({
+        object: {
+          id: "note-agent",
+          type: "note",
+          title: "Agent note",
+          x: 40,
+          y: 80,
+          width: 260,
+          height: 180,
+          zIndex: 4,
+          payload: { text: "Internal shape", tone: "sky" },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts bounded append-only note updates by stable ID or current selection", () => {
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.update_object_content.safeParse({
+        objectId: "note-launch",
+        text: "Owner: Sarah",
+      }).success,
+    ).toBe(true);
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.update_object_content.safeParse({
+        text: "Append this to the selected thought.",
+      }).success,
+    ).toBe(true);
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.update_object_content.safeParse({
+        text: "x".repeat(1_001),
+      }).success,
+    ).toBe(false);
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.update_object_content.safeParse({
+        objectId: "note-launch",
+        text: "Replace everything",
+        operation: "replace",
+      }).success,
+    ).toBe(false);
   });
 
   it("marks every tool that can echo a human-controlled object title as untrusted", () => {
     for (const toolName of [
       "create_object",
+      "update_object_content",
       "transform_object",
       "set_object_state",
       "discard_object",

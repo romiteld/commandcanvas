@@ -17,7 +17,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 - Production build and local browser startup.
 - Infinite canvas interaction and canonical mutation pipeline.
-- WebMCP registration or execution in Chrome 153 or ChatGPT’s built-in browser.
+- WebMCP registration or execution in Chrome 153 or ChatGPT desktop app’s built-in browser.
 - Supabase Anonymous Auth, persistence, Presence, Broadcast, or two-browser synchronization.
 - Camera permission, local hand tracking, finger drawing, or pinch movement.
 - Sketch rasterization, vision-model interpretation, and structured diagram creation.
@@ -136,7 +136,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 ### UNVERIFIED
 
 - Supabase project readiness, Anonymous Auth, schema, RLS, persistence, Presence, Broadcast, Postgres Changes, reconnect, late join, and two-real-browser synchronization.
-- WebMCP registration, discovery, invocation, cancellation, lifecycle, and phase behavior in Chrome 153 or ChatGPT’s built-in browser.
+- WebMCP registration, discovery, invocation, cancellation, lifecycle, and phase behavior in Chrome 153 or ChatGPT desktop app’s built-in browser.
 - Physical touch device, stylus device, camera permission, local hand tracking, finger drawing, and pinch movement.
 - Sketch rasterization, vision-model interpretation, structured-output validation, and structured diagram creation.
 - Packet preparation, recipient snapshot, approval invalidation, staged send authorization, Resend delivery, and honest preview-only fallback.
@@ -195,7 +195,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 ### UNVERIFIED
 
-- ChatGPT built-in-browser discovery and invocation against this deployed page.
+- ChatGPT desktop app’s built-in browser discovery and invocation against this deployed page.
 - Chrome 153’s non-disruptive registration-lifecycle behavior; the installed target is Chrome 152.
 - Actual agent- or user-triggered invocation cancellation across a network operation; signal identity and refusal behavior are unit-verified only.
 - Dynamic registration churn on native Chrome or ChatGPT; static registration remains the default.
@@ -268,7 +268,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 ### UNVERIFIED
 
-- A ChatGPT built-in-browser invocation of `transform_sketch` against the deployed public URL.
+- A ChatGPT desktop app’s built-in browser invocation of `transform_sketch` against the deployed public URL.
 - Real WebMCP cancellation while an OpenAI request is in flight. Signal identity and cancellation refusal remain unit-verified only.
 - Vision interpretation of handwriting or a camera-authored multi-stroke sketch; the live source used unlabeled geometric strokes.
 
@@ -356,7 +356,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 ### UNVERIFIED
 
-- ChatGPT built-in-browser discovery or tool invocation. Rollout access was not available in this environment.
+- ChatGPT desktop app’s built-in browser discovery or tool invocation. Rollout access was not available in this environment.
 - Chrome 153 lifecycle behavior. The installed target is Chrome 152 with its WebMCP testing feature.
 - Real human-hand pointing/pinch accuracy and physical-camera latency across lighting, webcams, and devices.
 - Real Resend submission or delivery. The public environment is intentionally preview-only.
@@ -391,7 +391,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 ### UNVERIFIED
 
-- ChatGPT built-in-browser Site Tools discovery, selection, confirmation UI, or invocation. No accessible built-in-browser rollout surface was available from this environment.
+- ChatGPT desktop app’s built-in browser Site Tools discovery, selection, confirmation UI, or invocation. No accessible built-in-browser rollout surface was available from this environment.
 - Dynamic registration at a public HTTPS deployment origin. It passed in a local production bundle backed by deployed APIs; public production intentionally remains in stable static mode until a separate dynamic deployment is exercised.
 - A real microphone plus the browser's external speech-recognition service. The production-browser test used an explicitly deterministic provider; typed commands are the guaranteed fallback.
 - Physical human-hand pointing/pinch accuracy, camera-to-canvas latency, lighting/occlusion behavior, and actual camera hardware. This host exposes no `/dev/video*` capture device.
@@ -421,7 +421,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 ### UNVERIFIED
 
 - The integrated release-candidate bytes have not yet been pushed and deployed. GitHub Actions, exact-commit Vercel deployment, the canonical public alias, and public-origin reruns remain release steps rather than completed evidence at this checkpoint.
-- ChatGPT built-in-browser discovery or invocation remains unavailable in this environment.
+- ChatGPT desktop app’s built-in browser discovery or invocation remains unavailable in this environment.
 - A real microphone/provider path, physical hand/camera behavior, physical touch/stylus hardware, and real Resend submission/delivery remain unverified at their named external boundaries.
 
 ### CUT
@@ -445,7 +445,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 ### UNVERIFIED
 
-- ChatGPT built-in-browser Site Tools discovery or invocation remains unavailable in this environment.
+- ChatGPT desktop app’s built-in browser Site Tools discovery or invocation remains unavailable in this environment.
 - Dynamic registration has been verified in the fresh production bundle and Chrome 153 but not at a public HTTPS deployment origin. Public production remains intentionally static.
 - A real microphone/provider path, physical hand/camera behavior, physical touch/stylus hardware, and real Resend submission/delivery remain unverified at their named boundaries.
 - Supabase leaked-password screening is disabled and two private foreign keys lack covering indexes. Neither affects the anonymous-only judge path at current scale, but both should be revisited before adding password accounts or production-scale retention.
@@ -485,7 +485,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 ### WORKING
 
-- The current WebMCP catalog contains ten tools: `get_canvas_state`, `create_object`, `transform_object`, `set_object_state`, `discard_object`, `organize_objects`, `history_action`, `transform_sketch`, `prepare_meeting_packet`, and `request_packet_send`. Static and dynamic registration use the same execute-time guards.
+- The current WebMCP catalog contains eleven tools: `get_canvas_state`, `create_object`, `update_object_content`, `transform_object`, `set_object_state`, `discard_object`, `organize_objects`, `history_action`, `transform_sketch`, `prepare_meeting_packet`, and `request_packet_send`. Static and dynamic registration use the same execute-time guards.
 - The optional Live voice control creates a regular `gpt-realtime-2.1` WebRTC session after an explicit user start. Its narrower tool catalog can create safe canvas objects, manipulate selected objects, focus locally, group, ungroup, rotate, undo, redo, and transform a selected sketch. It cannot discard objects, operate rooms, approve packets, stage email, or send email. Except for local-only focus, submitted tool output is not represented as completed until the shared mutation receipt arrives.
 - Paid voice admission is server-only, restricted to demo-room members, durably rate-limited, and bounded to a ten-minute client session. The separately budgeted provider key never reaches the browser.
 - Modifier and touch-friendly multi-selection, nested semantic grouping and ungrouping, 15-degree rotation, and shared undo/redo use the canonical command, revision, receipt, persistence, and collaboration paths. Moving or rotating an outer frame transforms its descendants in the same mutation and receipt.
@@ -506,8 +506,8 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 ### UNVERIFIED
 
 - The enhancement source has not been pushed and promoted to the canonical Vercel deployment. The public URL still represents the earlier verified release, not this checkpoint.
-- Native Chrome 153 discovery, invocation, cancellation, or lifecycle behavior against the current ten-tool source is unverified. Earlier Chrome 153 evidence applies only to the earlier eight-tool release checkpoint.
-- ChatGPT built-in-browser Site Tools discovery, selection, confirmation UI, and invocation remain unverified. The paid Realtime voice provider run is a different product boundary and does not establish Site Tools behavior.
+- Native Chrome 153 discovery, invocation, cancellation, or lifecycle behavior against the current eleven-tool source is unverified. Earlier Chrome 153 evidence applies only to the earlier eight-tool release checkpoint.
+- ChatGPT desktop app’s built-in browser Site Tools discovery, selection, confirmation UI, and invocation remain unverified. The paid Realtime voice provider run is a different product boundary and does not establish Site Tools behavior.
 - Physical iPhone or other mobile-device camera, microphone, touch, and media behavior remain unverified. The current browser evidence used emulated profiles, controlled audio, and fake-camera inputs.
 - Physical human-hand pointing, pinch, bimanual resize, open-palm dwell, and edge-motion accuracy across lighting, occlusion, webcams, and mobile hardware remain unverified.
 - Cross-network peer-to-peer media remains unverified. No TURN relay or SFU exists, so restrictive or symmetric NATs may fail. ICE can disclose network-address information to authorized room participants, and the configured STUN provider observes traversal requests.
@@ -541,7 +541,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 ### UNVERIFIED
 
 - This checkpoint has not yet been committed, pushed, promoted to the canonical Vercel alias, or rerun against the public HTTPS origin.
-- ChatGPT built-in-browser Site Tools discovery, selection, confirmation UI, and invocation remain unverified because that rollout surface is not accessible from this environment. Native Chrome and ChatGPT are separate boundaries.
+- ChatGPT desktop app’s built-in browser Site Tools discovery, selection, confirmation UI, and invocation remain unverified because that rollout surface is not accessible from this environment. Native Chrome and ChatGPT are separate boundaries.
 - A physical person has not yet exercised YOLO pointing, finger drawing, pinch acquisition, two-hand resize, open-palm dwell, or edge throws on an iPhone or webcam. Actual lighting, distance, occlusion, latency, thermals, and ergonomics remain unverified despite the real worker and controlled-camera evidence.
 - Physical touch/stylus pressure, tilt, palm rejection, and device ergonomics remain unverified. Trusted browser touch and pen event paths are automated evidence only.
 - Cross-network peer-to-peer media, restrictive NATs, TURN, and SFU behavior remain unverified. The slice has no TURN or SFU.
@@ -574,7 +574,7 @@ This ledger records observed behavior only. An integration remains **UNVERIFIED*
 
 ### UNVERIFIED
 
-- ChatGPT's built-in-browser Site Tools discovery, selection, confirmation UI, or invocation remains unverified because that rollout surface is not available in this environment. Native Chrome 153 is verified; it is not evidence for the separate ChatGPT host.
+- ChatGPT desktop app’s built-in browser Site Tools discovery, selection, confirmation UI, or invocation remains unverified because that rollout surface is not available in this environment. Native Chrome 153 is verified; it is not evidence for the separate ChatGPT host.
 - Public dynamic registration remains unverified at a second public dynamic HTTPS deployment. The canonical public environment intentionally uses the stable static catalog; dynamic registration is covered in a fresh production bundle and native Chrome 153, while execute-time guards remain authoritative in either mode.
 - The microphone provider path is verified with controlled browser audio, not a physical microphone. A physical person has not yet calibrated and exercised YOLO pointing, finger drawing, one-hand pinch, two-hand resize, open-palm dwell, or edge throws on an iPhone or webcam. Lighting, distance, occlusion, latency, thermals, mirrored-camera ergonomics, and device-specific accuracy remain physical-device checks.
 - Physical touch and stylus pressure, tilt, palm rejection, and device ergonomics remain unverified. Trusted browser touch/pen events and WebKit device profiles are automated evidence only.
@@ -614,7 +614,7 @@ This checkpoint is a draft for the current source candidate. It does not replace
 - The Checkpoint 18 candidate has completed its integrated source gate and hosted general-visual migration, but has not yet completed commit, push, Vercel promotion, or exact public-origin rerun. Checkpoint 17 remains the latest public evidence; its results do not automatically verify this changed source.
 - A physical microphone has not exercised the new thought-card flow. Component and controlled Realtime event coverage do not establish speech recognition accuracy, interruption behavior, latency, or ergonomics for a person speaking into a specific device.
 - A physical person has not exercised the current hand-navigation candidate on an iPhone or webcam. Browser state-machine coverage does not establish pointing, pinch, open-palm, bimanual, edge, occlusion, lighting, distance, thermal, or mirrored-camera accuracy.
-- ChatGPT built-in-browser Site Tools remains a separate unverified host boundary. In-page GPT Realtime behavior and native Chrome WebMCP behavior are not evidence of ChatGPT-host invocation.
+- ChatGPT desktop app’s built-in browser Site Tools remains a separate unverified host boundary. In-page GPT Realtime behavior and native Chrome WebMCP behavior are not evidence of ChatGPT-host invocation.
 - Public dynamic WebMCP registration, cross-network restrictive-NAT meeting media, physical touch/stylus ergonomics, and real public Resend delivery retain the honest boundaries recorded at Checkpoint 17.
 
 ### CUT
@@ -651,7 +651,7 @@ This checkpoint is a draft for the current source candidate. It does not replace
 - The native relay's public capability route and static-image CUDA protocol are verified, but an exact public CommandCanvas browser has not yet completed the consented session route, one-use WebSocket capability, live camera frame, semantic result, visible canvas action, consent revocation, and automatic local fallback as one end-to-end run.
 - Supabase delivered a real first-time OTP email containing the configured six-digit code, and the hosted SQL invitation probes passed. A real browser has not yet completed both new-address and returning-address OTP verification, host room creation, invitation delivery or copy fallback, invited-email acceptance, participant join, and reload reconstruction against the exact deployed candidate.
 - The canonical Vercel project does not yet have a safely supplied CommandCanvas `RESEND_API_KEY`, verified sender, and final invitation and packet allowlists. Real invitation submission, custom Supabase SMTP through Resend, and real public packet delivery remain unclaimed. Existing credentials for another project were not copied or rotated.
-- ChatGPT built-in-browser Site Tools, public dynamic WebMCP registration, physical touch and stylus ergonomics, and cross-network restrictive-NAT media remain separate unverified boundaries.
+- ChatGPT desktop app’s built-in browser Site Tools, public dynamic WebMCP registration, physical touch and stylus ergonomics, and cross-network restrictive-NAT media remain separate unverified boundaries.
 
 ### CUT
 
@@ -679,7 +679,7 @@ This checkpoint is a draft for the current source candidate. It does not replace
 ### UNVERIFIED
 
 - A fresh physical-device pass is still required for the final public release: sustained finger-drawing continuity, reliable one-hand pinch acquisition and release, object movement to every edge, two-hand resize and zoom, open-palm pan, recoverable throw, minimize docking, lighting, occlusion, latency, thermals, and relay-to-local fallback are not inferred from automated poses or the two still captures.
-- ChatGPT built-in-browser Site Tools discovery, confirmation UI, and invocation remain unverified because that rollout surface was unavailable. Native Chrome 153 evidence remains a separate verified boundary.
+- ChatGPT desktop app’s built-in browser Site Tools discovery, confirmation UI, and invocation remain unverified because that rollout surface was unavailable. Native Chrome 153 evidence remains a separate verified boundary.
 - Real public Resend delivery remains intentionally unverified and disabled without the dedicated key, verified sender, and exact allowlists. The public packet path stages and records an honest preview-only result rather than claiming delivery.
 - Public dynamic WebMCP registration, physical touch or stylus ergonomics, and cross-network restrictive-NAT meeting media remain separate unverified boundaries.
 
@@ -784,7 +784,7 @@ rewriting their historical evidence:
   separate AGPL repository and exact public source commit are published and
   linked. Local MediaPipe remains the MIT application fallback.
 - WebMCP Site Tools are exposed to supported agent hosts. Native Chrome,
-  ChatGPT's built-in browser, and in-page Realtime voice remain separate
+  ChatGPT desktop app's built-in browser, and in-page Realtime voice remain separate
   verification boundaries.
 
 ## Checkpoint 23: exact MIT production and bounded provider verification
@@ -838,7 +838,7 @@ rewriting their historical evidence:
 
 ### UNVERIFIED
 
-- ChatGPT built-in-browser Site Tools discovery, confirmation UI, and tool
+- ChatGPT desktop app’s built-in browser Site Tools discovery, confirmation UI, and tool
   invocation remain unverified. Native Chrome 153 and in-page Realtime voice are
   separate boundaries.
 - The microphone provider path is verified with controlled audio, not a
@@ -944,7 +944,7 @@ rewriting their historical evidence:
   matrix with 28 applicable scenarios passed, 46 explicit hardware, provider,
   credential, or project gates skipped, and zero failures. Covered targets were
   Chromium desktop, Chromium mobile, iPhone-profile WebKit, and native Chrome
-  153 WebMCP registration against the current ten-tool catalog.
+  153 WebMCP registration against the then-current ten-tool catalog.
 - A separate controlled-camera matrix passed the MediaPipe lifecycle on desktop
   and mobile plus classic-WASM recovery on desktop: 5 passed, 3 deliberate
   project skips, zero failures. It exercised camera permission, worker, WASM and
@@ -965,7 +965,7 @@ rewriting their historical evidence:
   release, full-edge reach, one-hand movement, two-hand resize and zoom,
   open-palm pan, recoverable throw, minimize docking, mirrored-camera
   ergonomics, lighting, occlusion, latency, thermals, or relay-to-local fallback.
-- The ChatGPT built-in browser remains unverified. Native Chrome 153 proves the
+- The ChatGPT desktop app’s built-in browser remains unverified. Native Chrome 153 proves the
   current WebMCP API contract, not ChatGPT rollout, confirmation, or invocation.
 - Real public Resend invitation and packet delivery remain disabled until the
   owner places a dedicated Resend key and webhook signing secret directly into
@@ -1025,7 +1025,7 @@ rewriting their historical evidence:
   two-hand release and resize, open-palm pan, recoverable throw, mirrored-camera
   ergonomics, lighting, occlusion, latency, and thermals. Controlled media and
   browser profiles are evidence for lifecycle and layout, not physical accuracy.
-- The ChatGPT built-in browser Site Tools rollout and invocation surface remain
+- The ChatGPT desktop app’s built-in browser Site Tools rollout and invocation surface remain
   unverified. Native Chrome 153 verifies the browser API contract only.
 - Real GPT Realtime microphone/provider behavior, live two-browser media, and a
   current-release real vision-provider request were not rerun in this release
@@ -1118,7 +1118,7 @@ rewriting their historical evidence:
   two-hand resize and canvas zoom, open-palm pan, minimize, recoverable edge
   throw, hand crossing, lighting, occlusion, sustained cadence, thermals, and
   local fallback during relay loss.
-- ChatGPT's built-in-browser Site Tools discovery, confirmation, voice-guidance
+- ChatGPT desktop app’s built-in browser Site Tools discovery, confirmation, voice-guidance
   handoff, and live-page invocation remain unverified. Native Chrome 153 and
   in-page GPT Realtime are separate verified boundaries and are not substitutes
   for the ChatGPT host.
@@ -1235,7 +1235,7 @@ rewriting their historical evidence:
 
 - At this checkpoint the separate relay source publication still required a
   repository-owner action, so the relay remained disabled.
-- Physical phone gesture accuracy and ChatGPT built-in-browser Site Tools remain
+- Physical phone gesture accuracy and ChatGPT desktop app’s built-in browser Site Tools remain
   external target-surface checks. The public release is available for those
   rehearsals, but neither is inferred from unit, browser-profile, native Chrome,
   or provider evidence.
@@ -1322,7 +1322,7 @@ rewriting their historical evidence:
   refresh after this deployment. The retained-identity/missing-tab-descriptor
   mechanism is verified in a public browser, but that does not constitute an
   observation of the user's physical phone session.
-- ChatGPT built-in-browser Site Tools invocation, physical phone hand-control
+- ChatGPT desktop app’s built-in browser Site Tools invocation, physical phone hand-control
   accuracy, and other physical-device checks remain the honest external
   boundaries recorded in the preceding checkpoints. This room-lifecycle
   release does not change or reclassify them.
@@ -1393,7 +1393,7 @@ rewriting their historical evidence:
 - The deterministic camera source proves permission, stream, worker, WASM,
   model-loading, shutdown, and layout behavior. It does not prove hand-pose
   accuracy or detector latency on a physical device.
-- ChatGPT built-in-browser Site Tools invocation remains a separate target-host
+- ChatGPT desktop app’s built-in browser Site Tools invocation remains a separate target-host
   check. Native browser and in-page tests do not substitute for that rollout
   surface.
 - The candidate is not yet claimed public in this checkpoint. Public status
@@ -1454,7 +1454,7 @@ rewriting their historical evidence:
   layout, and shutdown path; it does not prove fingertip drawing accuracy,
   learned pinch ergonomics, full-canvas reach, two-hand behavior, device heat,
   occlusion tolerance, or latency on the user's phone and camera.
-- ChatGPT built-in-browser Site Tools invocation remains a distinct host-rollout
+- ChatGPT desktop app’s built-in browser Site Tools invocation remains a distinct host-rollout
   boundary. The public Chromium checks do not substitute for a Site Tools call
   made by ChatGPT against the same live page and session.
 
@@ -1572,7 +1572,7 @@ rewriting their historical evidence:
 - The local browser lifecycle used an admin-created, confirmed test user and a
   programmatically installed Supabase session. It verifies the permanent-email
   account and credential lifecycle, not delivery or entry of an OTP email.
-- ChatGPT built-in-browser Site Tools invocation remains unverified. Native
+- ChatGPT desktop app’s built-in browser Site Tools invocation remains unverified. Native
   Chrome, API, and unit tests do not substitute for a call made by ChatGPT
   against the same live page and session.
 
@@ -1631,7 +1631,7 @@ rewriting their historical evidence:
 - The account browser probe installs a confirmed test session directly. It does
   not prove delivery or entry of a fresh Supabase OTP email, although the OTP
   flow remains implemented and separately covered by its existing tests.
-- ChatGPT built-in-browser Site Tools invocation remains a host-rollout check.
+- ChatGPT desktop app’s built-in browser Site Tools invocation remains a host-rollout check.
   Native browser tests do not substitute for a tool call made by ChatGPT against
   the same live page and session.
 - Physical phone hand accuracy, fingertip drawing ergonomics, pinch reliability,
@@ -1737,7 +1737,7 @@ rewriting their historical evidence:
   on this candidate. A real Resend invitation, OTP delivery and entry, approved
   packet delivery, and webhook reconciliation also require fresh Production
   acceptance.
-- ChatGPT built-in-browser Site Tools invocation remains a host-rollout check.
+- ChatGPT desktop app’s built-in browser Site Tools invocation remains a host-rollout check.
   Native Chrome registration does not substitute for a tool invocation made by
   ChatGPT against the same live page and session.
 - Supabase Realtime may cache authorization for an already-open WebSocket. The
@@ -1865,7 +1865,7 @@ rewriting their historical evidence:
   covered and the prior production API/database results are known, but an
   automated confirmed session is not a substitute for entering a newly
   delivered OTP on the user's device.
-- ChatGPT built-in-browser Site Tools invocation remains a host-rollout check.
+- ChatGPT desktop app’s built-in browser Site Tools invocation remains a host-rollout check.
   The application correctly distinguishes the surrounding ChatGPT account from
   CommandCanvas room identity, but native browser registration does not prove a
   tool call made by ChatGPT against the same live page and session.

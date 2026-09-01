@@ -571,7 +571,7 @@ function resolveReceiptSource(
 ): CanvasCommandSource {
   const allowed =
     actorType === "participant"
-      ? new Set<CanvasCommandSource>(["collaborator", "system"])
+      ? new Set<CanvasCommandSource>(["collaborator", "webmcp", "system"])
       : actorType === "agent"
         ? new Set<CanvasCommandSource>(["webmcp", "system"])
         : new Set<CanvasCommandSource>([
@@ -581,6 +581,7 @@ function resolveReceiptSource(
             "gesture",
             "voice",
             "typed",
+            "webmcp",
             "system",
           ]);
   if (!allowed.has(explicit))

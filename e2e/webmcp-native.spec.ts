@@ -13,7 +13,7 @@ test("registers the stable catalog on Chrome's native WebMCP surface", async ({
     page
       .getByRole("complementary", { name: "System status drawer" })
       .getByRole("region", { name: "Service status" })
-      .getByText("10 Site Tools registered", { exact: true }),
+      .getByText("11 Site Tools registered", { exact: true }),
   ).toBeVisible();
 
   const toolNames = await page.evaluate(async () => {
@@ -38,6 +38,7 @@ test("registers the stable catalog on Chrome's native WebMCP surface", async ({
     "set_object_state",
     "transform_object",
     "transform_sketch",
+    "update_object_content",
   ]);
   expect(browserErrors).toEqual([]);
 });

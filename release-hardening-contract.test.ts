@@ -138,11 +138,11 @@ describe("user-owned OpenAI credential boundary", () => {
   });
 });
 
-describe("account-first public positioning", () => {
-  it("puts the signed workspace before the limited judge preview", () => {
+describe("workspace and no-signup preview positioning", () => {
+  it("puts the Email-OTP workspace before the no-signup judge preview", () => {
     const readme = read("README.md");
-    const signedWorkspace = readme.indexOf("Signed workspace:");
-    const judgePreview = readme.indexOf("Limited judge preview:");
+    const signedWorkspace = readme.indexOf("Email-OTP workspace:");
+    const judgePreview = readme.indexOf("No-signup judge preview:");
 
     expect(signedWorkspace).toBeGreaterThanOrEqual(0);
     expect(judgePreview).toBeGreaterThan(signedWorkspace);
@@ -157,7 +157,7 @@ describe("account-first public positioning", () => {
   ])("describes the public preview boundary in %s", (relativePath) => {
     const copy = read(relativePath);
 
-    expect(copy).toMatch(/limited judge preview|bounded judge preview/i);
+    expect(copy).toMatch(/no-signup judge preview/i);
     expect(copy).toMatch(/temporary/i);
   });
 });

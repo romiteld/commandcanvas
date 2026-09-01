@@ -247,6 +247,10 @@ describe("OpenAI diagram transformer", () => {
 });
 
 describe("OpenAI diagram configuration", () => {
+  it("requires the caller to provide an explicit credential environment", () => {
+    expect(readOpenAiDiagramConfig).toHaveLength(1);
+  });
+
   it("defaults to Terra and accepts Sol explicitly", () => {
     expect(
       readOpenAiDiagramConfig({

@@ -24,4 +24,13 @@ describe("resolveDocumentWebMcpTarget", () => {
       }),
     ).toBeNull();
   });
+
+  it("keeps one target identity for one live modelContext surface", () => {
+    const modelContext = { registerTool: vi.fn().mockResolvedValue(undefined) };
+
+    const first = resolveDocumentWebMcpTarget({ modelContext });
+    const second = resolveDocumentWebMcpTarget({ modelContext });
+
+    expect(first).toBe(second);
+  });
 });

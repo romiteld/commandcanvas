@@ -38,13 +38,13 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
 
     render(<LocalCommandCanvas />);
 
-    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(10));
-    expect(screen.getByText("10 Site Tools registered")).toBeInTheDocument();
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(11));
+    expect(screen.getByText("11 Site Tools registered")).toBeInTheDocument();
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
+      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
     );
     expect(
-      screen.getByText("10 Site Tools registered to this page"),
+      screen.getByText("11 Site Tools registered to this page"),
     ).toBeVisible();
     expect(
       screen.getByText("No Site Tool has been invoked on this page yet."),
@@ -52,6 +52,7 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
     expect(registered.map((tool) => tool.name)).toEqual([
       "get_canvas_state",
       "create_object",
+      "update_object_content",
       "transform_object",
       "set_object_state",
       "discard_object",
@@ -69,17 +70,10 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
     await act(async () => {
       result = await createObject.execute(
         {
-          object: {
-            id: "note-site-tools",
-            type: "note",
-            title: "Shared agent action",
-            x: 240,
-            y: 160,
-            width: 280,
-            height: 190,
-            zIndex: 1,
-            payload: { text: "Same live page, same semantic state.", tone: "sky" },
-          },
+          type: "note",
+          title: "Shared agent action",
+          text: "Same live page, same semantic state.",
+          tone: "sky",
         },
         { signal: controller.signal },
       );
@@ -88,17 +82,113 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
     expect(result).toMatchObject({
       ok: true,
       status: "completed",
-      message: "ChatGPT created “Shared agent action”.",
+      message: "Site Tools agent created “Shared agent action”.",
     });
     expect(
       screen.getByRole("button", { name: "Select Shared agent action" }),
     ).toBeInTheDocument();
     expect(
-      screen.getAllByText("ChatGPT created “Shared agent action”.").length,
+      screen.getAllByText("Site Tools agent created “Shared agent action”.").length,
     ).toBeGreaterThan(0);
     expect(screen.getAllByText("R1 · webmcp").length).toBeGreaterThan(0);
     expect(screen.getByText("A page Site Tool was invoked")).toBeVisible();
     expect(screen.getByText("create object")).toBeVisible();
     expect(screen.getByText("COMPLETED")).toBeVisible();
+  });
+
+  it("registers once when the document surface arrives after mount and aborts it on disposal", async () => {
+    delete (document as unknown as Record<string, unknown>).modelContext;
+    const signals: AbortSignal[] = [];
+    const registerTool = vi.fn(
+      async (_tool: RegisteredWebMcpTool, options: { signal: AbortSignal }) => {
+        signals.push(options.signal);
+      },
+    );
+    const view = render(<LocalCommandCanvas />);
+
+    expect(
+      await screen.findAllByText("Site Tools unavailable"),
+    ).not.toHaveLength(0);
+    Object.defineProperty(document, "modelContext", {
+      value: { registerTool },
+      configurable: true,
+    });
+
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(11));
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await Promise.resolve();
+    expect(registerTool).toHaveBeenCalledTimes(11);
+    expect(signals.every((signal) => !signal.aborted)).toBe(true);
+
+    view.unmount();
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it(
+    "recovers when the host exposes document.modelContext after the startup window",
+    async () => {
+      delete (document as unknown as Record<string, unknown>).modelContext;
+      const signals: AbortSignal[] = [];
+      const registerTool = vi.fn(
+        async (_tool: RegisteredWebMcpTool, options: { signal: AbortSignal }) => {
+          signals.push(options.signal);
+        },
+      );
+      const view = render(<LocalCommandCanvas />);
+
+      await screen.findAllByText("Site Tools unavailable");
+      await new Promise((resolve) => window.setTimeout(resolve, 3_200));
+      Object.defineProperty(document, "modelContext", {
+        value: { registerTool },
+        configurable: true,
+      });
+
+      await waitFor(
+        () => expect(registerTool).toHaveBeenCalledTimes(11),
+        { timeout: 1_500 },
+      );
+      view.unmount();
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      await new Promise((resolve) => window.setTimeout(resolve, 1_100));
+      expect(registerTool).toHaveBeenCalledTimes(11);
+    },
+    8_000,
+  );
+
+  it("aborts the old catalog before registering a replacement document surface", async () => {
+    const oldSignals: AbortSignal[] = [];
+    const newSignals: AbortSignal[] = [];
+    const oldRegisterTool = vi.fn(
+      async (_tool: RegisteredWebMcpTool, options: { signal: AbortSignal }) => {
+        oldSignals.push(options.signal);
+      },
+    );
+    Object.defineProperty(document, "modelContext", {
+      value: { registerTool: oldRegisterTool },
+      configurable: true,
+    });
+    const view = render(<LocalCommandCanvas />);
+    await waitFor(() => expect(oldRegisterTool).toHaveBeenCalledTimes(11));
+
+    const newRegisterTool = vi.fn(
+      async (_tool: RegisteredWebMcpTool, options: { signal: AbortSignal }) => {
+        newSignals.push(options.signal);
+      },
+    );
+    Object.defineProperty(document, "modelContext", {
+      value: { registerTool: newRegisterTool },
+      configurable: true,
+    });
+    act(() => window.dispatchEvent(new Event("focus")));
+
+    await waitFor(() => expect(newRegisterTool).toHaveBeenCalledTimes(11));
+    expect(oldSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(newSignals.every((signal) => !signal.aborted)).toBe(true);
+
+    view.unmount();
+    expect(newSignals.every((signal) => signal.aborted)).toBe(true);
   });
 });

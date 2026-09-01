@@ -44,6 +44,7 @@ const expectedInitialTools =
         "prepare_meeting_packet",
         "set_object_state",
         "transform_object",
+        "update_object_content",
       ]
     : [
         "create_object",
@@ -56,6 +57,7 @@ const expectedInitialTools =
         "set_object_state",
         "transform_object",
         "transform_sketch",
+        "update_object_content",
       ];
 
 test("exercises Chrome 153's native WebMCP lifecycle and client-side cancellation", async ({
@@ -119,65 +121,33 @@ test("exercises Chrome 153's native WebMCP lifecycle and client-side cancellatio
     });
 
     const noteResult = await invokeNativeTool(page, "create_object", {
-      object: {
-        id: "chrome-native-note",
-        type: "note",
-        title: "Chrome 153 native proof",
-        x: 780,
-        y: 430,
-        width: 300,
-        height: 150,
-        zIndex: 10,
-        payload: {
-          text: "Created through document.modelContext.executeTool.",
-          tone: "sky",
-        },
-      },
+      type: "note",
+      title: "Chrome 153 native proof",
+      text: "Created through document.modelContext.executeTool.",
+      tone: "sky",
     });
     expect(noteResult).toMatchObject({
       ok: true,
       status: "completed",
       data: {
         revision: 4,
-        affectedObjectIds: ["chrome-native-note"],
+        affectedObjectIds: [expect.any(String)],
       },
     });
     await expect(
       page.getByRole("button", { name: "Select Chrome 153 native proof" }),
     ).toBeVisible();
-    await expect(page.getByText("R4 · webmcp")).toBeVisible();
+    const agentReceipt = page.getByRole("button", {
+      name: "Open activity drawer: Danny created “Chrome 153 native proof”.",
+    });
+    await expect(agentReceipt).toBeVisible();
+    await expect(
+      agentReceipt.getByText("R4 · webmcp", { exact: true }),
+    ).toBeVisible();
 
-    const sketchResult = await invokeNativeTool(page, "create_object", {
-      object: {
-        id: "chrome-native-sketch",
-        type: "sketch",
-        title: "Chrome 153 sketch",
-        x: 120,
-        y: 680,
-        width: 320,
-        height: 180,
-        zIndex: 11,
-        payload: {
-          strokes: [
-            {
-              id: "chrome-proof-stroke",
-              color: "#172033",
-              width: 5,
-              points: [
-                { x: 24, y: 32 },
-                { x: 140, y: 80 },
-                { x: 260, y: 44 },
-              ],
-            },
-          ],
-        },
-      },
-    });
-    expect(sketchResult).toMatchObject({
-      ok: true,
-      status: "completed",
-      data: { revision: 5 },
-    });
+    // Freehand strokes remain a human-input artifact. The WebMCP creation tool
+    // deliberately accepts semantic objects rather than raw persistence data.
+    await createArchitectureSketch(page);
 
     await verifyRegistrationLifecycle(page, expectedMode);
     await verifyClientSideCancellation(page);
@@ -208,7 +178,7 @@ test("exercises Chrome 153's native WebMCP lifecycle and client-side cancellatio
 });
 
 async function verifyRegistrationLifecycle(page: Page, mode: string) {
-  await page.getByRole("button", { name: "Select Chrome 153 sketch" }).click();
+  await page.getByRole("button", { name: "Select Rough sketch" }).click();
 
   if (mode === "static") {
     await expect.poll(() => nativeToolNames(page)).toEqual(expectedInitialTools);
@@ -220,6 +190,29 @@ async function verifyRegistrationLifecycle(page: Page, mode: string) {
     [...expectedInitialTools, "transform_sketch"].sort(),
   );
   expect(await toolChangeCount(page)).toBeGreaterThan(0);
+  const selectedState = await invokeNativeTool(page, "get_canvas_state", {
+    scope: "selected",
+    includeReceipts: false,
+  });
+  const sketchId = (
+    selectedState as { data?: { selectedObjectId?: unknown } }
+  ).data?.selectedObjectId;
+  expect(sketchId).toEqual(expect.any(String));
+  if (typeof sketchId !== "string")
+    throw new Error("The selected human sketch did not expose a stable ID.");
+
+  // The current credential architecture has no deployment-owner provider key.
+  // Supply a syntactically valid, non-secret session key so the request reaches
+  // Playwright's deterministic route before any external provider boundary.
+  await page
+    .getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" })
+    .click();
+  await page
+    .getByLabel("Your OpenAI API key")
+    .fill(["s", "k", "-", "a".repeat(24)].join(""));
+  await page
+    .getByRole("button", { name: "Close ChatGPT command drawer" })
+    .click();
 
   let releaseResponse: (() => void) | undefined;
   let requestObserved: (() => void) | undefined;
@@ -244,13 +237,18 @@ async function verifyRegistrationLifecycle(page: Page, mode: string) {
   await page.route("**/api/rooms/*/transform-sketch", routeHandler);
 
   await startNativeInvocation(page, "transform_sketch", {
-    sketchId: "chrome-native-sketch",
+    sketchId,
     instruction: "Verify lifecycle separation.",
     outputKind: "architecture",
   });
   await observed;
 
-  await page.getByRole("button", { name: "Select Launch readiness" }).click();
+  // The selected sketch can legitimately overlap the launch board in world
+  // space. Invoke the board's real selection control directly so this
+  // lifecycle probe tests registration churn rather than pointer hit-testing.
+  await page
+    .getByRole("button", { name: "Select Launch readiness" })
+    .evaluate((button: HTMLButtonElement) => button.click());
   await expect.poll(() => nativeToolNames(page)).toEqual(expectedInitialTools);
 
   releaseResponse?.();
@@ -278,7 +276,7 @@ async function verifyClientSideCancellation(page: Page) {
 
   const routeHandler = async (route: Route) => {
     const body = route.request().postData() ?? "";
-    if (!body.includes("chrome-client-aborted-note")) {
+    if (!body.includes("Client abort probe")) {
       await route.continue();
       return;
     }
@@ -305,17 +303,10 @@ async function verifyClientSideCancellation(page: Page) {
     page,
     "create_object",
     {
-      object: {
-        id: "chrome-client-aborted-note",
-        type: "note",
-        title: "Client abort probe",
-        x: 900,
-        y: 650,
-        width: 260,
-        height: 120,
-        zIndex: 12,
-        payload: { text: "Client-side cancellation probe", tone: "coral" },
-      },
+      type: "note",
+      title: "Client abort probe",
+      text: "Client-side cancellation probe",
+      tone: "coral",
     },
     true,
   );
@@ -329,6 +320,66 @@ async function verifyClientSideCancellation(page: Page) {
     name: "AbortError",
   });
   await page.unroute("**/api/rooms/*/commands", routeHandler);
+}
+
+async function createArchitectureSketch(page: Page) {
+  await page.getByRole("button", { name: "Create sketch" }).click();
+  const surface = page.getByRole("img", { name: "Sketch draft surface" });
+  const bounds = await surface.boundingBox();
+  if (!bounds) throw new Error("Sketch surface geometry is unavailable.");
+
+  await drawStroke(page, bounds, [
+    [0.13, 0.2],
+    [0.39, 0.2],
+    [0.39, 0.55],
+    [0.13, 0.55],
+    [0.13, 0.2],
+  ]);
+  await drawStroke(page, bounds, [
+    [0.61, 0.2],
+    [0.87, 0.2],
+    [0.87, 0.55],
+    [0.61, 0.55],
+    [0.61, 0.2],
+  ]);
+  await drawStroke(page, bounds, [
+    [0.39, 0.37],
+    [0.61, 0.37],
+  ]);
+  await drawStroke(page, bounds, [
+    [0.55, 0.3],
+    [0.61, 0.37],
+    [0.55, 0.44],
+  ]);
+
+  await expect(page.getByText("4 draft strokes")).toBeVisible();
+  await page.getByRole("button", { name: "Finish sketch" }).click();
+  await expect(
+    page
+      .getByLabel("Canvas coordinates")
+      .getByText("Revision 5", { exact: true }),
+  ).toBeVisible({ timeout: 20_000 });
+}
+
+async function drawStroke(
+  page: Page,
+  bounds: { x: number; y: number; width: number; height: number },
+  points: ReadonlyArray<readonly [number, number]>,
+) {
+  const [first, ...rest] = points;
+  if (!first) throw new Error("A sketch stroke requires at least one point.");
+  await page.mouse.move(
+    bounds.x + bounds.width * first[0],
+    bounds.y + bounds.height * first[1],
+  );
+  await page.mouse.down();
+  for (const [x, y] of rest)
+    await page.mouse.move(
+      bounds.x + bounds.width * x,
+      bounds.y + bounds.height * y,
+      { steps: 3 },
+    );
+  await page.mouse.up();
 }
 
 async function nativeToolNames(page: Page) {

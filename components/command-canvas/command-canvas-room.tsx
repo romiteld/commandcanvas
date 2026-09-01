@@ -2710,7 +2710,10 @@ export function CommandCanvasRoom({
               <div className="canvas-empty-state">
                 <span className="empty-crosshair" aria-hidden="true" />
                 <p>No objects yet</p>
-                <span>Speak to ChatGPT, draw, or choose an object below.</span>
+                <span>
+                  Ask through Site Tools, start Live Voice, draw, or choose an
+                  object below.
+                </span>
               </div>
             ) : null}
           </div>

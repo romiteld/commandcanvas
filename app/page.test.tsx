@@ -71,7 +71,7 @@ describe("CommandCanvas landing page", () => {
     expect(screen.getByRole("main")).toBeInTheDocument();
     expect(screen.getByRole("contentinfo")).toBeInTheDocument();
     expect(screen.getAllByRole("article")).toHaveLength(4);
-    expect(screen.getByText("Voice creates objects")).toBeInTheDocument();
+    expect(screen.getByText("Voice can create objects")).toBeInTheDocument();
     expect(screen.getByText("Draw with your finger")).toBeInTheDocument();
     expect(
       container.querySelector(

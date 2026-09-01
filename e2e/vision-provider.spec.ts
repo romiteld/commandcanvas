@@ -60,7 +60,7 @@ test("rasterizes a pointer sketch for real vision and preserves it beside the st
     });
     roomId = await roomCapture.resolveRoomId();
     await page
-      .getByRole("button", { name: "Open ChatGPT command drawer" })
+      .getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" })
       .click();
     await page
       .getByLabel("Your OpenAI API key")
@@ -157,7 +157,7 @@ test("rasterizes a pointer sketch for real vision and preserves it beside the st
     await expect(
       page
         .getByRole("button", {
-          name: "Open activity drawer: CommandCanvas agent created “Structured architecture”.",
+          name: "Open activity drawer: Danny created “Structured architecture”.",
         })
         .getByText("R5 · webmcp", { exact: true }),
     ).toBeVisible();

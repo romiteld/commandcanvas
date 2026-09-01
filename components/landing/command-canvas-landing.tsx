@@ -246,8 +246,8 @@ function HeroWorkspace() {
 }
 
 const capabilityCards: Array<{ icon: IconName; tone: string; title: string; text: string }> = [
-  { icon: "mic", tone: "violetTone", title: "Realtime voice", text: "Speak naturally. Objects, tasks, and content appear on the canvas." },
-  { icon: "hand", tone: "tealTone", title: "Hand input", text: "Draw, sketch, grab, move, resize, minimize, or discard with your hand." },
+  { icon: "mic", tone: "violetTone", title: "Realtime voice", text: "With your OpenAI key, optional Live Voice turns spoken intent into bounded canvas actions." },
+  { icon: "hand", tone: "tealTone", title: "Experimental hand input", text: "After camera calibration, local or private-relay landmarks can drive index drawing, grab, two-hand resize, minimize, and recoverable discard." },
   { icon: "receipt", tone: "orangeTone", title: "Shared receipts", text: "Supported canvas changes are attributed, visible, and reversible when technically reasonable." },
   { icon: "people", tone: "blueTone", title: "Live collaboration", text: "People join one room and edit the same spatial workspace in real time." },
   { icon: "spark", tone: "purpleTone", title: "WebMCP Site Tools exposed", text: "Available where supported, agents use structured page tools to create, organize, and summarize." },
@@ -255,8 +255,8 @@ const capabilityCards: Array<{ icon: IconName; tone: string; title: string; text
 
 const workflowCards: Array<{ title: string; text: string; visual: ReactNode }> = [
   {
-    title: "Voice creates objects",
-    text: "Speak what you need and watch it take shape on the canvas.",
+    title: "Voice can create objects",
+    text: "Start optional CommandCanvas Live Voice, speak what you need, and review the resulting canvas action.",
     visual: (
       <div className={styles.waveVisual}>
         <div className={styles.waveform}>
@@ -270,7 +270,7 @@ const workflowCards: Array<{ title: string; text: string; visual: ReactNode }> =
   },
   {
     title: "Draw with your finger",
-    text: "Sketch ideas, annotate, and arrange them with natural hand movements.",
+    text: "Use calibrated index tracking when it works well on your device, with touch, stylus, and pointer as full fallbacks.",
     visual: (
       <div className={styles.drawVisual}>
         <svg

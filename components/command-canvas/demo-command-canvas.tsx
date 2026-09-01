@@ -30,13 +30,13 @@ import { createBrowserSupabaseClient } from "@/lib/supabase/browser-client";
 import { createBrowserRoomApi } from "@/lib/supabase/room-api";
 import { createBrowserPacketApi } from "@/lib/packets/browser-api";
 import { createCanvasWebMcpAdapters } from "@/lib/webmcp/canvas-adapters";
-import { resolveDocumentWebMcpTarget } from "@/lib/webmcp/document-target";
 import type { WebMcpExecutionContext } from "@/lib/webmcp/phase-guards";
 import {
   WebMcpRegistry,
   type WebMcpExecutionEvent,
 } from "@/lib/webmcp/registry";
 import { upsertWebMcpExecutionActivity } from "@/lib/webmcp/execution-activity";
+import { useDocumentWebMcpTarget } from "@/lib/webmcp/use-document-target";
 import {
   createCanvasSketchTransformer,
   type CanvasSketchTransformer,
@@ -123,6 +123,7 @@ export function DemoCommandCanvas({
   const [openAiApiKey, setOpenAiApiKey] = useState("");
   const openAiApiKeyRef = useRef("");
   const webMcpRegistryRef = useRef<WebMcpRegistry | null>(null);
+  const webMcpTarget = useDocumentWebMcpTarget();
   const meetingMediaStreamRef = useRef<MediaStream | null>(null);
   const bootstrapOperationRef = useRef<DemoRoomBootstrapOperation | null>(null);
   const readyRoom = view.status === "ready" ? view.room : null;
@@ -251,8 +252,7 @@ export function DemoCommandCanvas({
   useEffect(() => {
     if (!readyRoom || !sketchTransformer) return;
     let active = true;
-    const target = resolveDocumentWebMcpTarget(document);
-    if (!target) {
+    if (!webMcpTarget) {
       queueMicrotask(() => {
         if (active)
           setWebMcpStatus({ value: "Site Tools unavailable", tone: "idle" });
@@ -270,7 +270,7 @@ export function DemoCommandCanvas({
         : "static";
     const registry = new WebMcpRegistry({
       mode,
-      target,
+      target: webMcpTarget,
       getContext: () =>
         demoWebMcpContext(
           room.session,
@@ -414,7 +414,7 @@ export function DemoCommandCanvas({
       if (webMcpRegistryRef.current === registry)
         webMcpRegistryRef.current = null;
     };
-  }, [readyRoom, sketchTransformer]);
+  }, [readyRoom, sketchTransformer, webMcpTarget]);
   /* eslint-enable react-hooks/exhaustive-deps */
 
   useEffect(() => {
@@ -453,7 +453,7 @@ export function DemoCommandCanvas({
           CC
         </span>
         <p className="eyebrow">CommandCanvas / judge mode</p>
-        <h1>Opening the limited judge preview…</h1>
+        <h1>Opening the no-signup judge preview…</h1>
         <p>
           Creating an anonymous browser identity, verifying room access, and
           arranging deterministic semantic objects.
@@ -473,6 +473,7 @@ export function DemoCommandCanvas({
         <button type="button" onClick={environment.resetDemo}>
           Try again
         </button>
+        <a href="/local">Open local canvas fallback</a>
       </main>
     );
 
@@ -521,11 +522,11 @@ export function DemoCommandCanvas({
     <div className="demo-room-stage">
       <aside
         className="demo-preview-boundary"
-        aria-label="Limited judge preview"
+        aria-label="No-signup judge preview"
       >
-        <strong>Limited judge preview</strong>
+        <strong>No-signup judge preview</strong>
         <span>Temporary Supabase room · email remains preview-only</span>
-        <a href="/meet">Sign in</a>
+        <a href="/meet">Workspace sign-in</a>
       </aside>
       <div className="demo-room-controls" aria-label="Demo room controls">
         <span>{room.role === "host" ? "HOST" : "PARTICIPANT"}</span>

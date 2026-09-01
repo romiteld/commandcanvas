@@ -71,7 +71,9 @@ test("renders a fluid, scrollable landing page with real destinations", async ({
   await page.goto("/");
   await page.getByRole("link", { name: "Open CommandCanvas" }).first().click();
   await expect(
-    page.getByRole("heading", { name: "Sign in to CommandCanvas" }),
+    page.getByRole("heading", {
+      name: "Sign in to your CommandCanvas workspace",
+    }),
   ).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Email" })).toBeVisible();
 
@@ -143,10 +145,10 @@ test("stays fluid, branded, readable, and touchable across narrow widths", async
         workspaceHeight: workspace.getBoundingClientRect().height,
         wordmarkVisible: getComputedStyle(wordmark).display !== "none",
         capabilityCopy: fontSize(
-          "Speak naturally. Objects, tasks, and content appear on the canvas.",
+          "With your OpenAI key, optional Live Voice turns spoken intent into bounded canvas actions.",
         ),
         workflowCopy: fontSize(
-          "Speak what you need and watch it take shape on the canvas.",
+          "Start optional CommandCanvas Live Voice, speak what you need, and review the resulting canvas action.",
         ),
         receiptCopy: fontSize("Added timeline"),
       };

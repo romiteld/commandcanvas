@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { readBoundedUtf8Body } from "@/lib/http/read-bounded-body";
 import { parseOpenAiApiKey } from "@/lib/openai-credentials/key";
 import {
   createServerOpenAiCredentialService,
@@ -151,13 +152,18 @@ async function parsePutRequest(request: Request) {
       response: jsonError(413, "request_too_large", "Request body is too large."),
     };
   try {
-    const body = await request.text();
-    if (Buffer.byteLength(body, "utf8") > MAX_REQUEST_BYTES)
+    const body = await readBoundedUtf8Body(
+      request.body,
+      MAX_REQUEST_BYTES,
+      request.signal,
+    );
+    if (!body.ok && body.reason === "too_large")
       return {
         ok: false as const,
         response: jsonError(413, "request_too_large", "Request body is too large."),
       };
-    const parsed = putRequestSchema.safeParse(JSON.parse(body));
+    if (!body.ok) throw new Error(body.reason);
+    const parsed = putRequestSchema.safeParse(JSON.parse(body.text));
     if (!parsed.success)
       return {
         ok: false as const,

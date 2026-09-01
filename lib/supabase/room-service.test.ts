@@ -243,6 +243,7 @@ function successfulCommitClient(input: {
   actorUserId: string;
   actorType: "human" | "participant" | "agent";
   actorDisplayName: string;
+  source?: "typed" | "collaborator" | "webmcp";
 }) {
   return createClient({
     tableResults: {
@@ -279,6 +280,7 @@ function successfulCommitClient(input: {
               actorUserId: input.actorUserId,
               actorType: input.actorType,
               actorDisplayName: input.actorDisplayName,
+              source: input.source,
             }),
           ],
           error: null,
@@ -507,7 +509,7 @@ describe("CommandCanvas room service", () => {
       dependencies,
     ).createRoom(HOST_ID, {
       mode: "demo",
-      name: "Limited judge preview",
+      name: "No-signup judge preview",
       displayName: "Danny",
       color: "#275ed7",
     });
@@ -517,7 +519,7 @@ describe("CommandCanvas room service", () => {
       error: {
         code: "demo_room_limit_reached",
         message:
-          "The limited judge preview is at capacity. Sign in to start a workspace or try again later.",
+          "The no-signup judge preview is at capacity. Sign in to start a workspace or try again later.",
       },
     });
     expect(JSON.stringify(result)).not.toContain("provider");
@@ -932,12 +934,13 @@ describe("CommandCanvas room service", () => {
     expect(harness.rawClient.from).toHaveBeenCalledOnce();
   });
 
-  it("allows a room participant to commit an ordinary WebMCP canvas mutation", async () => {
+  it("binds a participant WebMCP mutation to the authenticated participant", async () => {
     const harness = successfulCommitClient({
       member: memberRow("participant", "Sarah"),
       actorUserId: PARTICIPANT_ID,
-      actorType: "agent",
-      actorDisplayName: "CommandCanvas agent",
+      actorType: "participant",
+      actorDisplayName: "Sarah",
+      source: "webmcp",
     });
 
     const result = await createRoomService(
@@ -951,9 +954,9 @@ describe("CommandCanvas room service", () => {
       expect.objectContaining({
         p_expected_room_revision: 0,
         p_actor_user_id: PARTICIPANT_ID,
-        p_actor_type: "agent",
+        p_actor_type: "participant",
         p_source: "webmcp",
-        p_description: "CommandCanvas agent created “Launch decision”.",
+        p_description: "Sarah created “Launch decision”.",
       }),
     );
     if (!result.ok) throw new Error("Expected participant WebMCP commit.");
@@ -962,8 +965,8 @@ describe("CommandCanvas room service", () => {
         source: "webmcp",
         actor: {
           id: PARTICIPANT_ID,
-          displayName: "CommandCanvas agent",
-          type: "agent",
+          displayName: "Sarah",
+          type: "participant",
         },
       }),
     );
@@ -1354,31 +1357,32 @@ describe("CommandCanvas room service", () => {
     );
   });
 
-  it("derives participant and host-WebMCP actors from membership and source", async () => {
+  it("derives accountable participant and host actors independently of the WebMCP channel", async () => {
     const participantHarness = successfulCommitClient({
       member: memberRow("participant", "Sarah"),
       actorUserId: PARTICIPANT_ID,
       actorType: "participant",
       actorDisplayName: "Sarah",
     });
-    const agentHarness = successfulCommitClient({
+    const hostWebMcpHarness = successfulCommitClient({
       member: memberRow("host", "Danny"),
       actorUserId: HOST_ID,
-      actorType: "agent",
-      actorDisplayName: "CommandCanvas agent",
+      actorType: "human",
+      actorDisplayName: "Danny",
+      source: "webmcp",
     });
 
     const participant = await createRoomService(
       participantHarness.client,
       dependencies,
     ).commitCommand(PARTICIPANT_ID, createNoteRequest("pointer"));
-    const agent = await createRoomService(
-      agentHarness.client,
+    const hostWebMcp = await createRoomService(
+      hostWebMcpHarness.client,
       dependencies,
     ).commitCommand(HOST_ID, createNoteRequest("webmcp"));
 
     expect(participant.ok).toBe(true);
-    expect(agent.ok).toBe(true);
+    expect(hostWebMcp.ok).toBe(true);
     expect(participantHarness.rawClient.rpc).toHaveBeenCalledWith(
       "commit_canvas_mutation_at_revision",
       expect.objectContaining({
@@ -1389,19 +1393,25 @@ describe("CommandCanvas room service", () => {
         p_description: "Sarah created “Launch decision”.",
       }),
     );
-    expect(agentHarness.rawClient.rpc).toHaveBeenCalledWith(
+    expect(hostWebMcpHarness.rawClient.rpc).toHaveBeenCalledWith(
       "commit_canvas_mutation_at_revision",
       expect.objectContaining({
         p_expected_room_revision: 0,
         p_actor_user_id: HOST_ID,
-        p_actor_type: "agent",
+        p_actor_type: "human",
         p_source: "webmcp",
-        p_description: "CommandCanvas agent created “Launch decision”.",
+        p_description: "Danny created “Launch decision”.",
       }),
     );
-    if (!participant.ok || !agent.ok) throw new Error("Expected both commits.");
+    if (!participant.ok || !hostWebMcp.ok)
+      throw new Error("Expected both commits.");
     expect(participant.value.state.receipts.at(-1)?.source).toBe("collaborator");
-    expect(agent.value.state.receipts.at(-1)?.source).toBe("webmcp");
+    expect(hostWebMcp.value.state.receipts.at(-1)).toEqual(
+      expect.objectContaining({
+        source: "webmcp",
+        actor: { id: HOST_ID, displayName: "Danny", type: "human" },
+      }),
+    );
   });
 
   it("maps database conflicts to a compact typed error without raw details", async () => {

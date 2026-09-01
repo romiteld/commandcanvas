@@ -92,7 +92,7 @@ test("regular GPT Realtime hears speech and submits a canonical canvas mutation"
     roomId = await roomCapture.resolveRoomId();
 
     await page
-      .getByRole("button", { name: "Open ChatGPT command drawer" })
+      .getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" })
       .click();
     await page
       .getByLabel("Your OpenAI API key")

@@ -43,7 +43,6 @@ import { requestEmailOtp, verifyEmailOtp } from "@/lib/supabase/passwordless";
 import { createBrowserSketchTransformApi } from "@/lib/vision/browser-api";
 import { createCanvasSketchTransformer } from "@/lib/vision/canvas-transform";
 import { createCanvasWebMcpAdapters } from "@/lib/webmcp/canvas-adapters";
-import { resolveDocumentWebMcpTarget } from "@/lib/webmcp/document-target";
 import type { WebMcpExecutionContext } from "@/lib/webmcp/phase-guards";
 import {
   WebMcpRegistry,
@@ -51,6 +50,7 @@ import {
   type WebMcpRegistrationTarget,
 } from "@/lib/webmcp/registry";
 import { upsertWebMcpExecutionActivity } from "@/lib/webmcp/execution-activity";
+import { useDocumentWebMcpTarget } from "@/lib/webmcp/use-document-target";
 
 type BrowserClient = SupabaseClient;
 
@@ -124,6 +124,7 @@ export function MeetingCommandCanvas({
   const activeRuntimeSessionRef = useRef<DemoRoomSession | null>(null);
   const disposedRuntimeSessionsRef = useRef(new WeakSet<DemoRoomSession>());
   const webMcpRegistryRef = useRef<WebMcpRegistry | null>(null);
+  const webMcpTarget = useDocumentWebMcpTarget();
   const [webMcpStatus, setWebMcpStatus] = useState({
     value: "Checking Site Tools…",
     tone: "working" as "idle" | "working" | "ready",
@@ -613,8 +614,7 @@ export function MeetingCommandCanvas({
 
   useEffect(() => {
     if (!runtimeStore || !runtimeSession || !sketchTransformer) return;
-    const target = resolveDocumentWebMcpTarget(document);
-    if (!target) {
+    if (!webMcpTarget) {
       void Promise.resolve().then(() =>
         setWebMcpStatus({ value: "Site Tools unavailable", tone: "idle" }),
       );
@@ -628,7 +628,7 @@ export function MeetingCommandCanvas({
         process.env.NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION === "true"
           ? "dynamic"
           : "static",
-      target,
+      target: webMcpTarget,
       store: runtimeStore,
       session: runtimeSession,
       getSnapshot: runtimeSession.getSnapshot,
@@ -695,6 +695,7 @@ export function MeetingCommandCanvas({
     runtimeStore,
     sketchTransformer,
     stageMeetingPacketSend,
+    webMcpTarget,
   ]);
 
   useEffect(() => {
@@ -1158,7 +1159,7 @@ export function MeetingLobby({
         ) : state.phase === "email" ? (
           <>
             <p className="eyebrow">{state.invited ? "Private room invitation" : "Your CommandCanvas account"}</p>
-            <h1>{state.invited ? "Verify your invitation" : "Sign in to CommandCanvas"}</h1>
+            <h1>{state.invited ? "Verify your invitation" : "Sign in to your CommandCanvas workspace"}</h1>
             <p>
               {state.invited
                 ? "Use the exact email address your host invited."
@@ -1166,9 +1167,11 @@ export function MeetingLobby({
             </p>
             {!state.invited ? (
               <p className="meeting-chatgpt-boundary">
-                When this page runs inside ChatGPT, Site Tools use the ChatGPT
-                account already signed into that app. CommandCanvas sign-in is
-                separate and protects this workspace.
+                In the ChatGPT desktop app&apos;s built-in browser, Site Tools use
+                the ChatGPT account already signed into that app. CommandCanvas
+                sign-in is separate and protects this workspace. That built-in
+                browser keeps its own website session apart from Chrome, so this
+                room may still require an email code here.
               </p>
             ) : null}
             <form
@@ -1181,7 +1184,7 @@ export function MeetingLobby({
               <button type="submit">Email me a code</button>
             </form>
             {state.error ? <p role="alert">{state.error}</p> : null}
-            {!state.invited ? <a className="meeting-demo-link" href="/demo">Open the limited judge preview instead</a> : null}
+            {!state.invited ? <a className="meeting-demo-link" href="/demo">Open the no-signup judge preview instead</a> : null}
           </>
         ) : state.phase === "otp" ? (
           <>

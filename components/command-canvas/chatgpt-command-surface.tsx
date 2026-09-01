@@ -77,10 +77,6 @@ export function ChatGptCommandSurface({
       onToggleRealtimeVoice();
       return;
     }
-    if (siteToolsRegistered) {
-      onOpenDrawer();
-      return;
-    }
     if (!realtimeAvailable) {
       onOpenDrawer();
       return;
@@ -96,17 +92,20 @@ export function ChatGptCommandSurface({
       <div
         className="chatgpt-command-pill"
         role="group"
-        aria-label="ChatGPT controls"
+        aria-label="ChatGPT Site Tools and CommandCanvas Live Voice"
       >
         <button
           type="button"
           className="chatgpt-command-segment"
-          aria-label="Open ChatGPT command drawer"
+          aria-label="Open ChatGPT Site Tools and activity drawer"
           aria-expanded={drawerOpen}
           onClick={onOpenDrawer}
         >
           <span className="agent-pulse" aria-hidden="true" />
-          <span>ChatGPT</span>
+          <span className="chatgpt-command-label">
+            <strong>ChatGPT</strong>
+            <small>Site Tools</small>
+          </span>
         </button>
         <button
           type="button"
@@ -114,24 +113,19 @@ export function ChatGptCommandSurface({
           aria-label={
             realtimeActive
               ? "Stop CommandCanvas Live Voice"
-              : siteToolsRegistered
-              ? "Open ChatGPT voice guidance"
               : "Start CommandCanvas Live Voice"
           }
           title={
             realtimeActive
               ? "Stop CommandCanvas Live Voice"
-              : siteToolsRegistered
-              ? "Open instructions for using ChatGPT Voice with this page"
               : "Start CommandCanvas Live Voice"
           }
           aria-pressed={realtimeActive || undefined}
-          disabled={
-            !realtimeActive && !siteToolsRegistered && !realtimeAvailable
-          }
+          disabled={!realtimeActive && !realtimeAvailable}
           onClick={useVoice}
         >
-          <span aria-hidden="true">●</span>
+          <span className="chatgpt-live-indicator" aria-hidden="true">●</span>
+          <small>Live voice</small>
         </button>
       </div>
 
@@ -162,22 +156,30 @@ export function ChatGptCommandSurface({
           <p>{surfaceDescription(surfaceState)}</p>
           {siteToolsRegistered ? (
             <p className="chatgpt-host-voice-guidance" role="status">
-              Site Tools use the ChatGPT account already signed into the
-              surrounding app. CommandCanvas never receives that ChatGPT
-              credential. Use ChatGPT Voice there; this page cannot press that
-              microphone for you. OpenAI API billing is separate from a
-              ChatGPT subscription.
+              When this page is open in the ChatGPT desktop app&apos;s built-in
+              browser, Site Tools use the ChatGPT account already signed into
+              that app. CommandCanvas never receives that ChatGPT credential. A
+              registration surface alone does not prove which agent host exposed
+              it; the activity below records actual invocations. Current OpenAI
+              guidance does not promise that ChatGPT Voice will invoke Site Tools,
+              so verify that host behavior before relying on it. The adjacent mic
+              starts CommandCanvas Live Voice, which uses a separately billed
+              user-owned OpenAI API credential.
             </p>
           ) : null}
           {siteToolsRegistered && realtimeAvailable ? (
             <button
               type="button"
-              aria-label="Use CommandCanvas Live Voice instead"
+              aria-label={
+                realtimeActive
+                  ? "Stop CommandCanvas Live Voice from drawer"
+                  : "Start CommandCanvas Live Voice from drawer"
+              }
               onClick={onToggleRealtimeVoice}
             >
               {realtimeActive
                 ? "Stop CommandCanvas Live Voice"
-                : "Use CommandCanvas Live Voice instead"}
+                : "Start CommandCanvas Live Voice"}
             </button>
           ) : null}
         </section>
@@ -273,7 +275,7 @@ function surfaceHeading(state: WebMcpSurfaceState) {
     case "checking":
       return "Checking page Site Tools";
     case "unavailable":
-      return "Site Tools unavailable";
+      return "Site Tools unavailable in this browser session";
     case "registration_failed":
       return "Site Tools registration failed";
     case "registered_to_page":
@@ -288,11 +290,11 @@ function surfaceDescription(state: WebMcpSurfaceState) {
     case "checking":
       return "CommandCanvas is checking the page registration surface.";
     case "unavailable":
-      return "Open this page inside ChatGPT to use Site Tools with your signed-in ChatGPT account. In this browser, use your own OpenAI API key for Live Voice or use the typed fallback.";
+      return "No additional ChatGPT sign-in is required. This browser session did not expose Site Tools to CommandCanvas. For the competition path, open the page in the ChatGPT desktop app’s built-in browser. If you are already there, check Browser Settings → Permissions → Enable site tools; availability can also depend on your account, selected model, workspace policy, or rollout. Canvas controls and typed commands still work; CommandCanvas Live Voice is an optional, separately billed fallback.";
     case "registration_failed":
       return "The page could not register Site Tools. Canvas controls still work normally.";
     case "registered_to_page":
-      return "Registration succeeded on this page. ChatGPT discovery is not confirmed until an actual invocation appears below.";
+      return "A Site Tools registration surface is present on this page. Agent-host identity and discovery are not confirmed until an actual invocation appears below.";
     case "invoked":
       return "This status is based on an actual page-observable Site Tool invocation.";
   }

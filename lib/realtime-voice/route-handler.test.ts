@@ -70,6 +70,50 @@ function request(overrides?: {
   });
 }
 
+function requestWithUnboundedChunkedSdp() {
+  let pullCount = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        pullCount += 1;
+        if (pullCount === 1) {
+          controller.enqueue(new Uint8Array(256 * 1_024));
+          return;
+        }
+        if (pullCount === 2) {
+          controller.enqueue(new Uint8Array([0x20]));
+          return;
+        }
+        throw new Error("The handler read past its byte limit.");
+      },
+      cancel() {
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const headers = new Headers({
+    authorization: AUTHORIZATION,
+    "content-type": "application/sdp",
+    "x-commandcanvas-room-id": ROOM_ID,
+    "x-commandcanvas-openai-key": SESSION_OPENAI_API_KEY,
+  });
+  const chunkedRequest = new Request(
+    "https://commandcanvas.example/api/realtime/session",
+    {
+      method: "POST",
+      headers,
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" },
+  );
+  return {
+    request: chunkedRequest,
+    observation: () => ({ pullCount, cancelled }),
+  };
+}
+
 describe("Realtime session route", () => {
   it("refuses unauthenticated SDP before provider work", async () => {
     const deps = dependencies();
@@ -392,6 +436,21 @@ describe("Realtime session route", () => {
         code: "realtime_unavailable",
         message: "Live voice is temporarily unavailable.",
       },
+    });
+  });
+
+  it("stops reading a chunked SDP body as soon as the actual byte cap is crossed", async () => {
+    const deps = dependencies();
+    const chunked = requestWithUnboundedChunkedSdp();
+
+    const response = await handleRealtimeSessionRequest(chunked.request, deps);
+
+    expect(response.status).toBe(413);
+    expect(chunked.observation()).toEqual({ pullCount: 2, cancelled: true });
+    expect(deps.admitSession).not.toHaveBeenCalled();
+    expect(deps.createCall).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "request_too_large" },
     });
   });
 

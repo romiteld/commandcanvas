@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -68,40 +68,50 @@ function renderSurface(
 }
 
 describe("ChatGptCommandSurface", () => {
-  it("renders one ChatGPT pill with two accessible control segments", () => {
+  it("visually distinguishes page Site Tools from separately billed Live Voice", () => {
     renderSurface();
 
-    const group = screen.getByRole("group", { name: "ChatGPT controls" });
+    const group = screen.getByRole("group", {
+      name: "ChatGPT Site Tools and CommandCanvas Live Voice",
+    });
     expect(group).toHaveClass("chatgpt-command-pill");
     expect(group.querySelectorAll("button")).toHaveLength(2);
+    expect(within(group).getByText("ChatGPT")).toBeVisible();
+    expect(within(group).getByText("Site Tools")).toBeVisible();
+    expect(within(group).getByText("Live voice")).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
+      screen.getByRole("button", {
+        name: "Open ChatGPT Site Tools and activity drawer",
+      }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Open ChatGPT voice guidance" }),
+      screen.getByRole("button", { name: "Start CommandCanvas Live Voice" }),
     ).toHaveClass("chatgpt-voice-segment");
   });
 
-  it("guides registered Site Tools users to surrounding ChatGPT Voice without starting page audio", async () => {
+  it("starts the explicit in-page Live Voice path even when Site Tools are registered", async () => {
     const user = userEvent.setup();
     const callbacks = renderSurface();
 
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT voice guidance" }),
+      screen.getByRole("button", { name: "Start CommandCanvas Live Voice" }),
     );
 
     expect(callbacks.onOpenDrawer).toHaveBeenCalledOnce();
-    expect(callbacks.onToggleRealtimeVoice).not.toHaveBeenCalled();
+    expect(callbacks.onToggleRealtimeVoice).toHaveBeenCalledOnce();
     expect(
       screen.getByText(
-        /use the ChatGPT account already signed into the surrounding app/i,
+        /ChatGPT desktop app's built-in browser/i,
       ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/registration surface alone does not prove which agent host/i),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/CommandCanvas never receives that ChatGPT credential/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/OpenAI API billing is separate from a ChatGPT subscription/i),
+      screen.getByText(/does not promise that ChatGPT Voice will invoke Site Tools/i),
     ).toBeInTheDocument();
   });
 
@@ -145,17 +155,18 @@ describe("ChatGptCommandSurface", () => {
 
     expect(callbacks.onToggleRealtimeVoice).not.toHaveBeenCalled();
     expect(screen.getByText(/registered to this page/i)).toBeInTheDocument();
-    expect(screen.getByText(/discovery is not confirmed/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/agent-host identity and discovery are not confirmed/i),
+    ).toBeInTheDocument();
     await user.click(
       screen.getByRole("button", {
-        name: "Use CommandCanvas Live Voice instead",
+        name: "Start CommandCanvas Live Voice from drawer",
       }),
     );
     expect(callbacks.onToggleRealtimeVoice).toHaveBeenCalledOnce();
   });
 
-  it("removes surrounding-Voice guidance if the page registration surface becomes unavailable", async () => {
-    const user = userEvent.setup();
+  it("removes surrounding-host guidance if the page registration surface becomes unavailable", () => {
     const callbacks = {
       onOpenDrawer: vi.fn(),
       onCloseDrawer: vi.fn(),
@@ -174,10 +185,9 @@ describe("ChatGptCommandSurface", () => {
         {...callbacks}
       />,
     );
-    await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT voice guidance" }),
-    );
-    expect(screen.getByText(/surrounding app/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/registration surface alone does not prove which agent host/i),
+    ).toBeInTheDocument();
 
     view.rerender(
       <ChatGptCommandSurface
@@ -192,8 +202,32 @@ describe("ChatGptCommandSurface", () => {
       />,
     );
 
-    expect(screen.getByText("Site Tools unavailable")).toBeInTheDocument();
-    expect(screen.queryByText(/surrounding app/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Site Tools unavailable in this browser session"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/registration surface alone does not prove which agent host/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not mistake a missing Site Tools surface for a missing ChatGPT login", () => {
+    renderSurface({
+      surfaceState: { status: "unavailable" },
+      drawerOpen: true,
+    });
+
+    expect(
+      screen.getByText(/no additional ChatGPT sign-in is required/i),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/this browser session did not expose Site Tools/i),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Browser Settings.*Permissions.*Enable site tools/i),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/^Open this page inside ChatGPT/i),
+    ).not.toBeInTheDocument();
   });
 
   it("renders actual page-observable tool lifecycle and recent receipt without raw inputs", () => {

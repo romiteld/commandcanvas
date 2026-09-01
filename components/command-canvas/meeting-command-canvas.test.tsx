@@ -32,16 +32,19 @@ describe("normal meeting lobby", () => {
     );
     expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Sign in to CommandCanvas" }),
+      screen.getByRole("heading", { name: "Sign in to your CommandCanvas workspace" }),
     ).toBeVisible();
     expect(
       screen.getByText(/protects your rooms, invitations, and saved OpenAI key/i),
     ).toBeVisible();
     expect(
-      screen.getByText(/ChatGPT account already signed into that app/i),
+      screen.getByText(/ChatGPT desktop app's built-in browser/i),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/own website session apart from Chrome/i),
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "Email me a code" })).toBeVisible();
-    expect(screen.getByRole("link", { name: /limited judge preview/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /no-signup judge preview/i })).toHaveAttribute(
       "href",
       "/demo",
     );
@@ -58,7 +61,7 @@ describe("normal meeting lobby", () => {
       />,
     );
     expect(screen.getByRole("heading", { name: "Verify your invitation" })).toBeVisible();
-    expect(screen.queryByRole("link", { name: /limited judge preview/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /no-signup judge preview/i })).not.toBeInTheDocument();
 
     view.rerender(
       <MeetingLobby
@@ -228,7 +231,7 @@ describe("meeting invitation lifecycle and Site Tools", () => {
     });
 
     await registry.sync();
-    expect(registry.registeredToolNames()).toHaveLength(10);
+    expect(registry.registeredToolNames()).toHaveLength(11);
     expect(signals.every((signal) => !signal.aborted)).toBe(true);
     const inspect = registered.find((tool) => tool.name === "get_canvas_state");
     if (!inspect) throw new Error("get_canvas_state was not registered");
@@ -362,9 +365,9 @@ describe("meeting invitation lifecycle and Site Tools", () => {
     const tools = new Map<string, RegisteredWebMcpTool>();
     const submitCommand = vi.fn(async (command, source) => {
       const result = store.getState().dispatch(command, source, {
-        id: "agent-chatgpt",
-        displayName: "ChatGPT",
-        type: "agent",
+        id: "participant",
+        displayName: "Sarah",
+        type: "participant",
       });
       return result.ok
         ? { ok: true as const, state: result.state }
@@ -401,17 +404,10 @@ describe("meeting invitation lifecycle and Site Tools", () => {
     await registry.sync();
     const result = await tools.get("create_object")!.execute(
       {
-        object: {
-          id: "note-participant-agent",
-          type: "note",
-          title: "Participant agent note",
-          x: 120,
-          y: 160,
-          width: 260,
-          height: 180,
-          zIndex: 4,
-          payload: { text: "Created through Sarah's ChatGPT.", tone: "sky" },
-        },
+        type: "note",
+        title: "Participant agent note",
+        text: "Created through Sarah's ChatGPT.",
+        tone: "sky",
       },
       { signal: new AbortController().signal },
     );
@@ -421,9 +417,12 @@ describe("meeting invitation lifecycle and Site Tools", () => {
       status: "completed",
       receiptId: "receipt-test",
     });
-    expect(store.getState().canvas.objects["note-participant-agent"]).toMatchObject({
+    const participantAgentNote = Object.values(
+      store.getState().canvas.objects,
+    ).find((object) => object.title === "Participant agent note");
+    expect(participantAgentNote).toMatchObject({
       title: "Participant agent note",
-      createdBy: "agent-chatgpt",
+      createdBy: "participant",
     });
   });
 

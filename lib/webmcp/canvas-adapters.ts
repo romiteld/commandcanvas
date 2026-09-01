@@ -2,6 +2,7 @@ import type { StoreApi } from "zustand";
 
 import type { CanvasStoreState } from "@/lib/canvas/canvas-store";
 import type { CanvasCommand, CommandError } from "@/lib/canvas/command-engine";
+import { buildSemanticCanvasObject } from "@/lib/canvas/semantic-object";
 import type { CanvasSketchTransformer } from "@/lib/vision/canvas-transform";
 import { projectCanvasState } from "@/lib/webmcp/canvas-state-projection";
 import type {
@@ -15,9 +16,13 @@ import type {
   WebMcpAdapterRequest,
 } from "@/lib/webmcp/registry";
 
+// WebMCP exposes a page capability surface, not an authenticated host identity.
+// Keep local receipts host-neutral unless a trusted server boundary can bind a
+// stronger actor. Standard rooms bind WebMCP mutations to the authenticated
+// room member and retain `webmcp` as the interaction source.
 const WEBMCP_AGENT = {
-  id: "agent-chatgpt",
-  displayName: "ChatGPT",
+  id: "agent-site-tools",
+  displayName: "Site Tools agent",
   type: "agent" as const,
 };
 
@@ -50,14 +55,9 @@ export function createCanvasWebMcpAdapters(
         case "get_canvas_state":
           return readCanvasState(options.store, request.input);
         case "create_object":
-          return executeMutation(
-            options,
-            {
-              type: "object.create",
-              object: request.input.object,
-            },
-            request.signal,
-          );
+          return createSemanticObject(options, request);
+        case "update_object_content":
+          return appendObjectContent(options, request);
         case "transform_object":
           return executeMutation(
             options,
@@ -142,6 +142,84 @@ export function createCanvasWebMcpAdapters(
         : unavailable("meeting packet delivery staging is not ready");
     },
   };
+}
+
+function createSemanticObject(
+  options: CanvasWebMcpAdapterOptions,
+  request: Extract<WebMcpAdapterRequest, { toolName: "create_object" }>,
+): Promise<WebMcpToolResult> | WebMcpToolResult {
+  const state = options.store.getState();
+  const sourceSketchId =
+    request.input.type === "diagram" || request.input.type === "chart"
+      ? request.input.sourceSketchId
+      : undefined;
+  if (sourceSketchId) {
+    const source = state.canvas.objects[sourceSketchId];
+    if (!source || source.deletedAt || source.type !== "sketch")
+      return {
+        ok: false,
+        code: "invalid_input",
+        message: "sourceSketchId must reference an active sketch in this room.",
+      };
+    if (state.selectedObjectId !== sourceSketchId)
+      return {
+        ok: false,
+        code: "invalid_input",
+        message: "Select the source sketch before creating a linked visual.",
+      };
+  }
+  if (request.input.placement === "right_of_selection") {
+    const selected = state.selectedObjectId
+      ? state.canvas.objects[state.selectedObjectId]
+      : undefined;
+    if (!selected || selected.deletedAt)
+      return {
+        ok: false,
+        code: "invalid_input",
+        message:
+          "Select an active canvas object before placing new content beside it.",
+      };
+  }
+
+  return executeMutation(
+    options,
+    {
+      type: "object.create",
+      object: buildSemanticCanvasObject(request.input, {
+        viewport: state.viewport,
+        objects: state.canvas.objects,
+        selectedObjectId: state.selectedObjectId,
+      }),
+    },
+    request.signal,
+  );
+}
+
+function appendObjectContent(
+  options: CanvasWebMcpAdapterOptions,
+  request: Extract<WebMcpAdapterRequest, { toolName: "update_object_content" }>,
+): Promise<WebMcpToolResult> | WebMcpToolResult {
+  const state = options.store.getState();
+  const objectId = request.input.objectId ?? state.selectedObjectId;
+  const object = objectId ? state.canvas.objects[objectId] : undefined;
+  if (!object || object.deletedAt || object.type !== "note")
+    return {
+      ok: false,
+      code: "invalid_input",
+      message:
+        "Select a note or thought, or provide its stable object ID before adding text.",
+    };
+
+  return executeMutation(
+    options,
+    {
+      type: "object.append_note_text",
+      objectId: object.id,
+      expectedVersion: object.version,
+      text: request.input.text,
+    },
+    request.signal,
+  );
 }
 
 async function transformSelectedSketch(

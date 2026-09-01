@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { readBoundedUtf8Body } from "@/lib/http/read-bounded-body";
 import {
   authenticatePermanentEmailUser,
   authenticateRequestActor,
@@ -116,16 +117,17 @@ export async function handleRealtimeSessionRequest(
   );
   if (!credential.ok) return credential.response;
 
-  let sdp: string;
-  try {
-    sdp = await request.text();
-  } catch {
+  const body = await readBoundedUtf8Body(
+    request.body,
+    MAX_SDP_BYTES,
+    request.signal,
+  );
+  if (!body.ok && body.reason === "too_large")
+    return jsonError(413, "request_too_large", "SDP offer is too large.");
+  if (!body.ok)
     return jsonError(400, "invalid_sdp", "SDP offer is invalid.");
-  }
-  if (
-    Buffer.byteLength(sdp, "utf8") > MAX_SDP_BYTES ||
-    !sdp.startsWith("v=0")
-  )
+  const sdp = body.text;
+  if (!sdp.startsWith("v=0"))
     return jsonError(400, "invalid_sdp", "SDP offer is invalid.");
 
   let admission: RealtimeSessionAdmissionResult;

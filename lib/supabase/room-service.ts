@@ -239,7 +239,7 @@ export function createRoomService(
       )
         return failure(
           "demo_room_limit_reached",
-          "The limited judge preview is at capacity. Sign in to start a workspace or try again later.",
+          "The no-signup judge preview is at capacity. Sign in to start a workspace or try again later.",
         );
       if (hasError(response))
         return failure("create_unavailable", "Room could not be created.");
@@ -598,20 +598,6 @@ function deriveActor(
   member: z.infer<typeof memberSchema>,
   requestedSource: CanvasCommandSource,
 ): RoomServiceResult<{ actor: CanvasActor; source: CanvasCommandSource }> {
-  if (requestedSource === "webmcp") {
-    return {
-      ok: true,
-      value: {
-        actor: {
-          id: actorUserId,
-          displayName: "CommandCanvas agent",
-          type: "agent",
-        },
-        source: "webmcp",
-      },
-    };
-  }
-
   if (member.role === "participant")
     return {
       ok: true,
@@ -621,7 +607,10 @@ function deriveActor(
           displayName: member.display_name,
           type: "participant",
         },
-        source: requestedSource === "system" ? "system" : "collaborator",
+        source:
+          requestedSource === "system" || requestedSource === "webmcp"
+            ? requestedSource
+            : "collaborator",
       },
     };
 

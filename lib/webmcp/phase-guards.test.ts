@@ -71,6 +71,7 @@ describe("WebMCP phase availability", () => {
     expect(getPhaseAvailableToolNames(phase)).toEqual([
       "get_canvas_state",
       "create_object",
+      "update_object_content",
       "transform_object",
       "set_object_state",
       "discard_object",

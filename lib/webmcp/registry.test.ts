@@ -93,6 +93,7 @@ describe("WebMcpRegistry registration", () => {
     expect(target.calls.map((call) => call.tool.name)).toEqual([
       "get_canvas_state",
       "create_object",
+      "update_object_content",
       "transform_object",
       "set_object_state",
       "discard_object",
@@ -146,6 +147,7 @@ describe("WebMcpRegistry registration", () => {
     expect(registry.registeredToolNames()).toEqual([
       "get_canvas_state",
       "create_object",
+      "update_object_content",
       "transform_object",
       "set_object_state",
       "discard_object",
@@ -195,6 +197,7 @@ describe("WebMcpRegistry registration", () => {
     expect(registry.registeredToolNames()).toEqual([
       "get_canvas_state",
       "create_object",
+      "update_object_content",
       "transform_object",
       "set_object_state",
       "discard_object",
@@ -213,7 +216,7 @@ describe("WebMcpRegistry registration", () => {
       adapters: adapters(),
     });
     await registry.sync();
-    expect(target.calls).toHaveLength(10);
+    expect(target.calls).toHaveLength(11);
 
     registry.dispose();
 
@@ -377,17 +380,10 @@ describe("WebMcpRegistry execution boundary", () => {
 
     await target.latest("create_object").execute(
       {
-        object: {
-          id: "note-agent",
-          type: "note",
-          title: "Agent note",
-          x: 40,
-          y: 80,
-          width: 260,
-          height: 180,
-          zIndex: 4,
-          payload: { text: "Validated first.", tone: "sky" },
-        },
+        type: "note",
+        title: "Agent note",
+        text: "Validated first.",
+        tone: "sky",
       },
       { signal: new AbortController().signal },
     );
@@ -696,17 +692,10 @@ describe("WebMcpRegistry execution boundary", () => {
 
     const execution = target.latest("create_object").execute(
       {
-        object: {
-          id: "note-agent",
-          type: "note",
-          title: "Agent note",
-          x: 40,
-          y: 80,
-          width: 260,
-          height: 180,
-          zIndex: 4,
-          payload: { text: "Validated first.", tone: "sky" },
-        },
+        type: "note",
+        title: "Agent note",
+        text: "Validated first.",
+        tone: "sky",
       },
       { signal: invocation.signal },
     );
@@ -767,17 +756,10 @@ describe("WebMcpRegistry execution boundary", () => {
 
     const execution = target.latest("create_object").execute(
       {
-        object: {
-          id: "note-in-flight",
-          type: "note",
-          title: "In flight",
-          x: 40,
-          y: 80,
-          width: 260,
-          height: 180,
-          zIndex: 4,
-          payload: { text: "Complete independently.", tone: "sand" },
-        },
+        type: "note",
+        title: "In flight",
+        text: "Complete independently.",
+        tone: "sand",
       },
       { signal: new AbortController().signal },
     );

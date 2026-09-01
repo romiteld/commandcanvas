@@ -852,6 +852,7 @@ button:focus-visible {
 }
 
 .demo-entry-actions .demo-entry-primary,
+.demo-entry-actions .demo-entry-secondary,
 .demo-entry-actions button {
   min-height: 46px;
   display: inline-flex;
@@ -878,6 +879,11 @@ button:focus-visible {
   color: var(--ink);
 }
 
+.demo-entry-actions .demo-entry-secondary {
+  background: white;
+  color: var(--ink);
+}
+
 .demo-entry .demo-entry-boundary {
   max-width: 520px;
   margin-top: 4px;
@@ -890,6 +896,7 @@ button:focus-visible {
   }
 
   .demo-entry-actions .demo-entry-primary,
+  .demo-entry-actions .demo-entry-secondary,
   .demo-entry-actions button {
     width: 100%;
   }
@@ -3009,12 +3016,33 @@ body {
   padding: 0 15px 0 17px;
 }
 
+.chatgpt-command-label {
+  display: grid;
+  gap: 1px;
+  text-align: left;
+  line-height: 1;
+}
+
+.chatgpt-command-label strong {
+  font-size: 13px;
+}
+
+.chatgpt-command-label small,
+.chatgpt-voice-segment small {
+  color: rgb(255 255 255 / 68%);
+  font-size: 8px;
+  font-weight: 640;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .chatgpt-voice-segment {
-  width: 48px;
+  min-width: 76px;
+  padding: 0 12px;
   border-left: 1px solid rgb(255 255 255 / 18%);
 }
 
-.chatgpt-voice-segment > span {
+.chatgpt-live-indicator {
   width: 12px;
   height: 12px;
   display: grid;
@@ -3025,7 +3053,7 @@ body {
   box-shadow: 0 0 0 5px rgb(109 241 220 / 10%);
 }
 
-.chatgpt-voice-segment[aria-pressed="true"] > span {
+.chatgpt-voice-segment[aria-pressed="true"] .chatgpt-live-indicator {
   color: white;
   background: #00a88f;
   box-shadow: 0 0 0 7px rgb(0 168 143 / 18%);
@@ -4433,8 +4461,13 @@ body {
     padding-inline: 13px;
   }
 
-  .chatgpt-command-segment > span:last-child {
-    font-size: 10px;
+  .chatgpt-command-label strong {
+    font-size: 11px;
+  }
+
+  .chatgpt-voice-segment {
+    min-width: 68px;
+    padding-inline: 9px;
   }
 
   .latest-activity-toast {

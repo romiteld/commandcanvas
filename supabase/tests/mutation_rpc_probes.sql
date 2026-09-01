@@ -22,10 +22,12 @@ select
   gen_random_uuid() as undo_one_receipt_id,
   gen_random_uuid() as pin_receipt_id,
   gen_random_uuid() as rejected_pin_receipt_id,
-  gen_random_uuid() as participant_agent_receipt_id,
+  gen_random_uuid() as legacy_webmcp_receipt_id,
+  gen_random_uuid() as current_webmcp_receipt_id,
   gen_random_uuid() as rejected_inverse_receipt_id,
   'note-' || gen_random_uuid()::text as object_id,
-  'note-' || gen_random_uuid()::text as participant_agent_object_id
+  'note-' || gen_random_uuid()::text as legacy_webmcp_object_id,
+  'note-' || gen_random_uuid()::text as current_webmcp_object_id
 \gset cc_
 
 select
@@ -58,13 +60,23 @@ select
     true
   ),
   set_config(
-    'commandcanvas.test_participant_agent_receipt_id',
-    :'cc_participant_agent_receipt_id',
+    'commandcanvas.test_legacy_webmcp_receipt_id',
+    :'cc_legacy_webmcp_receipt_id',
     true
   ),
   set_config(
-    'commandcanvas.test_participant_agent_object_id',
-    :'cc_participant_agent_object_id',
+    'commandcanvas.test_current_webmcp_receipt_id',
+    :'cc_current_webmcp_receipt_id',
+    true
+  ),
+  set_config(
+    'commandcanvas.test_legacy_webmcp_object_id',
+    :'cc_legacy_webmcp_object_id',
+    true
+  ),
+  set_config(
+    'commandcanvas.test_current_webmcp_object_id',
+    :'cc_current_webmcp_object_id',
     true
   ),
   set_config(
@@ -543,29 +555,70 @@ begin
       end if;
   end;
 
+  -- The previously deployed client sends agent + webmcp. The database must
+  -- accept that request during rollout but persist the authenticated member.
   perform public.commit_canvas_mutation(
     p_room_id => current_setting('commandcanvas.test_room_id')::uuid,
     p_actor_user_id => current_setting(
-      'commandcanvas.test_participant_user_id'
+      'commandcanvas.test_host_user_id'
     )::uuid,
     p_actor_type => 'agent',
     p_source => 'webmcp',
     p_action => 'create',
-    p_description => 'CommandCanvas agent created a participant note.',
+    p_description => 'Legacy host client created a note through WebMCP.',
     p_changes => jsonb_build_array(
       jsonb_build_object(
         'objectId', current_setting(
-          'commandcanvas.test_participant_agent_object_id'
+          'commandcanvas.test_legacy_webmcp_object_id'
         ),
         'expectedVersion', null,
         'after', jsonb_build_object(
           'type', 'note',
-          'title', 'Participant agent note',
+          'title', 'Legacy WebMCP note',
           'x', 380,
           'y', 60,
           'width', 300,
           'height', 180,
           'zIndex', 2,
+          'minimized', false,
+          'pinned', false,
+          'deletedAt', null,
+          'metadata', '{}'::jsonb,
+          'payload', '{"text":"Legacy WebMCP probe","tone":"sky"}'::jsonb
+        )
+      )
+    ),
+    p_inverse_command => null,
+    p_reversible => true,
+    p_undoes_receipt_id => null,
+    p_receipt_id => current_setting(
+      'commandcanvas.test_legacy_webmcp_receipt_id'
+    )::uuid
+  );
+
+  perform public.commit_canvas_mutation(
+    p_room_id => current_setting('commandcanvas.test_room_id')::uuid,
+    p_actor_user_id => current_setting(
+      'commandcanvas.test_participant_user_id'
+    )::uuid,
+    p_actor_type => 'participant',
+    p_source => 'webmcp',
+    p_action => 'create',
+    p_description => 'Mutation participant created a note through WebMCP.',
+    p_changes => jsonb_build_array(
+      jsonb_build_object(
+        'objectId', current_setting(
+          'commandcanvas.test_current_webmcp_object_id'
+        ),
+        'expectedVersion', null,
+        'after', jsonb_build_object(
+          'type', 'note',
+          'title', 'Participant WebMCP note',
+          'x', 720,
+          'y', 60,
+          'width', 300,
+          'height', 180,
+          'zIndex', 3,
           'minimized', false,
           'pinned', false,
           'deletedAt', null,
@@ -578,7 +631,7 @@ begin
     p_reversible => true,
     p_undoes_receipt_id => null,
     p_receipt_id => current_setting(
-      'commandcanvas.test_participant_agent_receipt_id'
+      'commandcanvas.test_current_webmcp_receipt_id'
     )::uuid
   );
 
@@ -589,29 +642,73 @@ begin
       'commandcanvas.test_room_id'
     )::uuid
       and object_row.id = current_setting(
-        'commandcanvas.test_participant_agent_object_id'
+        'commandcanvas.test_legacy_webmcp_object_id'
       )
       and object_row.created_by = current_setting(
-        'commandcanvas.test_participant_user_id'
+        'commandcanvas.test_host_user_id'
       )::uuid
   ) then
-    raise exception 'mutation_participant_agent_object_missing';
+    raise exception 'mutation_legacy_webmcp_object_missing';
   end if;
 
   if not exists (
     select 1
     from public.receipts receipt
     where receipt.id = current_setting(
-      'commandcanvas.test_participant_agent_receipt_id'
+      'commandcanvas.test_legacy_webmcp_receipt_id'
+    )::uuid
+      and receipt.actor_user_id = current_setting(
+        'commandcanvas.test_host_user_id'
+      )::uuid
+      and receipt.actor_type = 'human'
+      and receipt.source = 'webmcp'
+      and receipt.actor_display_name = 'Mutation host'
+  ) then
+    raise exception 'mutation_legacy_webmcp_receipt_invalid';
+  end if;
+
+  if not exists (
+    select 1
+    from public.canvas_objects object_row
+    where object_row.room_id = current_setting(
+      'commandcanvas.test_room_id'
+    )::uuid
+      and object_row.id = current_setting(
+        'commandcanvas.test_current_webmcp_object_id'
+      )
+      and object_row.created_by = current_setting(
+        'commandcanvas.test_participant_user_id'
+      )::uuid
+  ) then
+    raise exception 'mutation_current_webmcp_object_missing';
+  end if;
+
+  if not exists (
+    select 1
+    from public.receipts receipt
+    where receipt.id = current_setting(
+      'commandcanvas.test_current_webmcp_receipt_id'
     )::uuid
       and receipt.actor_user_id = current_setting(
         'commandcanvas.test_participant_user_id'
       )::uuid
+      and receipt.actor_type = 'participant'
+      and receipt.source = 'webmcp'
+      and receipt.actor_display_name = 'Mutation participant'
+  ) then
+    raise exception 'mutation_current_webmcp_receipt_invalid';
+  end if;
+
+  if exists (
+    select 1
+    from public.receipts receipt
+    where receipt.room_id = current_setting(
+      'commandcanvas.test_room_id'
+    )::uuid
       and receipt.actor_type = 'agent'
       and receipt.source = 'webmcp'
-      and receipt.actor_display_name = 'CommandCanvas agent'
   ) then
-    raise exception 'mutation_participant_agent_receipt_invalid';
+    raise exception 'mutation_new_agent_webmcp_receipt_was_created';
   end if;
 
   begin

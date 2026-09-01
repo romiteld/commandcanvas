@@ -262,7 +262,7 @@ async function drawStroke(
 async function exercisePreviewOnlyPacketWorkflow(page: Page, roomId: string) {
   await openDrawer(
     page,
-    "Open ChatGPT command drawer",
+    "Open ChatGPT Site Tools and activity drawer",
     "ChatGPT command drawer",
   );
   const prepareResponsePromise = waitForPacketResponse(
@@ -323,7 +323,7 @@ async function exercisePreviewOnlyPacketWorkflow(page: Page, roomId: string) {
   await expect(page.getByText("Live demo room")).toBeVisible({ timeout: 20_000 });
   await openDrawer(
     page,
-    "Open ChatGPT command drawer",
+    "Open ChatGPT Site Tools and activity drawer",
     "ChatGPT command drawer",
   );
   await expect(page.getByText("Approved packet v1").first()).toBeVisible();
@@ -368,7 +368,7 @@ async function exercisePreviewOnlyPacketWorkflow(page: Page, roomId: string) {
   await expect(page.getByText("Live demo room")).toBeVisible({ timeout: 20_000 });
   await openDrawer(
     page,
-    "Open ChatGPT command drawer",
+    "Open ChatGPT Site Tools and activity drawer",
     "ChatGPT command drawer",
   );
   await expect(page.getByText("Preview only: not sent")).toBeVisible();

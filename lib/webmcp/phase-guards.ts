@@ -1,6 +1,7 @@
 export const WEBMCP_TOOL_NAMES = [
   "get_canvas_state",
   "create_object",
+  "update_object_content",
   "transform_object",
   "set_object_state",
   "discard_object",
@@ -55,6 +56,7 @@ export const WEBMCP_PHASE_TOOL_MATRIX = {
   no_room: [],
   room_active: ["get_canvas_state", "create_object", "history_action"],
   content_exists: [
+    "update_object_content",
     "transform_object",
     "set_object_state",
     "discard_object",
@@ -70,6 +72,7 @@ export const WEBMCP_PHASE_TOOL_MATRIX = {
 const PHASE_REQUIRED_BY_TOOL: Record<WebMcpToolName, WebMcpPhase> = {
   get_canvas_state: "room_active",
   create_object: "room_active",
+  update_object_content: "content_exists",
   transform_object: "content_exists",
   set_object_state: "content_exists",
   discard_object: "content_exists",

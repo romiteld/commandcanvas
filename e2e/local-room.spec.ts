@@ -94,7 +94,7 @@ test("bridges a document.modelContext invocation into the live canvas", async ({
     page
       .getByRole("complementary", { name: "System status drawer" })
       .getByRole("region", { name: "Service status" })
-      .getByText("10 Site Tools registered", { exact: true }),
+      .getByText("11 Site Tools registered", { exact: true }),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Close system status drawer" })
@@ -120,20 +120,10 @@ test("bridges a document.modelContext invocation into the live canvas", async ({
     if (!registration) throw new Error("create_object is not registered");
     return registration.tool.execute(
       {
-        object: {
-          id: "note-browser-agent",
-          type: "note",
-          title: "Browser agent action",
-          x: 300,
-          y: 190,
-          width: 280,
-          height: 190,
-          zIndex: 1,
-          payload: {
-            text: "The registered tool changed this exact page.",
-            tone: "sky",
-          },
-        },
+        type: "note",
+        title: "Browser agent action",
+        text: "The registered tool changed this exact page.",
+        tone: "sky",
       },
       { signal: new AbortController().signal },
     );
@@ -144,7 +134,7 @@ test("bridges a document.modelContext invocation into the live canvas", async ({
     page.getByRole("button", { name: "Select Browser agent action" }),
   ).toBeVisible();
   const agentReceipt = page.getByRole("button", {
-    name: "Open activity drawer: ChatGPT created “Browser agent action”.",
+    name: "Open activity drawer: Site Tools agent created “Browser agent action”.",
   });
   await expect(agentReceipt).toBeVisible();
   await expect(agentReceipt.getByText("R1 · webmcp", { exact: true })).toBeVisible();
@@ -260,7 +250,7 @@ test("opens command and system controls over the workspace without resizing the 
     page.getByRole("complementary", { name: "ChatGPT command drawer" }),
   ).toHaveCount(0);
   await page
-    .getByRole("button", { name: "Open ChatGPT command drawer" })
+    .getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" })
     .click();
   await expect(
     page.getByRole("complementary", { name: "ChatGPT command drawer" }),
@@ -392,7 +382,7 @@ test("reviews a deterministic browser speech transcript before a canonical voice
 
   await page.goto("/local");
   await page
-    .getByRole("button", { name: "Open ChatGPT command drawer" })
+    .getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" })
     .click();
   expect(
     await page.evaluate(

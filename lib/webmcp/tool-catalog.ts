@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import { newCanvasObjectSchema } from "@/lib/canvas/object-model";
+import { NOTE_APPEND_TEXT_MAX_LENGTH } from "@/lib/canvas/object-model";
+import { semanticCanvasObjectInputSchema } from "@/lib/canvas/semantic-object";
 import { sketchTransformOutputKindSchema } from "@/lib/vision/diagram-transform";
 import type { WebMcpToolName } from "@/lib/webmcp/phase-guards";
 
@@ -79,7 +80,13 @@ export const WEBMCP_TOOL_INPUT_SCHEMAS = {
       includeReceipts: z.boolean().optional(),
     })
     .strict(),
-  create_object: z.object({ object: newCanvasObjectSchema }).strict(),
+  create_object: semanticCanvasObjectInputSchema,
+  update_object_content: z
+    .object({
+      objectId: objectIdSchema.optional(),
+      text: z.string().trim().min(1).max(NOTE_APPEND_TEXT_MAX_LENGTH),
+    })
+    .strict(),
   transform_object: z
     .object({
       objectId: objectIdSchema,
@@ -169,35 +176,42 @@ export interface WebMcpToolCatalogEntry {
 export const WEBMCP_TOOL_CATALOG = {
   get_canvas_state: {
     description:
-      "Read a compact semantic projection of the live canvas, selection, and recent activity receipts without changing the room.",
+      "Read a compact semantic projection of the live canvas, current selection, and recent activity receipts without changing the room. Call this with scope selected before acting when the user says this, that, or the selected object; use the returned stable object ID in the next tool call.",
     inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.get_canvas_state,
     annotations: { readOnlyHint: true, untrustedContentHint: true },
     humanApproval: "not_required",
   },
   create_object: {
     description:
-      "Create one validated semantic canvas object at explicit world coordinates and record an attributable receipt.",
+      "Create one note, task board, schedule, diagram, chart, data table, reference card, decision, action item, summary, risk, or open-question card from compact semantic content. CommandCanvas assigns safe IDs, geometry, z-order, and nested IDs, so use this directly for ordinary creation requests without reading the canvas first. To create a visual from the user's spoken explanation of a selected sketch without image inference, first read the selected state, pass its ID as sourceSketchId, and CommandCanvas will preserve the sketch and place the linked visual beside it.",
     inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.create_object,
+    annotations: { readOnlyHint: false, untrustedContentHint: true },
+    humanApproval: "not_required",
+  },
+  update_object_content: {
+    description:
+      "Append bounded text to one active note or thought through the versioned mutation pipeline. Provide a stable objectId, or omit it only after get_canvas_state with scope selected confirms the intended note; this cannot replace content or apply arbitrary JSON patches.",
+    inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.update_object_content,
     annotations: { readOnlyHint: false, untrustedContentHint: true },
     humanApproval: "not_required",
   },
   transform_object: {
     description:
-      "Move, resize, or rotate one existing, unpinned canvas object through the canonical mutation pipeline.",
+      "Move, resize, or rotate one existing, unpinned canvas object through the canonical mutation pipeline. When the user says this or that, first read the selected canvas state and then use that stable object ID.",
     inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.transform_object,
     annotations: { readOnlyHint: false, untrustedContentHint: true },
     humanApproval: "not_required",
   },
   set_object_state: {
     description:
-      "Pin, unpin, minimize, or restore one existing canvas object and record the resulting receipt.",
+      "Pin, unpin, minimize, or restore one existing canvas object and record the resulting receipt. Resolve this, that, or selected through get_canvas_state before using its stable object ID.",
     inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.set_object_state,
     annotations: { readOnlyHint: false, untrustedContentHint: true },
     humanApproval: "not_required",
   },
   discard_object: {
     description:
-      "Move one canvas object to recoverable trash; this never performs permanent deletion.",
+      "Move one explicit canvas object to recoverable trash; this never performs permanent deletion. Resolve this, that, or selected through get_canvas_state before using its stable object ID.",
     inputSchema: WEBMCP_TOOL_INPUT_SCHEMAS.discard_object,
     annotations: { readOnlyHint: false, untrustedContentHint: true },
     humanApproval: "not_required",

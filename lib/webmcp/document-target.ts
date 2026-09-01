@@ -10,6 +10,8 @@ interface ModelContextCandidate {
   ) => Promise<void>;
 }
 
+const resolvedTargets = new WeakMap<object, WebMcpRegistrationTarget>();
+
 export function resolveDocumentWebMcpTarget(
   candidate: unknown,
 ): WebMcpRegistrationTarget | null {
@@ -18,10 +20,15 @@ export function resolveDocumentWebMcpTarget(
   if (!isRecord(modelContext) || typeof modelContext.registerTool !== "function")
     return null;
 
+  const cached = resolvedTargets.get(modelContext);
+  if (cached) return cached;
+
   const target = modelContext as unknown as ModelContextCandidate;
-  return {
+  const resolved: WebMcpRegistrationTarget = {
     registerTool: (tool, options) => target.registerTool(tool, options),
   };
+  resolvedTargets.set(modelContext, resolved);
+  return resolved;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

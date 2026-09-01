@@ -58,7 +58,7 @@ export interface OpenAiDiagramTransformerOptions {
 }
 
 export function readOpenAiDiagramConfig(
-  environment: Readonly<Record<string, string | undefined>> = process.env,
+  environment: Readonly<Record<string, string | undefined>>,
 ): OpenAiDiagramConfigResult {
   const apiKey = environment.OPENAI_API_KEY?.trim() ?? "";
   const rawModel = environment.OPENAI_VISION_MODEL?.trim() || "gpt-5.6-terra";

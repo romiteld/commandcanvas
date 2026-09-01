@@ -113,6 +113,7 @@ function harness(options?: {
       })
     );
   });
+  const getUserMedia = vi.fn(async () => stream);
   const statuses: string[] = [];
   const transcripts: string[] = [];
   const transcriptDeltas: Array<{ delta: string; itemId?: string }> = [];
@@ -152,7 +153,7 @@ function harness(options?: {
     onPlaybackBlocked: options?.onPlaybackBlocked,
     platform: {
       createPeerConnection: () => peer,
-      getUserMedia: vi.fn(async () => stream),
+      getUserMedia,
       createRemoteAudio: () => remoteAudio,
       fetch: fetcher,
     },
@@ -176,6 +177,7 @@ function harness(options?: {
     remoteTrack,
     remoteStream,
     fetcher,
+    getUserMedia,
     statuses,
     transcripts,
     transcriptDeltas,
@@ -335,6 +337,14 @@ describe("Realtime voice WebRTC controller", () => {
       setup.microphoneTrack,
       setup.stream,
     );
+    expect(setup.getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+      },
+      video: false,
+    });
     expect(setup.peer.setRemoteDescription).toHaveBeenCalledWith({
       type: "answer",
       sdp: "v=0\no=openai-answer",

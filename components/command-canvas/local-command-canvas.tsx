@@ -9,11 +9,11 @@ import {
   type CanvasStoreState,
 } from "@/lib/canvas/canvas-store";
 import { createCanvasWebMcpAdapters } from "@/lib/webmcp/canvas-adapters";
-import { resolveDocumentWebMcpTarget } from "@/lib/webmcp/document-target";
 import type { WebMcpExecutionContext } from "@/lib/webmcp/phase-guards";
 import { WebMcpRegistry } from "@/lib/webmcp/registry";
 import type { WebMcpExecutionEvent } from "@/lib/webmcp/registry";
 import { upsertWebMcpExecutionActivity } from "@/lib/webmcp/execution-activity";
+import { useDocumentWebMcpTarget } from "@/lib/webmcp/use-document-target";
 
 export function LocalCommandCanvas() {
   const [webMcpStatus, setWebMcpStatus] = useState<{
@@ -25,6 +25,7 @@ export function LocalCommandCanvas() {
   const [webMcpExecutionActivity, setWebMcpExecutionActivity] = useState<
     readonly WebMcpExecutionEvent[]
   >([]);
+  const webMcpTarget = useDocumentWebMcpTarget();
   const [store] = useState(() =>
     createCanvasStore("room-local", {
       actor: {
@@ -39,8 +40,7 @@ export function LocalCommandCanvas() {
 
   useEffect(() => {
     let active = true;
-    const target = resolveDocumentWebMcpTarget(document);
-    if (!target) {
+    if (!webMcpTarget) {
       queueMicrotask(() => {
         if (active)
           setWebMcpStatus({ value: "Site Tools unavailable", tone: "idle" });
@@ -57,7 +57,7 @@ export function LocalCommandCanvas() {
         : "static";
     const registry = new WebMcpRegistry({
       mode,
-      target,
+      target: webMcpTarget,
       getContext: () => localWebMcpContext(store.getState()),
       adapters: createCanvasWebMcpAdapters({ store }),
       onExecutionEvent(event) {
@@ -110,7 +110,7 @@ export function LocalCommandCanvas() {
       unsubscribe();
       registry.dispose();
     };
-  }, [store]);
+  }, [store, webMcpTarget]);
 
   return (
     <CommandCanvasRoom

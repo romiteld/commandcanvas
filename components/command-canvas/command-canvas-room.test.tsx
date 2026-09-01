@@ -367,7 +367,7 @@ describe("CommandCanvasRoom", () => {
       screen.getByRole("region", { name: "Infinite canvas" }),
     ).toBeVisible();
     const chatGptControls = screen.getByRole("group", {
-      name: "ChatGPT controls",
+      name: "ChatGPT Site Tools and CommandCanvas Live Voice",
     });
     expect(within(chatGptControls).getAllByRole("button")).toHaveLength(2);
     expect(
@@ -385,7 +385,7 @@ describe("CommandCanvasRoom", () => {
       screen.queryByRole("region", { name: "Meeting packet workflow" }),
     ).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
 
     expect(
       screen.getByRole("complementary", { name: "ChatGPT command drawer" }),
@@ -415,7 +415,7 @@ describe("CommandCanvasRoom", () => {
     ).toBeNull();
   });
 
-  it("keeps surrounding ChatGPT Voice primary when Site Tools are registered", async () => {
+  it("keeps the explicit in-page voice control operable when Site Tools are registered", async () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     const idleState = { status: "idle" as const };
@@ -442,13 +442,13 @@ describe("CommandCanvasRoom", () => {
     );
 
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT voice guidance" }),
+      screen.getByRole("button", { name: "Start CommandCanvas Live Voice" }),
     );
 
-    expect(controller.start).not.toHaveBeenCalled();
+    expect(controller.start).toHaveBeenCalledOnce();
     expect(
       screen.getByText(
-        /Site Tools use the ChatGPT account already signed into the surrounding app/i,
+        /ChatGPT desktop app's built-in browser/i,
       ),
     ).toBeVisible();
     expect(
@@ -534,7 +534,7 @@ describe("CommandCanvasRoom", () => {
     });
 
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT command drawer" }),
+      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
     );
     expect(screen.getByText("Revision 1 · 1 visible object")).toBeVisible();
 
@@ -558,7 +558,7 @@ describe("CommandCanvasRoom", () => {
     const store = createCanvasStore("room-local", dependencies());
     const { container } = render(<CommandCanvasRoom store={store} />);
 
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
     const close = screen.getByRole("button", { name: "Close ChatGPT command drawer" });
     const viewport = container.querySelector<HTMLElement>(".canvas-viewport");
     if (!viewport) throw new Error("Canvas viewport fixture was not rendered.");
@@ -610,7 +610,7 @@ describe("CommandCanvasRoom", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
     expect(screen.getByRole("button", { name: "Start live voice" })).toBeVisible();
 
     let result:
@@ -965,7 +965,7 @@ describe("CommandCanvasRoom", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
     await user.click(screen.getByRole("button", { name: "Start live voice" }));
     await user.click(screen.getByRole("button", { name: "Close ChatGPT command drawer" }));
 
@@ -3778,7 +3778,7 @@ describe("CommandCanvasRoom", () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
     const input = screen.getByRole("textbox", {
       name: "Direct canvas command",
     });
@@ -3805,7 +3805,7 @@ describe("CommandCanvasRoom", () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
     const input = screen.getByRole("textbox", {
       name: "Direct canvas command",
     });
@@ -3832,7 +3832,7 @@ describe("CommandCanvasRoom", () => {
     seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
     seedNote(store, { id: "note-risk", title: "Risk note", x: 340 });
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
 
     await user.click(screen.getByRole("button", { name: "Select Launch note" }));
     await user.type(
@@ -3859,7 +3859,7 @@ describe("CommandCanvasRoom", () => {
     const store = createCanvasStore("room-local", dependencies());
     seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
 
     await user.click(screen.getByRole("button", { name: "Select Launch note" }));
     await user.type(
@@ -3896,7 +3896,7 @@ describe("CommandCanvasRoom", () => {
     const store = createCanvasStore("room-local", dependencies());
     seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
 
     await user.click(screen.getByRole("button", { name: "Select Launch note" }));
     await user.type(

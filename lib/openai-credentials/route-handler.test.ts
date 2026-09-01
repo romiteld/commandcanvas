@@ -83,6 +83,47 @@ function request(
   });
 }
 
+function requestWithUnboundedChunkedBody() {
+  let pullCount = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        pullCount += 1;
+        if (pullCount === 1) {
+          controller.enqueue(new Uint8Array(2 * 1_024));
+          return;
+        }
+        if (pullCount === 2) {
+          controller.enqueue(new Uint8Array([0x20]));
+          return;
+        }
+        throw new Error("The handler read past its byte limit.");
+      },
+      cancel() {
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const chunkedRequest = new Request(
+    "https://commandcanvas.example/api/openai-credential",
+    {
+      method: "PUT",
+      headers: {
+        authorization: AUTHORIZATION,
+        "content-type": "application/json",
+      },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" },
+  );
+  return {
+    request: chunkedRequest,
+    observation: () => ({ pullCount, cancelled }),
+  };
+}
+
 describe("OTP-user OpenAI credential API", () => {
   it("requires bearer authentication before any credential access", async () => {
     const deps = dependencies();
@@ -162,6 +203,23 @@ describe("OTP-user OpenAI credential API", () => {
     const serialized = await response.text();
     expect(serialized).toBe(JSON.stringify(STATUS));
     expect(serialized).not.toContain(VALID_KEY);
+  });
+
+  it("stops reading a chunked credential body as soon as the actual byte cap is crossed", async () => {
+    const deps = dependencies();
+    const chunked = requestWithUnboundedChunkedBody();
+
+    const response = await handlePutOpenAiCredentialRequest(
+      chunked.request,
+      deps,
+    );
+
+    expect(response.status).toBe(413);
+    expect(chunked.observation()).toEqual({ pullCount: 2, cancelled: true });
+    expect(deps.service.save).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "request_too_large" },
+    });
   });
 
   it("rejects caller-supplied user identity instead of allowing cross-user writes", async () => {
