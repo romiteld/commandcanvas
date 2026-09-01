@@ -263,6 +263,32 @@ function readyEnvironment(options?: {
 }
 
 describe("DemoCommandCanvas", () => {
+  it("returns an active anonymous demo to the in-place email sign-in gate", async () => {
+    const user = userEvent.setup();
+    const harness = readyEnvironment({ isAnonymous: true });
+    const beginDemoSignIn = vi.fn();
+    (
+      harness.environment as DemoCommandCanvasEnvironment & {
+        beginDemoSignIn: () => void;
+      }
+    ).beginDemoSignIn = beginDemoSignIn;
+
+    render(<DemoCommandCanvas environment={harness.environment} />);
+
+    await user.click(await screen.findByRole("button", { name: "Sign in" }));
+    expect(beginDemoSignIn).toHaveBeenCalledOnce();
+  });
+
+  it("renders a permanent demo account boundary without calling it temporary", async () => {
+    const harness = readyEnvironment({ isAnonymous: false });
+
+    render(<DemoCommandCanvas environment={harness.environment} />);
+
+    expect(await screen.findByText("Signed in as Daniel")).toBeVisible();
+    expect(screen.getByText(/saved OpenAI key eligibility/i)).toBeVisible();
+    expect(screen.queryByText(/Temporary Supabase room/i)).not.toBeInTheDocument();
+  });
+
   it("loads and auto-selects a permanent user's saved credential for Live Voice and sketch interpretation", async () => {
     const credentialStatus = {
       configured: true,
@@ -1189,7 +1215,8 @@ describe("DemoCommandCanvas", () => {
     await userEvent.setup().click(
       screen.getByRole("button", { name: "Open system status" }),
     );
-    expect(screen.getByText(/temporary Supabase room/i)).toBeVisible();
+    expect(screen.getByText(/no owner key/i)).toBeVisible();
+    expect(screen.getByText(/local hand tracking by default/i)).toBeVisible();
     expect(screen.getByText(/email remains preview-only/i)).toBeVisible();
   });
 
@@ -1235,22 +1262,71 @@ describe("DemoCommandCanvas", () => {
     expect(screen.getByRole("button", { name: "Run direct command" })).toBeVisible();
   });
 
-  it("copies the host invite and exposes an exact reset action", async () => {
+  it("shares the real host invite natively when the browser exposes share", async () => {
     const user = userEvent.setup();
+    const share = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: share,
+    });
+    const { environment, copyInvite } = readyEnvironment();
+    render(<DemoCommandCanvas environment={environment} />);
+    await screen.findByText("Live demo room");
+
+    await user.click(screen.getByRole("button", { name: "Invite people" }));
+
+    expect(share).toHaveBeenCalledWith({
+      title: "Join my CommandCanvas room",
+      text: "Join the live CommandCanvas workspace.",
+      url: "https://commandcanvas.example/demo?room=room&join=token",
+    });
+    expect(copyInvite).not.toHaveBeenCalled();
+    expect(await screen.findByText("Invite shared")).toBeVisible();
+  });
+
+  it("copies the real host invite when native sharing is unavailable", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: undefined,
+    });
     const { environment, copyInvite, resetDemo, deleteHostedDemoRoom } =
       readyEnvironment();
     render(<DemoCommandCanvas environment={environment} />);
     await screen.findByText("Live demo room");
 
-    await user.click(screen.getByRole("button", { name: "Copy participant invite" }));
+    await user.click(screen.getByRole("button", { name: "Invite people" }));
     expect(copyInvite).toHaveBeenCalledWith(
       "https://commandcanvas.example/demo?room=room&join=token",
     );
-    expect(await screen.findByText("Invite copied")).toBeVisible();
+    expect(await screen.findByText("Invite link copied")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Reset demo" }));
     expect(deleteHostedDemoRoom).toHaveBeenCalledOnce();
     expect(resetDemo).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to copying after a native share failure and reports an honest failure", async () => {
+    const user = userEvent.setup();
+    const share = vi.fn(async () => {
+      throw new Error("native sharing unavailable");
+    });
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: share,
+    });
+    const { environment, copyInvite } = readyEnvironment();
+    copyInvite.mockRejectedValueOnce(new Error("clipboard unavailable"));
+    render(<DemoCommandCanvas environment={environment} />);
+    await screen.findByText("Live demo room");
+
+    await user.click(screen.getByRole("button", { name: "Invite people" }));
+
+    expect(share).toHaveBeenCalledOnce();
+    expect(copyInvite).toHaveBeenCalledWith(
+      "https://commandcanvas.example/demo?room=room&join=token",
+    );
+    expect(await screen.findByText("Invite unavailable")).toBeVisible();
   });
 
   it("does not clear or reload the demo when durable room deletion fails", async () => {

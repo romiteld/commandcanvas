@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CommandCanvasRoom } from "@/components/command-canvas/command-canvas-room";
+import { returnToDemoSignIn } from "@/components/command-canvas/demo-entry";
 import type { WebMcpSurfaceState } from "@/components/command-canvas/chatgpt-command-surface";
 import type { SpatialCameraControllerPreferences } from "@/components/command-canvas/spatial-camera-control";
 import { MeetingFilmstrip } from "@/components/command-canvas/meeting-filmstrip";
@@ -55,6 +56,7 @@ export interface DemoCommandCanvasEnvironment {
     getUseSavedOpenAiCredential?: () => boolean,
   ) => Promise<DemoRoomBootstrapResult>;
   copyInvite: (inviteUrl: string) => Promise<void>;
+  beginDemoSignIn?: () => void;
   resetDemo: () => void;
   createSketchTransformer?: (
     options: CanvasSketchTransformerOptions,
@@ -91,6 +93,7 @@ const defaultEnvironment: DemoCommandCanvasEnvironment = {
       throw new Error("Clipboard access is unavailable.");
     await navigator.clipboard.writeText(inviteUrl);
   },
+  beginDemoSignIn: returnToDemoSignIn,
   resetDemo() {
     clearStoredDemoRoom(window.sessionStorage);
     window.history.replaceState(null, "", "/demo");
@@ -109,8 +112,8 @@ export function DemoCommandCanvas({
   privateGpuRelayEnabled = false,
 }: DemoCommandCanvasProps) {
   const [view, setView] = useState<DemoView>({ status: "loading" });
-  const [copyState, setCopyState] = useState<
-    "idle" | "copying" | "copied" | "failed"
+  const [inviteState, setInviteState] = useState<
+    "idle" | "sharing" | "shared" | "copied" | "failed"
   >("idle");
   const [webMcpStatus, setWebMcpStatus] = useState<{
     value: string;
@@ -207,6 +210,32 @@ export function DemoCommandCanvas({
       return;
     }
     environment.resetDemo();
+  }
+
+  async function shareInvite(inviteUrl: string) {
+    setInviteState("sharing");
+
+    if (typeof navigator.share === "function") {
+      try {
+        await navigator.share({
+          title: "Join my CommandCanvas room",
+          text: "Join the live CommandCanvas workspace.",
+          url: inviteUrl,
+        });
+        setInviteState("shared");
+        return;
+      } catch {
+        // Native sharing is an optional transport. Clipboard is the honest
+        // fallback when a browser cannot complete the share sheet.
+      }
+    }
+
+    try {
+      await environment.copyInvite(inviteUrl);
+      setInviteState("copied");
+    } catch {
+      setInviteState("failed");
+    }
   }
 
   useEffect(() => {
@@ -634,6 +663,10 @@ export function DemoCommandCanvas({
     );
 
   const { room, snapshot } = view;
+  const isAnonymousDemo = snapshot.identity?.isAnonymous !== false;
+  const accountLabel = isAnonymousDemo
+    ? "No-signup preview"
+    : `Signed in as ${snapshot.membership?.displayName ?? "verified member"}`;
   const collaborationStatus = describeCollaboration(snapshot);
   const participants = snapshot.presence.map((participant) => ({
     id: participant.participantId,
@@ -696,11 +729,21 @@ export function DemoCommandCanvas({
         webMcpSurfaceState={webMcpSurfaceState}
         webMcpExecutionActivity={webMcpExecutionActivity}
         previewBoundary={{
-          label: "Preview",
+          label: isAnonymousDemo ? "No-signup preview" : "Signed in",
           description: (
             <>
-              <p>Temporary Supabase room · email remains preview-only.</p>
-              <a href="/meet">Workspace sign-in</a>
+              {isAnonymousDemo ? (
+                <p>
+                  No owner key · local hand tracking by default · email remains
+                  preview-only.
+                </p>
+              ) : (
+                <p>
+                  {accountLabel} · saved OpenAI key eligibility is scoped to
+                  this verified account · private GPU requires server
+                  authorization.
+                </p>
+              )}
             </>
           ),
         }}
@@ -709,26 +752,37 @@ export function DemoCommandCanvas({
             <span className="demo-role-label">
               {room.role === "host" ? "HOST" : "PARTICIPANT"}
             </span>
+            {isAnonymousDemo ? (
+              <button
+                type="button"
+                aria-label="Sign in"
+                onClick={() =>
+                  (environment.beginDemoSignIn ?? returnToDemoSignIn)()
+                }
+              >
+                Sign in
+              </button>
+            ) : (
+              <span className="demo-account-label" aria-label={accountLabel}>
+                {accountLabel}
+              </span>
+            )}
             {room.inviteUrl ? (
               <button
                 type="button"
-                aria-label="Copy participant invite"
-                disabled={copyState === "copying"}
-                onClick={async () => {
-                  setCopyState("copying");
-                  try {
-                    await environment.copyInvite(room.inviteUrl!);
-                    setCopyState("copied");
-                  } catch {
-                    setCopyState("failed");
-                  }
-                }}
+                aria-label="Invite people"
+                disabled={inviteState === "sharing"}
+                onClick={() => void shareInvite(room.inviteUrl!)}
               >
-                {copyState === "copied"
-                  ? "Invite copied"
-                  : copyState === "failed"
-                    ? "Copy unavailable"
-                    : "Copy invite"}
+                {inviteState === "sharing"
+                  ? "Sharing…"
+                  : inviteState === "shared"
+                    ? "Invite shared"
+                    : inviteState === "copied"
+                      ? "Invite link copied"
+                      : inviteState === "failed"
+                        ? "Invite unavailable"
+                        : "Invite people"}
               </button>
             ) : null}
             <button

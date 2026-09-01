@@ -791,6 +791,62 @@ button:focus-visible {
   font-size: 11px;
 }
 
+.demo-entry-form {
+  width: min(100%, 420px);
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  text-align: left;
+}
+
+.demo-entry-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.demo-entry-form input {
+  width: 100%;
+  min-height: 46px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: white;
+  color: var(--ink);
+  font: inherit;
+}
+
+.demo-entry-form input:focus-visible {
+  outline: 3px solid rgb(39 94 215 / 24%);
+  outline-offset: 2px;
+}
+
+.demo-entry-form .demo-entry-primary,
+.demo-entry-form .demo-entry-secondary {
+  min-height: 46px;
+  margin: 0;
+  border: 1px solid var(--ink);
+  border-radius: 10px;
+  padding: 0 18px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.demo-entry-form .demo-entry-primary {
+  background: var(--ink);
+  color: white;
+}
+
+.demo-entry-form .demo-entry-secondary {
+  background: white;
+  color: var(--ink);
+  cursor: pointer;
+}
+
 @media (max-width: 520px) {
   .demo-entry-actions {
     width: 100%;
@@ -798,7 +854,8 @@ button:focus-visible {
 
   .demo-entry-actions .demo-entry-primary,
   .demo-entry-actions .demo-entry-secondary,
-  .demo-entry-actions button {
+  .demo-entry-actions button,
+  .demo-entry-form {
     width: 100%;
   }
 }
