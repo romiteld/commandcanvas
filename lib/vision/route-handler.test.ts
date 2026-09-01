@@ -238,8 +238,54 @@ describe("sketch transform route", () => {
     expect(await response.text()).not.toContain(savedKey);
   });
 
-  it("refuses saved credentials in demo rooms and missing saved credentials before admission", async () => {
-    const demo = dependencies({
+  it("resolves the same verified permanent demo-room member's saved key on the server", async () => {
+    const savedKey = `sk-saved-${"c".repeat(40)}`;
+    const deps = dependencies({
+      verifier: {
+        auth: {
+          getUser: vi.fn(async () => ({
+            data: {
+              user: {
+                id: ACTOR_ID,
+                email: "danny@example.com",
+                email_confirmed_at: "2026-08-28T12:00:00.000Z",
+                is_anonymous: false,
+              },
+            },
+            error: null,
+          })),
+        },
+      },
+      verifyMembership: vi.fn(async () => ({
+        ok: true as const,
+        role: "host" as const,
+        roomMode: "demo" as const,
+      })),
+      resolveSavedOpenAiApiKey: vi.fn(async () => savedKey),
+    });
+
+    const response = await handleSketchTransformRequest(
+      request(validBody(), null, true),
+      ROOM_ID,
+      deps,
+    );
+
+    expect(response.status).toBe(200);
+    expect(deps.resolveSavedOpenAiApiKey).toHaveBeenCalledWith(ACTOR_ID);
+    expect(deps.transform).toHaveBeenCalledWith(expect.any(Object), savedKey);
+    expect(await response.text()).not.toContain(savedKey);
+  });
+
+  it("refuses an anonymous demo member's saved selector before Vault, admission, or provider work", async () => {
+    const deps = dependencies({
+      verifier: {
+        auth: {
+          getUser: vi.fn(async () => ({
+            data: { user: { id: ACTOR_ID, is_anonymous: true } },
+            error: null,
+          })),
+        },
+      },
       verifyMembership: vi.fn(async () => ({
         ok: true as const,
         role: "host" as const,
@@ -247,18 +293,79 @@ describe("sketch transform route", () => {
       })),
       resolveSavedOpenAiApiKey: vi.fn(async () => OPENAI_API_KEY),
     });
-    const demoResponse = await handleSketchTransformRequest(
+
+    const response = await handleSketchTransformRequest(
       request(validBody(), null, true),
       ROOM_ID,
-      demo,
+      deps,
     );
-    expect(demoResponse.status).toBe(403);
-    await expect(demoResponse.json()).resolves.toMatchObject({
-      error: { code: "saved_credential_unavailable" },
-    });
-    expect(demo.resolveSavedOpenAiApiKey).not.toHaveBeenCalled();
-    expect(demo.admitTransform).not.toHaveBeenCalled();
 
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "permanent_email_auth_required",
+        message: "Verify your email before using a saved OpenAI credential.",
+      },
+    });
+    expect(deps.resolveSavedOpenAiApiKey).not.toHaveBeenCalled();
+    expect(deps.admitTransform).not.toHaveBeenCalled();
+    expect(deps.transform).not.toHaveBeenCalled();
+  });
+
+  it("refuses a saved selector when demo actor verification changes identity", async () => {
+    const otherActorId = "36fc0d14-a2c2-4240-b0c2-d21cdf2765c4";
+    const getUser = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: {
+          user: {
+            id: ACTOR_ID,
+            email: "danny@example.com",
+            email_confirmed_at: "2026-08-28T12:00:00.000Z",
+            is_anonymous: false,
+          },
+        },
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        data: {
+          user: {
+            id: otherActorId,
+            email: "other@example.com",
+            email_confirmed_at: "2026-08-28T12:00:00.000Z",
+            is_anonymous: false,
+          },
+        },
+        error: null,
+      });
+    const deps = dependencies({
+      verifier: { auth: { getUser } },
+      verifyMembership: vi.fn(async () => ({
+        ok: true as const,
+        role: "host" as const,
+        roomMode: "demo" as const,
+      })),
+      resolveSavedOpenAiApiKey: vi.fn(async () => OPENAI_API_KEY),
+    });
+
+    const response = await handleSketchTransformRequest(
+      request(validBody(), null, true),
+      ROOM_ID,
+      deps,
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "permanent_email_auth_required" },
+    });
+    expect(getUser).toHaveBeenCalledTimes(2);
+    expect(deps.resolveSavedOpenAiApiKey).not.toHaveBeenCalled();
+    expect(deps.admitTransform).not.toHaveBeenCalled();
+    expect(deps.transform).not.toHaveBeenCalled();
+  });
+
+  it("refuses a missing standard-room saved credential before admission", async () => {
     const missing = dependencies({
       verifier: {
         auth: {

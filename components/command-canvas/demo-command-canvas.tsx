@@ -29,6 +29,11 @@ import type { BrowserRoomClient } from "@/lib/supabase/browser-room";
 import { createBrowserSupabaseClient } from "@/lib/supabase/browser-client";
 import { createBrowserRoomApi } from "@/lib/supabase/room-api";
 import { createBrowserPacketApi } from "@/lib/packets/browser-api";
+import {
+  createBrowserOpenAiCredentialApi,
+  type BrowserOpenAiCredentialApi,
+  type BrowserOpenAiCredentialStatus,
+} from "@/lib/openai-credentials/browser-api";
 import { createCanvasWebMcpAdapters } from "@/lib/webmcp/canvas-adapters";
 import type { WebMcpExecutionContext } from "@/lib/webmcp/phase-guards";
 import {
@@ -47,6 +52,7 @@ import { createBrowserSketchTransformApi } from "@/lib/vision/browser-api";
 export interface DemoCommandCanvasEnvironment {
   bootstrap: (
     getOpenAiApiKey?: () => string,
+    getUseSavedOpenAiCredential?: () => boolean,
   ) => Promise<DemoRoomBootstrapResult>;
   copyInvite: (inviteUrl: string) => Promise<void>;
   resetDemo: () => void;
@@ -121,7 +127,18 @@ export function DemoCommandCanvas({
     | { status: "failed"; message: string }
   >({ status: "idle" });
   const [openAiApiKey, setOpenAiApiKey] = useState("");
+  const [savedOpenAiCredential, setSavedOpenAiCredential] =
+    useState<BrowserOpenAiCredentialStatus>({ configured: false });
+  const [savedOpenAiCredentialBusy, setSavedOpenAiCredentialBusy] =
+    useState(false);
+  const [savedOpenAiCredentialError, setSavedOpenAiCredentialError] =
+    useState<string | null>(null);
+  const [useSavedOpenAiCredential, setUseSavedOpenAiCredential] =
+    useState(false);
   const openAiApiKeyRef = useRef("");
+  const useSavedOpenAiCredentialRef = useRef(false);
+  const openAiCredentialApiRef = useRef<BrowserOpenAiCredentialApi | null>(null);
+  const openAiCredentialAbortRef = useRef<AbortController | null>(null);
   const webMcpRegistryRef = useRef<WebMcpRegistry | null>(null);
   const webMcpTarget = useDocumentWebMcpTarget();
   const meetingMediaStreamRef = useRef<MediaStream | null>(null);
@@ -162,6 +179,10 @@ export function DemoCommandCanvas({
     openAiApiKeyRef.current = value;
     setOpenAiApiKey(value);
   }, []);
+  const selectSavedOpenAiCredential = useCallback((value: boolean) => {
+    useSavedOpenAiCredentialRef.current = value;
+    setUseSavedOpenAiCredential(value);
+  }, []);
   const sketchTransformer = useMemo(() => {
     if (!readyRoom) return null;
     const createTransformer =
@@ -197,7 +218,10 @@ export function DemoCommandCanvas({
     if (!operation || operation.environment !== environment) {
       operation = {
         environment,
-        promise: environment.bootstrap(() => openAiApiKeyRef.current),
+        promise: environment.bootstrap(
+          () => openAiApiKeyRef.current,
+          () => useSavedOpenAiCredentialRef.current,
+        ),
         activeConsumers: 0,
         session: null,
         disposed: false,
@@ -240,10 +264,142 @@ export function DemoCommandCanvas({
       active = false;
       unsubscribe();
       openAiApiKeyRef.current = "";
+      useSavedOpenAiCredentialRef.current = false;
       operation.activeConsumers = Math.max(0, operation.activeConsumers - 1);
       if (operation.activeConsumers === 0) void disposeOperation();
     };
   }, [environment]);
+
+  const permanentIdentityId =
+    view.status === "ready" && view.snapshot.identity?.isAnonymous === false
+      ? view.snapshot.identity.userId
+      : null;
+
+  useEffect(() => {
+    let active = true;
+    openAiCredentialAbortRef.current?.abort();
+    openAiCredentialAbortRef.current = null;
+    openAiCredentialApiRef.current = null;
+
+    if (!readyRoom || !permanentIdentityId) {
+      queueMicrotask(() => {
+        if (!active) return;
+        setSavedOpenAiCredential({ configured: false });
+        setSavedOpenAiCredentialBusy(false);
+        setSavedOpenAiCredentialError(null);
+        selectSavedOpenAiCredential(false);
+      });
+      return () => {
+        active = false;
+      };
+    }
+
+    const accessToken = readyRoom.session.getAccessToken();
+    if (!accessToken) {
+      queueMicrotask(() => {
+        if (!active) return;
+        setSavedOpenAiCredential({ configured: false });
+        setSavedOpenAiCredentialBusy(false);
+        setSavedOpenAiCredentialError(
+          "OpenAI credential service is unavailable for this room.",
+        );
+        selectSavedOpenAiCredential(false);
+      });
+      return () => {
+        active = false;
+      };
+    }
+
+    const lifecycle = new AbortController();
+    const credentialApi = createBrowserOpenAiCredentialApi({ accessToken });
+    openAiCredentialAbortRef.current = lifecycle;
+    openAiCredentialApiRef.current = credentialApi;
+    queueMicrotask(() => {
+      if (!active || lifecycle.signal.aborted) return;
+      setSavedOpenAiCredentialBusy(true);
+      setSavedOpenAiCredentialError(null);
+    });
+    void credentialApi.load(lifecycle.signal).then((result) => {
+      if (
+        !active ||
+        lifecycle.signal.aborted ||
+        openAiCredentialApiRef.current !== credentialApi
+      )
+        return;
+      setSavedOpenAiCredentialBusy(false);
+      if (!result.ok) {
+        setSavedOpenAiCredential({ configured: false });
+        selectSavedOpenAiCredential(false);
+        setSavedOpenAiCredentialError(result.error.message);
+        return;
+      }
+      setSavedOpenAiCredential(result.value);
+      selectSavedOpenAiCredential(result.value.configured);
+    });
+
+    return () => {
+      active = false;
+      lifecycle.abort();
+      if (openAiCredentialAbortRef.current === lifecycle)
+        openAiCredentialAbortRef.current = null;
+      if (openAiCredentialApiRef.current === credentialApi)
+        openAiCredentialApiRef.current = null;
+    };
+  }, [permanentIdentityId, readyRoom, selectSavedOpenAiCredential]);
+
+  async function saveOpenAiCredential(apiKey: string) {
+    const signal = openAiCredentialAbortRef.current?.signal;
+    const accessToken = readyRoom?.session.getAccessToken();
+    if (!permanentIdentityId || !accessToken || !signal || signal.aborted) {
+      setSavedOpenAiCredentialError(
+        "OpenAI credential service is unavailable for this room.",
+      );
+      return;
+    }
+    const credentialApi = createBrowserOpenAiCredentialApi({ accessToken });
+    openAiCredentialApiRef.current = credentialApi;
+    setSavedOpenAiCredentialBusy(true);
+    setSavedOpenAiCredentialError(null);
+    const result = await credentialApi.save(
+      { apiKey, confirmSave: true },
+      signal,
+    );
+    if (signal.aborted || openAiCredentialApiRef.current !== credentialApi)
+      return;
+    setSavedOpenAiCredentialBusy(false);
+    if (!result.ok) {
+      setSavedOpenAiCredentialError(result.error.message);
+      return;
+    }
+    updateOpenAiApiKey("");
+    setSavedOpenAiCredential(result.value);
+    selectSavedOpenAiCredential(true);
+  }
+
+  async function deleteOpenAiCredential() {
+    const signal = openAiCredentialAbortRef.current?.signal;
+    const accessToken = readyRoom?.session.getAccessToken();
+    if (!permanentIdentityId || !accessToken || !signal || signal.aborted) {
+      setSavedOpenAiCredentialError(
+        "OpenAI credential service is unavailable for this room.",
+      );
+      return;
+    }
+    const credentialApi = createBrowserOpenAiCredentialApi({ accessToken });
+    openAiCredentialApiRef.current = credentialApi;
+    setSavedOpenAiCredentialBusy(true);
+    setSavedOpenAiCredentialError(null);
+    const result = await credentialApi.clear(signal);
+    if (signal.aborted || openAiCredentialApiRef.current !== credentialApi)
+      return;
+    setSavedOpenAiCredentialBusy(false);
+    if (!result.ok) {
+      setSavedOpenAiCredentialError(result.error.message);
+      return;
+    }
+    setSavedOpenAiCredential(result.value);
+    selectSavedOpenAiCredential(false);
+  }
 
   /* Packet adapters intentionally call stable workflow methods that read the
      latest canonical state. Re-registering every render would create Site Tool
@@ -600,6 +756,22 @@ export function DemoCommandCanvas({
           getAccessToken: room.session.getAccessToken,
           disabled:
             snapshot.status !== "ready" && snapshot.status !== "degraded",
+          ...(permanentIdentityId
+            ? {
+                useSavedOpenAiCredential,
+                onUseSavedOpenAiCredentialChange:
+                  selectSavedOpenAiCredential,
+                savedOpenAiCredential: {
+                  ...savedOpenAiCredential,
+                  busy: savedOpenAiCredentialBusy,
+                  ...(savedOpenAiCredentialError
+                    ? { error: savedOpenAiCredentialError }
+                    : {}),
+                  onSave: saveOpenAiCredential,
+                  onDelete: deleteOpenAiCredential,
+                },
+              }
+            : {}),
         }}
         openAiApiKey={openAiApiKey}
         onOpenAiApiKeyChange={updateOpenAiApiKey}
@@ -624,6 +796,7 @@ export function DemoCommandCanvas({
 
 async function bootstrapBrowserDemoRoom(
   getOpenAiApiKey: () => string = () => "",
+  getUseSavedOpenAiCredential: () => boolean = () => false,
 ) {
   const clientResult = createBrowserSupabaseClient({
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -650,7 +823,11 @@ async function bootstrapBrowserDemoRoom(
         realtimeClient: client as unknown as DemoRoomRealtimeClient,
         createRoomApi: (accessToken) => createBrowserRoomApi({ accessToken }),
         createSketchTransformApi: (accessToken) =>
-          createBrowserSketchTransformApi({ accessToken, getOpenAiApiKey }),
+          createBrowserSketchTransformApi({
+            accessToken,
+            getOpenAiApiKey,
+            getUseSavedOpenAiCredential,
+          }),
         createPacketApi: (accessToken) =>
           createBrowserPacketApi({ accessToken }),
         hydrateCanvas,

@@ -94,8 +94,11 @@ export function DemoEntry({ children }: { children: ReactNode }) {
       <p className="demo-entry-boundary">
         The judge preview uses your existing signed-in CommandCanvas identity,
         or creates a temporary Supabase identity when none exists. A capped room
-        is allocated only after you continue. It does not save an OpenAI key and
-        cannot send production email.
+        is allocated only after you continue. Anonymous no-signup users can
+        enter a temporary key held only in this tab. A permanent
+        email-authenticated CommandCanvas identity can save and reuse only its
+        own credential through server-side Supabase Vault. No deployment-owner
+        OpenAI key is shared, and the preview cannot send production email.
       </p>
     </main>
   );

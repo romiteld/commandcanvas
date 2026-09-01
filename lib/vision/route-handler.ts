@@ -275,7 +275,7 @@ async function resolveOpenAiCredential(
       ),
     };
   if (!useSaved) return readSessionOpenAiKey(rawKey);
-  if (roomMode !== "standard")
+  if (roomMode !== "standard" && roomMode !== "demo")
     return {
       ok: false,
       response: jsonError(

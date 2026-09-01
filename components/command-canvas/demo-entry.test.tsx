@@ -70,6 +70,22 @@ describe("DemoEntry", () => {
     expect(
       screen.getByText(/no additional ChatGPT sign-in is required/i),
     ).toBeVisible();
+    expect(
+      screen.getByText(
+        /anonymous no-signup users can enter a temporary key held only in this tab/i,
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        /permanent email-authenticated CommandCanvas identity can save and reuse only its own credential through server-side Supabase Vault/i,
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/no deployment-owner OpenAI key is shared/i),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/It does not save an OpenAI key/i),
+    ).not.toBeInTheDocument();
 
     await user.click(
       screen.getByRole("button", { name: "Enter no-signup preview" }),

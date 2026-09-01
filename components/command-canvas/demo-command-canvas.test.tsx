@@ -23,6 +23,7 @@ import * as roomSessionModule from "@/lib/demo/room-session";
 import * as browserClientModule from "@/lib/supabase/browser-client";
 import * as browserTransformModule from "@/lib/vision/browser-api";
 import * as browserPacketModule from "@/lib/packets/browser-api";
+import * as browserCredentialModule from "@/lib/openai-credentials/browser-api";
 import { createTestOpenAiApiKey } from "@/lib/testing/openai-key-fixture";
 
 const ROOM_ID = "d32af6a9-31dd-4dfc-98d5-fcf439b9b106";
@@ -66,6 +67,7 @@ function readyEnvironment(options?: {
   packetId?: string;
   deleteHostedDemoRoom?: DemoRoomSession["deleteHostedDemoRoom"];
   role?: "host" | "participant";
+  isAnonymous?: boolean;
 }) {
   const canvas = createEmptyCanvasState(ROOM_ID);
   const store = createCanvasStore(ROOM_ID, {
@@ -128,7 +130,10 @@ function readyEnvironment(options?: {
   let snapshot: DemoRoomSnapshot = {
     status: "ready",
     realtimeStatus: "connected",
-    identity: { userId: HOST_ID, isAnonymous: true },
+    identity: {
+      userId: HOST_ID,
+      isAnonymous: options?.isAnonymous ?? true,
+    },
     roomId: ROOM_ID,
     membership: {
       roomId: ROOM_ID,
@@ -258,6 +263,126 @@ function readyEnvironment(options?: {
 }
 
 describe("DemoCommandCanvas", () => {
+  it("loads and auto-selects a permanent user's saved credential for Live Voice and sketch interpretation", async () => {
+    const credentialStatus = {
+      configured: true,
+      fingerprint: "sha256:0123456789abcdef",
+      updatedAt: "2026-09-01T03:12:34.000Z",
+    };
+    const credentialApi = {
+      load: vi.fn(async () => ({ ok: true as const, value: credentialStatus })),
+      save: vi.fn(),
+      clear: vi.fn(),
+    };
+    const createCredentialApi = vi
+      .spyOn(browserCredentialModule, "createBrowserOpenAiCredentialApi")
+      .mockReturnValue(credentialApi);
+    const harness = readyEnvironment({ isAnonymous: false });
+    const originalBootstrap = harness.environment.bootstrap;
+    let readUseSavedOpenAiCredential: (() => boolean) | undefined;
+    harness.environment.bootstrap = (async (...args: unknown[]) => {
+      readUseSavedOpenAiCredential = args[1] as (() => boolean) | undefined;
+      return originalBootstrap();
+    }) as DemoCommandCanvasEnvironment["bootstrap"];
+
+    try {
+      render(<DemoCommandCanvas environment={harness.environment} />);
+
+      expect(
+        await screen.findByText(
+          /Saved to your CommandCanvas account and selected automatically/i,
+        ),
+      ).toBeVisible();
+      expect(screen.getByText("sha256:0123456789abcdef")).toBeVisible();
+      expect(createCredentialApi).toHaveBeenCalledExactlyOnceWith({
+        accessToken: "header.payload.signature",
+      });
+      expect(credentialApi.load).toHaveBeenCalledOnce();
+      expect(readUseSavedOpenAiCredential).toBeTypeOf("function");
+      expect(readUseSavedOpenAiCredential?.()).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("lets a permanent user save and delete a credential without exposing its raw value", async () => {
+    const user = userEvent.setup();
+    const apiKey = createTestOpenAiApiKey("permanent-demo-user");
+    const credentialStatus = {
+      configured: true,
+      fingerprint: "sha256:fedcba9876543210",
+      updatedAt: "2026-09-01T03:22:34.000Z",
+    };
+    const credentialApi = {
+      load: vi.fn(async () => ({
+        ok: true as const,
+        value: { configured: false as const },
+      })),
+      save: vi.fn(async () => ({ ok: true as const, value: credentialStatus })),
+      clear: vi.fn(async () => ({
+        ok: true as const,
+        value: { configured: false as const },
+      })),
+    };
+    vi.spyOn(browserCredentialModule, "createBrowserOpenAiCredentialApi")
+      .mockReturnValue(credentialApi);
+    const harness = readyEnvironment({ isAnonymous: false });
+
+    try {
+      render(<DemoCommandCanvas environment={harness.environment} />);
+      await user.click(
+        await screen.findByRole("button", {
+          name: "Open ChatGPT Site Tools and activity drawer",
+        }),
+      );
+      const input = await screen.findByLabelText("Your OpenAI API key");
+      await user.type(input, apiKey);
+      await user.click(screen.getByRole("button", { name: "Save key to my account" }));
+
+      await waitFor(() =>
+        expect(credentialApi.save).toHaveBeenCalledExactlyOnceWith(
+          { apiKey, confirmSave: true },
+          expect.any(AbortSignal),
+        ),
+      );
+      expect(screen.queryByDisplayValue(apiKey)).not.toBeInTheDocument();
+      expect(await screen.findByText("sha256:fedcba9876543210")).toBeVisible();
+
+      await user.click(screen.getByRole("button", { name: "Remove saved key" }));
+      await user.click(screen.getByRole("button", { name: "Confirm remove saved key" }));
+      await waitFor(() => expect(credentialApi.clear).toHaveBeenCalledOnce());
+      expect(await screen.findByLabelText("Your OpenAI API key")).toBeVisible();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("keeps an anonymous no-signup demo isolated from the saved credential API", async () => {
+    const createCredentialApi = vi.spyOn(
+      browserCredentialModule,
+      "createBrowserOpenAiCredentialApi",
+    );
+    const harness = readyEnvironment({ isAnonymous: true });
+    const originalBootstrap = harness.environment.bootstrap;
+    let readUseSavedOpenAiCredential: (() => boolean) | undefined;
+    harness.environment.bootstrap = (async (...args: unknown[]) => {
+      readUseSavedOpenAiCredential = args[1] as (() => boolean) | undefined;
+      return originalBootstrap();
+    }) as DemoCommandCanvasEnvironment["bootstrap"];
+
+    try {
+      render(<DemoCommandCanvas environment={harness.environment} />);
+      expect(await screen.findByText("Live demo room")).toBeVisible();
+      expect(createCredentialApi).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: "Save key to my account" }))
+        .not.toBeInTheDocument();
+      expect(readUseSavedOpenAiCredential).toBeTypeOf("function");
+      expect(readUseSavedOpenAiCredential?.()).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("shares one in-memory OpenAI key with room providers and clears it on unmount", async () => {
     const user = userEvent.setup();
     const harness = readyEnvironment();
@@ -337,6 +462,7 @@ describe("DemoCommandCanvas", () => {
       expect(createBrowserSketchTransformApi).toHaveBeenCalledWith({
         accessToken: "header.payload.signature",
         getOpenAiApiKey: expect.any(Function),
+        getUseSavedOpenAiCredential: expect.any(Function),
       });
       expect(dependencies?.createPacketApi?.("header.payload.signature"))
         .toBe(packetApi);

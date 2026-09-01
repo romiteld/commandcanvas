@@ -96,7 +96,9 @@ export async function handleRealtimeSessionRequest(
       "member_required",
       "Join this room before starting live voice.",
     );
-  if (membership.roomMode === "standard") {
+  const requestsSavedCredential =
+    request.headers.get("x-commandcanvas-openai-credential") === "saved";
+  if (membership.roomMode === "standard" || requestsSavedCredential) {
     const permanentActor = await authenticatePermanentEmailUser(
       request.headers.get("authorization"),
       dependencies.verifier,
@@ -111,7 +113,6 @@ export async function handleRealtimeSessionRequest(
 
   const credential = await resolveOpenAiCredential(
     request,
-    membership.roomMode,
     actor.actorUserId,
     dependencies,
   );
@@ -172,7 +173,6 @@ export async function handleRealtimeSessionRequest(
 
 async function resolveOpenAiCredential(
   request: Request,
-  roomMode: "standard" | "demo",
   actorUserId: string,
   dependencies: RealtimeSessionRouteDependencies,
 ): Promise<
@@ -215,15 +215,6 @@ async function resolveOpenAiCredential(
           ),
         };
   }
-  if (roomMode !== "standard")
-    return {
-      ok: false,
-      response: jsonError(
-        403,
-        "saved_credential_unavailable",
-        "Saved credentials are available after email sign-in in a meeting room.",
-      ),
-    };
   try {
     const savedKey = await dependencies.resolveSavedOpenAiApiKey(actorUserId);
     const parsed = openAiApiKeySchema.safeParse(savedKey);

@@ -242,6 +242,86 @@ describe("Realtime session route", () => {
     expect(await response.text()).not.toContain(savedKey);
   });
 
+  it("allows a permanent demo member to use only their own server-resolved saved credential", async () => {
+    const savedKey = `sk-demo-saved-${"d".repeat(40)}`;
+    const deps = dependencies({
+      verifier: {
+        auth: {
+          getUser: vi.fn(async () => ({
+            data: {
+              user: {
+                id: ACTOR_ID,
+                email: "danny@example.com",
+                email_confirmed_at: "2026-09-01T12:00:00.000Z",
+                is_anonymous: false,
+              },
+            },
+            error: null,
+          })),
+        },
+      },
+      resolveSavedOpenAiApiKey: vi.fn(async () => savedKey),
+    });
+
+    const response = await handleRealtimeSessionRequest(
+      request({ openAiApiKey: null, savedCredential: true }),
+      deps,
+    );
+
+    expect(response.status).toBe(200);
+    expect(deps.resolveSavedOpenAiApiKey).toHaveBeenCalledWith(ACTOR_ID);
+    expect(deps.admitSession).toHaveBeenCalledWith(ROOM_ID, ACTOR_ID);
+    expect(deps.createCall).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: savedKey }),
+    );
+    expect(await response.text()).not.toContain(savedKey);
+  });
+
+  it("refuses a demo saved credential when permanent verification resolves to another user", async () => {
+    const otherUserId = "33333333-3333-4333-8333-333333333333";
+    const getUser = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: {
+          user: {
+            id: ACTOR_ID,
+            email: "danny@example.com",
+            email_confirmed_at: "2026-09-01T12:00:00.000Z",
+            is_anonymous: false,
+          },
+        },
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        data: {
+          user: {
+            id: otherUserId,
+            email: "other@example.com",
+            email_confirmed_at: "2026-09-01T12:00:00.000Z",
+            is_anonymous: false,
+          },
+        },
+        error: null,
+      });
+    const deps = dependencies({
+      verifier: { auth: { getUser } },
+      resolveSavedOpenAiApiKey: vi.fn(async () => SESSION_OPENAI_API_KEY),
+    });
+
+    const response = await handleRealtimeSessionRequest(
+      request({ openAiApiKey: null, savedCredential: true }),
+      deps,
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "permanent_email_auth_required" },
+    });
+    expect(deps.resolveSavedOpenAiApiKey).not.toHaveBeenCalled();
+    expect(deps.admitSession).not.toHaveBeenCalled();
+    expect(deps.createCall).not.toHaveBeenCalled();
+  });
+
   it("refuses missing or ambiguous saved credentials before admission", async () => {
     const permanentVerifier = {
       auth: {
@@ -335,7 +415,7 @@ describe("Realtime session route", () => {
     expect(deps.createCall).not.toHaveBeenCalled();
   });
 
-  it("does not allow an account-saved credential in a no-signup demo room", async () => {
+  it("refuses an anonymous demo member's saved credential before Vault, admission, or provider work", async () => {
     const deps = dependencies({
       resolveSavedOpenAiApiKey: vi.fn(async () => SESSION_OPENAI_API_KEY),
     });
@@ -347,10 +427,11 @@ describe("Realtime session route", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
-      error: { code: "saved_credential_unavailable" },
+      error: { code: "permanent_email_auth_required" },
     });
     expect(deps.resolveSavedOpenAiApiKey).not.toHaveBeenCalled();
     expect(deps.admitSession).not.toHaveBeenCalled();
+    expect(deps.createCall).not.toHaveBeenCalled();
   });
 
   it("refuses an anonymous identity in a standard room before admission or paid provider work", async () => {
