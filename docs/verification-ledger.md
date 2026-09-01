@@ -1759,3 +1759,135 @@ rewriting their historical evidence:
   enterprise identity, billing, native applications, headset support,
   marketplaces, desktop automation, and arbitrary physical-object tracking are
   not claimed by this release.
+
+## Checkpoint 35: authenticated entry, demo reload, and public release closeout
+
+### WORKING
+
+- The verified-email meeting lobby now handles OTP request, OTP verification,
+  host profile submission, and in-room invitation creation through explicit
+  client submit handlers that synchronously prevent native form navigation.
+  A mobile browser can no longer win a page reload against successful room
+  creation and return the host to the display-name form.
+- Production request logs and database membership checks showed that the
+  reported display-name attempts had already returned HTTP 201 and created
+  matching host memberships. The defect was the client navigation fallback,
+  not a failed Supabase mutation. Existing user-created rooms were preserved.
+- The limited judge preview still requires an explicit first entry. That choice
+  is now remembered only for reloads in the same browser tab, allowing the
+  current Supabase room and participant session to reconstruct. A new tab still
+  presents the entry gate, and storage-disabled browsers retain the repeated
+  gate rather than bypassing it.
+- Public source commit
+  `3dfe1c135cf00387c5b985d5c4ab5b0a68d36d60` contains the runtime fixes. It
+  is authored and committed only by Daniel Romitelli, with no co-author or
+  automated-author attribution.
+- GitHub Actions run `33498110021` completed with conclusion `success` for that
+  exact SHA. Vercel deployment `dpl_4CSdyfPnB3KDtJLWrsW7AWyJUpxD` is `Ready`,
+  targets Production, contains the same Git SHA, and owned the canonical
+  `https://commandcanvas.vercel.app` alias for the browser runs below. This
+  checkpoint is necessarily recorded in a later documentation-only commit;
+  that successor changes no runtime application file and requires its own final
+  alias receipt in the release handoff.
+- The linked Supabase migration ledger records both repository-matched release
+  migrations `20260901030350` and `20260901093110`. Historical version-ID
+  differences remain documented; fresh projects apply the repository files in
+  filename order and raw linked `supabase db push` remains intentionally
+  disallowed until that historical ledger is reconciled.
+- Vercel has the required Supabase, Resend, voice, WebMCP, vision-model, and
+  private-relay configuration names in Production. No deployment-owner OpenAI
+  API key is present. Preview has zero environment bindings and zero
+  deployments.
+
+### VERIFIED LOCALLY
+
+- `npm run lint`: exit 0 with no warnings.
+- Raw `npx tsc --noEmit`: exit 0 with no diagnostics.
+- `npm test -- --run`: 124 files and 1,351 tests passed with zero failures.
+- `npm run build`: the generated hand worker and optimized Next.js 16.3.3
+  webpack build completed, including all 14 static pages and dynamic API
+  routes.
+- `npm audit --omit=dev --audit-level=high`: zero vulnerabilities.
+- Regression coverage proves that the authenticated host form has no native
+  action, prevents the submit event default, and forwards the exact room and
+  display-name `FormData`. Separate coverage proves the first judge-preview
+  entry is explicit and same-tab reload recognition is session-scoped.
+
+### VERIFIED IN BROWSER
+
+- Fresh canonical requests returned HTTP 200 for `/`, `/demo`, and `/meet`.
+  An unauthenticated `GET /api/openai-credential` returned the required HTTP
+  401 `authorization_missing` refusal.
+- The exact Production deployment passed 10 applicable responsive landing,
+  reduced-motion, trusted touch/stylus, offline-recovery, desktop Chromium,
+  mobile Chromium, and mobile WebKit scenarios. Eleven inapplicable project
+  combinations were intentionally skipped and none failed.
+- The exact Production deployment passed 13 applicable spatial-object browser
+  scenarios covering creation, selection, pointer movement, resize, minimize,
+  restore, recoverable discard, undo, pan, zoom, direct speech transcription,
+  WebMCP bridging, receipts, desktop layout, and mobile layout. Nine
+  inapplicable project combinations were intentionally skipped and none failed.
+- Two fresh production browsers joined one real no-signup Supabase room. The
+  run verified Presence, two participant indicators, cursor broadcast,
+  collaborator mutation persistence, activity receipts, offline recovery,
+  grouping, transform, undo, redo, ungroup, participant reload, room-state
+  reconstruction, and resumed cursor movement. A second scenario verified
+  that a fresh tab retaining only the Supabase identity reopened the recent
+  room rather than allocating a duplicate. Both scenarios passed and their
+  temporary rooms were deleted in `finally` cleanup.
+- The WebKit failures observed during this closeout were resolved as test
+  contract defects, not hidden: toolbar-created objects are intentionally named
+  `Project board` and `Schedule` without invented commitments, and WebKit's
+  non-document `Load request cancelled` events during deliberate navigation
+  are distinguished from real document or network failures.
+
+### PUBLIC REPOSITORY CLEANUP
+
+- The public default branch no longer contains internal `.superpowers`
+  execution reports or an inoperative CodeRabbit configuration. The ignore
+  contract prevents the internal reports from returning.
+- The obsolete review pull request is closed and neutrally titled. Its review
+  thread is resolved, its non-deletable bot comment is minimized as `outdated`,
+  and it has zero issue comments. Both temporary review branches were deleted.
+- Public branches are now exactly `main` and `hand-relay-source`. The latter is
+  intentionally retained because commit
+  `ee5c2afcfbfc8427b39e2f13e170785c87bce2e3` is the exact separate AGPL
+  corresponding source for the optional GPU relay. `SOURCE.md` and the relay
+  documentation link that exact commit.
+- The obsolete Vercel deployment tied to the superseded synthetic-secret test
+  commit was deleted. Current GitHub secret scanning reports no source alert,
+  and the detector-shaped literal is absent from current `main`.
+
+### UNVERIFIED OR EXTERNALLY BLOCKED
+
+- The reported physical mobile OTP and display-name sequence still needs one
+  user rerun against this exact release. The native-navigation regression is
+  covered and the prior production API/database results are known, but an
+  automated confirmed session is not a substitute for entering a newly
+  delivered OTP on the user's device.
+- ChatGPT built-in-browser Site Tools invocation remains a host-rollout check.
+  The application correctly distinguishes the surrounding ChatGPT account from
+  CommandCanvas room identity, but native browser registration does not prove a
+  tool call made by ChatGPT against the same live page and session.
+- Physical camera, index-finger drawing, pinch acquisition, two-hand resize,
+  throw ergonomics, lighting, occlusion, thermal behavior, and private RTX
+  relay fallback require a real human and target device. Deterministic landmark
+  media and browser profiles remain engineering evidence, not physical proof.
+- A fresh billed Realtime or vision call with a real user-owned OpenAI key and a
+  fresh real Resend invitation or approved packet delivery were not repeated on
+  this closeout SHA. Their server boundaries and historical provider evidence
+  remain intact, but are not presented as new provider evidence.
+- GitHub rejected deletion of historical Actions run `33467667512` and changes
+  to repository topics or vulnerability-alert settings with HTTP 403 for the
+  available token. The run is not reachable from a current branch, its paired
+  Vercel deployment is deleted, and the external GitGuardian dashboard incident
+  may still require an owner-session dismissal or later GitHub cache cleanup.
+
+### CUT
+
+- No implemented object-creation, voice, hand-control, WebMCP, collaboration,
+  invitation, authentication, packet, or Resend behavior was removed.
+- Production TURN/SFU conferencing infrastructure, recording, screen sharing,
+  enterprise identity, billing, native applications, headset support,
+  marketplaces, desktop automation, and arbitrary physical-object tracking are
+  not claimed by this release.
