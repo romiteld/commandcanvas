@@ -34,8 +34,22 @@ export type HandCalibrationResult =
   | { readonly accepted: true; readonly profile: HandCalibrationProfile }
   | {
       readonly accepted: false;
-      readonly reason: "insufficient_reach" | "reach_too_small" | "reach_too_large";
+      readonly reason:
+        | "insufficient_reach"
+        | "reach_too_small"
+        | "reach_too_large"
+        | "pinch_not_separated";
       readonly profile: HandCalibrationProfile;
+    };
+
+export type HandCalibrationReachResult =
+  | {
+      readonly accepted: true;
+      readonly cameraBounds: NormalizedRect;
+    }
+  | {
+      readonly accepted: false;
+      readonly reason: "insufficient_reach" | "reach_too_small" | "reach_too_large";
     };
 
 export type HandControlGainState =
@@ -184,7 +198,9 @@ const FALLBACK_CAMERA_BOUNDS: NormalizedRect = Object.freeze({
 const FALLBACK_CLOSED_PINCH_RATIO = 0.28;
 const FALLBACK_OPEN_PINCH_RATIO = 0.68;
 const CAMERA_BOUND_EXPANSION = 0.05;
-const MIN_CAMERA_SPAN = 0.45;
+// A comfortable central reach should map to the whole canvas. Requiring nearly
+// half of the camera frame forced users to leave the ergonomic interaction zone.
+const MIN_CAMERA_SPAN = 0.18;
 const MAX_CAMERA_HORIZONTAL_SPAN = 0.8;
 const MAX_CAMERA_VERTICAL_SPAN = 0.85;
 const PINCH_MIN_CONFIDENCE = 0.5;
@@ -206,39 +222,50 @@ export function buildHandCalibration(
   samples: HandCalibrationSamples,
 ): HandCalibrationResult {
   const fallback = createFallbackHandCalibration(samples);
-  if (!validSamples(samples.reachSamples))
-    return { accepted: false, reason: "insufficient_reach", profile: fallback };
-
-  const left = percentile(samples.reachSamples.map((point) => point.x), 0.05);
-  const right = percentile(samples.reachSamples.map((point) => point.x), 0.95);
-  const top = percentile(samples.reachSamples.map((point) => point.y), 0.05);
-  const bottom = percentile(samples.reachSamples.map((point) => point.y), 0.95);
-  const horizontalSpan = right - left;
-  const verticalSpan = bottom - top;
-  if (horizontalSpan < MIN_CAMERA_SPAN || verticalSpan < MIN_CAMERA_SPAN)
-    return { accepted: false, reason: "reach_too_small", profile: fallback };
-  if (
-    horizontalSpan > MAX_CAMERA_HORIZONTAL_SPAN ||
-    verticalSpan > MAX_CAMERA_VERTICAL_SPAN
-  )
-    return { accepted: false, reason: "reach_too_large", profile: fallback };
-
-  const cameraBounds = expandCameraBounds({ left, right, top, bottom });
+  const reach = assessHandCalibrationReach(samples.reachSamples);
+  if (!reach.accepted)
+    return { accepted: false, reason: reach.reason, profile: fallback };
   const pinch = calibratedPinchRatios(
     samples.closedPinchRatios,
     samples.openPinchRatios,
   );
+  if (!pinch)
+    return { accepted: false, reason: "pinch_not_separated", profile: fallback };
   return {
     accepted: true,
     profile: {
       deviceKey: samples.deviceKey,
-      cameraBounds,
+      cameraBounds: reach.cameraBounds,
       safeCanvasInsetPx: SAFE_CANVAS_INSET_PX,
       pinchClosedRatio: pinch.closed,
       pinchOpenRatio: pinch.open,
       mirrorX: samples.mirrorX,
       createdAt: samples.createdAt,
     },
+  };
+}
+
+export function assessHandCalibrationReach(
+  reachSamples: readonly NormalizedPoint[],
+): HandCalibrationReachResult {
+  if (!validSamples(reachSamples))
+    return { accepted: false, reason: "insufficient_reach" };
+  const left = percentile(reachSamples.map((point) => point.x), 0.05);
+  const right = percentile(reachSamples.map((point) => point.x), 0.95);
+  const top = percentile(reachSamples.map((point) => point.y), 0.05);
+  const bottom = percentile(reachSamples.map((point) => point.y), 0.95);
+  const horizontalSpan = right - left;
+  const verticalSpan = bottom - top;
+  if (horizontalSpan < MIN_CAMERA_SPAN || verticalSpan < MIN_CAMERA_SPAN)
+    return { accepted: false, reason: "reach_too_small" };
+  if (
+    horizontalSpan > MAX_CAMERA_HORIZONTAL_SPAN ||
+    verticalSpan > MAX_CAMERA_VERTICAL_SPAN
+  )
+    return { accepted: false, reason: "reach_too_large" };
+  return {
+    accepted: true,
+    cameraBounds: expandCameraBounds({ left, right, top, bottom }),
   };
 }
 
@@ -267,6 +294,8 @@ export function resolvePinchThresholds(
     !Number.isFinite(calibration.pinchClosedRatio) ||
     !Number.isFinite(calibration.pinchOpenRatio) ||
     calibration.pinchClosedRatio < 0 ||
+    calibration.pinchClosedRatio > 2 ||
+    calibration.pinchOpenRatio > 2 ||
     calibration.pinchOpenRatio <= calibration.pinchClosedRatio
   )
     return { engage: 0.38, release: 0.52 };
@@ -523,12 +552,10 @@ function calibratedPinchRatios(
   openSamples: readonly number[],
 ) {
   if (!validRatios(closedSamples) || !validRatios(openSamples))
-    return { closed: FALLBACK_CLOSED_PINCH_RATIO, open: FALLBACK_OPEN_PINCH_RATIO };
+    return null;
   const closed = percentile(closedSamples, 0.95);
   const open = percentile(openSamples, 0.05);
-  return closed < open
-    ? { closed, open }
-    : { closed: FALLBACK_CLOSED_PINCH_RATIO, open: FALLBACK_OPEN_PINCH_RATIO };
+  return closed < open ? { closed, open } : null;
 }
 
 function expandCameraBounds(bounds: {
@@ -567,7 +594,12 @@ function validSamples(samples: readonly NormalizedPoint[]) {
 }
 
 function validRatios(ratios: readonly number[]) {
-  return ratios.length > 0 && ratios.every((ratio) => Number.isFinite(ratio) && ratio >= 0);
+  return (
+    ratios.length > 0 &&
+    ratios.every(
+      (ratio) => Number.isFinite(ratio) && ratio >= 0 && ratio <= 2,
+    )
+  );
 }
 
 function isConfidentPinchSample(input: PinchVoteInput) {
@@ -581,7 +613,8 @@ function isConfidentPinchSample(input: PinchVoteInput) {
     input.thumbTipConfidence >= PINCH_MIN_CONFIDENCE &&
     !input.predicted &&
     Number.isFinite(input.pinchRatio) &&
-    input.pinchRatio >= 0
+    input.pinchRatio >= 0 &&
+    input.pinchRatio <= 2
   );
 }
 

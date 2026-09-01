@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assessHandCalibrationReach,
   buildHandCalibration,
   createInitialHandReliabilityState,
   createInitialPinchVoteState,
@@ -32,6 +33,58 @@ function pinchSample(
 }
 
 describe("hand calibration", () => {
+  it("preflights reach without requiring pinch evidence", () => {
+    expect(
+      assessHandCalibrationReach([
+        { x: 0.49, y: 0.49 },
+        { x: 0.5, y: 0.5 },
+        { x: 0.51, y: 0.51 },
+      ]),
+    ).toEqual({ accepted: false, reason: "reach_too_small" });
+    expect(
+      assessHandCalibrationReach([
+        { x: 0.36, y: 0.34 },
+        { x: 0.64, y: 0.34 },
+        { x: 0.36, y: 0.66 },
+        { x: 0.64, y: 0.66 },
+      ]),
+    ).toMatchObject({ accepted: true, cameraBounds: expect.any(Object) });
+  });
+
+  it("maps a compact comfortable reach to the full canvas without demanding camera-frame edges", () => {
+    const result = buildHandCalibration({
+      deviceKey: "compact-comfortable-reach",
+      mirrorX: true,
+      createdAt: 900,
+      reachSamples: [
+        { x: 0.36, y: 0.34 },
+        { x: 0.36, y: 0.34 },
+        { x: 0.64, y: 0.34 },
+        { x: 0.64, y: 0.34 },
+        { x: 0.36, y: 0.66 },
+        { x: 0.36, y: 0.66 },
+        { x: 0.64, y: 0.66 },
+        { x: 0.64, y: 0.66 },
+      ],
+      closedPinchRatios: [0.31, 0.32, 0.33],
+      openPinchRatios: [0.67, 0.69, 0.71],
+    });
+
+    expect(result).toMatchObject({
+      accepted: true,
+      profile: {
+        cameraBounds: {
+          x: expect.any(Number),
+          y: expect.any(Number),
+          width: expect.any(Number),
+          height: expect.any(Number),
+        },
+        pinchClosedRatio: 0.329,
+        pinchOpenRatio: 0.672,
+      },
+    });
+  });
+
   it("accepts percentile reach and records its expanded comfortable camera bounds", () => {
     const result = buildHandCalibration({
       deviceKey: "camera-a",
@@ -116,6 +169,58 @@ describe("hand calibration", () => {
       reason: "reach_too_large",
       profile: { cameraBounds: { x: 0.15, y: 0.12, width: 0.7, height: 0.76 } },
     });
+  });
+
+  it("refuses overlapping open and closed pinch evidence instead of claiming fallback calibration", () => {
+    const result = buildHandCalibration({
+      deviceKey: "overlapping-pinch",
+      mirrorX: true,
+      createdAt: 2_500,
+      reachSamples: [
+        { x: 0.35, y: 0.35 },
+        { x: 0.35, y: 0.35 },
+        { x: 0.65, y: 0.35 },
+        { x: 0.65, y: 0.35 },
+        { x: 0.35, y: 0.65 },
+        { x: 0.35, y: 0.65 },
+        { x: 0.65, y: 0.65 },
+        { x: 0.65, y: 0.65 },
+      ],
+      closedPinchRatios: [0.48, 0.51, 0.54],
+      openPinchRatios: [0.49, 0.52, 0.55],
+    });
+
+    expect(result).toMatchObject({
+      accepted: false,
+      reason: "pinch_not_separated",
+    });
+  });
+
+  it("refuses out-of-domain pinch evidence and resolves unsafe profiles to defaults", () => {
+    const result = buildHandCalibration({
+      deviceKey: "invalid-pinch-domain",
+      mirrorX: true,
+      createdAt: 2_600,
+      reachSamples: [
+        { x: 0.35, y: 0.35 },
+        { x: 0.65, y: 0.35 },
+        { x: 0.35, y: 0.65 },
+        { x: 0.65, y: 0.65 },
+      ],
+      closedPinchRatios: [1.8, 1.85, 1.9],
+      openPinchRatios: [2.2, 2.3, 2.4],
+    });
+
+    expect(result).toMatchObject({
+      accepted: false,
+      reason: "pinch_not_separated",
+    });
+    expect(
+      resolvePinchThresholds({
+        pinchClosedRatio: 1.8,
+        pinchOpenRatio: 2.4,
+      }),
+    ).toEqual({ engage: 0.38, release: 0.52 });
   });
 
   it.each([

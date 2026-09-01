@@ -2118,6 +2118,7 @@ button:focus-visible {
   min-height: 210px;
   height: clamp(210px, 34dvh, 320px);
   aspect-ratio: auto;
+  container-type: size;
   display: grid;
   place-items: center;
   background: #080d16;
@@ -2129,6 +2130,14 @@ button:focus-visible {
   max-width: 100%;
   overflow: hidden;
   background: #080d16;
+}
+
+@supports (width: 1cqw) {
+  .camera-media-frame {
+    width: min(100cqw, var(--camera-width-from-height));
+    height: min(100cqh, var(--camera-height-from-width));
+    max-height: 100cqh;
+  }
 }
 
 .camera-media-frame video {
@@ -2293,7 +2302,7 @@ button:focus-visible {
   font-weight: 720;
 }
 
-.camera-calibration-actions button:last-child {
+.camera-calibration-actions .camera-calibration-primary {
   border-color: var(--cobalt);
   background: var(--cobalt);
   color: white;

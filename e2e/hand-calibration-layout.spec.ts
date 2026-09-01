@@ -13,7 +13,7 @@ test.use({
   },
 });
 
-test("keeps mobile calibration in a bounded sensor sheet then returns to a hideable PiP", async ({
+test("uses a large mobile calibration surface then returns to a hideable PiP", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-mobile");
@@ -38,7 +38,9 @@ test("keeps mobile calibration in a bounded sensor sheet then returns to a hidea
     .boundingBox();
   const canvas = await page.locator(".canvas-viewport").boundingBox();
   const camera = await page.locator(".camera-preview").boundingBox();
-  if (!viewport || !calibrationControl || !canvas || !camera)
+  const mediaFrame = await page.locator(".camera-media-frame").boundingBox();
+  const overlay = await page.locator(".camera-keypoint-overlay").boundingBox();
+  if (!viewport || !calibrationControl || !canvas || !camera || !mediaFrame || !overlay)
     throw new Error("The mobile calibration geometry is unavailable.");
 
   const geometry = await page.evaluate(() => ({
@@ -47,24 +49,39 @@ test("keeps mobile calibration in a bounded sensor sheet then returns to a hidea
     videoObjectFit: getComputedStyle(
       document.querySelector<HTMLVideoElement>(".camera-media-frame video")!,
     ).objectFit,
+    intrinsicVideoAspect: (() => {
+      const video = document.querySelector<HTMLVideoElement>(
+        ".camera-media-frame video",
+      )!;
+      return video.videoWidth / video.videoHeight;
+    })(),
     boundaryCount: document.querySelectorAll(".camera-interaction-boundary").length,
   }));
   expect(calibrationControl.width).toBeLessThanOrEqual(viewport.width * 0.98);
-  expect(calibrationControl.height).toBeLessThanOrEqual(viewport.height * 0.5);
+  expect(calibrationControl.height).toBeGreaterThan(viewport.height * 0.65);
+  expect(calibrationControl.height).toBeLessThanOrEqual(viewport.height * 0.8);
   expect(Math.max(0, calibrationControl.y - canvas.y)).toBeGreaterThan(
-    viewport.height * 0.4,
+    viewport.height * 0.13,
   );
   expect(calibrationControl.y + calibrationControl.height).toBeLessThanOrEqual(
     canvas.y + canvas.height,
   );
-  expect(camera.height).toBeGreaterThan(viewport.height * 0.18);
-  expect(camera.height).toBeLessThanOrEqual(viewport.height * 0.3);
+  expect(camera.height).toBeGreaterThan(viewport.height * 0.35);
+  expect(camera.height).toBeLessThanOrEqual(viewport.height * 0.52);
+  expect(Math.abs(mediaFrame.width / mediaFrame.height - geometry.intrinsicVideoAspect)).toBeLessThan(0.03);
+  expect(overlay).toEqual(mediaFrame);
   expect(geometry.scrollWidth).toBe(geometry.clientWidth);
   expect(geometry.videoObjectFit).toBe("contain");
   expect(geometry.boundaryCount).toBe(0);
+  await expect(page.getByText(/1 of 3 · map comfortable reach/i)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Continue to open hand" }),
+  ).toBeDisabled();
   await expect(page.getByRole("region", { name: "Hand interaction controls" })).toBeHidden();
 
   await page.getByRole("button", { name: "Skip hand calibration" }).click();
+  await expect(page.getByText("Default controls · calibration skipped")).toHaveCount(1);
+  await expect(page.getByText("Calibrated for this camera session")).toHaveCount(0);
   const sensor = page.locator(".spatial-camera-control");
   await expect(sensor).toHaveClass(/is-sensor-pip/);
   await expect(sensor).toHaveClass(/is-sensor-pip-hidden/);
@@ -83,6 +100,7 @@ test("keeps mobile calibration in a bounded sensor sheet then returns to a hidea
 
   await page.getByRole("button", { name: "Show hand sensor preview" }).click();
   await expect(sensor).not.toHaveClass(/is-sensor-pip-hidden/);
+  await expect(page.getByText("Default controls · calibration skipped")).toBeVisible();
   for (const accessibleName of [
     "Move hand sensor preview",
     "Hide hand sensor preview",

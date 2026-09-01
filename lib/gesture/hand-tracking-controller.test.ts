@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createHandTrackingController,
+  type HandTrackingController,
   type HandTrackingObservation,
   type HandTrackingWorkerLike,
 } from "@/lib/gesture/hand-tracking-controller";
@@ -769,6 +770,105 @@ describe("hand tracking controller lifecycle", () => {
         timestamp: 1_000,
       }),
     ]);
+  });
+
+  it("publishes reliable physical measurements before semantic gesture classification", async () => {
+    const { controller, worker, video } = harness();
+    const sensorFrames: unknown[] = [];
+    const observations: HandTrackingObservation[] = [];
+    const calibrationController = controller as HandTrackingController & {
+      subscribeSensorFrames?: (listener: (frame: unknown) => void) => () => void;
+    };
+    expect(calibrationController.subscribeSensorFrames).toBeTypeOf("function");
+    calibrationController.subscribeSensorFrames?.((frame) => sensorFrames.push(frame));
+    controller.subscribeObservations((observation) => observations.push(observation));
+
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+    worker.emit({
+      type: "result",
+      timestamp: 1_000,
+      hands: [
+        {
+          handedness: "left",
+          confidence: 0.96,
+          landmarks: neutralShiftedHand(0),
+        },
+      ],
+    });
+
+    expect(sensorFrames).toEqual([
+      expect.objectContaining({
+        timestamp: 1_000,
+        hands: [
+          expect.objectContaining({
+            trackId: expect.stringMatching(/^hand-track-/),
+            handedness: "left",
+            measurements: expect.objectContaining({
+              indexTip: { x: expect.any(Number), y: expect.any(Number) },
+              pinchRatio: expect.any(Number),
+            }),
+          }),
+        ],
+      }),
+    ]);
+    expect(observations.at(-1)).toMatchObject({
+      mode: "idle",
+    });
+  });
+
+  it("publishes an empty sensor frame when detector tracking is lost", async () => {
+    const { controller, worker, video } = harness();
+    const sensorFrames: unknown[] = [];
+    controller.subscribeSensorFrames?.((frame) => sensorFrames.push(frame));
+
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+    worker.emit({
+      type: "result",
+      timestamp: 1_000,
+      hands: [],
+    });
+
+    expect(sensorFrames).toEqual([
+      expect.objectContaining({
+        timestamp: 1_000,
+        hands: [],
+      }),
+    ]);
+  });
+
+  it("applies retained calibration thresholds at the canonical gesture classifier", async () => {
+    const { controller, worker, video } = harness();
+    const calibratedController = controller as HandTrackingController & {
+      setPinchThresholds?: (thresholds: { engage: number; release: number }) => void;
+    };
+    expect(calibratedController.setPinchThresholds).toBeTypeOf("function");
+    calibratedController.setPinchThresholds?.({ engage: 0.36, release: 0.54 });
+    const observations: HandTrackingObservation[] = [];
+    controller.subscribeObservations((observation) => observations.push(observation));
+
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+    worker.emit({
+      type: "result",
+      timestamp: 1_000,
+      hands: [
+        {
+          handedness: "left",
+          confidence: 0.96,
+          landmarks: hand({ x: 0.3, y: 0.4 }, { x: 0.368, y: 0.4 }),
+        },
+      ],
+    });
+
+    expect(observations.at(-1)).toMatchObject({ mode: "pinch" });
   });
 
   it("accepts a valid 0.60-confidence MediaPipe hand instead of hard-dropping it", async () => {

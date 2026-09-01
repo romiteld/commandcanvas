@@ -90,6 +90,31 @@ export interface HandTrackingPointer {
   trackingState?: "tracked" | "grace";
 }
 
+export interface HandTrackingPinchThresholds {
+  readonly engage: number;
+  readonly release: number;
+}
+
+/** Local, ephemeral detector evidence. It never represents a canvas command. */
+export interface HandTrackingSensorHand {
+  readonly trackId: HandTrackId;
+  readonly handedness: TrackedHandedness;
+  readonly confidence: number;
+  readonly landmarks: HandLandmarks;
+  readonly measurements: HandPhysicalMeasurements;
+  readonly prediction: HandPredictionMarker;
+  readonly source: HandEngineSource;
+  readonly capturedAt: number;
+  readonly receivedAt: HandReceiveTimestamp;
+}
+
+export interface HandTrackingSensorFrame {
+  readonly timestamp: number;
+  readonly receivedAt: HandReceiveTimestamp;
+  readonly source: HandEngineSource;
+  readonly hands: readonly HandTrackingSensorHand[];
+}
+
 export interface HandTrackingWorkerLike {
   readonly frameQueueMode?: "newest-only";
   onmessage: ((event: MessageEvent<HandTrackingWorkerOutboundMessage>) => void) | null;
@@ -104,6 +129,12 @@ export interface HandTrackingController {
   subscribeObservations(
     listener: (observation: HandTrackingObservation) => void,
   ): () => void;
+  subscribeSensorFrames?(
+    listener: (frame: HandTrackingSensorFrame) => void,
+  ): () => void;
+  setPinchThresholds?(
+    thresholds: HandTrackingPinchThresholds | null,
+  ): void;
   getEngineStatus?(): HandTrackingEngineStatus | null;
   subscribeEngineStatus?(
     listener: (engine: HandTrackingEngineStatus | null) => void,
@@ -195,6 +226,9 @@ export function createHandTrackingController(
   const observationListeners = new Set<
     (observation: HandTrackingObservation) => void
   >();
+  const sensorListeners = new Set<
+    (frame: HandTrackingSensorFrame) => void
+  >();
   const engineListeners = new Set<
     (engine: HandTrackingEngineStatus | null) => void
   >();
@@ -202,6 +236,7 @@ export function createHandTrackingController(
   let engineStatus: HandTrackingEngineStatus | null = null;
   let nextRunId = 0;
   let activeRun: HandTrackingRun | null = null;
+  let pinchThresholds: HandTrackingPinchThresholds | null = null;
 
   function setStatus(next: HandTrackingStatus) {
     status = next;
@@ -210,6 +245,10 @@ export function createHandTrackingController(
 
   function emit(observation: HandTrackingObservation) {
     observationListeners.forEach((listener) => listener(observation));
+  }
+
+  function emitSensorFrame(frame: HandTrackingSensorFrame) {
+    sensorListeners.forEach((listener) => listener(frame));
   }
 
   function setEngineStatus(
@@ -697,12 +736,18 @@ export function createHandTrackingController(
       emitLossOrGrace(run, receivedAt);
       return;
     }
+    const source = run.visionEngines[run.engineIndex]?.descriptor.id ?? "unknown";
     if (message.hands.length === 0) {
+      emitSensorFrame({
+        timestamp: message.timestamp,
+        receivedAt,
+        source,
+        hands: [],
+      });
       emitLossOrGrace(run, message.timestamp);
       return;
     }
     const stateKeys = assignHandStateKeys(run, message.hands, message.timestamp);
-    const source = run.visionEngines[run.engineIndex]?.descriptor.id ?? "unknown";
     const activeKeys = new Set<string>();
     const interpreted = message.hands.map((hand, index) => {
       const key = stateKeys[index]!;
@@ -719,7 +764,15 @@ export function createHandTrackingController(
           handedness: hand.handedness,
         },
         dependencies.now(),
-        { mirrorX: true },
+        {
+          mirrorX: true,
+          ...(pinchThresholds
+            ? {
+                pinchEngageRatio: pinchThresholds.engage,
+                pinchReleaseRatio: pinchThresholds.release,
+              }
+            : {}),
+        },
       );
       if (
         transition.output.accepted ||
@@ -727,6 +780,28 @@ export function createHandTrackingController(
       )
         run.intentStates.set(key, transition.state);
       return { hand, trackId: key, transition };
+    });
+    emitSensorFrame({
+      timestamp: message.timestamp,
+      receivedAt,
+      source,
+      hands: interpreted.flatMap(({ hand, trackId, transition }) =>
+        transition.measurements
+          ? [
+              {
+                trackId,
+                handedness: hand.handedness,
+                confidence: hand.confidence,
+                landmarks: hand.landmarks as HandLandmarks,
+                measurements: transition.measurements,
+                prediction: transition.prediction,
+                source,
+                capturedAt: message.timestamp,
+                receivedAt,
+              },
+            ]
+          : [],
+      ),
     });
     for (const key of run.intentStates.keys()) {
       if (!activeKeys.has(key) && !run.handTracks.has(key))
@@ -1074,6 +1149,28 @@ export function createHandTrackingController(
     subscribeObservations(listener) {
       observationListeners.add(listener);
       return () => observationListeners.delete(listener);
+    },
+    subscribeSensorFrames(listener) {
+      sensorListeners.add(listener);
+      return () => sensorListeners.delete(listener);
+    },
+    setPinchThresholds(next) {
+      if (
+        next &&
+        (!Number.isFinite(next.engage) ||
+          !Number.isFinite(next.release) ||
+          next.engage <= 0 ||
+          next.engage >= next.release ||
+          next.release > 2)
+      )
+        throw new RangeError(
+          "Pinch thresholds must satisfy 0 < engage < release <= 2.",
+        );
+      pinchThresholds = next;
+      if (activeRun) {
+        activeRun.intentStates.clear();
+        activeRun.lastSingleObservation = null;
+      }
     },
     getEngineStatus: () => engineStatus,
     subscribeEngineStatus(listener) {

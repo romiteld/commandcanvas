@@ -1355,3 +1355,83 @@ rewriting their historical evidence:
   not manually deleted after the database tool refused that destructive action.
   It is actor-scoped, has no user content, and is eligible for the same bounded
   recovery cleanup; no deletion is claimed.
+
+## Checkpoint 30: hand-calibration recovery candidate
+
+### WORKING
+
+- Calibration now consumes local raw detector measurements before semantic
+  point or pinch classification. A physical pinch that sits above the default
+  cutoff can therefore teach its own engage and release thresholds instead of
+  being rejected by the threshold it is trying to replace.
+- The flow is staged and bounded: comfortable reach, open fingers, closed
+  pinch, then review. Reach samples freeze after stage one, and a comfortable
+  central camera region as small as 18 percent per axis maps across the safe
+  canvas. Stage one is validated before the user is asked for either pinch
+  pose.
+- Closing-motion samples no longer contaminate the learned pinch profile. The
+  closed stage waits for a stable lower-ratio cluster, while implausible ratios,
+  overlapping open/closed evidence, insufficient reach, and excessive reach
+  remain explicit refusals.
+- Calibration reacquires the only visible hand after detector track-ID churn,
+  publishes zero-hand sensor frames to clear stale landmarks, and discards raw
+  21-point sensor state when calibration closes or tracking stops. Raw sensor
+  frames remain local and never enter the canvas mutation, receipt, or
+  Supabase pipelines.
+- The learned thresholds are installed in the canonical controller classifier.
+  Removing a retained profile clears those personalized thresholds. Skipping
+  uses bounded defaults and remains labeled `Default controls · calibration
+  skipped` after the controlled room state round-trip; it is never presented
+  as successful calibration.
+- The enlarged mobile calibration surface preserves the exact rendered camera
+  aspect ratio. The video, 21 landmarks, skeleton, and pointer now share one
+  content rectangle instead of stretching landmarks across letterbox bars.
+
+### VERIFIED IN BROWSER
+
+- A 390 by 844 Chromium-mobile production-build run measured a large bounded
+  calibration surface, a camera media frame matching the intrinsic stream
+  aspect within 0.03, and an overlay rectangle identical to the media frame. It
+  also exercised the real parent-controlled Skip round-trip, reopened the
+  collapsed PiP, and displayed the default-controls label. The applicable
+  scenario passed.
+- The combined local production-build layout matrix passed its applicable
+  Chromium-mobile and Chromium-desktop scenarios: 2 passed, 2
+  project-specific skips, and zero failures. Neither viewport gained horizontal
+  document overflow.
+- A separate Chromium-mobile camera lifecycle run used a real browser media
+  track with a deterministic Y4M source, loaded the same-origin worker, WASM,
+  and versioned detector model, reached ready, returned to the canvas, disabled
+  input, detached the stream, ended the exact track, and deleted its temporary
+  production demo room. The one applicable scenario passed.
+- The candidate passed Node 22.17.0 ESLint, raw TypeScript, all 1,217 Vitest
+  tests across 115 files, `git diff --check`, the generated hand worker, and the
+  optimized Next.js webpack build with all 13 generated routes.
+
+### UNVERIFIED
+
+- This checkpoint does not claim physical-hand acceptance. The browser camera
+  lifecycle used deterministic media, so actual fingertip drawing, learned
+  pinch ergonomics, left/right/top/bottom reach, occlusion, lighting, thermal
+  behavior, and two-hand use still require a fresh human phone rehearsal after
+  public deployment.
+- The deterministic camera source proves permission, stream, worker, WASM,
+  model-loading, shutdown, and layout behavior. It does not prove hand-pose
+  accuracy or detector latency on a physical device.
+- ChatGPT built-in-browser Site Tools invocation remains a separate target-host
+  check. Native browser and in-page tests do not substitute for that rollout
+  surface.
+- The candidate is not yet claimed public in this checkpoint. Public status
+  requires a pushed exact commit, a Vercel `READY` deployment, the canonical
+  alias, and fresh deployed-browser evidence.
+
+### CUT
+
+- Nothing was cut from the approved hand-control or object-creation behavior in
+  this recovery. The change repairs calibration and its presentation; it does
+  not remove finger drawing, one-hand move, two-hand resize/zoom, edge throw,
+  realtime voice, WebMCP, collaboration, invitations, packets, or email.
+- Physical pencil, marker, or arbitrary-object tracking; unrecoverable
+  gesture-only deletion; TURN/SFU conferencing scale; recording; screen
+  sharing; enterprise identity; billing; native applications; headset support;
+  marketplaces; and desktop automation remain outside this release.

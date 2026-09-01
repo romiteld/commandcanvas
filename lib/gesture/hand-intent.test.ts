@@ -583,6 +583,12 @@ describe("pinch hysteresis", () => {
       pointer: null,
       reason: "no_deliberate_gesture",
     });
+    expect(transition.measurements).toMatchObject({
+      indexTip: { x: expect.any(Number), y: expect.any(Number) },
+      thumbTip: { x: expect.any(Number), y: expect.any(Number) },
+      pinchRatio: expect.any(Number),
+      palmScale: expect.any(Number),
+    });
   });
 
   it("requires reliable wrist, MCP, and PIP geometry before classifying an open palm", () => {

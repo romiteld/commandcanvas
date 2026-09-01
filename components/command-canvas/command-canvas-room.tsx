@@ -237,6 +237,9 @@ export function CommandCanvasRoom({
   const [handCalibrationOpen, setHandCalibrationOpen] = useState(false);
   const [handCalibrationProfile, setHandCalibrationProfile] =
     useState<HandCalibrationProfile | null>(null);
+  const [handCalibrationKind, setHandCalibrationKind] = useState<
+    "calibrated" | "skipped" | null
+  >(null);
   const [typedFallbackOpen, setTypedFallbackOpen] = useState(false);
   const [realtimeVoiceActive, setRealtimeVoiceActive] = useState(false);
   const [voiceThoughtDraft, setVoiceThoughtDraft] =
@@ -2638,12 +2641,14 @@ export function CommandCanvasRoom({
         <SpatialCameraControl
           calibrationOpen={handCalibrationOpen}
           calibrationDeviceKey="commandcanvas-hand-camera"
+          calibrationKind={handCalibrationKind}
           calibrationProfile={handCalibrationProfile}
           createController={createHandTrackingController}
           privateGpuRelayAvailable={privateGpuRelayAvailable}
           onCalibrationResult={(result) => {
             spatialRoomInputState.current = createInitialSpatialRoomInputState();
             setHandCalibrationProfile(result.profile);
+            setHandCalibrationKind(result.accepted ? "calibrated" : "skipped");
           }}
           onCalibrationOpenChange={(open) => {
             if (open) {

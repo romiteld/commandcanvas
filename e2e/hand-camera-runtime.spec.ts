@@ -99,13 +99,14 @@ test("starts the local hand detector from a real browser camera stream and relea
     if (!viewport || !calibration || !calibrationBounds || !canvas)
       throw new Error("Spatial calibration geometry is unavailable.");
     expect(calibration.height).toBeLessThanOrEqual(
-      viewport.height * (testInfo.project.name === "chromium-mobile" ? 0.3 : 0.55),
+      viewport.height * (testInfo.project.name === "chromium-mobile" ? 0.52 : 0.55),
     );
     if (testInfo.project.name === "chromium-mobile") {
-      expect(calibrationBounds.height).toBeLessThanOrEqual(viewport.height * 0.5);
+      expect(calibrationBounds.height).toBeGreaterThan(viewport.height * 0.65);
+      expect(calibrationBounds.height).toBeLessThanOrEqual(viewport.height * 0.8);
       expect(calibrationBounds.width).toBeLessThanOrEqual(viewport.width * 0.98);
       expect(Math.max(0, calibrationBounds.y - canvas.y)).toBeGreaterThan(
-        viewport.height * 0.4,
+        viewport.height * 0.13,
       );
     } else {
       expect(calibrationBounds.height).toBeLessThanOrEqual(

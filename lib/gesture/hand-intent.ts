@@ -342,6 +342,7 @@ export function interpretHandFrame(
       frame.confidence,
       { predicted: false },
       nextState,
+      roundedMeasurements(physical),
     );
 
   return {
@@ -543,6 +544,7 @@ function refuse(
   confidence: number | null,
   prediction: HandPredictionMarker = { predicted: false },
   state: HandIntentState = createInitialHandIntentState(),
+  measurements: HandPhysicalMeasurements | null = null,
 ): HandIntentTransition {
   return {
     state,
@@ -554,7 +556,7 @@ function refuse(
       timestamp: timestamp ?? now,
       reason,
     },
-    measurements: null,
+    measurements,
     prediction,
   };
 }
