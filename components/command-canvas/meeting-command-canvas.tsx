@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import type { StoreApi } from "zustand";
 
 import { CommandCanvasRoom } from "@/components/command-canvas/command-canvas-room";
@@ -38,8 +38,10 @@ import {
   createBrowserMeetingApi,
   type BrowserMeetingInvitationValue,
 } from "@/lib/supabase/meeting-api";
+import { pollInvitationDelivery } from "@/lib/supabase/invitation-delivery-poller";
 import { readAndScrubMeetingInvite } from "@/lib/supabase/meeting-invite-fragment";
 import { requestEmailOtp, verifyEmailOtp } from "@/lib/supabase/passwordless";
+import { createBrowserUserProfileApi } from "@/lib/user-profiles/browser-api";
 import { createBrowserSketchTransformApi } from "@/lib/vision/browser-api";
 import { createCanvasSketchTransformer } from "@/lib/vision/canvas-transform";
 import { createCanvasWebMcpAdapters } from "@/lib/webmcp/canvas-adapters";
@@ -64,7 +66,14 @@ export type MeetingLobbyState =
       message: string;
       error?: string;
     }
-  | { phase: "host_form"; email: string; error?: string }
+  | {
+      phase: "host_form";
+      email: string;
+      displayName?: string;
+      color?: string;
+      roomName?: string;
+      error?: string;
+    }
   | { phase: "working"; message: string }
   | { phase: "error"; message: string };
 
@@ -79,6 +88,8 @@ type InvitationDeliveryStatus =
   BrowserMeetingInvitationValue["delivery"]["status"];
 
 const INVITATION_DELIVERY_LABELS: Record<InvitationDeliveryStatus, string> = {
+  created: "Invitation ready to send",
+  sending: "Email submission in progress",
   preview_only: "Preview only: email not sent",
   reconciling: "Email submission being reconciled",
   submitted: "Email submitted: delivery pending",
@@ -88,6 +99,31 @@ const INVITATION_DELIVERY_LABELS: Record<InvitationDeliveryStatus, string> = {
   failed: "Email delivery failed",
   suppressed: "Email suppressed",
 };
+
+type RecoveredBrowserSession =
+  | { ok: true; session: Session | null }
+  | { ok: false };
+
+async function recoverBrowserSession(
+  client: BrowserClient,
+  options: { refreshAfterThrown?: boolean } = {},
+): Promise<RecoveredBrowserSession> {
+  try {
+    const current = await client.auth.getSession();
+    if (!current.error) return { ok: true, session: current.data.session };
+  } catch {
+    // A transient browser/session-store failure gets one explicit refresh.
+    if (options.refreshAfterThrown === false) return { ok: false };
+  }
+  try {
+    const refreshed = await client.auth.refreshSession();
+    return refreshed.error
+      ? { ok: false }
+      : { ok: true, session: refreshed.data.session };
+  } catch {
+    return { ok: false };
+  }
+}
 
 export function MeetingCommandCanvas({
   privateGpuRelayEnabled = false,
@@ -119,6 +155,7 @@ export function MeetingCommandCanvas({
   const inviteTokenRef = useRef<string | null>(null);
   const inviteReadRef = useRef(false);
   const lifecycleAbortRef = useRef<AbortController | null>(null);
+  const invitationPollAbortRef = useRef<AbortController | null>(null);
   const roomUnsubscribeRef = useRef<(() => void) | null>(null);
   const meetingMediaStreamRef = useRef<MediaStream | null>(null);
   const activeRuntimeSessionRef = useRef<DemoRoomSession | null>(null);
@@ -146,6 +183,8 @@ export function MeetingCommandCanvas({
     lifecycleAbortRef.current = lifecycle;
     const cleanup = () => {
       lifecycle.abort();
+      invitationPollAbortRef.current?.abort();
+      invitationPollAbortRef.current = null;
       openAiApiKeyRef.current = "";
       useSavedOpenAiCredentialRef.current = false;
       openAiCredentialApiRef.current = null;
@@ -181,13 +220,17 @@ export function MeetingCommandCanvas({
     clientRef.current = client;
 
     void (async () => {
-      const current = await client.auth.getSession();
+      const recovered = await recoverBrowserSession(client);
       if (signal.aborted) return;
-      if (current.error) {
-        setLobby({ phase: "error", message: "Sign-in state could not be read." });
+      if (!recovered.ok) {
+        setLobby({
+          phase: "email",
+          invited: Boolean(inviteToken),
+          error: "Your session could not be refreshed. Request a new code.",
+        });
         return;
       }
-      const session = current.data.session;
+      const session = recovered.session;
       const permanent =
         session?.user?.is_anonymous !== true &&
         typeof session?.user?.email === "string" &&
@@ -222,7 +265,11 @@ export function MeetingCommandCanvas({
             return;
           }
         }
-        setLobby({ phase: "host_form", email: session.user.email! });
+        await showHostForm(
+          session.access_token,
+          session.user.email!,
+          signal,
+        );
         return;
       }
       setLobby({ phase: "email", invited: Boolean(inviteToken) });
@@ -234,6 +281,44 @@ export function MeetingCommandCanvas({
     // create duplicate authenticated room work.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function showHostForm(
+    accessToken: string,
+    email: string,
+    signal: AbortSignal,
+    draft?: Pick<
+      Extract<MeetingLobbyState, { phase: "host_form" }>,
+      "displayName" | "color" | "roomName"
+    >,
+  ) {
+    const result = await createBrowserUserProfileApi({ accessToken }).load(signal);
+    if (signal.aborted) return;
+    if (!result.ok) {
+      setLobby({
+        phase: "host_form",
+        email,
+        ...draft,
+        error: result.error.message,
+      });
+      return;
+    }
+    setLobby({
+      phase: "host_form",
+      email,
+      displayName: draft?.displayName ?? result.value?.displayName,
+      color: draft?.color ?? result.value?.color,
+      roomName: draft?.roomName,
+    });
+  }
+
+  function clearAccountScopedCredentialState() {
+    openAiApiKeyRef.current = "";
+    setOpenAiApiKey("");
+    openAiCredentialApiRef.current = null;
+    setSavedOpenAiCredential({ configured: false });
+    setSavedOpenAiCredentialError(null);
+    selectSavedOpenAiCredential(false);
+  }
 
   async function acceptAndEnter(
       client: BrowserClient,
@@ -461,6 +546,7 @@ export function MeetingCommandCanvas({
         });
         return;
       }
+      clearAccountScopedCredentialState();
       setLobby({ phase: "email", invited: true });
     } catch {
       if (!signal.aborted)
@@ -495,32 +581,73 @@ export function MeetingCommandCanvas({
       );
       return;
     }
-    setLobby({ phase: "host_form", email: result.value.email });
+    const signal = lifecycleAbortRef.current?.signal;
+    if (!signal || signal.aborted) return;
+    await showHostForm(
+      result.value.session.access_token,
+      result.value.email,
+      signal,
+    );
   }
 
   async function createMeeting(form: FormData) {
     const client = clientRef.current;
     if (!client || lobby.phase !== "host_form") return;
-    const session = await client.auth.getSession();
-    const accessToken = session.data.session?.access_token;
-    if (!accessToken) {
-      setLobby({ phase: "error", message: "Your verified session expired." });
-      return;
-    }
+    const previousEmail = lobby.email;
+    const draft = {
+      roomName: String(form.get("roomName") ?? ""),
+      displayName: String(form.get("displayName") ?? ""),
+      color: lobby.color ?? "#0ea5e9",
+    };
     const signal = lifecycleAbortRef.current?.signal;
     if (!signal || signal.aborted) return;
     setLobby({ phase: "working", message: "Creating the shared workspace…" });
-    const api = createBrowserMeetingApi({ accessToken });
-    const result = await api.createMeeting({
-      name: String(form.get("roomName") ?? ""),
-      displayName: String(form.get("displayName") ?? ""),
-      color: "#0ea5e9",
+    const recovered = await recoverBrowserSession(client, {
+      refreshAfterThrown: false,
     });
-    if (!result.ok) {
-      setLobby({ phase: "host_form", email: lobby.email, error: result.error.message });
+    if (signal.aborted) return;
+    const accessToken = recovered.ok
+      ? recovered.session?.access_token
+      : undefined;
+    if (!accessToken) {
+      setLobby({
+        phase: "host_form",
+        email: previousEmail,
+        ...draft,
+        error: "Your session could not be refreshed. Try again.",
+      });
       return;
     }
-    await enterRoom(client, accessToken, result.value.roomId, "host", signal);
+    try {
+      const api = createBrowserMeetingApi({ accessToken });
+      const result = await api.createMeeting(
+        {
+          name: draft.roomName,
+          displayName: draft.displayName,
+          color: draft.color,
+        },
+        signal,
+      );
+      if (signal.aborted) return;
+      if (!result.ok) {
+        setLobby({
+          phase: "host_form",
+          email: previousEmail,
+          ...draft,
+          error: result.error.message,
+        });
+        return;
+      }
+      await enterRoom(client, accessToken, result.value.roomId, "host", signal);
+    } catch {
+      if (!signal.aborted)
+        setLobby({
+          phase: "host_form",
+          email: previousEmail,
+          ...draft,
+          error: "Room creation could not be confirmed. Try again to recover it.",
+        });
+    }
   }
 
   async function createInvitation(form: FormData) {
@@ -566,6 +693,35 @@ export function MeetingCommandCanvas({
     }
     setInviteResult(result.value);
     setCopyLabel("Copy secure link");
+    if (
+      ["created", "sending", "reconciling", "submitted"].includes(
+        result.value.delivery.status,
+      )
+    ) {
+      invitationPollAbortRef.current?.abort();
+      const pollController = new AbortController();
+      invitationPollAbortRef.current = pollController;
+      const abortPoll = () => pollController.abort();
+      signal.addEventListener("abort", abortPoll, { once: true });
+      void pollInvitationDelivery({
+        api,
+        roomId: result.value.roomId,
+        invitationId: result.value.invitationId,
+        signal: pollController.signal,
+        onUpdate: (delivery) => {
+          if (pollController.signal.aborted) return;
+          setInviteResult((currentResult) =>
+            currentResult?.invitationId === delivery.invitationId
+              ? { ...currentResult, delivery: delivery.delivery }
+              : currentResult,
+          );
+        },
+      }).finally(() => {
+        signal.removeEventListener("abort", abortPoll);
+        if (invitationPollAbortRef.current === pollController)
+          invitationPollAbortRef.current = null;
+      });
+    }
   }
 
   const runtimeStore = runtime?.store ?? null;
@@ -793,6 +949,7 @@ export function MeetingCommandCanvas({
           type="button"
           onClick={async () => {
             await runtime.client.auth.signOut({ scope: "local" });
+            clearAccountScopedCredentialState();
             window.history.replaceState(null, "", "/meet");
             window.location.reload();
           }}
@@ -898,7 +1055,7 @@ export function MeetingCommandCanvas({
             >
               <label>Display name<input name="displayName" required maxLength={64} autoComplete="name" /></label>
               <label>Email<input name="email" type="email" required maxLength={254} autoComplete="email" /></label>
-              <button type="submit" disabled={inviteBusy}>{inviteBusy ? "Creating…" : "Create invitation"}</button>
+              <button type="submit" disabled={inviteBusy}>{inviteBusy ? "Sending…" : "Send invitation"}</button>
             </form>
             {inviteError ? (
               <div
@@ -1211,8 +1368,8 @@ export function MeetingLobby({
                 void onCreateMeeting(new FormData(event.currentTarget));
               }}
             >
-              <label>Room name<input name="roomName" required maxLength={120} defaultValue="Project working session" /></label>
-              <label>Your display name<input name="displayName" required maxLength={64} autoComplete="name" /></label>
+              <label>Room name<input name="roomName" required maxLength={120} defaultValue={state.roomName ?? "Project working session"} /></label>
+              <label>Your display name<input name="displayName" required maxLength={64} autoComplete="name" defaultValue={state.displayName ?? ""} /></label>
               <button type="submit">Enter CommandCanvas</button>
             </form>
             {state.error ? <p role="alert">{state.error}</p> : null}

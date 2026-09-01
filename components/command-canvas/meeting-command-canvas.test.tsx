@@ -63,7 +63,8 @@ describe("normal meeting lobby", () => {
     expect(screen.getByRole("heading", { name: "Verify your invitation" })).toBeVisible();
     expect(screen.queryByRole("link", { name: /no-signup judge preview/i })).not.toBeInTheDocument();
 
-    view.rerender(
+    view.unmount();
+    render(
       <MeetingLobby
         state={{ phase: "otp", invited: true, email: "sarah@example.com" }}
         onRequestCode={vi.fn()}
@@ -139,6 +140,52 @@ describe("normal meeting lobby", () => {
     expect(submitted).toBeInstanceOf(FormData);
     expect(submitted?.get("roomName")).toBe("Product review");
     expect(submitted?.get("displayName")).toBe("Daniel");
+  });
+
+  it("prefills a returning user's saved display name and preserves a failed draft", () => {
+    const view = render(
+      <MeetingLobby
+        state={{
+          phase: "host_form",
+          email: "danny@example.com",
+          displayName: "Daniel",
+          color: "#0EA5E9",
+          roomName: "Saved planning room",
+          error: "Room could not be created. Try again.",
+        }}
+        onRequestCode={vi.fn()}
+        onVerifyCode={vi.fn()}
+        onSwitchInvitationAccount={vi.fn()}
+        onCreateMeeting={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText("Your display name")).toHaveValue("Daniel");
+    expect(screen.getByLabelText("Room name")).toHaveValue(
+      "Saved planning room",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Room could not be created. Try again.",
+    );
+
+    view.unmount();
+    render(
+      <MeetingLobby
+        state={{
+          phase: "host_form",
+          email: "danny@example.com",
+          displayName: "Daniel",
+          color: "#0EA5E9",
+        }}
+        onRequestCode={vi.fn()}
+        onVerifyCode={vi.fn()}
+        onSwitchInvitationAccount={vi.fn()}
+        onCreateMeeting={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText("Room name")).toHaveValue(
+      "Project working session",
+    );
   });
 });
 

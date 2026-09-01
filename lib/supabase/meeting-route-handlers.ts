@@ -34,6 +34,8 @@ const REQUEST_MAX_BYTES = 8 * 1_024;
 
 type InvitationResponseDelivery = {
   status:
+    | "created"
+    | "sending"
     | "preview_only"
     | "reconciling"
     | "submitted"
@@ -212,6 +214,42 @@ export async function handleCreateMeetingInvitationRequest(
   }
 }
 
+export async function handleGetMeetingInvitationDeliveryRequest(
+  request: Request,
+  pathRoomId: string,
+  dependencies: MeetingRouteDependencies,
+) {
+  const auth = await authenticate(request, dependencies);
+  if (!auth.ok) return auth.response;
+  const invitationId = new URL(request.url).searchParams.get("invitationId");
+  if (
+    !z.uuid().safeParse(pathRoomId).success ||
+    !z.uuid().safeParse(invitationId).success
+  )
+    return invalidRequest();
+  try {
+    const result = await dependencies.service.loadInvitationDelivery(
+      auth.actorUserId,
+      pathRoomId,
+      invitationId!,
+    );
+    if (!result.ok) return serviceFailure(result);
+    return json(200, {
+      ok: true,
+      invitation: {
+        invitationId: result.value.invitationId,
+        roomId: pathRoomId,
+        delivery: durableInvitationDelivery(
+          result.value.deliveryStatus,
+          result.value.providerMessageId,
+        ),
+      },
+    });
+  } catch {
+    return unavailable();
+  }
+}
+
 function invitationDeliveryMayResume(
   status: InvitationDeliveryStatus,
 ): status is "created" | "sending" | "reconciling" {
@@ -234,11 +272,27 @@ function invitationCompletion(
 }
 
 function durableInvitationDelivery(
-  status: Exclude<InvitationDeliveryStatus, "created" | "sending" | "reconciling">,
+  status: InvitationDeliveryStatus,
   providerMessageId: string | null,
 ): InvitationResponseDelivery {
   const provider = providerMessageId ? { providerId: providerMessageId } : {};
   switch (status) {
+    case "created":
+      return {
+        status,
+        message: "Invitation is ready for email submission.",
+      };
+    case "sending":
+      return {
+        status,
+        message: "Invitation submission is in progress; delivery is not confirmed.",
+      };
+    case "reconciling":
+      return {
+        status,
+        message: "Invitation submission is being reconciled; delivery is not confirmed.",
+        ...provider,
+      };
     case "preview_only":
       return {
         status,

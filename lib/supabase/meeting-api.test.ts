@@ -34,6 +34,65 @@ describe("browser meeting API", () => {
     );
   });
 
+  it("recovers a lost room-creation response with one persisted non-PII request id", async () => {
+    const persisted = new Map<string, string>();
+    const requestStorage = {
+      getItem: vi.fn((key: string) => persisted.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => persisted.set(key, value)),
+      removeItem: vi.fn((key: string) => persisted.delete(key)),
+    };
+    const draft = {
+      name: "Project review",
+      displayName: "Daniel",
+      color: "#0ea5e9",
+    };
+    const firstFetch = vi.fn<typeof fetch>(
+      async (): Promise<Response> => {
+        throw new TypeError("lost response");
+      },
+    );
+    const firstApi = createBrowserMeetingApi({
+      accessToken: JWT,
+      fetcher: firstFetch,
+      createRequestId: () => "55555555-5555-4555-8555-555555555555",
+      meetingRequestStorage: requestStorage,
+    });
+
+    await expect(firstApi.createMeeting(draft)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "request_failed" },
+    });
+    const firstBody = JSON.parse(String(firstFetch.mock.calls[0]?.[1]?.body));
+    expect(firstBody.requestId).toBe("55555555-5555-4555-8555-555555555555");
+    expect(JSON.stringify([...persisted.entries()])).not.toContain("Daniel");
+    expect(JSON.stringify([...persisted.entries()])).not.toContain("Project review");
+
+    const secondFetch = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        ok: true,
+        meeting: { roomId: firstBody.requestId, role: "host", joined: true },
+      }),
+    );
+    const createAnotherId = vi.fn(
+      () => "66666666-6666-4666-8666-666666666666",
+    );
+    const recreated = createBrowserMeetingApi({
+      accessToken: JWT,
+      fetcher: secondFetch,
+      createRequestId: createAnotherId,
+      meetingRequestStorage: requestStorage,
+    });
+
+    await expect(recreated.createMeeting(draft)).resolves.toEqual({
+      ok: true,
+      value: { roomId: firstBody.requestId, role: "host", joined: true },
+    });
+    const retryBody = JSON.parse(String(secondFetch.mock.calls[0]?.[1]?.body));
+    expect(retryBody.requestId).toBe(firstBody.requestId);
+    expect(createAnotherId).not.toHaveBeenCalled();
+    expect(persisted.size).toBe(0);
+  });
+
   it("retains one invitation request UUID across a lost response retry", async () => {
     const invitation = {
       invitationId: "33333333-3333-4333-8333-333333333333",
@@ -187,5 +246,35 @@ describe("browser meeting API", () => {
         color: "#0ea5e9",
       }),
     ).toMatchObject({ ok: false, error: { code: "invalid_response" } });
+  });
+
+  it("loads durable invitation delivery truth without treating submitted as delivered", async () => {
+    const invitationId = "33333333-3333-4333-8333-333333333333";
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        invitation: {
+          invitationId,
+          roomId: ROOM_ID,
+          delivery: {
+            status: "submitted",
+            message: "Invitation was submitted to the email provider; delivery is pending.",
+            providerId: "email_accepted_123",
+          },
+        },
+      }),
+    );
+    const api = createBrowserMeetingApi({ accessToken: JWT, fetcher });
+
+    await expect(
+      api.loadInvitationDelivery(ROOM_ID, invitationId),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { delivery: { status: "submitted" } },
+    });
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith(
+      `/api/meetings/${ROOM_ID}/invitations?invitationId=${invitationId}`,
+      expect.objectContaining({ method: "GET", cache: "no-store" }),
+    );
   });
 });

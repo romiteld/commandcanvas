@@ -33,6 +33,7 @@ describe("meeting service", () => {
     });
 
     const result = await service.createMeeting(ACTOR_ID, {
+      requestId: ROOM_ID,
       name: "Product review",
       displayName: "Danny",
       color: "#0ea5e9",
@@ -50,6 +51,46 @@ describe("meeting service", () => {
       }),
     );
     expect(JSON.stringify(result)).not.toContain("joinToken");
+  });
+
+  it("loads durable invitation delivery only for the host, room, and invitation tuple", async () => {
+    const client = clientWith([
+      {
+        data: {
+          invitationId: INVITATION_ID,
+          deliveryStatus: "submitted",
+          providerMessageId: "email_accepted_123",
+          changed: false,
+        },
+        error: null,
+      },
+    ]);
+    const service = createMeetingService(client, {
+      createUuid: () => INVITATION_ID,
+      randomBytes: (size) => Buffer.alloc(size, 1),
+      now: () => new Date("2026-08-28T12:00:00.000Z"),
+      inviteTokenSecret: INVITE_SECRET,
+    });
+
+    await expect(
+      service.loadInvitationDelivery(ACTOR_ID, ROOM_ID, INVITATION_ID),
+    ).resolves.toEqual({
+      ok: true,
+      value: {
+        invitationId: INVITATION_ID,
+        deliveryStatus: "submitted",
+        providerMessageId: "email_accepted_123",
+        changed: false,
+      },
+    });
+    expect(client.rpc).toHaveBeenCalledExactlyOnceWith(
+      "load_room_invitation_delivery",
+      {
+        p_host_user_id: ACTOR_ID,
+        p_room_id: ROOM_ID,
+        p_invitation_id: INVITATION_ID,
+      },
+    );
   });
 
   it("creates an idempotent email-bound invitation with a stable 256-bit HMAC token", async () => {

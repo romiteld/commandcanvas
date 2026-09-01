@@ -4,10 +4,11 @@ import {
   acceptMeetingInvitationRequestSchema,
   createMeetingInvitationRequestSchema,
   createMeetingRequestSchema,
+  createMeetingDraftSchema,
   type AcceptMeetingInvitationRequest,
   type CreateMeetingInvitationRequest,
   type CreateMeetingInvitationDraft,
-  type CreateMeetingRequest,
+  type CreateMeetingDraft,
 } from "@/lib/supabase/meeting-contracts";
 import { parseBearerJwtHeader } from "@/lib/supabase/server-auth";
 
@@ -37,6 +38,8 @@ const invitationResponseSchema = z
         delivery: z
           .object({
             status: z.enum([
+              "created",
+              "sending",
               "preview_only",
               "reconciling",
               "submitted",
@@ -72,6 +75,8 @@ export interface BrowserMeetingInvitationValue {
   joinUrl: string;
   delivery: {
     status:
+      | "created"
+      | "sending"
       | "preview_only"
       | "reconciling"
       | "submitted"
@@ -85,9 +90,15 @@ export interface BrowserMeetingInvitationValue {
   };
 }
 
+export interface BrowserMeetingInvitationDeliveryValue {
+  invitationId: string;
+  roomId: string;
+  delivery: BrowserMeetingInvitationValue["delivery"];
+}
+
 export interface BrowserMeetingApi {
   createMeeting: (
-    input: CreateMeetingRequest,
+    input: CreateMeetingDraft,
     signal?: AbortSignal,
   ) => Promise<BrowserMeetingApiResult<BrowserMeetingValue>>;
   createInvitation: (
@@ -99,6 +110,13 @@ export interface BrowserMeetingApi {
     input: AcceptMeetingInvitationRequest,
     signal?: AbortSignal,
   ) => Promise<BrowserMeetingApiResult<BrowserMeetingValue>>;
+  loadInvitationDelivery: (
+    roomId: string,
+    invitationId: string,
+    signal?: AbortSignal,
+  ) => Promise<
+    BrowserMeetingApiResult<BrowserMeetingInvitationDeliveryValue>
+  >;
 }
 
 export function createBrowserMeetingApi(options: {
@@ -106,6 +124,10 @@ export function createBrowserMeetingApi(options: {
   fetcher?: typeof fetch;
   createRequestId?: () => string;
   invitationRequestStorage?: Pick<
+    Storage,
+    "getItem" | "setItem" | "removeItem"
+  > | null;
+  meetingRequestStorage?: Pick<
     Storage,
     "getItem" | "setItem" | "removeItem"
   > | null;
@@ -119,20 +141,60 @@ export function createBrowserMeetingApi(options: {
       ? browserSessionStorage()
       : options.invitationRequestStorage;
   const pendingInvitationIds = new Map<string, string>();
+  const pendingMeetingIds = new Map<string, string>();
   const invitationDraftSchema = createMeetingInvitationRequestSchema.omit({
     requestId: true,
   });
+  const meetingRequestStorage =
+    options.meetingRequestStorage === undefined
+      ? browserSessionStorage()
+      : options.meetingRequestStorage;
+  const meetingDeliveryResponseSchema = z
+    .object({
+      ok: z.literal(true),
+      invitation: z
+        .object({
+          invitationId: z.uuid(),
+          roomId: z.uuid(),
+          delivery: invitationResponseSchema.shape.invitation.shape.delivery,
+        })
+        .strict(),
+    })
+    .strict();
 
   return {
-    createMeeting: (input: CreateMeetingRequest, signal?: AbortSignal) =>
-      call(
+    createMeeting: async (rawInput: CreateMeetingDraft, signal?: AbortSignal) => {
+      const input = createMeetingDraftSchema.safeParse(rawInput);
+      if (!input.success) return invalidInput();
+      const identity = JSON.stringify(input.data);
+      const storageKey = await requestStorageKey(
+        MEETING_REQUEST_STORAGE_PREFIX,
+        identity,
+      );
+      let requestId =
+        pendingMeetingIds.get(identity) ??
+        readPersistedRequestId(meetingRequestStorage, storageKey);
+      if (!requestId) {
+        const candidate = createRequestId();
+        if (!z.uuid().safeParse(candidate).success) return invalidInput();
+        requestId = candidate;
+      }
+      pendingMeetingIds.set(identity, requestId);
+      persistRequestId(meetingRequestStorage, storageKey, requestId);
+      const result = await call(
         "/api/meetings",
-        input,
+        { requestId, ...input.data },
         createMeetingRequestSchema,
         meetingResponseSchema,
         (envelope) => envelope.meeting,
         signal,
-      ),
+      );
+      if (result.ok) {
+        pendingMeetingIds.delete(identity);
+        removePersistedRequestId(meetingRequestStorage, storageKey);
+      }
+      return result;
+    },
     createInvitation: async (
       roomId: string,
       input: CreateMeetingInvitationDraft,
@@ -142,7 +204,10 @@ export function createBrowserMeetingApi(options: {
       if (!z.uuid().safeParse(roomId).success || !parsed.success)
         return invalidInput();
       const inMemoryKey = JSON.stringify([roomId, parsed.data]);
-      const storageKey = await invitationStorageKey(inMemoryKey);
+      const storageKey = await requestStorageKey(
+        INVITATION_REQUEST_STORAGE_PREFIX,
+        inMemoryKey,
+      );
       let requestId =
         pendingInvitationIds.get(inMemoryKey) ??
         readPersistedRequestId(invitationRequestStorage, storageKey);
@@ -183,7 +248,46 @@ export function createBrowserMeetingApi(options: {
         (envelope) => envelope.meeting,
         signal,
       ),
+    loadInvitationDelivery: (roomId, invitationId, signal) => {
+      if (
+        !z.uuid().safeParse(roomId).success ||
+        !z.uuid().safeParse(invitationId).success ||
+        !bearer.ok
+      )
+        return invalidInput();
+      return get(
+        `/api/meetings/${roomId}/invitations?invitationId=${invitationId}`,
+        meetingDeliveryResponseSchema,
+        (envelope) => envelope.invitation,
+        signal,
+      );
+    },
   };
+
+  async function get<Envelope, Value>(
+    path: string,
+    outputSchema: z.ZodType<Envelope>,
+    selectValue: (envelope: Envelope) => Value,
+    signal?: AbortSignal,
+  ): Promise<BrowserMeetingApiResult<Value>> {
+    if (!bearer.ok) return invalidInput();
+    try {
+      const response = await fetcher(path, {
+        method: "GET",
+        headers: { authorization: `Bearer ${bearer.token}` },
+        cache: "no-store",
+        signal,
+      });
+      const raw: unknown = await response.json();
+      if (!response.ok) return parseFailure(raw, response.status);
+      const parsed = outputSchema.safeParse(raw);
+      return parsed.success
+        ? { ok: true, value: selectValue(parsed.data) }
+        : invalidResponse();
+    } catch {
+      return requestFailed();
+    }
+  }
 
   async function call<Input, Envelope, Value>(
     path: string,
@@ -226,16 +330,14 @@ export function createBrowserMeetingApi(options: {
       if (!parsed.success) return invalidResponse();
       return { ok: true, value: selectValue(parsed.data) };
     } catch {
-      return {
-        ok: false,
-        error: { code: "request_failed", message: "Meeting request failed." },
-      };
+      return requestFailed();
     }
   }
 }
 
 const INVITATION_REQUEST_STORAGE_PREFIX =
   "commandcanvas:invitation-request:v1:";
+const MEETING_REQUEST_STORAGE_PREFIX = "commandcanvas:meeting-request:v1:";
 
 function browserSessionStorage(): Pick<
   Storage,
@@ -250,7 +352,7 @@ function browserSessionStorage(): Pick<
   }
 }
 
-async function invitationStorageKey(identity: string) {
+async function requestStorageKey(prefix: string, identity: string) {
   try {
     const digest = await globalThis.crypto.subtle.digest(
       "SHA-256",
@@ -259,10 +361,30 @@ async function invitationStorageKey(identity: string) {
     const hex = [...new Uint8Array(digest)]
       .map((byte) => byte.toString(16).padStart(2, "0"))
       .join("");
-    return `${INVITATION_REQUEST_STORAGE_PREFIX}${hex}`;
+    return `${prefix}${hex}`;
   } catch {
     return null;
   }
+}
+
+function parseFailure(raw: unknown, status: number): BrowserMeetingApiResult<never> {
+  const parsed = z
+    .object({
+      ok: z.literal(false),
+      error: z.object({ code: z.string(), message: z.string() }).strict(),
+    })
+    .strict()
+    .safeParse(raw);
+  return parsed.success
+    ? { ok: false, error: { ...parsed.data.error, status } }
+    : invalidResponse();
+}
+
+function requestFailed(): BrowserMeetingApiResult<never> {
+  return {
+    ok: false,
+    error: { code: "request_failed", message: "Meeting request failed." },
+  };
 }
 
 function readPersistedRequestId(

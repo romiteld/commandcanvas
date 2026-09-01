@@ -13,6 +13,21 @@ const SAVED_OPENAI_CREDENTIAL = {
   updatedAt: "2026-09-01T03:12:34.000Z",
 };
 
+interface FakeAuthSession {
+  access_token: string;
+  user: {
+    id: string;
+    email: string;
+    email_confirmed_at: string;
+    is_anonymous: boolean;
+  };
+}
+
+interface FakeSessionResult {
+  data: { session: FakeAuthSession | null };
+  error: { message: string } | null;
+}
+
 const fakes = vi.hoisted(() => {
   const order: string[] = [];
   const webMcpSignals: AbortSignal[] = [];
@@ -36,6 +51,8 @@ const fakes = vi.hoisted(() => {
   let role: "host" | "participant" = "participant";
   let accessToken = "bootstrap.header.signature";
   let invitationStatus:
+    | "created"
+    | "sending"
     | "preview_only"
     | "reconciling"
     | "submitted"
@@ -45,6 +62,7 @@ const fakes = vi.hoisted(() => {
     | "failed"
     | "suppressed" = "preview_only";
   let invitationFailure: { code: string; message: string } | null = null;
+  let meetingFailure: { code: string; message: string } | null = null;
   let sessionError: { message: string } | null = null;
   let roomOnCommand:
     | ((command: unknown, source: unknown) => unknown)
@@ -131,7 +149,27 @@ const fakes = vi.hoisted(() => {
       };
     },
   );
-  const getSession = vi.fn(async () => ({
+  const createMeeting = vi.fn(
+    async (
+      requestAccessToken: string,
+      input: { name: string; displayName: string; color: string },
+    ) =>
+      meetingFailure
+        ? { ok: false as const, error: meetingFailure }
+        : {
+            ok: true as const,
+            value: { roomId: ROOM_ID, role: "host" as const, joined: true },
+            requestAccessToken,
+            input,
+          },
+  );
+  const loadInvitationDelivery = vi.fn();
+  const loadUserProfile = vi.fn();
+  const createUserProfileApi = vi.fn(() => ({
+    load: loadUserProfile,
+    save: vi.fn(),
+  }));
+  const getSession = vi.fn(async (): Promise<FakeSessionResult> => ({
     data: {
       session: {
         access_token: accessToken,
@@ -145,9 +183,24 @@ const fakes = vi.hoisted(() => {
     },
     error: sessionError,
   }));
+  const refreshSession = vi.fn(async (): Promise<FakeSessionResult> => ({
+    data: {
+      session: {
+        access_token: accessToken,
+        user: {
+          id: USER_ID,
+          email: "sarah@example.com",
+          email_confirmed_at: "2026-08-28T12:00:00.000Z",
+          is_anonymous: false,
+        },
+      },
+    },
+    error: null,
+  }));
   const client = {
     auth: {
       getSession,
+      refreshSession,
       signOut,
       signInWithOtp,
       verifyOtp,
@@ -160,11 +213,16 @@ const fakes = vi.hoisted(() => {
     order,
     acceptInvitation,
     createInvitation,
+    createMeeting,
+    loadInvitationDelivery,
+    loadUserProfile,
+    createUserProfileApi,
     client,
     webMcpSignals,
     disposeSession,
     submitCommand,
     getSession,
+    refreshSession,
     startSession,
     subscribeSession,
     unsubscribeSession,
@@ -185,6 +243,9 @@ const fakes = vi.hoisted(() => {
     },
     setInvitationFailure(nextFailure: typeof invitationFailure) {
       invitationFailure = nextFailure;
+    },
+    setMeetingFailure(nextFailure: typeof meetingFailure) {
+      meetingFailure = nextFailure;
     },
     setSessionError(nextError: typeof sessionError) {
       sessionError = nextError;
@@ -232,12 +293,21 @@ vi.mock("@/lib/supabase/browser-client", () => ({
 vi.mock("@/lib/supabase/meeting-api", () => ({
   createBrowserMeetingApi: vi.fn(({ accessToken }: { accessToken: string }) => ({
     acceptInvitation: fakes.acceptInvitation,
-    createMeeting: vi.fn(),
+    createMeeting: (input: {
+      name: string;
+      displayName: string;
+      color: string;
+    }) => fakes.createMeeting(accessToken, input),
     createInvitation: (
       roomId: string,
       input: { email: string; displayName: string },
     ) => fakes.createInvitation(accessToken, roomId, input),
+    loadInvitationDelivery: fakes.loadInvitationDelivery,
   })),
+}));
+
+vi.mock("@/lib/user-profiles/browser-api", () => ({
+  createBrowserUserProfileApi: fakes.createUserProfileApi,
 }));
 
 vi.mock("@/lib/demo/room-session", () => ({
@@ -378,7 +448,20 @@ describe("meeting invitation StrictMode handshake", () => {
     fakes.verifyOtp.mockClear();
     fakes.acceptInvitation.mockClear();
     fakes.createInvitation.mockClear();
+    fakes.createMeeting.mockClear();
+    fakes.loadInvitationDelivery.mockReset();
+    fakes.loadInvitationDelivery.mockResolvedValue({
+      ok: false,
+      error: {
+        code: "request_failed",
+        message: "Delivery refresh is temporarily unavailable.",
+      },
+    });
+    fakes.loadUserProfile.mockReset();
+    fakes.loadUserProfile.mockResolvedValue({ ok: true, value: null });
+    fakes.createUserProfileApi.mockClear();
     fakes.getSession.mockClear();
+    fakes.refreshSession.mockClear();
     fakes.startSession.mockClear();
     fakes.subscribeSession.mockClear();
     fakes.unsubscribeSession.mockClear();
@@ -386,6 +469,7 @@ describe("meeting invitation StrictMode handshake", () => {
     fakes.setAccessToken("bootstrap.header.signature");
     fakes.setInvitationStatus("preview_only");
     fakes.setInvitationFailure(null);
+    fakes.setMeetingFailure(null);
     fakes.setSessionError(null);
     window.history.replaceState(null, "", `/meet#invite=${TOKEN}`);
   });
@@ -529,6 +613,97 @@ describe("meeting invitation StrictMode handshake", () => {
       fakes.sketchCredentialOptions?.getUseSavedOpenAiCredential?.(),
     ).toBe(true);
     expect(fakes.sketchCredentialOptions?.getOpenAiApiKey?.()).toBe("");
+  });
+
+  it("loads a returning permanent user's saved profile before rendering the host form", async () => {
+    window.history.replaceState(null, "", "/meet");
+    fakes.loadUserProfile.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        displayName: "Daniel",
+        color: "#0EA5E9",
+        updatedAt: "2026-09-01T19:00:00.000Z",
+      },
+    });
+
+    render(<MeetingCommandCanvas />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Create a shared spatial room" }),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Your display name")).toHaveValue("Daniel");
+    expect(fakes.createUserProfileApi).toHaveBeenCalledWith({
+      accessToken: "bootstrap.header.signature",
+    });
+    expect(fakes.loadUserProfile).toHaveBeenCalledWith(expect.any(AbortSignal));
+  });
+
+  it("recovers an expired cached session through refresh before profile setup", async () => {
+    window.history.replaceState(null, "", "/meet");
+    fakes.getSession.mockResolvedValueOnce({
+      data: { session: null },
+      error: { message: "cached session expired" },
+    });
+
+    render(<MeetingCommandCanvas />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Create a shared spatial room" }),
+    ).toBeVisible();
+    expect(fakes.refreshSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the entered room and display names after a create failure", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/meet");
+    fakes.setMeetingFailure({
+      code: "service_unavailable",
+      message: "Room could not be created. Try again.",
+    });
+    render(<MeetingCommandCanvas />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Create a shared spatial room" }),
+    ).toBeVisible();
+    const roomName = screen.getByLabelText("Room name");
+    const displayName = screen.getByLabelText("Your display name");
+    await user.clear(roomName);
+    await user.type(roomName, "Launch recovery room");
+    await user.type(displayName, "Daniel Romitelli");
+    await user.click(screen.getByRole("button", { name: "Enter CommandCanvas" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Room could not be created. Try again.",
+    );
+    expect(screen.getByLabelText("Room name")).toHaveValue(
+      "Launch recovery room",
+    );
+    expect(screen.getByLabelText("Your display name")).toHaveValue(
+      "Daniel Romitelli",
+    );
+  });
+
+  it("preserves the entered values when session lookup throws before creation", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/meet");
+    render(<MeetingCommandCanvas />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Create a shared spatial room" }),
+    ).toBeVisible();
+    await user.clear(screen.getByLabelText("Room name"));
+    await user.type(screen.getByLabelText("Room name"), "Session recovery room");
+    await user.type(screen.getByLabelText("Your display name"), "Daniel");
+    fakes.getSession.mockRejectedValueOnce(new Error("network unavailable"));
+    await user.click(screen.getByRole("button", { name: "Enter CommandCanvas" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Your session could not be refreshed. Try again.",
+    );
+    expect(screen.getByLabelText("Room name")).toHaveValue(
+      "Session recovery room",
+    );
+    expect(screen.getByLabelText("Your display name")).toHaveValue("Daniel");
   });
 
   it("saves a confirmed key, clears its raw state, and selects the saved credential everywhere", async () => {
@@ -724,7 +899,7 @@ describe("meeting invitation StrictMode handshake", () => {
     await user.type(screen.getByLabelText("Email"), "mike@example.com");
 
     fakes.setAccessToken("fresh.one.signature");
-    await user.click(screen.getByRole("button", { name: "Create invitation" }));
+    await user.click(screen.getByRole("button", { name: "Send invitation" }));
     await waitFor(() => expect(fakes.createInvitation).toHaveBeenCalledTimes(1));
     expect(
       await screen.findByText("Preview only: email not sent"),
@@ -737,6 +912,8 @@ describe("meeting invitation StrictMode handshake", () => {
   });
 
   it.each([
+    ["created", "Invitation ready to send"],
+    ["sending", "Email submission in progress"],
     ["preview_only", "Preview only: email not sent"],
     ["reconciling", "Email submission being reconciled"],
     ["submitted", "Email submitted: delivery pending"],
@@ -758,7 +935,7 @@ describe("meeting invitation StrictMode handshake", () => {
       await user.type(screen.getByLabelText("Display name"), "Mike");
       await user.type(screen.getByLabelText("Email"), "mike@example.com");
       await user.click(
-        screen.getByRole("button", { name: "Create invitation" }),
+        screen.getByRole("button", { name: "Send invitation" }),
       );
 
       expect(await screen.findByText(label)).toBeVisible();
@@ -767,6 +944,38 @@ describe("meeting invitation StrictMode handshake", () => {
       ).toBeVisible();
     },
   );
+
+  it("polls a nonterminal invitation until the durable delivery state changes", async () => {
+    const user = userEvent.setup();
+    fakes.setRole("host");
+    fakes.setInvitationStatus("submitted");
+    fakes.loadInvitationDelivery.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        invitationId: "33333333-3333-4333-8333-333333333333",
+        roomId: ROOM_ID,
+        delivery: {
+          status: "delivered",
+          message: "Resend confirmed delivery.",
+        },
+      },
+    });
+    render(<MeetingCommandCanvas />);
+
+    expect(await screen.findByTestId("meeting-room")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Invite" }));
+    await user.type(screen.getByLabelText("Display name"), "Mike");
+    await user.type(screen.getByLabelText("Email"), "mike@example.com");
+    await user.click(screen.getByRole("button", { name: "Send invitation" }));
+
+    expect(await screen.findByText("Email delivered")).toBeVisible();
+    expect(screen.getByText("Resend confirmed delivery.")).toBeVisible();
+    expect(fakes.loadInvitationDelivery).toHaveBeenCalledWith(
+      ROOM_ID,
+      "33333333-3333-4333-8333-333333333333",
+      expect.any(AbortSignal),
+    );
+  });
 
   it("renders an invitation request failure inside the open dialog", async () => {
     const user = userEvent.setup();
@@ -782,7 +991,7 @@ describe("meeting invitation StrictMode handshake", () => {
     await user.type(screen.getByLabelText("Display name"), "Mike");
     await user.type(screen.getByLabelText("Email"), "mike@example.com");
     await user.click(
-      screen.getByRole("button", { name: "Create invitation" }),
+      screen.getByRole("button", { name: "Send invitation" }),
     );
 
     const alert = await screen.findByRole("alert");
@@ -803,7 +1012,7 @@ describe("meeting invitation StrictMode handshake", () => {
     await user.type(screen.getByLabelText("Email"), "mike@example.com");
     fakes.setSessionError({ message: "Session refresh failed." });
     await user.click(
-      screen.getByRole("button", { name: "Create invitation" }),
+      screen.getByRole("button", { name: "Send invitation" }),
     );
 
     const alert = await screen.findByRole("alert");
@@ -824,7 +1033,7 @@ describe("meeting invitation StrictMode handshake", () => {
     await user.type(screen.getByLabelText("Email"), "mike@example.com");
     fakes.getSession.mockRejectedValueOnce(new Error("network unavailable"));
     await user.click(
-      screen.getByRole("button", { name: "Create invitation" }),
+      screen.getByRole("button", { name: "Send invitation" }),
     );
 
     const alert = await screen.findByRole("alert");

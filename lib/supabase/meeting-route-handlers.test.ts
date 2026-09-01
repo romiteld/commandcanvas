@@ -6,6 +6,7 @@ import {
   handleAcceptMeetingInvitationRequest,
   handleCreateMeetingInvitationRequest,
   handleCreateMeetingRequest,
+  handleGetMeetingInvitationDeliveryRequest,
   type MeetingRouteDependencies,
 } from "@/lib/supabase/meeting-route-handlers";
 import type { MeetingService } from "@/lib/supabase/meeting-service";
@@ -35,6 +36,7 @@ function dependencies(input?: {
   acceptInvitation?: MeetingService["acceptInvitation"];
   reserveInvitationDelivery?: MeetingService["reserveInvitationDelivery"];
   completeInvitationDelivery?: MeetingService["completeInvitationDelivery"];
+  loadInvitationDelivery?: MeetingService["loadInvitationDelivery"];
 }) {
   const verifier = {
     auth: {
@@ -99,6 +101,17 @@ function dependencies(input?: {
           changed: true,
         },
       })),
+    loadInvitationDelivery:
+      input?.loadInvitationDelivery ??
+      vi.fn(async () => ({
+        ok: true as const,
+        value: {
+          invitationId: INVITATION_ID,
+          deliveryStatus: "submitted" as const,
+          providerMessageId: "email_accepted_123",
+          changed: false,
+        },
+      })),
     acceptInvitation:
       input?.acceptInvitation ??
       vi.fn(async () => ({
@@ -132,6 +145,7 @@ describe("meeting route security", () => {
     });
     const response = await handleCreateMeetingRequest(
       request("/api/meetings", {
+        requestId: ROOM_ID,
         name: "Product review",
         displayName: "Danny",
         color: "#0ea5e9",
@@ -150,6 +164,7 @@ describe("meeting route security", () => {
     const values = dependencies();
     const response = await handleCreateMeetingRequest(
       request("/api/meetings", {
+        requestId: ROOM_ID,
         name: "Product review",
         displayName: "Danny",
         color: "#0ea5e9",
@@ -165,6 +180,7 @@ describe("meeting route security", () => {
     const values = dependencies();
     const response = await handleCreateMeetingRequest(
       request("/api/meetings", {
+        requestId: ROOM_ID,
         name: "Product review",
         displayName: "Danny",
         color: "#0ea5e9",
@@ -178,6 +194,29 @@ describe("meeting route security", () => {
       meeting: { roomId: ROOM_ID, role: "host", joined: true },
     });
     expect(JSON.stringify(body)).not.toContain("joinToken");
+  });
+
+  it("loads host-authorized invitation delivery truth without invoking Resend", async () => {
+    const values = dependencies();
+    const response = await handleGetMeetingInvitationDeliveryRequest(
+      new Request(
+        `https://commandcanvas.test/api/meetings/${ROOM_ID}/invitations?invitationId=${INVITATION_ID}`,
+        { headers: { authorization: `Bearer ${JWT}` } },
+      ),
+      ROOM_ID,
+      values.dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    expect(values.service.loadInvitationDelivery).toHaveBeenCalledWith(
+      ACTOR_ID,
+      ROOM_ID,
+      INVITATION_ID,
+    );
+    expect(values.deliverInvitation).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      invitation: { delivery: { status: "submitted" } },
+    });
   });
 
   it("creates an email-bound invitation and returns one honest copy link", async () => {

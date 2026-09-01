@@ -10,12 +10,16 @@ export const normalizedEmailSchema = z
 const displayNameSchema = z.string().trim().min(1).max(64);
 const participantColorSchema = z.string().regex(/^#[0-9a-f]{6}$/i);
 
-export const createMeetingRequestSchema = z
+export const createMeetingDraftSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
     displayName: displayNameSchema,
     color: participantColorSchema,
   })
+  .strict();
+
+export const createMeetingRequestSchema = createMeetingDraftSchema
+  .extend({ requestId: z.uuid() })
   .strict();
 
 export const createMeetingInvitationRequestSchema = z
@@ -39,6 +43,7 @@ export const acceptMeetingInvitationRequestSchema = z
   .strict();
 
 export type CreateMeetingRequest = z.infer<typeof createMeetingRequestSchema>;
+export type CreateMeetingDraft = z.infer<typeof createMeetingDraftSchema>;
 export type CreateMeetingInvitationRequest = z.infer<
   typeof createMeetingInvitationRequestSchema
 >;

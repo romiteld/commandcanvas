@@ -10,6 +10,7 @@ describe("meeting request contracts", () => {
   it("accepts only bounded standard meeting creation fields", () => {
     expect(
       createMeetingRequestSchema.safeParse({
+        requestId: "11111111-1111-4111-8111-111111111111",
         name: "Product review",
         displayName: "Danny",
         color: "#0ea5e9",
@@ -17,6 +18,7 @@ describe("meeting request contracts", () => {
     ).toBe(true);
     expect(
       createMeetingRequestSchema.safeParse({
+        requestId: "11111111-1111-4111-8111-111111111111",
         name: "Product review",
         displayName: "Danny",
         color: "#0ea5e9",

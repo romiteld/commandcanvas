@@ -22,6 +22,7 @@ const roomRpcSchema = z
     slug: z.string().min(12).max(96),
     role: z.literal("host"),
     joined: z.literal(true),
+    resumed: z.boolean().optional(),
   })
   .strict();
 const invitationRpcSchema = z
@@ -157,6 +158,18 @@ export interface MeetingService {
       changed: boolean;
     }>
   >;
+  loadInvitationDelivery: (
+    actorUserId: string,
+    roomId: string,
+    invitationId: string,
+  ) => Promise<
+    MeetingServiceResult<{
+      invitationId: string;
+      deliveryStatus: InvitationDeliveryStatus;
+      providerMessageId: string | null;
+      changed: boolean;
+    }>
+  >;
   acceptInvitation: (
     actorUserId: string,
     input: AcceptMeetingInvitationRequest,
@@ -186,7 +199,7 @@ export function createMeetingService(
       if (!input.success || !uuidSchema.safeParse(actorUserId).success)
         return invalidRequest();
       try {
-        const roomId = exactUuid(dependencies.createUuid());
+        const roomId = input.data.requestId;
         const slug = `room-${Buffer.from(exactEntropy(dependencies, 16)).toString("hex")}`;
         const joinToken = Buffer.from(exactEntropy(dependencies, 32)).toString(
           "base64url",
@@ -320,6 +333,29 @@ export function createMeetingService(
           p_provider_message_id:
             "providerId" in delivery ? delivery.providerId ?? null : null,
           p_error_code: "errorCode" in delivery ? delivery.errorCode : null,
+        });
+        if (response.error) return providerFailure(response.error);
+        const parsed = invitationDeliveryRpcSchema.safeParse(response.data);
+        if (!parsed.success || parsed.data.invitationId !== invitationId)
+          return unavailable();
+        return { ok: true, value: parsed.data };
+      } catch {
+        return unavailable();
+      }
+    },
+
+    async loadInvitationDelivery(actorUserId, roomId, invitationId) {
+      if (
+        ![actorUserId, roomId, invitationId].every((value) =>
+          uuidSchema.safeParse(value).success,
+        )
+      )
+        return invalidRequest();
+      try {
+        const response = await client.rpc("load_room_invitation_delivery", {
+          p_host_user_id: actorUserId,
+          p_room_id: roomId,
+          p_invitation_id: invitationId,
         });
         if (response.error) return providerFailure(response.error);
         const parsed = invitationDeliveryRpcSchema.safeParse(response.data);
