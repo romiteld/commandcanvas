@@ -35,6 +35,11 @@ describe("durable user profile migration", () => {
   it("keeps profile reads and writes behind service-only locked wrappers", () => {
     const sql = migrationSql();
 
+    // COALESCE is SQL syntax rather than a pg_catalog function. Qualifying it
+    // parses as a nonexistent function and makes the migration fail at apply
+    // time even though a regex-only contract otherwise looks valid.
+    expect(sql).not.toMatch(/pg_catalog\.coalesce\s*\(/i);
+
     for (const name of ["get_user_profile", "upsert_user_profile"]) {
       expect(sql).toMatch(
         new RegExp(

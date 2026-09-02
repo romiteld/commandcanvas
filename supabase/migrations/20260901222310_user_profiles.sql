@@ -27,7 +27,7 @@ stable
 security definer
 set search_path = ''
 as $$
-  select pg_catalog.coalesce(
+  select coalesce(
     (
       select pg_catalog.jsonb_build_object(
         'configured', true,
