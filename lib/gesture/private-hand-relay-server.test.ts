@@ -23,6 +23,7 @@ function environment(overrides: Record<string, string | undefined> = {}) {
       "base64url",
     ),
     PRIVATE_HAND_RELAY_TOKEN_TTL_SECONDS: "60",
+    PRIVATE_HAND_RELAY_ALLOWED_ACTOR_IDS: ACTOR_ID,
     ...overrides,
   };
 }
@@ -152,6 +153,42 @@ describe("private hand relay server dependencies", () => {
         }),
       }),
     ).toEqual({ ok: false });
+    expect(
+      createServerPrivateHandRelayDependencies({
+        environment: environment({
+          PRIVATE_HAND_RELAY_ALLOWED_ACTOR_IDS: undefined,
+        }),
+      }),
+    ).toEqual({ ok: false });
+    expect(
+      createServerPrivateHandRelayDependencies({
+        environment: environment({
+          PRIVATE_HAND_RELAY_ALLOWED_ACTOR_IDS: "not-a-user-id",
+        }),
+      }),
+    ).toEqual({ ok: false });
+  });
+
+  it("authorizes only server-configured owner actor ids", async () => {
+    const fakeClient = client();
+    const built = createServerPrivateHandRelayDependencies({
+      environment: environment(),
+      createClient: () => fakeClient,
+      fetch: vi.fn(),
+    });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+
+    await expect(built.dependencies.authorizeActor(ACTOR_ID)).resolves.toEqual({
+      ok: true,
+    });
+    await expect(
+      built.dependencies.authorizeActor(
+        "55555555-5555-4555-8555-555555555555",
+      ),
+    ).resolves.toEqual({ ok: false });
+    expect(fakeClient.query.maybeSingle).not.toHaveBeenCalled();
+    expect(fakeClient.rpc).not.toHaveBeenCalled();
   });
 
   it("probes honest readiness then issues a short-lived room/user token", async () => {

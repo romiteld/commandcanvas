@@ -1,11 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import { meetingMediaSignalSchema } from "@/lib/meeting/media-protocol";
+import * as mediaProtocol from "@/lib/meeting/media-protocol";
+
+const { meetingMediaSignalSchema } = mediaProtocol;
 
 const participantA = "11111111-1111-4111-8111-111111111111";
 const participantB = "22222222-2222-4222-8222-222222222222";
 
 describe("meeting media signaling protocol", () => {
+  it("derives the only sender-bound topic accepted by Realtime RLS", () => {
+    const meetingMediaTopic = (
+      mediaProtocol as typeof mediaProtocol & {
+        meetingMediaTopic?: (roomId: string, participantId: string) => string;
+      }
+    ).meetingMediaTopic;
+
+    expect(meetingMediaTopic).toBeTypeOf("function");
+    expect(meetingMediaTopic?.("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", participantA))
+      .toBe(
+        "room-media:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:" + participantA,
+      );
+    expect(() => meetingMediaTopic?.("not-a-room", participantA)).toThrow();
+  });
+
   it("accepts targeted ready, SDP, ICE, and leave messages", () => {
     expect(
       meetingMediaSignalSchema.parse({

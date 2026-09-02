@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 const participantIdSchema = z.uuid();
+const roomIdSchema = z.uuid();
+
+export function meetingMediaTopic(roomId: string, participantId: string) {
+  return `room-media:${roomIdSchema.parse(roomId)}:${participantIdSchema.parse(participantId)}`;
+}
 
 const baseSignal = {
   version: z.literal(1),

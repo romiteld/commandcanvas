@@ -26,6 +26,34 @@ describe("createSharedCameraHandController", () => {
     expect(getMeetingStream).toHaveBeenCalledOnce();
   });
 
+  it("prefers a ref-counted hand lease so meeting shutdown cannot end hand input", async () => {
+    const meetingStream = {} as MediaStream;
+    const handStream = {} as MediaStream;
+    const release = vi.fn();
+    const acquireHandMedia = vi.fn(async () => ({
+      stream: handStream,
+      release,
+    }));
+    const createController = vi.fn<
+      (dependencies: HandTrackingControllerDependencies) => HandTrackingController
+    >(() => ({} as HandTrackingController));
+
+    createSharedCameraHandController({
+      getMeetingStream: () => meetingStream,
+      acquireHandMedia,
+      createController,
+    });
+
+    const dependencies = createController.mock.calls[0]?.[0];
+    await expect(
+      Promise.resolve(dependencies?.getSharedMediaStream?.()),
+    ).resolves.toEqual({
+      stream: handStream,
+      release,
+    });
+    expect(acquireHandMedia).toHaveBeenCalledOnce();
+  });
+
   it("passes the exact room access-token provider and live upload-consent getter to the relay engine", () => {
     const controller = {} as HandTrackingController;
     const createController = vi.fn<

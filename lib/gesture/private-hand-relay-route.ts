@@ -8,7 +8,7 @@ import {
   type PrivateHandRelaySession,
 } from "@/lib/gesture/private-hand-relay-contract";
 import {
-  authenticateRequestActor,
+  authenticatePermanentEmailUser,
   type SupabaseUserVerifier,
 } from "@/lib/supabase/server-auth";
 import { readBoundedUtf8Body } from "@/lib/http/read-bounded-body";
@@ -27,6 +27,9 @@ export type PrivateHandRelayStartResult =
 
 export interface PrivateHandRelaySessionRouteDependencies {
   verifier: SupabaseUserVerifier;
+  authorizeActor: (
+    actorUserId: string,
+  ) => Promise<{ ok: true } | { ok: false }>;
   verifyMembership: (
     roomId: string,
     actorUserId: string,
@@ -43,14 +46,37 @@ export async function handlePrivateHandRelaySessionRequest(
   pathRoomId: string,
   dependencies: PrivateHandRelaySessionRouteDependencies,
 ): Promise<Response> {
-  const actor = await authenticateRequestActor(
+  const actor = await authenticatePermanentEmailUser(
     request.headers.get("authorization"),
     dependencies.verifier,
   );
-  if (!actor.ok)
+  if (!actor.ok) {
+    if (actor.error.code === "permanent_email_auth_required")
+      return jsonError(
+        403,
+        actor.error.code,
+        "Sign in with a verified email to use private GPU hand tracking. Local tracking remains active.",
+        true,
+      );
     return jsonError(401, actor.error.code, actor.error.message);
+  }
   if (!roomIdSchema.safeParse(pathRoomId).success)
     return jsonError(400, "invalid_room_id", "Room ID is invalid.");
+
+  let authorized: { ok: true } | { ok: false };
+  try {
+    authorized = await dependencies.authorizeActor(actor.actorUserId);
+  } catch {
+    authorized = { ok: false };
+  }
+  if (!authorized.ok)
+    return jsonError(
+      403,
+      "private_relay_owner_required",
+      "Private GPU hand tracking is restricted to an authorized owner. Local tracking remains active.",
+      true,
+    );
+
   if (!isApplicationJson(request.headers.get("content-type")))
     return jsonError(
       415,

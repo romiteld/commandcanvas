@@ -43,6 +43,7 @@ Private processing is attempted only when all of these conditions hold:
 - the user explicitly enables camera upload for hand tracking;
 - Hand input is active;
 - the browser has a valid Supabase session and current room membership;
+- that permanent actor UUID is present in the server-only owner allowlist;
 - the server configuration names one exact HTTPS relay origin;
 - durable actor, room, and global admission succeeds;
 - a short-lived, one-use capability can be issued.
@@ -66,9 +67,12 @@ PRIVATE_HAND_RELAY_ENABLED=true
 PRIVATE_HAND_RELAY_ORIGIN=https://configured-relay.example
 PRIVATE_HAND_RELAY_SIGNING_KEY=<independent 32-byte base64url secret>
 PRIVATE_HAND_RELAY_TOKEN_TTL_SECONDS=60
+PRIVATE_HAND_RELAY_ALLOWED_ACTOR_IDS=<comma-separated Supabase owner UUIDs>
 ```
 
-No reusable relay secret is exposed to the browser. No firewall, router,
+The allowlist is default-deny and is never returned to the browser. Anonymous
+no-signup actors and permanent non-owner room members always remain on local
+MediaPipe. No reusable relay secret is exposed to the browser. No firewall, router,
 provider, or deployment credential belongs in either repository.
 
 ## Verification boundary

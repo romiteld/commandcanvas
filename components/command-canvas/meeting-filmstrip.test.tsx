@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MeetingFilmstrip } from "@/components/command-canvas/meeting-filmstrip";
 import type {
@@ -44,14 +44,23 @@ const participants = [
   { id: remoteId, displayName: "Sarah", color: "#38bdf8" },
 ];
 
-const crowdedParticipants = [
-  ...participants,
-  { id: "33333333-3333-4333-8333-333333333333", displayName: "Mike" },
-  { id: "44444444-4444-4444-8444-444444444444", displayName: "Avery" },
-  { id: "55555555-5555-4555-8555-555555555555", displayName: "Jo" },
-];
+const eligibleRoster = (participantIds: readonly string[]) => ({
+  status: "eligible" as const,
+  participantIds: new Set(participantIds),
+});
+const loadVerifiedParticipants = async () =>
+  eligibleRoster([localId, remoteId]);
 
 describe("MeetingFilmstrip", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("defaults to compact room presence with a clear count and visible roster", () => {
     const setup = harness();
     render(
@@ -60,6 +69,7 @@ describe("MeetingFilmstrip", () => {
         localParticipantId={localId}
         participants={participants}
         getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={loadVerifiedParticipants}
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
       />,
@@ -94,6 +104,7 @@ describe("MeetingFilmstrip", () => {
         localParticipantId={localId}
         participants={participants}
         getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={loadVerifiedParticipants}
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
       />,
@@ -111,14 +122,53 @@ describe("MeetingFilmstrip", () => {
     expect(screen.queryAllByTestId("remote-meeting-video")).toHaveLength(0);
   });
 
-  it("visibly refuses meeting media while more than four people are present", () => {
+  it("uses the authoritative persisted roster total for the four-person cap even when only two appear in Presence", async () => {
     const setup = harness();
     render(
       <MeetingFilmstrip
         roomId={roomId}
         localParticipantId={localId}
-        participants={crowdedParticipants}
+        participants={participants}
         getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={async () => ({
+          status: "over_capacity",
+        })}
+        client={{} as MeetingMediaControllerOptions["client"]}
+        createController={setup.createController}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Start camera and microphone" }),
+      ).toBeDisabled(),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "This room has more than four verified members. Meeting media supports up to four.",
+    );
+    await waitFor(() =>
+      expect(setup.controller.setAllowedParticipantIds).toHaveBeenLastCalledWith(
+        new Set(),
+        { overCapacity: true },
+      ),
+    );
+  });
+
+  it("keeps Start disabled while authoritative membership is still loading", async () => {
+    let resolveRoster:
+      | ((roster: ReturnType<typeof eligibleRoster>) => void)
+      | undefined;
+    const roster = new Promise<ReturnType<typeof eligibleRoster>>((resolve) => {
+      resolveRoster = resolve;
+    });
+    const setup = harness();
+    render(
+      <MeetingFilmstrip
+        roomId={roomId}
+        localParticipantId={localId}
+        participants={participants}
+        getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={() => roster}
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
       />,
@@ -128,8 +178,187 @@ describe("MeetingFilmstrip", () => {
       screen.getByRole("button", { name: "Start camera and microphone" }),
     ).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent(
-      "5 people are present. Meeting media starts at four or fewer.",
+      "Verifying meeting media access",
     );
+
+    resolveRoster?.(eligibleRoster([localId, remoteId]));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Start camera and microphone" }),
+      ).toBeEnabled(),
+    );
+  });
+
+  it("ignores forged Presence identities and subscribes only to the authoritative roster", async () => {
+    const forgedParticipants = [
+      ...participants,
+      { id: "33333333-3333-4333-8333-333333333333", displayName: "Forged A" },
+      { id: "44444444-4444-4444-8444-444444444444", displayName: "Forged B" },
+      { id: "55555555-5555-4555-8555-555555555555", displayName: "Forged C" },
+    ];
+    const setup = harness();
+    const loadRoster = vi.fn(async () =>
+      eligibleRoster([localId, remoteId]),
+    );
+    render(
+      <MeetingFilmstrip
+        roomId={roomId}
+        localParticipantId={localId}
+        participants={forgedParticipants}
+        getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={loadRoster}
+        client={{} as MeetingMediaControllerOptions["client"]}
+        createController={setup.createController}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(setup.controller.setAllowedParticipantIds).toHaveBeenLastCalledWith(
+        new Set([localId, remoteId]),
+      ),
+    );
+    expect(loadRoster).toHaveBeenCalledWith(
+      expect.objectContaining({ roomId, accessToken: "token" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Start camera and microphone" }),
+    ).toBeEnabled();
+  });
+
+  it("does not amplify authoritative roster requests when Presence identities churn", async () => {
+    const setup = harness();
+    const loadRoster = vi.fn(loadVerifiedParticipants);
+    const getAccessToken = () => "token";
+    const client = {} as MeetingMediaControllerOptions["client"];
+    const view = render(
+      <MeetingFilmstrip
+        roomId={roomId}
+        localParticipantId={localId}
+        participants={participants}
+        getAccessToken={getAccessToken}
+        loadAuthoritativeParticipantIds={loadRoster}
+        client={client}
+        createController={setup.createController}
+      />,
+    );
+    await waitFor(() => expect(loadRoster).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <MeetingFilmstrip
+        roomId={roomId}
+        localParticipantId={localId}
+        participants={[
+          ...participants,
+          {
+            id: "33333333-3333-4333-8333-333333333333",
+            displayName: "Forged",
+          },
+        ]}
+        getAccessToken={getAccessToken}
+        loadAuthoritativeParticipantIds={loadRoster}
+        client={client}
+        createController={setup.createController}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(loadRoster).toHaveBeenCalledOnce();
+  });
+
+  it("periodically refreshes authoritative membership independently of Presence", async () => {
+    vi.useFakeTimers();
+    let resolveRefresh:
+      | ((roster: { status: "unavailable" }) => void)
+      | undefined;
+    const pendingRefresh = new Promise<{ status: "unavailable" }>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const setup = harness();
+    const loadRoster = vi
+      .fn()
+      .mockResolvedValueOnce(eligibleRoster([localId, remoteId]))
+      .mockReturnValueOnce(pendingRefresh);
+    render(
+      <MeetingFilmstrip
+        roomId={roomId}
+        localParticipantId={localId}
+        participants={participants}
+        getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={loadRoster}
+        client={{} as MeetingMediaControllerOptions["client"]}
+        createController={setup.createController}
+      />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(setup.controller.setAllowedParticipantIds).toHaveBeenLastCalledWith(
+      new Set([localId, remoteId]),
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+
+    expect(loadRoster).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByRole("button", { name: "Start camera and microphone" }),
+    ).toBeEnabled();
+    expect(
+      screen.queryByText("Verifying meeting media access…"),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveRefresh?.({ status: "unavailable" });
+      await Promise.resolve();
+    });
+    expect(setup.controller.setAllowedParticipantIds).toHaveBeenLastCalledWith(
+      new Set(),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Verified meeting roster unavailable. Video remains off.",
+    );
+  });
+
+  it("aborts in-flight roster refresh and removes refresh triggers on unmount", async () => {
+    vi.useFakeTimers();
+    const pendingRefresh = new Promise<{ status: "unavailable" }>(
+      () => undefined,
+    );
+    const setup = harness();
+    const loadRoster = vi
+      .fn()
+      .mockResolvedValueOnce(eligibleRoster([localId, remoteId]))
+      .mockReturnValueOnce(pendingRefresh);
+    const view = render(
+      <MeetingFilmstrip
+        roomId={roomId}
+        localParticipantId={localId}
+        participants={participants}
+        getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={loadRoster}
+        client={{} as MeetingMediaControllerOptions["client"]}
+        createController={setup.createController}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(loadRoster).toHaveBeenCalledTimes(2);
+    const refreshSignal = loadRoster.mock.calls[1]?.[0].signal as AbortSignal;
+
+    view.unmount();
+    expect(refreshSignal.aborted).toBe(true);
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(loadRoster).toHaveBeenCalledTimes(2);
   });
 
   it("starts only from a human click and exposes camera, microphone, and leave controls", async () => {
@@ -141,6 +370,7 @@ describe("MeetingFilmstrip", () => {
         localParticipantId={localId}
         participants={participants}
         getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={loadVerifiedParticipants}
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
       />,
@@ -218,6 +448,7 @@ describe("MeetingFilmstrip", () => {
           localParticipantId={localId}
           participants={participants}
           getAccessToken={() => "token"}
+          loadAuthoritativeParticipantIds={loadVerifiedParticipants}
           client={{} as MeetingMediaControllerOptions["client"]}
           createController={createController}
         />
@@ -242,6 +473,7 @@ describe("MeetingFilmstrip", () => {
         localParticipantId={localId}
         participants={participants}
         getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={loadVerifiedParticipants}
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
       />,
@@ -276,6 +508,7 @@ describe("MeetingFilmstrip", () => {
         localParticipantId={localId}
         participants={participants}
         getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={loadVerifiedParticipants}
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
       />,
@@ -307,7 +540,7 @@ describe("MeetingFilmstrip", () => {
     );
   });
 
-  it("distinguishes lost signaling from stopped direct media", () => {
+  it("distinguishes lost signaling from stopped direct media", async () => {
     const setup = harness();
     render(
       <MeetingFilmstrip
@@ -315,9 +548,16 @@ describe("MeetingFilmstrip", () => {
         localParticipantId={localId}
         participants={participants}
         getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={loadVerifiedParticipants}
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
       />,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Start camera and microphone" }),
+      ).toBeEnabled(),
     );
 
     act(() =>
@@ -351,6 +591,7 @@ describe("MeetingFilmstrip", () => {
         localParticipantId={localId}
         participants={participants}
         getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={loadVerifiedParticipants}
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
         onLocalStreamChange={onLocalStreamChange}
@@ -383,6 +624,7 @@ describe("MeetingFilmstrip", () => {
         localParticipantId={localId}
         participants={participants}
         getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={loadVerifiedParticipants}
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
       />,
@@ -420,6 +662,7 @@ describe("MeetingFilmstrip", () => {
         localParticipantId={localId}
         participants={participants}
         getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={loadVerifiedParticipants}
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
       />,
@@ -447,7 +690,7 @@ describe("MeetingFilmstrip", () => {
   it("offers a user-gesture recovery when mobile autoplay blocks remote media", async () => {
     const user = userEvent.setup();
     const play = vi
-      .spyOn(HTMLMediaElement.prototype, "play")
+      .mocked(HTMLMediaElement.prototype.play)
       .mockRejectedValueOnce(new DOMException("Not allowed", "NotAllowedError"))
       .mockResolvedValueOnce(undefined);
     const setup = harness();
@@ -457,6 +700,7 @@ describe("MeetingFilmstrip", () => {
         localParticipantId={localId}
         participants={participants}
         getAccessToken={() => "token"}
+        loadAuthoritativeParticipantIds={loadVerifiedParticipants}
         client={{} as MeetingMediaControllerOptions["client"]}
         createController={setup.createController}
       />,
@@ -484,6 +728,5 @@ describe("MeetingFilmstrip", () => {
     expect(
       screen.queryByRole("button", { name: "Tap to play Sarah's video" }),
     ).toBeNull();
-    play.mockRestore();
   });
 });

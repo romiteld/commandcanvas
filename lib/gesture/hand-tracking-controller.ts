@@ -202,11 +202,17 @@ export interface PrivateHandRelayControllerOptions
   createWorker?: () => PrivateHandRelayWorkerLike;
 }
 
+export interface SharedHandMediaLease {
+  stream: MediaStream;
+  release: () => void;
+}
+
 export interface HandTrackingControllerDependencies {
   getSharedMediaStream?: () =>
     | MediaStream
+    | SharedHandMediaLease
     | null
-    | Promise<MediaStream | null>;
+    | Promise<MediaStream | SharedHandMediaLease | null>;
   getUserMedia?: (
     constraints: MediaStreamConstraints,
   ) => Promise<MediaStream>;
@@ -435,6 +441,8 @@ export function createHandTrackingController(
     run.worker = null;
     if (run.ownsStream)
       for (const track of run.stream?.getTracks() ?? []) track.stop();
+    else run.releaseSharedStream?.();
+    run.releaseSharedStream = null;
     if (run.video.srcObject === run.stream) run.video.srcObject = null;
     run.stream = null;
     run.ownsStream = false;
@@ -1292,6 +1300,7 @@ export function createHandTrackingController(
         }
         run.stream = mediaResult.value.stream;
         run.ownsStream = mediaResult.value.owned;
+        run.releaseSharedStream = mediaResult.value.release ?? null;
         if (activeRun !== run || run.cancelled) {
           clearRunResources(run);
           return;
@@ -1358,6 +1367,7 @@ interface HandTrackingRun {
   readonly video: HTMLVideoElement;
   stream: MediaStream | null;
   ownsStream: boolean;
+  releaseSharedStream: (() => void) | null;
   worker: HandTrackingWorkerLike | null;
   readonly visionEngines: readonly SpatialVisionEngine[];
   engineIndex: number;
@@ -1422,6 +1432,7 @@ function createRun(
     video,
     stream: null,
     ownsStream: false,
+    releaseSharedStream: null,
     worker: null,
     visionEngines,
     engineIndex: 0,
@@ -1754,9 +1765,17 @@ function stopStream(stream: MediaStream) {
 
 async function acquireMediaStream(
   dependencies: ResolvedHandTrackingControllerDependencies,
-): Promise<{ stream: MediaStream; owned: boolean }> {
+): Promise<{
+  stream: MediaStream;
+  owned: boolean;
+  release?: () => void;
+}> {
   const shared = await dependencies.getSharedMediaStream?.();
-  if (shared) return { stream: shared, owned: false };
+  if (shared) {
+    if (isSharedHandMediaLease(shared))
+      return { stream: shared.stream, owned: false, release: shared.release };
+    return { stream: shared, owned: false };
+  }
   if (!dependencies.getUserMedia) throw new Error(UNAVAILABLE_MESSAGE);
   const stream = await dependencies.getUserMedia({
     audio: false,
@@ -1773,8 +1792,22 @@ async function acquireMediaStream(
 function releaseAcquiredStream(acquired: {
   stream: MediaStream;
   owned: boolean;
+  release?: () => void;
 }) {
   if (acquired.owned) stopStream(acquired.stream);
+  else acquired.release?.();
+}
+
+function isSharedHandMediaLease(
+  value: MediaStream | SharedHandMediaLease,
+): value is SharedHandMediaLease {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "stream" in value &&
+    "release" in value &&
+    typeof value.release === "function"
+  );
 }
 
 function resolveDependencies(

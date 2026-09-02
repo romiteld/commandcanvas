@@ -21,6 +21,7 @@ import {
 
 const MAX_CAPABILITY_RESPONSE_BYTES = 64 * 1_024;
 const CAPABILITY_PROBE_TIMEOUT_MS = 1_500;
+const actorIdSchema = z.uuid();
 
 const memberSchema = z
   .object({
@@ -121,11 +122,17 @@ export function createServerPrivateHandRelayDependencies(
   const fetcher = options.fetch ?? fetch;
   const now = options.now ?? Date.now;
   const createUuid = options.createUuid ?? randomUUID;
+  const allowedActorIds = relayConfig.allowedActorIds;
 
   return {
     ok: true,
     dependencies: {
       verifier,
+      async authorizeActor(actorUserId) {
+        return allowedActorIds.has(actorUserId)
+          ? { ok: true as const }
+          : { ok: false as const };
+      },
       async verifyMembership(roomId, actorUserId) {
         try {
           const response = await client
@@ -233,6 +240,7 @@ type PrivateHandRelayConfigResult =
       origin: string;
       signingKey: Uint8Array;
       tokenTtlSeconds: number;
+      allowedActorIds: ReadonlySet<string>;
     }
   | { ok: false };
 
@@ -276,11 +284,25 @@ export function readPrivateHandRelayConfig(
     tokenTtlSeconds > 120
   )
     return { ok: false };
+  const rawAllowedActorIds =
+    environment.PRIVATE_HAND_RELAY_ALLOWED_ACTOR_IDS?.trim() ?? "";
+  const parsedAllowedActorIds = z
+    .array(actorIdSchema)
+    .min(1)
+    .max(8)
+    .safeParse(
+      rawAllowedActorIds
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    );
+  if (!parsedAllowedActorIds.success) return { ok: false };
   return {
     ok: true,
     origin: origin.origin,
     signingKey: new Uint8Array(signingKey),
     tokenTtlSeconds,
+    allowedActorIds: new Set(parsedAllowedActorIds.data),
   };
 }
 

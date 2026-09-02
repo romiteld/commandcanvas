@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  meetingMediaTopic,
   meetingMediaSignalSchema,
   type MeetingMediaSignal,
 } from "@/lib/meeting/media-protocol";
@@ -11,6 +12,11 @@ const MAX_REMOTE_PEERS = 3;
 const MAX_MEETING_PARTICIPANTS = MAX_REMOTE_PEERS + 1;
 const MAX_PENDING_ICE_CANDIDATES = 128;
 const RESOURCE_CLEANUP_TIMEOUT_MS = 500;
+const ICE_SERVER_LOOKUP_TIMEOUT_MS = 1_500;
+const TURN_REFRESH_SAFETY_WINDOW_MS = 60_000;
+const DIRECT_ICE_SERVERS: readonly RTCIceServer[] = [
+  { urls: "stun:stun.l.google.com:19302" },
+];
 const OVER_CAPACITY_MESSAGE =
   "Meeting media is available when four or fewer people are present.";
 
@@ -92,11 +98,22 @@ export interface MeetingMediaController {
   start: () => Promise<boolean>;
   stop: () => Promise<void>;
   dispose: () => Promise<void>;
-  setAllowedParticipantIds: (participantIds: ReadonlySet<string>) => void;
+  setAllowedParticipantIds: (
+    participantIds: ReadonlySet<string>,
+    decision?: { overCapacity: true },
+  ) => void;
   setCameraEnabled: (enabled: boolean) => void;
   setMicrophoneEnabled: (enabled: boolean) => void;
   whenIdle: () => Promise<void>;
 }
+
+export type MeetingMediaIceServerConfig =
+  | {
+      mode: "turn";
+      expiresAt: string;
+      iceServers: readonly RTCIceServer[];
+    }
+  | { mode: "direct"; iceServers: readonly RTCIceServer[] };
 
 export interface MeetingMediaControllerOptions {
   roomId: string;
@@ -107,7 +124,13 @@ export interface MeetingMediaControllerOptions {
   getUserMedia?: (
     constraints: MediaStreamConstraints,
   ) => Promise<MediaStream>;
-  createPeer?: () => MeetingMediaPeer;
+  acquireLocalMedia?: () => Promise<{
+    stream: MediaStream;
+    release: () => void;
+  }>;
+  getIceServerConfig?: () => Promise<MeetingMediaIceServerConfig>;
+  now?: () => number;
+  createPeer?: (iceServers: readonly RTCIceServer[]) => MeetingMediaPeer;
   createRemoteStream?: (track: MediaStreamTrack) => MediaStream;
   onSnapshot: (snapshot: MeetingMediaSnapshot) => void;
 }
@@ -139,18 +162,21 @@ export function createMeetingMediaController(
     rawOptions.getUserMedia ??
     ((constraints: MediaStreamConstraints) =>
       navigator.mediaDevices.getUserMedia(constraints));
-  const createPeer =
-    rawOptions.createPeer ??
-    (() =>
+  const createPeer = rawOptions.createPeer ??
+    ((iceServers) =>
       new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        iceServers: [...iceServers],
       }) as unknown as MeetingMediaPeer);
   const createRemoteStream =
     rawOptions.createRemoteStream ?? ((track) => new MediaStream([track]));
   let snapshot = initialSnapshot();
-  let channel: MeetingMediaChannel | null = null;
+  const channels = new Map<string, MeetingMediaChannel>();
+  const subscribedParticipantIds = new Set<string>();
   let localStream: MediaStream | null = null;
+  let releaseLocalMedia: (() => void) | null = null;
   let publicationVideoTrack: MediaStreamTrack | null = null;
+  let iceServerConfig: MeetingMediaIceServerConfig = directIceServerConfig();
+  let iceServerLookup: Promise<MeetingMediaIceServerConfig> | null = null;
   let disposed = false;
   let lifecycleVersion = 0;
   let starting: Promise<boolean> | null = null;
@@ -195,20 +221,17 @@ export function createMeetingMediaController(
       return false;
     }
 
+    iceServerConfig = await resolveIceServerConfig(
+      rawOptions.getIceServerConfig,
+    );
+    if (disposed || version !== lifecycleVersion) return false;
+
     emit({ state: "requesting_permission", message: undefined });
-    let acquiredStream: MediaStream;
+    let acquired: { stream: MediaStream; release: () => void };
     try {
-      acquiredStream = await getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-        video: {
-          facingMode: "user",
-          width: { ideal: 640 },
-          height: { ideal: 360 },
-        },
-      });
+      acquired = rawOptions.acquireLocalMedia
+        ? await rawOptions.acquireLocalMedia()
+        : await acquireOwnedMedia(getUserMedia);
     } catch (error) {
       if (disposed || version !== lifecycleVersion) return false;
       emit({
@@ -221,14 +244,15 @@ export function createMeetingMediaController(
       return false;
     }
     if (disposed || version !== lifecycleVersion) {
-      stopTracks(acquiredStream);
+      acquired.release();
       return false;
     }
+    const acquiredStream = acquired.stream;
     const sourceVideoTrack = acquiredStream.getVideoTracks()[0] ?? null;
     try {
       publicationVideoTrack = sourceVideoTrack?.clone() ?? null;
     } catch {
-      stopTracks(acquiredStream);
+      acquired.release();
       if (disposed || version !== lifecycleVersion) return false;
       emit({
         state: "error",
@@ -242,6 +266,7 @@ export function createMeetingMediaController(
     if (publicationVideoTrack && sourceVideoTrack)
       publicationVideoTrack.enabled = sourceVideoTrack.enabled;
     localStream = acquiredStream;
+    releaseLocalMedia = once(acquired.release);
 
     emit({
       state: "connecting",
@@ -256,48 +281,7 @@ export function createMeetingMediaController(
     try {
       await rawOptions.client.realtime.setAuth(accessToken);
       if (disposed || version !== lifecycleVersion || !localStream) return false;
-      const nextChannel = rawOptions.client.channel(`room-media:${roomId}`, {
-        config: {
-          private: true,
-          broadcast: { ack: true, self: false },
-        },
-      });
-      channel = nextChannel;
-      nextChannel
-        .on("broadcast", { event: "meeting-media" }, (message) => {
-          const signal = parsePayload(message);
-          if (!signal) return;
-          signalWork = signalWork
-            .then(() => handleSignal(signal))
-            .catch(() => {
-              if (!disposed)
-                emit({
-                  state: "error",
-                  message: "Direct meeting media negotiation failed.",
-                });
-            });
-        })
-        .subscribe((status) => {
-          if (channel !== nextChannel || disposed) return;
-          if (status === "SUBSCRIBED") {
-            emit({ state: "active", message: undefined });
-            void send({
-              version: 1,
-              kind: "ready",
-              senderId: localParticipantId,
-            });
-          } else if (
-            status === "CHANNEL_ERROR" ||
-            status === "TIMED_OUT" ||
-            status === "CLOSED"
-          ) {
-            emit({
-              state: "signaling_lost",
-              message:
-                "Signaling was lost. Existing direct media may continue; new connections are unavailable.",
-            });
-          }
-        });
+      syncSenderChannels();
       return true;
     } catch {
       if (disposed || version !== lifecycleVersion) return false;
@@ -313,6 +297,106 @@ export function createMeetingMediaController(
       });
       return false;
     }
+  }
+
+  function syncSenderChannels() {
+    if (!localStream || disposed) return;
+    const desiredParticipantIds = new Set(allowedParticipantIds);
+    for (const participantId of [...channels.keys()])
+      if (!desiredParticipantIds.has(participantId))
+        void removeSenderChannel(participantId);
+
+    const orderedParticipantIds = [
+      localParticipantId,
+      ...[...desiredParticipantIds]
+        .filter((participantId) => participantId !== localParticipantId)
+        .sort(),
+    ];
+    for (const participantId of orderedParticipantIds)
+      if (desiredParticipantIds.has(participantId) && !channels.has(participantId))
+        openSenderChannel(participantId);
+  }
+
+  function openSenderChannel(boundParticipantId: string) {
+    const nextChannel = rawOptions.client.channel(
+      meetingMediaTopic(roomId, boundParticipantId),
+      {
+        config: {
+          private: true,
+          broadcast: { ack: true, self: false },
+        },
+      },
+    );
+    channels.set(boundParticipantId, nextChannel);
+    nextChannel
+      .on("broadcast", { event: "meeting-media" }, (message) => {
+        if (
+          channels.get(boundParticipantId) !== nextChannel ||
+          disposed ||
+          !allowedParticipantIds.has(boundParticipantId)
+        )
+          return;
+        const signal = parsePayload(message, boundParticipantId);
+        if (!signal) return;
+        signalWork = signalWork
+          .then(() => handleSignal(signal))
+          .catch(() => {
+            if (!disposed)
+              emit({
+                state: "error",
+                message: "Direct meeting media negotiation failed.",
+              });
+          });
+      })
+      .subscribe((status) => {
+        if (channels.get(boundParticipantId) !== nextChannel || disposed) return;
+        if (status === "SUBSCRIBED") {
+          subscribedParticipantIds.add(boundParticipantId);
+          if (boundParticipantId === localParticipantId) {
+            emit({ state: "active", message: undefined });
+            void send({
+              version: 1,
+              kind: "ready",
+              senderId: localParticipantId,
+            });
+            for (const remoteParticipantId of subscribedParticipantIds)
+              if (remoteParticipantId !== localParticipantId)
+                void announceReadyTo(remoteParticipantId);
+          } else if (subscribedParticipantIds.has(localParticipantId))
+            void announceReadyTo(boundParticipantId);
+        } else if (
+          status === "CHANNEL_ERROR" ||
+          status === "TIMED_OUT" ||
+          status === "CLOSED"
+        ) {
+          subscribedParticipantIds.delete(boundParticipantId);
+          emit({
+            state: "signaling_lost",
+            message:
+              "Signaling was lost. Existing direct media may continue; new connections are unavailable.",
+          });
+        }
+      });
+  }
+
+  function announceReadyTo(remoteParticipantId: string) {
+    return send({
+      version: 1,
+      kind: "ready",
+      senderId: localParticipantId,
+      targetId: remoteParticipantId,
+    });
+  }
+
+  async function removeSenderChannel(participantId: string) {
+    const activeChannel = channels.get(participantId);
+    if (!activeChannel) return;
+    channels.delete(participantId);
+    subscribedParticipantIds.delete(participantId);
+    await settleWithin(
+      Promise.resolve(rawOptions.client.removeChannel(activeChannel)),
+      RESOURCE_CLEANUP_TIMEOUT_MS,
+    );
   }
 
   async function handleSignal(signal: MeetingMediaSignal) {
@@ -384,7 +468,10 @@ export function createMeetingMediaController(
     if (existing) return existing;
     if (peers.size >= MAX_REMOTE_PEERS || !localStream) return null;
 
-    const peer = createPeer();
+    const currentIceServers = await iceServersForNewPeer();
+    if (disposed || !localStream || !allowedParticipantIds.has(remoteParticipantId))
+      return null;
+    const peer = createPeer(currentIceServers);
     const record: PeerRecord = {
       peer,
       videoSender: null,
@@ -443,6 +530,28 @@ export function createMeetingMediaController(
     return record;
   }
 
+  async function iceServersForNewPeer() {
+    if (!turnConfigNeedsRefresh(iceServerConfig, rawOptions.now?.() ?? Date.now()))
+      return iceServerConfig.iceServers;
+    if (!iceServerLookup) {
+      iceServerLookup = resolveIceServerConfig(rawOptions.getIceServerConfig)
+        .then((resolved) => {
+          const usable = turnConfigNeedsRefresh(
+            resolved,
+            rawOptions.now?.() ?? Date.now(),
+          )
+            ? directIceServerConfig()
+            : resolved;
+          iceServerConfig = usable;
+          return usable;
+        })
+        .finally(() => {
+          iceServerLookup = null;
+        });
+    }
+    return (await iceServerLookup).iceServers;
+  }
+
   async function sendOffer(remoteParticipantId: string, record: PeerRecord) {
     if (record.peer.localDescription) return;
     const offer = await record.peer.createOffer();
@@ -488,7 +597,7 @@ export function createMeetingMediaController(
   }
 
   async function send(signal: MeetingMediaSignal) {
-    const activeChannel = channel;
+    const activeChannel = channels.get(localParticipantId);
     if (!activeChannel) return false;
     try {
       const result = await activeChannel.send({
@@ -499,7 +608,11 @@ export function createMeetingMediaController(
       if (result !== "ok") throw new Error("Signaling was not acknowledged.");
       return true;
     } catch {
-      if (!disposed && channel === activeChannel && localStream)
+      if (
+        !disposed &&
+        channels.get(localParticipantId) === activeChannel &&
+        localStream
+      )
         emit({
           state: "signaling_lost",
           message: "Meeting media signaling was interrupted.",
@@ -550,15 +663,33 @@ export function createMeetingMediaController(
     await cleanup;
   }
 
-  function setAllowedParticipantIds(participantIds: ReadonlySet<string>) {
+  function setAllowedParticipantIds(
+    participantIds: ReadonlySet<string>,
+    decision?: { overCapacity: true },
+  ) {
     allowedParticipantIds = new Set(participantIds);
-    if (allowedParticipantIds.size > MAX_MEETING_PARTICIPANTS) {
+    if (
+      decision?.overCapacity ||
+      allowedParticipantIds.size > MAX_MEETING_PARTICIPANTS
+    ) {
       lifecycleVersion += 1;
       const cleanup = cleanupResources(true);
       snapshot = {
         ...initialSnapshot(),
         state: "error",
         message: OVER_CAPACITY_MESSAGE,
+      };
+      emit();
+      void cleanup;
+      return;
+    }
+    if (!allowedParticipantIds.has(localParticipantId)) {
+      lifecycleVersion += 1;
+      const cleanup = cleanupResources(true);
+      snapshot = {
+        ...initialSnapshot(),
+        state: "error",
+        message: "Room membership is unavailable.",
       };
       emit();
       void cleanup;
@@ -575,21 +706,25 @@ export function createMeetingMediaController(
     for (const participantId of [...peers.keys()])
       if (!allowedParticipantIds.has(participantId))
         closePeer(participantId, "disconnected");
+    syncSenderChannels();
   }
 
   async function cleanupResources(announceDeparture: boolean) {
-    const activeChannel = channel;
-    channel = null;
+    const activeChannels = [...channels.values()];
+    const localChannel = channels.get(localParticipantId);
+    channels.clear();
+    subscribedParticipantIds.clear();
     for (const participantId of [...peers.keys()]) closePeer(participantId);
     publicationVideoTrack?.stop();
     publicationVideoTrack = null;
-    stopTracks(localStream);
+    releaseLocalMedia?.();
+    releaseLocalMedia = null;
     localStream = null;
-    if (!activeChannel) return;
+    if (!localChannel && activeChannels.length === 0) return;
 
-    if (announceDeparture)
+    if (announceDeparture && localChannel)
       await settleWithin(
-        activeChannel.send({
+        localChannel.send({
           type: "broadcast",
           event: "meeting-media",
           payload: {
@@ -600,9 +735,13 @@ export function createMeetingMediaController(
         }),
         RESOURCE_CLEANUP_TIMEOUT_MS,
       );
-    await settleWithin(
-      Promise.resolve(rawOptions.client.removeChannel(activeChannel)),
-      RESOURCE_CLEANUP_TIMEOUT_MS,
+    await Promise.all(
+      activeChannels.map((activeChannel) =>
+        settleWithin(
+          Promise.resolve(rawOptions.client.removeChannel(activeChannel)),
+          RESOURCE_CLEANUP_TIMEOUT_MS,
+        ),
+      ),
     );
   }
 
@@ -621,12 +760,17 @@ export function createMeetingMediaController(
   };
 }
 
-function parsePayload(message: unknown): MeetingMediaSignal | null {
+function parsePayload(
+  message: unknown,
+  boundParticipantId: string,
+): MeetingMediaSignal | null {
   if (!message || typeof message !== "object" || Array.isArray(message))
     return null;
   const candidate = (message as { payload?: unknown }).payload;
   const parsed = meetingMediaSignalSchema.safeParse(candidate);
-  return parsed.success ? parsed.data : null;
+  return parsed.success && parsed.data.senderId === boundParticipantId
+    ? parsed.data
+    : null;
 }
 
 function requiredDescription(
@@ -640,6 +784,31 @@ function requiredDescription(
 
 function stopTracks(stream: MediaStream | null | undefined) {
   for (const track of stream?.getTracks() ?? []) track.stop();
+}
+
+async function acquireOwnedMedia(
+  getUserMedia: (
+    constraints: MediaStreamConstraints,
+  ) => Promise<MediaStream>,
+) {
+  const stream = await getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true },
+    video: {
+      facingMode: "user",
+      width: { ideal: 640 },
+      height: { ideal: 360 },
+    },
+  });
+  return { stream, release: once(() => stopTracks(stream)) };
+}
+
+function once(operation: () => void) {
+  let called = false;
+  return () => {
+    if (called) return;
+    called = true;
+    operation();
+  };
 }
 
 function iceCandidateKey(candidate: RTCIceCandidateInit) {
@@ -663,4 +832,43 @@ async function settleWithin(operation: Promise<unknown>, timeoutMs: number) {
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
   }
+}
+
+async function resolveIceServerConfig(
+  loader: MeetingMediaControllerOptions["getIceServerConfig"],
+): Promise<MeetingMediaIceServerConfig> {
+  if (!loader) return directIceServerConfig();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const resolved = await Promise.race([
+      loader(),
+      new Promise<MeetingMediaIceServerConfig>((resolve) => {
+        timeout = setTimeout(
+          () => resolve(directIceServerConfig()),
+          ICE_SERVER_LOOKUP_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    return resolved.iceServers.length > 0 ? resolved : directIceServerConfig();
+  } catch {
+    return directIceServerConfig();
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+function turnConfigNeedsRefresh(
+  config: MeetingMediaIceServerConfig,
+  nowEpochMs: number,
+) {
+  if (config.mode !== "turn") return false;
+  const expiresAt = Date.parse(config.expiresAt);
+  return (
+    !Number.isFinite(expiresAt) ||
+    expiresAt <= nowEpochMs + TURN_REFRESH_SAFETY_WINDOW_MS
+  );
+}
+
+function directIceServerConfig(): MeetingMediaIceServerConfig {
+  return { mode: "direct", iceServers: DIRECT_ICE_SERVERS };
 }

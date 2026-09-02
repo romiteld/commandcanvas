@@ -28,6 +28,7 @@ import {
 } from "@/lib/demo/room-session";
 import type { DemoRoomRealtimeClient } from "@/lib/demo/room-session";
 import type { MeetingMediaClient } from "@/lib/meeting/media-controller";
+import { createLocalMediaBroker } from "@/lib/meeting/local-media-broker";
 import { createSharedCameraHandController } from "@/lib/gesture/shared-camera-controller";
 import type { BrowserRoomClient } from "@/lib/supabase/browser-room";
 import { createBrowserSupabaseClient } from "@/lib/supabase/browser-client";
@@ -152,6 +153,8 @@ export function DemoCommandCanvas({
   const [workspaceController] = useState(createCanvasWorkspaceController);
   const webMcpTarget = useDocumentWebMcpTarget();
   const meetingMediaStreamRef = useRef<MediaStream | null>(null);
+  const localMediaBroker = useMemo(() => createLocalMediaBroker(), []);
+  const localMediaBrokerLifecycleRef = useRef(0);
   const bootstrapOperationRef = useRef<DemoRoomBootstrapOperation | null>(null);
   const readyRoom = view.status === "ready" ? view.room : null;
   const activeRoomId = view.status === "ready" ? view.snapshot.roomId : null;
@@ -163,6 +166,16 @@ export function DemoCommandCanvas({
     createPacketId:
       environment.createPacketId ?? defaultEnvironment.createPacketId,
   });
+  useEffect(() => {
+    const lifecycleRef = localMediaBrokerLifecycleRef;
+    const lifecycle = ++lifecycleRef.current;
+    return () => {
+      queueMicrotask(() => {
+        if (lifecycleRef.current === lifecycle)
+          localMediaBroker.dispose();
+      });
+    };
+  }, [localMediaBroker]);
   const handleMeetingMediaStreamChange = useCallback(
     (stream: MediaStream | null) => {
       meetingMediaStreamRef.current = stream;
@@ -173,6 +186,7 @@ export function DemoCommandCanvas({
     (preferences: SpatialCameraControllerPreferences) =>
       createSharedCameraHandController({
         getMeetingStream: () => meetingMediaStreamRef.current,
+        acquireHandMedia: localMediaBroker.acquireHandVideo,
         ...(privateGpuRelayEnabled && readyRoom && activeRoomId
           ? {
               privateHandRelay: {
@@ -183,7 +197,7 @@ export function DemoCommandCanvas({
             }
           : {}),
       }),
-    [activeRoomId, privateGpuRelayEnabled, readyRoom],
+    [activeRoomId, localMediaBroker, privateGpuRelayEnabled, readyRoom],
   );
   const updateOpenAiApiKey = useCallback((value: string) => {
     openAiApiKeyRef.current = value;
@@ -891,6 +905,7 @@ export function DemoCommandCanvas({
               participants={[...meetingParticipants.values()]}
               getAccessToken={room.session.getAccessToken}
               client={room.meetingMediaClient}
+              acquireLocalMedia={localMediaBroker.acquireMeetingMedia}
               onLocalStreamChange={handleMeetingMediaStreamChange}
             />
           ) : undefined

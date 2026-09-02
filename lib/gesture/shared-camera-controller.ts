@@ -3,10 +3,12 @@ import {
   type HandTrackingController,
   type HandTrackingControllerDependencies,
   type PrivateHandRelayControllerOptions,
+  type SharedHandMediaLease,
 } from "@/lib/gesture/hand-tracking-controller";
 
 export interface SharedCameraHandControllerOptions {
   getMeetingStream: () => MediaStream | null;
+  acquireHandMedia?: () => Promise<SharedHandMediaLease>;
   privateHandRelay?: PrivateHandRelayControllerOptions;
   createController?: (
     dependencies: HandTrackingControllerDependencies,
@@ -15,11 +17,13 @@ export interface SharedCameraHandControllerOptions {
 
 export function createSharedCameraHandController({
   getMeetingStream,
+  acquireHandMedia,
   privateHandRelay,
   createController = createHandTrackingController,
 }: SharedCameraHandControllerOptions): HandTrackingController {
   return createController({
-    getSharedMediaStream: () => getMeetingStream(),
+    getSharedMediaStream: () =>
+      acquireHandMedia ? acquireHandMedia() : getMeetingStream(),
     ...(privateHandRelay ? { privateHandRelay } : {}),
   });
 }

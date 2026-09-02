@@ -9,6 +9,8 @@ import {
   type MeetingMediaControllerOptions,
   type MeetingMediaSnapshot,
 } from "@/lib/meeting/media-controller";
+import { requestAuthoritativeMeetingRoster } from "@/lib/meeting/media-roster-browser";
+import { requestMeetingIceServers } from "@/lib/meeting/turn-browser";
 
 export interface MeetingFilmstripParticipant {
   id: string;
@@ -22,6 +24,8 @@ export interface MeetingFilmstripProps {
   participants: readonly MeetingFilmstripParticipant[];
   getAccessToken: () => string | null;
   client: MeetingMediaClient;
+  acquireLocalMedia?: MeetingMediaControllerOptions["acquireLocalMedia"];
+  loadAuthoritativeParticipantIds?: typeof requestAuthoritativeMeetingRoster;
   onLocalStreamChange?: (stream: MediaStream | null) => void;
   createController?: (
     options: MeetingMediaControllerOptions,
@@ -36,6 +40,14 @@ const EMPTY_MEDIA: MeetingMediaSnapshot = {
   cameraEnabled: false,
   microphoneEnabled: false,
 };
+const EMPTY_PARTICIPANT_IDS: ReadonlySet<string> = new Set();
+const AUTHORITATIVE_ROSTER_REFRESH_MS = 15_000;
+
+interface AuthoritativeRosterSnapshot {
+  identity: string;
+  participantIds: ReadonlySet<string>;
+  state: "eligible" | "over_capacity" | "unavailable";
+}
 
 export function MeetingFilmstrip({
   roomId,
@@ -43,6 +55,8 @@ export function MeetingFilmstrip({
   participants,
   getAccessToken,
   client,
+  acquireLocalMedia,
+  loadAuthoritativeParticipantIds = requestAuthoritativeMeetingRoster,
   onLocalStreamChange,
   createController = createMeetingMediaController,
 }: MeetingFilmstripProps) {
@@ -51,19 +65,31 @@ export function MeetingFilmstrip({
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const videoPanelId = useId();
   const controllerRef = useRef<MeetingMediaController | null>(null);
-  const participantIds = useMemo(() => {
-    const ids = new Set(participants.map(({ id }) => id));
-    ids.add(localParticipantId);
-    return ids;
-  }, [localParticipantId, participants]);
+  const rosterIdentity = `${roomId}:${localParticipantId}`;
+  const [rosterSnapshot, setRosterSnapshot] =
+    useState<AuthoritativeRosterSnapshot | null>(null);
+  const rosterState =
+    rosterSnapshot?.identity === rosterIdentity
+      ? rosterSnapshot.state
+      : "loading";
+  const allowedParticipantIds =
+    rosterSnapshot?.identity === rosterIdentity
+      ? rosterSnapshot.participantIds
+      : EMPTY_PARTICIPANT_IDS;
 
   useEffect(() => {
     let active = true;
     const controller = createController({
       roomId,
       localParticipantId,
-      allowedParticipantIds: new Set([localParticipantId]),
+      allowedParticipantIds: new Set(),
       getAccessToken,
+      ...(acquireLocalMedia ? { acquireLocalMedia } : {}),
+      getIceServerConfig: () =>
+        requestMeetingIceServers({
+          roomId,
+          accessToken: getAccessToken(),
+        }),
       client,
       onSnapshot: (snapshot) => {
         if (active) setMedia(snapshot);
@@ -75,11 +101,95 @@ export function MeetingFilmstrip({
       if (controllerRef.current === controller) controllerRef.current = null;
       void controller.dispose();
     };
-  }, [client, createController, getAccessToken, localParticipantId, roomId]);
+  }, [
+    acquireLocalMedia,
+    client,
+    createController,
+    getAccessToken,
+    localParticipantId,
+    roomId,
+  ]);
 
   useEffect(() => {
-    controllerRef.current?.setAllowedParticipantIds(participantIds);
-  }, [participantIds]);
+    let active = true;
+    let requestController: AbortController | null = null;
+    const refreshRoster = () => {
+      if (!active || requestController) return;
+      const controller = new AbortController();
+      requestController = controller;
+      void loadAuthoritativeParticipantIds({
+        roomId,
+        accessToken: getAccessToken(),
+        signal: controller.signal,
+      })
+        .then((roster) => {
+          if (!active || controller.signal.aborted) return;
+          if (
+            roster.status !== "eligible" ||
+            !roster.participantIds.has(localParticipantId)
+          ) {
+            setRosterSnapshot({
+              identity: rosterIdentity,
+              participantIds: EMPTY_PARTICIPANT_IDS,
+              state:
+                roster.status === "eligible" ? "unavailable" : roster.status,
+            });
+            return;
+          }
+          setRosterSnapshot({
+            identity: rosterIdentity,
+            participantIds: new Set(roster.participantIds),
+            state: "eligible",
+          });
+        })
+        .catch(() => {
+          if (!active || controller.signal.aborted) return;
+          setRosterSnapshot({
+            identity: rosterIdentity,
+            participantIds: EMPTY_PARTICIPANT_IDS,
+            state: "unavailable",
+          });
+        })
+        .finally(() => {
+          if (requestController === controller) requestController = null;
+        });
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refreshRoster();
+    };
+
+    refreshRoster();
+    const interval = window.setInterval(
+      refreshRoster,
+      AUTHORITATIVE_ROSTER_REFRESH_MS,
+    );
+    window.addEventListener("focus", refreshRoster);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshRoster);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      requestController?.abort();
+    };
+  }, [
+    getAccessToken,
+    loadAuthoritativeParticipantIds,
+    localParticipantId,
+    rosterIdentity,
+    roomId,
+  ]);
+
+  useEffect(() => {
+    if (rosterState === "loading") return;
+    if (rosterState === "over_capacity")
+      controllerRef.current?.setAllowedParticipantIds(
+        EMPTY_PARTICIPANT_IDS,
+        { overCapacity: true },
+      );
+    else
+      controllerRef.current?.setAllowedParticipantIds(allowedParticipantIds);
+  }, [allowedParticipantIds, rosterState]);
 
   useEffect(() => {
     onLocalStreamChange?.(media.localStream);
@@ -99,7 +209,9 @@ export function MeetingFilmstrip({
       return left.displayName.localeCompare(right.displayName);
     });
   }, [localParticipantId, participants]);
-  const mediaCapacityExceeded = visibleParticipants.length > 4;
+  const mediaCapacityExceeded = rosterState === "over_capacity";
+  const mediaRosterReady =
+    rosterState === "eligible" && allowedParticipantIds.has(localParticipantId);
 
   return (
     <section
@@ -170,7 +282,7 @@ export function MeetingFilmstrip({
           {!media.localStream ? (
             <button
               type="button"
-              disabled={mediaCapacityExceeded}
+              disabled={mediaCapacityExceeded || !mediaRosterReady}
               onClick={() => {
                 void controllerRef.current?.start().then((started) => {
                   if (started) setExpanded(true);
@@ -317,7 +429,7 @@ export function MeetingFilmstrip({
           })}
           <p className="meeting-media-boundary">
             {mediaCapacityExceeded
-              ? `${visibleParticipants.length} people are present. Meeting media starts at four or fewer.`
+              ? "This room has more than four verified members. Meeting media supports up to four."
               : "Small-room direct video · up to 4 people"}
           </p>
       </div>
@@ -331,8 +443,15 @@ export function MeetingFilmstrip({
 
       {mediaCapacityExceeded ? (
         <p className="meeting-media-message" role="status">
-          {visibleParticipants.length} people are present. Meeting media starts at
-          four or fewer.
+          This room has more than four verified members. Meeting media supports up to four.
+        </p>
+      ) : null}
+
+      {!mediaCapacityExceeded && rosterState !== "eligible" ? (
+        <p className="meeting-media-message" role="status">
+          {rosterState === "loading"
+            ? "Verifying meeting media access…"
+            : "Verified meeting roster unavailable. Video remains off."}
         </p>
       ) : null}
 

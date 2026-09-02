@@ -23,6 +23,7 @@ import {
 } from "@/lib/canvas/workspace-controller";
 import { createSharedCameraHandController } from "@/lib/gesture/shared-camera-controller";
 import type { MeetingMediaClient } from "@/lib/meeting/media-controller";
+import { createLocalMediaBroker } from "@/lib/meeting/local-media-broker";
 import {
   createBrowserOpenAiCredentialApi,
   type BrowserOpenAiCredentialApi,
@@ -167,6 +168,8 @@ export function MeetingCommandCanvas({
   const invitationPollAbortRef = useRef<AbortController | null>(null);
   const roomUnsubscribeRef = useRef<(() => void) | null>(null);
   const meetingMediaStreamRef = useRef<MediaStream | null>(null);
+  const localMediaBroker = useMemo(() => createLocalMediaBroker(), []);
+  const localMediaBrokerLifecycleRef = useRef(0);
   const activeRuntimeSessionRef = useRef<DemoRoomSession | null>(null);
   const authenticatedActorIdRef = useRef<string | null>(null);
   const disposedRuntimeSessionsRef = useRef(new WeakSet<DemoRoomSession>());
@@ -183,6 +186,17 @@ export function MeetingCommandCanvas({
   const [webMcpExecutionActivity, setWebMcpExecutionActivity] = useState<
     readonly WebMcpExecutionEvent[]
   >([]);
+
+  useEffect(() => {
+    const lifecycleRef = localMediaBrokerLifecycleRef;
+    const lifecycle = ++lifecycleRef.current;
+    return () => {
+      queueMicrotask(() => {
+        if (lifecycleRef.current === lifecycle)
+          localMediaBroker.dispose();
+      });
+    };
+  }, [localMediaBroker]);
 
   const selectSavedOpenAiCredential = useCallback((value: boolean) => {
     useSavedOpenAiCredentialRef.current = value;
@@ -1022,9 +1036,10 @@ export function MeetingCommandCanvas({
           getAccessToken: runtime?.session.getAccessToken ?? (() => null),
           cameraUploadConsent: preferences.cameraUploadConsent,
           getMeetingStream: () => meetingMediaStreamRef.current,
+          acquireHandMedia: localMediaBroker.acquireHandVideo,
         }),
       ),
-    [privateGpuRelayEnabled, runtime],
+    [localMediaBroker, privateGpuRelayEnabled, runtime],
   );
 
   if (!runtime) return <MeetingLobby state={lobby} onRequestCode={requestCode} onVerifyCode={verifyCode} onSwitchInvitationAccount={switchInvitationAccount} onCreateMeeting={createMeeting} />;
@@ -1181,6 +1196,7 @@ export function MeetingCommandCanvas({
               participants={filmstripParticipants}
               getAccessToken={runtime.session.getAccessToken}
               client={runtime.client as unknown as MeetingMediaClient}
+              acquireLocalMedia={localMediaBroker.acquireMeetingMedia}
               onLocalStreamChange={(stream) => {
                 meetingMediaStreamRef.current = stream;
               }}
@@ -1251,9 +1267,15 @@ export function meetingHandControllerOptions(input: {
   getAccessToken: () => string | null;
   cameraUploadConsent: () => boolean;
   getMeetingStream: () => MediaStream | null;
+  acquireHandMedia?: ReturnType<
+    typeof createLocalMediaBroker
+  >["acquireHandVideo"];
 }) {
   return {
     getMeetingStream: input.getMeetingStream,
+    ...(input.acquireHandMedia
+      ? { acquireHandMedia: input.acquireHandMedia }
+      : {}),
     ...(input.enabled && input.roomId
       ? {
           privateHandRelay: {

@@ -613,6 +613,41 @@ describe("hand tracking controller lifecycle", () => {
     expect(video.srcObject).toBeNull();
   });
 
+  it("releases a broker-owned shared-camera lease without stopping its track directly", async () => {
+    const worker = new FakeWorker();
+    const sharedTrack = { stop: vi.fn() };
+    const release = vi.fn();
+    const sharedStream = {
+      getTracks: () => [sharedTrack],
+    } as unknown as MediaStream;
+    const video = {
+      srcObject: null,
+      readyState: 4,
+      play: vi.fn(async () => undefined),
+    } as unknown as HTMLVideoElement;
+    const controller = createHandTrackingController({
+      getSharedMediaStream: async () => ({ stream: sharedStream, release }),
+      getUserMedia: vi.fn(),
+      createWorker: () => worker,
+      createImageBitmap: vi.fn(
+        async () => ({ close: vi.fn() }) as unknown as ImageBitmap,
+      ),
+      requestAnimationFrame: vi.fn(() => 1),
+      cancelAnimationFrame: vi.fn(),
+      now: () => 1_000,
+    });
+
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+    controller.stop();
+    controller.stop();
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(sharedTrack.stop).not.toHaveBeenCalled();
+  });
+
   it("releases gesture state and becomes visibly recoverable when a shared camera track ends", async () => {
     const worker = new FakeWorker();
     const sharedTrack = new FakeVideoTrack();

@@ -19,11 +19,19 @@ function dependencies(
     verifier: {
       auth: {
         getUser: vi.fn(async () => ({
-          data: { user: { id: ACTOR_ID, is_anonymous: true } },
+          data: {
+            user: {
+              id: ACTOR_ID,
+              email: "danny@example.com",
+              email_confirmed_at: "2026-08-28T12:00:00.000Z",
+              is_anonymous: false,
+            },
+          },
           error: null,
         })),
       },
     },
+    authorizeActor: vi.fn(async () => ({ ok: true as const })),
     verifyMembership: vi.fn(async () => ({ ok: true as const })),
     startSession: vi.fn(async () => ({
       ok: true as const,
@@ -87,6 +95,30 @@ function request(input?: { authorization?: string | null; consent?: boolean }) {
 }
 
 describe("private hand relay session route", () => {
+  it("refuses a permanent room member who is not explicitly authorized for the owner relay", async () => {
+    const deps = dependencies({
+      authorizeActor: vi.fn(async () => ({ ok: false as const })),
+    });
+    const response = await handlePrivateHandRelaySessionRequest(
+      request(),
+      ROOM_ID,
+      deps,
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      fallback: "local",
+      error: {
+        code: "private_relay_owner_required",
+        message:
+          "Private GPU hand tracking is restricted to an authorized owner. Local tracking remains active.",
+      },
+    });
+    expect(deps.verifyMembership).not.toHaveBeenCalled();
+    expect(deps.startSession).not.toHaveBeenCalled();
+  });
+
   it("stops reading a chunked request as soon as the body exceeds the limit", async () => {
     let pulls = 0;
     const body = new ReadableStream<Uint8Array>({
@@ -132,6 +164,43 @@ describe("private hand relay session route", () => {
     );
 
     expect(response.status).toBe(401);
+    expect(deps.verifyMembership).not.toHaveBeenCalled();
+    expect(deps.startSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps the owner GPU relay unavailable to anonymous demo identities", async () => {
+    const deps = dependencies({
+      verifier: {
+        auth: {
+          getUser: vi.fn(async () => ({
+            data: {
+              user: {
+                id: ACTOR_ID,
+                is_anonymous: true,
+              },
+            },
+            error: null,
+          })),
+        },
+      },
+    });
+
+    const response = await handlePrivateHandRelaySessionRequest(
+      request(),
+      ROOM_ID,
+      deps,
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      fallback: "local",
+      error: {
+        code: "permanent_email_auth_required",
+        message:
+          "Sign in with a verified email to use private GPU hand tracking. Local tracking remains active.",
+      },
+    });
     expect(deps.verifyMembership).not.toHaveBeenCalled();
     expect(deps.startSession).not.toHaveBeenCalled();
   });
