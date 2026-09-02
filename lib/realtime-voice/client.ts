@@ -1,6 +1,7 @@
 import type { DirectCanvasIntent } from "@/lib/canvas/direct-command";
 import {
   executeRealtimeVoiceTool,
+  type RealtimeVoiceCapabilityInvoker,
   type RealtimeVoiceCanvasInspector,
   type RealtimeVoiceIntentResult,
 } from "@/lib/realtime-voice/tools";
@@ -105,6 +106,7 @@ export interface RealtimeVoiceControllerOptions {
   ) => void;
   onToolAction?: (action: RealtimeVoiceToolAction) => void;
   inspectCanvas?: RealtimeVoiceCanvasInspector;
+  invokeCapability?: RealtimeVoiceCapabilityInvoker;
   onPlaybackBlocked?: () => void;
   platform?: RealtimeVoicePlatform;
 }
@@ -627,6 +629,7 @@ export function createRealtimeVoiceController(
       {
         signal: intentSignal,
         inspectCanvas: options.inspectCanvas,
+        invokeCapability: options.invokeCapability,
       },
     );
     if (result.outcome === "cancelled")

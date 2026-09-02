@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 import {
+  executeCanvasCapability,
+  type CanvasCapabilitySource,
+} from "@/lib/canvas/capability-executor";
+import {
   evaluateToolGuard,
   getPhaseAvailableToolNames,
   WEBMCP_TOOL_NAMES,
@@ -42,6 +46,7 @@ export type WebMcpAdapterRequest = {
   [Name in NonSendToolName]: {
     toolName: Name;
     input: WebMcpToolInput<Name>;
+    source?: CanvasCapabilitySource;
     signal: AbortSignal;
     context: WebMcpExecutionContext;
   };
@@ -49,6 +54,7 @@ export type WebMcpAdapterRequest = {
 
 export interface WebMcpPacketSendStageRequest {
   input: WebMcpToolInput<"request_packet_send">;
+  source?: CanvasCapabilitySource;
   signal: AbortSignal;
   context: WebMcpExecutionContext;
 }
@@ -165,6 +171,37 @@ export class WebMcpRegistry {
     this.#registrations.clear();
   }
 
+  invokeCapability(
+    toolName: WebMcpToolName,
+    input: unknown,
+    signal: AbortSignal,
+    source: CanvasCapabilitySource = "voice",
+  ): Promise<WebMcpToolResult> {
+    return executeCanvasCapability({
+      capability: toolName,
+      input,
+      source,
+      signal,
+      getContext: this.#getContext,
+      adapter: async (request) => {
+        if (request.capability === "request_packet_send")
+          return this.#adapters.stagePacketSendRequest({
+            input: request.input,
+            source: request.source,
+            signal: request.signal,
+            context: request.context,
+          });
+        return this.#adapters.executeTool({
+          toolName: request.capability,
+          input: request.input,
+          source: request.source,
+          signal: request.signal,
+          context: request.context,
+        } as WebMcpAdapterRequest);
+      },
+    });
+  }
+
   #createDescriptor(toolName: WebMcpToolName): RegisteredWebMcpTool {
     const definition = WEBMCP_TOOL_CATALOG[toolName];
     return Object.freeze({
@@ -203,63 +240,13 @@ export class WebMcpRegistry {
       message: `${toolName.replaceAll("_", " ")} is running.`,
     });
 
-    const context = this.#getContext();
-    const guard = evaluateToolGuard(toolName, context);
-    if (!guard.ok) {
-      this.#emitExecution({
-        invocationId,
-        toolName,
-        status: "refused",
-        message: guard.message,
-      });
-      return guard;
-    }
-
-    const parsed = WEBMCP_TOOL_CATALOG[toolName].inputSchema.safeParse(input);
-    if (!parsed.success) {
-      const failure: WebMcpToolFailure = {
-        ok: false,
-        code: "invalid_input",
-        message: "invalid tool input: check the documented schema",
-      };
-      this.#emitExecution({
-        invocationId,
-        toolName,
-        status: "refused",
-        message: failure.message,
-      });
-      return failure;
-    }
-
-    if (signal.aborted) {
-      this.#emitExecution({
-        invocationId,
-        toolName,
-        status: "cancelled",
-        message: "Invocation cancelled.",
-      });
-      signal.throwIfAborted();
-    }
-
     try {
-      if (toolName === "request_packet_send") {
-        let result = await this.#adapters.stagePacketSendRequest({
-          input: parsed.data as WebMcpToolInput<"request_packet_send">,
-          signal,
-          context,
-        });
-        if (result.ok && result.status !== "awaiting_human_approval")
-          result = executionFailure();
-        this.#emitTerminalExecution(invocationId, toolName, result);
-        return result;
-      }
-
-      const result = await this.#adapters.executeTool({
+      const result = await this.invokeCapability(
         toolName,
-        input: parsed.data,
+        input,
         signal,
-        context,
-      } as WebMcpAdapterRequest);
+        "webmcp",
+      );
       this.#emitTerminalExecution(invocationId, toolName, result);
       return result;
     } catch (error) {

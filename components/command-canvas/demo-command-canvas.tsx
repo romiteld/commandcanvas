@@ -19,6 +19,7 @@ import {
   type DemoRoomBootstrapResult,
 } from "@/lib/demo/bootstrap";
 import { clearStoredDemoRoom } from "@/lib/demo/room-link";
+import { createCanvasWorkspaceController } from "@/lib/canvas/workspace-controller";
 import {
   createDemoRoomSession,
   type DemoRoomSession,
@@ -145,6 +146,7 @@ export function DemoCommandCanvas({
   const openAiCredentialApiRef = useRef<BrowserOpenAiCredentialApi | null>(null);
   const openAiCredentialAbortRef = useRef<AbortController | null>(null);
   const webMcpRegistryRef = useRef<WebMcpRegistry | null>(null);
+  const [workspaceController] = useState(createCanvasWorkspaceController);
   const webMcpTarget = useDocumentWebMcpTarget();
   const meetingMediaStreamRef = useRef<MediaStream | null>(null);
   const bootstrapOperationRef = useRef<DemoRoomBootstrapOperation | null>(null);
@@ -515,10 +517,16 @@ export function DemoCommandCanvas({
             },
           };
         },
-        dispatchMutation: async (command, signal) => {
+        controlWorkspace: (request) =>
+          workspaceController.execute(
+            request.input,
+            request.signal,
+            request.source ?? "webmcp",
+          ),
+        dispatchMutation: async (command, signal, source) => {
           const result = await room.session.submitCommand(
             command,
-            "webmcp",
+            source,
             signal,
           );
           if (!result.ok)
@@ -533,7 +541,7 @@ export function DemoCommandCanvas({
               message: result.message,
             };
           const receipt = result.state.receipts.at(-1);
-          if (!receipt || receipt.source !== "webmcp")
+          if (!receipt || receipt.source !== source)
             return {
               ok: false,
               code: "execution_failed",
@@ -608,7 +616,7 @@ export function DemoCommandCanvas({
       if (webMcpRegistryRef.current === registry)
         webMcpRegistryRef.current = null;
     };
-  }, [readyRoom, sketchTransformer, webMcpTarget]);
+  }, [readyRoom, sketchTransformer, webMcpTarget, workspaceController]);
   /* eslint-enable react-hooks/exhaustive-deps */
 
   useEffect(() => {
@@ -744,6 +752,7 @@ export function DemoCommandCanvas({
         }}
         webMcpSurfaceState={webMcpSurfaceState}
         webMcpExecutionActivity={webMcpExecutionActivity}
+        workspaceController={workspaceController}
         previewBoundary={{
           label: isAnonymousDemo ? "No-signup preview" : "Signed in",
           description: (
@@ -831,6 +840,16 @@ export function DemoCommandCanvas({
         realtimeVoice={{
           roomId: snapshot.roomId!,
           getAccessToken: room.session.getAccessToken,
+          invokeCapability: (capability, input, signal) => {
+            const registry = webMcpRegistryRef.current;
+            return registry
+              ? registry.invokeCapability(capability, input, signal, "voice")
+              : Promise.resolve({
+                  ok: false as const,
+                  code: "not_available" as const,
+                  message: "not available yet: canvas capabilities are still connecting",
+                });
+          },
           disabled:
             snapshot.status !== "ready" && snapshot.status !== "degraded",
           ...(permanentIdentityId

@@ -16,6 +16,10 @@ import {
 } from "@/components/command-canvas/meeting-packet-workflow";
 import { createCanvasStore, type CanvasStoreState } from "@/lib/canvas/canvas-store";
 import type { CanvasPoint } from "@/lib/canvas/coordinates";
+import {
+  createCanvasWorkspaceController,
+  type CanvasWorkspaceController,
+} from "@/lib/canvas/workspace-controller";
 import { createSharedCameraHandController } from "@/lib/gesture/shared-camera-controller";
 import type { MeetingMediaClient } from "@/lib/meeting/media-controller";
 import {
@@ -165,6 +169,7 @@ export function MeetingCommandCanvas({
   const authenticatedActorIdRef = useRef<string | null>(null);
   const disposedRuntimeSessionsRef = useRef(new WeakSet<DemoRoomSession>());
   const webMcpRegistryRef = useRef<WebMcpRegistry | null>(null);
+  const [workspaceController] = useState(createCanvasWorkspaceController);
   const webMcpTarget = useDocumentWebMcpTarget();
   const [webMcpStatus, setWebMcpStatus] = useState({
     value: "Checking Site Tools…",
@@ -895,6 +900,7 @@ export function MeetingCommandCanvas({
         preparePacket: prepareMeetingPacket,
         stagePacketSend: stageMeetingPacketSend,
       },
+      workspaceController,
       onExecutionEvent(event) {
         if (!active) return;
         setWebMcpExecutionActivity((current) =>
@@ -952,6 +958,7 @@ export function MeetingCommandCanvas({
     runtimeStore,
     sketchTransformer,
     stageMeetingPacketSend,
+    workspaceController,
     webMcpTarget,
   ]);
 
@@ -1083,6 +1090,7 @@ export function MeetingCommandCanvas({
         }}
         webMcpSurfaceState={webMcpSurfaceState}
         webMcpExecutionActivity={webMcpExecutionActivity}
+        workspaceController={workspaceController}
         onCommand={async (command, source) => {
           const result = await runtime.session.submitCommand(command, source);
           if (!result.ok) {
@@ -1109,6 +1117,16 @@ export function MeetingCommandCanvas({
         realtimeVoice={{
           roomId: snapshot.roomId!,
           getAccessToken: runtime.session.getAccessToken,
+          invokeCapability: (capability, input, signal) => {
+            const registry = webMcpRegistryRef.current;
+            return registry
+              ? registry.invokeCapability(capability, input, signal, "voice")
+              : Promise.resolve({
+                  ok: false as const,
+                  code: "not_available" as const,
+                  message: "not available yet: canvas capabilities are still connecting",
+                });
+          },
           disabled: snapshot.status !== "ready" && snapshot.status !== "degraded",
           useSavedOpenAiCredential,
           onUseSavedOpenAiCredentialChange: selectSavedOpenAiCredential,
@@ -1255,6 +1273,7 @@ export function createStandardMeetingWebMcpRegistry(options: {
     MeetingPacketWorkflowController,
     "getStatus" | "preparePacket" | "stagePacketSend"
   >;
+  workspaceController?: CanvasWorkspaceController;
   onExecutionEvent?: (event: WebMcpExecutionEvent) => void;
 }) {
   return new WebMcpRegistry({
@@ -1314,8 +1333,16 @@ export function createStandardMeetingWebMcpRegistry(options: {
             };
           }
         : undefined,
-      dispatchMutation: async (command, signal) => {
-        const result = await options.session.submitCommand(command, "webmcp", signal);
+      controlWorkspace: options.workspaceController
+        ? (request) =>
+            options.workspaceController!.execute(
+              request.input,
+              request.signal,
+              request.source ?? "webmcp",
+            )
+        : undefined,
+      dispatchMutation: async (command, signal, source) => {
+        const result = await options.session.submitCommand(command, source, signal);
         if (!result.ok)
           return {
             ok: false,
@@ -1323,7 +1350,7 @@ export function createStandardMeetingWebMcpRegistry(options: {
             message: result.message,
           };
         const receipt = result.state.receipts.at(-1);
-        if (!receipt || receipt.source !== "webmcp")
+        if (!receipt || receipt.source !== source)
           return {
             ok: false,
             code: "execution_failed",

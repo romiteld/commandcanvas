@@ -831,13 +831,13 @@ describe("DemoCommandCanvas", () => {
     });
     act(() => window.dispatchEvent(new Event("focus")));
 
-    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(11));
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(12));
     act(() => window.dispatchEvent(new Event("focus")));
     await Promise.resolve();
-    expect(registerTool).toHaveBeenCalledTimes(11);
+    expect(registerTool).toHaveBeenCalledTimes(12);
 
     view.unmount();
-    expect(signals).toHaveLength(11);
+    expect(signals).toHaveLength(12);
     expect(signals.every((signal) => signal.aborted)).toBe(true);
     delete (document as unknown as { modelContext?: unknown }).modelContext;
   });

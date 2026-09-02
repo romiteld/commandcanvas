@@ -1,11 +1,17 @@
 import { z } from "zod";
 
+import {
+  REALTIME_CAPABILITY_ALIASES,
+  projectRealtimeCapabilityTools,
+  type CanvasCapabilityName,
+} from "@/lib/canvas/capability-catalog";
 import type { DirectCanvasIntent } from "@/lib/canvas/direct-command";
 import {
   newCanvasObjectSchema,
   type NewCanvasObject,
 } from "@/lib/canvas/object-model";
 import type { JsonValue } from "@/lib/webmcp/tool-catalog";
+import type { WebMcpToolResult } from "@/lib/webmcp/tool-catalog";
 
 export type RealtimeVoiceIntentResult =
   | { ok: true; message: string }
@@ -38,7 +44,14 @@ export type RealtimeVoiceCanvasInspector = (
 export interface RealtimeVoiceToolExecutionOptions {
   signal?: AbortSignal;
   inspectCanvas?: RealtimeVoiceCanvasInspector;
+  invokeCapability?: RealtimeVoiceCapabilityInvoker;
 }
+
+export type RealtimeVoiceCapabilityInvoker = (
+  capability: CanvasCapabilityName,
+  input: unknown,
+  signal: AbortSignal,
+) => Promise<WebMcpToolResult>;
 
 export interface RealtimeVoiceToolCall {
   name: string;
@@ -280,22 +293,6 @@ const inspectArgumentsSchema = z
     includeReceipts: z.boolean().default(false),
   })
   .strict();
-
-const inspectToolDefinition: RealtimeVoiceToolDefinition = {
-  type: "function",
-  name: "inspect_canvas",
-  description:
-    "Read the bounded semantic canvas selection or object list. Use once when resolving this or that, or when the user asks what is on the canvas.",
-  parameters: {
-    type: "object",
-    properties: {
-      scope: { type: "string", enum: ["selected", "all"] },
-      includeReceipts: { type: "boolean" },
-    },
-    required: [],
-    additionalProperties: false,
-  },
-};
 
 const toolSpecifications = [
   {
@@ -547,23 +544,31 @@ const toolSpecifications = [
 ] as const;
 
 export const REALTIME_VOICE_TOOL_DEFINITIONS: readonly RealtimeVoiceToolDefinition[] =
-  [
-    inspectToolDefinition,
-    ...toolSpecifications.map(({ name, description, parameters }) => ({
-      type: "function" as const,
-      name,
-      description,
-      parameters,
-    })),
-  ];
+  projectRealtimeCapabilityTools();
 
 export const REALTIME_VOICE_INSTRUCTIONS =
-  "You are CommandCanvas live voice. Be brief. Use only the provided bounded canvas tools. Inspect the canvas once when resolving this or that or when asked what is on the canvas. Do not browse the web. For ordinary creation requests, use the matching compact tool: create_note, create_board, create_schedule, create_diagram, create_chart, create_data_table, create_reference_card, or create_meeting_card. Call that creation tool immediately without inspecting first; the compact tool assigns initial canvas geometry. Use create_semantic_object only as an advanced compatibility path when you already have a complete spatial object. If you already inspected for a creation request, continue in the same response by calling the matching creation tool before confirming anything to the user. Do not force requests into an architecture diagram: create the diagram, chart, table, reference, note, board, schedule, decision, action item, summary, risk, or open question the user actually requested. For fill, add, append, or update language about this note or thought, inspect the selected object and then call append_selected_note with only the content to add. When the user explicitly says start a thought or new thought, call start_thought once. After it is submitted, CommandCanvas automatically places later completed user speech inside that selected thought card; do not create another object for each sentence. While thought capture is active, treat all user speech as dictated thought content and do not call any other canvas tool. When the user explicitly says finish thought, call finish_thought once; only then resume normal canvas tools. Never operate rooms, approve packets, or send email. Use discard_selected only when the user explicitly asks to discard, delete, trash, throw away, or get rid of the selected object; it goes to recoverable trash and remains undoable. Except for local viewport focus, a tool result with outcome submitted means the action entered CommandCanvas's canonical mutation pipeline; it is not proof that the change persisted. Say submitted, not created, saved, persisted, or completed. Ask the user to select a target when a selected-object tool is refused.";
+  "You are CommandCanvas live voice. Be brief. Use only the provided bounded canvas tools. Inspect the canvas once when resolving this or that or when asked what is on the canvas. Do not browse the web. For ordinary creation requests, use the matching compact tool: create_note, create_board, create_schedule, create_diagram, create_chart, create_data_table, create_reference_card, or create_meeting_card. Call that creation tool immediately without inspecting first; the compact tool assigns initial canvas geometry. Use create_semantic_object only as an advanced compatibility path when you already have a complete spatial object. If you already inspected for a creation request, continue in the same response by calling the matching creation tool before confirming anything to the user. Do not force requests into an architecture diagram: create the diagram, chart, table, reference, note, board, schedule, decision, action item, summary, risk, or open question the user actually requested. For fill, add, append, or update language about this note or thought, inspect the selected object and then call append_selected_note with only the content to add. When the user explicitly says start a thought or new thought, call start_thought once. After it is submitted, CommandCanvas automatically places later completed user speech inside that selected thought card; do not create another object for each sentence. While thought capture is active, treat all user speech as dictated thought content and do not call any other canvas tool. When the user explicitly says finish thought, call finish_thought once; only then resume normal canvas tools. You may prepare a packet draft and request that an already approved packet be staged for delivery, but you can never approve a packet or execute email; the host must review the exact recipients and press SEND in the CommandCanvas UI. Never operate rooms. Use discard_selected only when the user explicitly asks to discard, delete, trash, throw away, or get rid of the selected object; it goes to recoverable trash and remains undoable. Except for local viewport controls, a tool result with outcome submitted means the action entered CommandCanvas's canonical mutation pipeline; it is not proof that the change persisted. Say submitted, not created, saved, persisted, or completed. Ask the user to select a target when a selected-object tool is refused.";
 
-export function createRealtimeVoiceSessionConfig() {
+export const REALTIME_VOICE_MODELS = [
+  "gpt-realtime-2.1",
+  "gpt-realtime-mini",
+] as const;
+
+export type RealtimeVoiceModel = (typeof REALTIME_VOICE_MODELS)[number];
+
+const realtimeVoiceModelSchema = z.enum(REALTIME_VOICE_MODELS);
+
+export function createRealtimeVoiceSessionConfig(
+  modelPreference: unknown = "gpt-realtime-2.1",
+) {
+  const model = realtimeVoiceModelSchema.safeParse(modelPreference);
+  if (!model.success)
+    throw new Error(
+      "Unsupported Realtime model preference. Choose gpt-realtime-2.1 or gpt-realtime-mini explicitly.",
+    );
   return {
     type: "realtime",
-    model: "gpt-realtime-2.1",
+    model: model.data,
     // The Realtime contract permits audio or text output, not both. Audio
     // output includes an assistant transcript event for the command rail.
     output_modalities: ["audio"],
@@ -594,6 +599,16 @@ export async function executeRealtimeVoiceTool(
 ): Promise<RealtimeVoiceToolResult> {
   const action = safeActionName(call.name);
   if (options.signal?.aborted) return cancelled(action);
+  const capabilityAlias = REALTIME_CAPABILITY_ALIASES.find(
+    (candidate) => candidate.name === call.name,
+  );
+  if (capabilityAlias && !capabilityAlias.localIntent && options.invokeCapability)
+    return executeCanonicalRealtimeCapability(
+      capabilityAlias,
+      call,
+      options,
+      action,
+    );
   if (call.name === "inspect_canvas") {
     if (call.arguments.length > MAX_STANDARD_TOOL_ARGUMENT_CHARS)
       return invalidArguments(action);
@@ -693,6 +708,259 @@ export async function executeRealtimeVoiceTool(
     };
   }
 }
+
+async function executeCanonicalRealtimeCapability(
+  alias: (typeof REALTIME_CAPABILITY_ALIASES)[number],
+  call: RealtimeVoiceToolCall,
+  options: RealtimeVoiceToolExecutionOptions,
+  action: string,
+): Promise<RealtimeVoiceToolResult> {
+  const limit =
+    call.name === "create_semantic_object"
+      ? MAX_SEMANTIC_OBJECT_ARGUMENT_CHARS
+      : MAX_STANDARD_TOOL_ARGUMENT_CHARS;
+  if (call.arguments.length > limit) return invalidArguments(action);
+  let rawArguments: unknown;
+  try {
+    rawArguments = JSON.parse(call.arguments);
+  } catch {
+    return invalidArguments(action);
+  }
+  const parsed = alias.inputSchema.safeParse(rawArguments);
+  if (!parsed.success) return invalidArguments(action);
+  const signal = options.signal ?? new AbortController().signal;
+  try {
+    let input = alias.normalize(parsed.data);
+    input = await resolveSelectedCapabilityInput(
+      alias.capability,
+      input,
+      options.inspectCanvas,
+      signal,
+    );
+    const result = await options.invokeCapability!(
+      alias.capability,
+      input,
+      signal,
+    );
+    if (!result.ok)
+      return {
+        ok: false,
+        outcome: "refused",
+        action,
+        message: result.message,
+      };
+    return {
+      ok: true,
+      outcome:
+        alias.capability === "get_canvas_state" ? "observed" : "submitted",
+      action,
+      message:
+        result.status === "awaiting_human_approval"
+          ? "Packet send request staged for explicit host SEND confirmation."
+          : alias.capability === "control_workspace"
+            ? result.message
+            : alias.capability === "get_canvas_state"
+              ? "Current semantic canvas context observed."
+              : "Canvas action submitted; check the canvas receipt for the result.",
+      ...(result.data ? { data: result.data } : {}),
+    };
+  } catch (error) {
+    if (error instanceof RealtimeCapabilityRefusal)
+      return {
+        ok: false,
+        outcome: "refused",
+        action,
+        message: error.message,
+      };
+    return signal.aborted || isAbortError(error)
+      ? cancelled(action)
+      : {
+          ok: false,
+          outcome: "refused",
+          action,
+          message: "The canvas action could not be submitted.",
+        };
+  }
+}
+
+async function resolveSelectedCapabilityInput(
+  capability: CanvasCapabilityName,
+  rawInput: unknown,
+  inspectCanvas: RealtimeVoiceCanvasInspector | undefined,
+  signal: AbortSignal,
+): Promise<unknown> {
+  if (
+    capability !== "transform_object" &&
+    capability !== "set_object_state" &&
+    capability !== "discard_object" &&
+    capability !== "transform_sketch" &&
+    capability !== "organize_objects"
+  )
+    return rawInput;
+  const input = rawInput as Record<string, unknown>;
+  if (
+    capability === "organize_objects" &&
+    (input.action === "group" || input.action === "ungroup")
+  )
+    return input;
+  const targetKey = capability === "transform_sketch" ? "sketchId" : "objectId";
+  if (capability !== "organize_objects" && typeof input[targetKey] === "string")
+    return input;
+  if (!inspectCanvas)
+    throw new RealtimeCapabilityRefusal(
+      "Canvas selection inspection is unavailable.",
+    );
+  const projection = await inspectCanvas(
+    {
+      scope:
+        capability === "organize_objects" && input.action === "group_selected"
+          ? "all"
+          : "selected",
+      includeReceipts: false,
+    },
+    signal,
+  );
+  const projectionRecord = jsonRecord(projection);
+  const selectedObjectId =
+    typeof projectionRecord?.selectedObjectId === "string"
+      ? projectionRecord.selectedObjectId
+      : null;
+  if (!selectedObjectId)
+    throw new RealtimeCapabilityRefusal("Select an active object first.");
+
+  if (capability === "organize_objects") {
+    if (input.action === "ungroup_selected")
+      return { action: "ungroup", frameId: selectedObjectId };
+    if (input.action !== "group_selected") return input;
+    return createSelectedGroupInput(projectionRecord);
+  }
+
+  if (
+    capability === "transform_object" &&
+    (input.rotateDirection === "clockwise" ||
+      input.rotateDirection === "counterclockwise")
+  ) {
+    const selected = selectedObjectSummary(projectionRecord, selectedObjectId);
+    if (!selected)
+      throw new RealtimeCapabilityRefusal("Select an active object first.");
+    const currentRotation = numberField(selected.spatial, "rotation") ?? 0;
+    const delta = input.rotateDirection === "clockwise" ? 15 : -15;
+    return {
+      objectId: selectedObjectId,
+      transform: { rotation: wrapRotation(currentRotation + delta) },
+    };
+  }
+  return { ...input, [targetKey]: selectedObjectId };
+}
+
+function createSelectedGroupInput(
+  projection: Record<string, JsonValue> | null,
+): unknown {
+  const selectedObjectIds = Array.isArray(projection?.selectedObjectIds)
+    ? projection.selectedObjectIds.filter(
+        (value): value is string => typeof value === "string",
+      )
+    : [];
+  const summaries = selectedObjectIds.flatMap((objectId) => {
+    const object = selectedObjectSummary(projection, objectId);
+    return object ? [object] : [];
+  });
+  const groupable = summaries.filter(
+    (object) =>
+      object.state?.pinned === false && object.state?.parentId === null,
+  );
+  if (groupable.length < 2 || groupable.length !== selectedObjectIds.length)
+    throw new RealtimeCapabilityRefusal(
+      "Select at least two unpinned top-level objects first.",
+    );
+
+  const left = Math.min(...groupable.map((object) => numberField(object.spatial, "x")!));
+  const top = Math.min(...groupable.map((object) => numberField(object.spatial, "y")!));
+  const right = Math.max(
+    ...groupable.map(
+      (object) =>
+        numberField(object.spatial, "x")! +
+        numberField(object.spatial, "width")!,
+    ),
+  );
+  const bottom = Math.max(
+    ...groupable.map(
+      (object) =>
+        numberField(object.spatial, "y")! +
+        numberField(object.spatial, "height")!,
+    ),
+  );
+  const zIndex = Math.min(
+    ...groupable.map((object) => numberField(object.spatial, "zIndex")!),
+  );
+  const padding = 44;
+  return {
+    action: "group",
+    objectIds: selectedObjectIds,
+    frame: {
+      id: createRealtimeObjectId("frame"),
+      title: `Frame ${(numberField(projection, "revision") ?? 0) + 1}`,
+      x: left - padding,
+      y: top - padding,
+      width: right - left + padding * 2,
+      height: bottom - top + padding * 2,
+      zIndex: Math.max(0, zIndex - 1),
+      tone: "violet",
+    },
+  };
+}
+
+function selectedObjectSummary(
+  projection: Record<string, JsonValue> | null,
+  objectId: string,
+) {
+  if (!Array.isArray(projection?.objects)) return null;
+  for (const value of projection.objects) {
+    const object = jsonRecord(value);
+    if (object?.id !== objectId) continue;
+    const spatial = jsonRecord(object.spatial);
+    const state = jsonRecord(object.state);
+    if (
+      !spatial ||
+      !state ||
+      numberField(spatial, "x") === null ||
+      numberField(spatial, "y") === null ||
+      numberField(spatial, "width") === null ||
+      numberField(spatial, "height") === null ||
+      numberField(spatial, "zIndex") === null
+    )
+      return null;
+    return { spatial, state };
+  }
+  return null;
+}
+
+function jsonRecord(value: JsonValue | undefined) {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value
+    : null;
+}
+
+function numberField(
+  value: Record<string, JsonValue> | null,
+  key: string,
+) {
+  const field = value?.[key];
+  return typeof field === "number" && Number.isFinite(field) ? field : null;
+}
+
+function wrapRotation(rotation: number) {
+  if (rotation > 180) return rotation - 360;
+  if (rotation < -180) return rotation + 360;
+  return rotation;
+}
+
+function createRealtimeObjectId(prefix: string) {
+  const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`;
+  return `${prefix}-${suffix}`;
+}
+
+class RealtimeCapabilityRefusal extends Error {}
 
 function cancelled(action: string): RealtimeVoiceToolResult {
   return {

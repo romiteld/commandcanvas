@@ -1052,7 +1052,7 @@ describe("RealtimeVoiceControl", () => {
     expect(drafts.at(-1)).toBeNull();
   });
 
-  it("keeps one live controller while callback, token, and canvas inspector identities change", async () => {
+  it("keeps one live controller while callback, token, inspector, and capability identities change", async () => {
     const setup = controllerHarness();
     let controllerOptions: RealtimeVoiceControllerOptions | undefined;
     const createController = vi.fn((options: RealtimeVoiceControllerOptions) => {
@@ -1065,12 +1065,23 @@ describe("RealtimeVoiceControl", () => {
     const secondToken = vi.fn(() => "second.token.value");
     const firstInspector = vi.fn(() => ({ revision: 1 }));
     const secondInspector = vi.fn(() => ({ revision: 2 }));
+    const firstInvoker = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "First capability.",
+    }));
+    const secondInvoker = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Second capability.",
+    }));
     const view = render(
       <RealtimeVoiceControl
         roomId={ROOM_ID}
         getAccessToken={firstToken}
         onIntent={firstIntent}
         inspectCanvas={firstInspector}
+        invokeCapability={firstInvoker}
         createController={createController}
       />,
     );
@@ -1080,6 +1091,7 @@ describe("RealtimeVoiceControl", () => {
         getAccessToken={secondToken}
         onIntent={secondIntent}
         inspectCanvas={secondInspector}
+        invokeCapability={secondInvoker}
         createController={createController}
       />,
     );
@@ -1105,5 +1117,14 @@ describe("RealtimeVoiceControl", () => {
     expect(secondIntent).toHaveBeenCalledOnce();
     expect(firstInspector).not.toHaveBeenCalled();
     expect(secondInspector).toHaveBeenCalledOnce();
+    await expect(
+      controllerOptions.invokeCapability?.(
+        "control_workspace",
+        { action: "fit_all" },
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ message: "Second capability." });
+    expect(firstInvoker).not.toHaveBeenCalled();
+    expect(secondInvoker).toHaveBeenCalledOnce();
   });
 });

@@ -278,7 +278,7 @@ describe("meeting invitation lifecycle and Site Tools", () => {
     });
 
     await registry.sync();
-    expect(registry.registeredToolNames()).toHaveLength(11);
+    expect(registry.registeredToolNames()).toHaveLength(12);
     expect(signals.every((signal) => !signal.aborted)).toBe(true);
     const inspect = registered.find((tool) => tool.name === "get_canvas_state");
     if (!inspect) throw new Error("get_canvas_state was not registered");

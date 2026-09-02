@@ -4,11 +4,22 @@ import type { DirectCanvasIntent } from "@/lib/canvas/direct-command";
 import {
   REALTIME_VOICE_INSTRUCTIONS,
   REALTIME_VOICE_TOOL_DEFINITIONS,
+  createRealtimeVoiceSessionConfig,
   executeRealtimeVoiceTool,
   type RealtimeVoiceIntentHandler,
 } from "@/lib/realtime-voice/tools";
 
 describe("Realtime voice tools", () => {
+  it("defaults to the full Realtime model and permits mini only as an explicit preference", () => {
+    expect(createRealtimeVoiceSessionConfig().model).toBe("gpt-realtime-2.1");
+    expect(createRealtimeVoiceSessionConfig("gpt-realtime-mini").model).toBe(
+      "gpt-realtime-mini",
+    );
+    expect(() =>
+      createRealtimeVoiceSessionConfig("not-a-realtime-model" as never),
+    ).toThrow(/realtime model/i);
+  });
+
   it("requires direct object requests to mutate before any confirmation", () => {
     expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
       "Call that creation tool immediately without inspecting first",
@@ -50,13 +61,286 @@ describe("Realtime voice tools", () => {
       "group_selected",
       "ungroup_selected",
       "rotate_selected",
+      "move_selected_object",
+      "resize_selected_object",
+      "prepare_meeting_packet",
+      "request_packet_send",
+      "control_workspace",
     ]);
     expect(
-      JSON.stringify(REALTIME_VOICE_TOOL_DEFINITIONS),
-    ).not.toMatch(/packet|email|room/i);
+      REALTIME_VOICE_TOOL_DEFINITIONS.map((tool) => tool.name),
+    ).not.toEqual(expect.arrayContaining(["approve_packet", "send_email"]));
     expect(
       JSON.stringify(REALTIME_VOICE_TOOL_DEFINITIONS),
     ).toMatch(/recoverable trash/i);
+  });
+
+  it("normalizes selected movement and workspace control through the canonical capability invoker", async () => {
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Applied.",
+    }));
+    const inspectCanvas = vi.fn(async () => ({
+      roomId: "room-1",
+      revision: 9,
+      selectedObjectId: "note-1",
+      objects: [],
+      receipts: [],
+      truncation: {},
+    }));
+
+    await executeRealtimeVoiceTool(
+      {
+        name: "move_selected_object",
+        arguments: JSON.stringify({ x: 420, y: 180 }),
+      },
+      vi.fn(),
+      { invokeCapability, inspectCanvas },
+    );
+    await executeRealtimeVoiceTool(
+      {
+        name: "control_workspace",
+        arguments: JSON.stringify({ action: "fit_all" }),
+      },
+      vi.fn(),
+      { invokeCapability, inspectCanvas },
+    );
+
+    expect(invokeCapability).toHaveBeenNthCalledWith(
+      1,
+      "transform_object",
+      { objectId: "note-1", transform: { x: 420, y: 180 } },
+      expect.any(AbortSignal),
+    );
+    expect(invokeCapability).toHaveBeenNthCalledWith(
+      2,
+      "control_workspace",
+      { action: "fit_all" },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("routes selected sketch transformation through the canonical capability invoker", async () => {
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Transformed.",
+    }));
+    const inspectCanvas = vi.fn(async () => ({
+      roomId: "room-1",
+      revision: 9,
+      selectedObjectId: "sketch-1",
+      objects: [{ id: "sketch-1", type: "sketch" }],
+      receipts: [],
+      truncation: {},
+    }));
+
+    await executeRealtimeVoiceTool(
+      { name: "transform_selected_sketch", arguments: "{}" },
+      vi.fn(),
+      { invokeCapability, inspectCanvas },
+    );
+
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "transform_sketch",
+      {
+        sketchId: "sketch-1",
+        instruction: "Make that usable.",
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("returns a specific selection refusal before canonical selected-object invocation", async () => {
+    const invokeCapability = vi.fn();
+    const result = await executeRealtimeVoiceTool(
+      { name: "move_selected_object", arguments: JSON.stringify({ x: 300 }) },
+      vi.fn(),
+      {
+        invokeCapability,
+        inspectCanvas: async () => ({
+          roomId: "room-1",
+          revision: 1,
+          selectedObjectId: null,
+          objects: [],
+          receipts: [],
+          truncation: {},
+        }),
+      },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      outcome: "refused",
+      action: "move_selected_object",
+      message: "Select an active object first.",
+    });
+    expect(invokeCapability).not.toHaveBeenCalled();
+  });
+
+  it("normalizes rotate, group, and ungroup aliases into canonical shared mutations", async () => {
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Applied.",
+    }));
+    const inspectCanvas = vi.fn(async () => ({
+      roomId: "room-1",
+      revision: 9,
+      selectedObjectId: "note-2",
+      selectedObjectIds: ["note-1", "note-2"],
+      objects: [
+        {
+          id: "note-1",
+          type: "note",
+          spatial: { x: 100, y: 120, width: 300, height: 180, zIndex: 4, rotation: 0 },
+          state: { minimized: false, pinned: false, parentId: null },
+        },
+        {
+          id: "note-2",
+          type: "note",
+          spatial: { x: 460, y: 160, width: 280, height: 200, zIndex: 6, rotation: 175 },
+          state: { minimized: false, pinned: false, parentId: null },
+        },
+      ],
+      receipts: [],
+      truncation: {},
+    }));
+
+    await executeRealtimeVoiceTool(
+      {
+        name: "rotate_selected",
+        arguments: JSON.stringify({ direction: "clockwise" }),
+      },
+      vi.fn(),
+      { invokeCapability, inspectCanvas },
+    );
+    await executeRealtimeVoiceTool(
+      { name: "group_selected", arguments: "{}" },
+      vi.fn(),
+      { invokeCapability, inspectCanvas },
+    );
+    await executeRealtimeVoiceTool(
+      { name: "ungroup_selected", arguments: "{}" },
+      vi.fn(),
+      { invokeCapability, inspectCanvas },
+    );
+
+    expect(invokeCapability).toHaveBeenNthCalledWith(
+      1,
+      "transform_object",
+      { objectId: "note-2", transform: { rotation: -170 } },
+      expect.any(AbortSignal),
+    );
+    expect(invokeCapability).toHaveBeenNthCalledWith(
+      2,
+      "organize_objects",
+      expect.objectContaining({
+        action: "group",
+        objectIds: ["note-1", "note-2"],
+        frame: expect.objectContaining({
+          id: expect.stringMatching(/^frame-/),
+          x: 56,
+          y: 76,
+          width: 728,
+          height: 328,
+          zIndex: 3,
+        }),
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(invokeCapability).toHaveBeenNthCalledWith(
+      3,
+      "organize_objects",
+      { action: "ungroup", frameId: "note-2" },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("keeps full-geometry semantic creation compatible behind the shared capability guard", async () => {
+    const object = {
+      id: "note-voice",
+      type: "note" as const,
+      title: "Spatial note",
+      x: 480,
+      y: 260,
+      width: 360,
+      height: 240,
+      zIndex: 8,
+      payload: { text: "Keep this geometry.", tone: "sky" as const },
+    };
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Applied.",
+    }));
+
+    await executeRealtimeVoiceTool(
+      {
+        name: "create_semantic_object",
+        arguments: JSON.stringify({ object }),
+      },
+      vi.fn(),
+      { invokeCapability },
+    );
+
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "create_object",
+      { object },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("prepares and stages packets but never approves or sends them", async () => {
+    const invokeCapability = vi.fn(async (capability: string) =>
+      capability === "request_packet_send"
+        ? {
+            ok: true as const,
+            status: "awaiting_human_approval" as const,
+            message: "Staged.",
+          }
+        : {
+            ok: true as const,
+            status: "completed" as const,
+            message: "Draft prepared.",
+          },
+    );
+
+    await executeRealtimeVoiceTool(
+      {
+        name: "prepare_meeting_packet",
+        arguments: JSON.stringify({ title: "Project review" }),
+      },
+      vi.fn(),
+      { invokeCapability },
+    );
+    const staged = await executeRealtimeVoiceTool(
+      {
+        name: "request_packet_send",
+        arguments: JSON.stringify({ packetId: "packet-1" }),
+      },
+      vi.fn(),
+      { invokeCapability },
+    );
+
+    expect(invokeCapability).toHaveBeenNthCalledWith(
+      1,
+      "prepare_meeting_packet",
+      { title: "Project review" },
+      expect.any(AbortSignal),
+    );
+    expect(invokeCapability).toHaveBeenNthCalledWith(
+      2,
+      "request_packet_send",
+      { packetId: "packet-1" },
+      expect.any(AbortSignal),
+    );
+    expect(staged).toMatchObject({
+      ok: true,
+      outcome: "submitted",
+      message: expect.stringContaining("explicit host SEND"),
+    });
   });
 
   it("maps compact everyday creation tools without requiring model-generated spatial geometry", async () => {

@@ -1,7 +1,13 @@
 import type { StoreApi } from "zustand";
 
 import type { CanvasStoreState } from "@/lib/canvas/canvas-store";
-import type { CanvasCommand, CommandError } from "@/lib/canvas/command-engine";
+import type { NewCanvasObject } from "@/lib/canvas/object-model";
+import type { SemanticCanvasObjectInput } from "@/lib/canvas/semantic-object";
+import type {
+  CanvasCommand,
+  CanvasCommandSource,
+  CommandError,
+} from "@/lib/canvas/command-engine";
 import { buildSemanticCanvasObject } from "@/lib/canvas/semantic-object";
 import type { CanvasSketchTransformer } from "@/lib/vision/canvas-transform";
 import { projectCanvasState } from "@/lib/webmcp/canvas-state-projection";
@@ -31,6 +37,7 @@ export interface CanvasWebMcpAdapterOptions {
   dispatchMutation?: (
     command: CanvasCommand,
     signal: AbortSignal,
+    source: "webmcp" | "voice",
   ) => Promise<WebMcpToolResult>;
   transformSketch?: CanvasSketchTransformer["transform"];
   prepareMeetingPacket?: (
@@ -42,6 +49,9 @@ export interface CanvasWebMcpAdapterOptions {
   stagePacketSendRequest?: (
     request: WebMcpPacketSendStageRequest,
   ) => Promise<WebMcpAwaitingApprovalResult | WebMcpToolFailure>;
+  controlWorkspace?: (
+    request: Extract<WebMcpAdapterRequest, { toolName: "control_workspace" }>,
+  ) => Promise<WebMcpToolResult> | WebMcpToolResult;
 }
 
 export function createCanvasWebMcpAdapters(
@@ -67,6 +77,7 @@ export function createCanvasWebMcpAdapters(
               transform: request.input.transform,
             },
             request.signal,
+            capabilitySource(request),
           );
         case "set_object_state":
           return executeMutation(
@@ -77,6 +88,7 @@ export function createCanvasWebMcpAdapters(
               flags: request.input.state,
             },
             request.signal,
+            capabilitySource(request),
           );
         case "discard_object":
           return executeMutation(
@@ -86,6 +98,7 @@ export function createCanvasWebMcpAdapters(
               objectId: request.input.objectId,
             },
             request.signal,
+            capabilitySource(request),
           );
         case "organize_objects":
           return request.input.action === "group"
@@ -107,6 +120,7 @@ export function createCanvasWebMcpAdapters(
                   },
                 },
                 request.signal,
+                capabilitySource(request),
               )
             : executeMutation(
                 options,
@@ -115,6 +129,7 @@ export function createCanvasWebMcpAdapters(
                   frameId: request.input.frameId,
                 },
                 request.signal,
+                capabilitySource(request),
               );
         case "history_action":
           return executeMutation(
@@ -126,6 +141,7 @@ export function createCanvasWebMcpAdapters(
                   : "history.redo",
             },
             request.signal,
+            capabilitySource(request),
           );
         case "transform_sketch":
           return transformSelectedSketch(options, request);
@@ -133,6 +149,10 @@ export function createCanvasWebMcpAdapters(
           return options.prepareMeetingPacket
             ? options.prepareMeetingPacket(request)
             : unavailable("meeting packet preparation is not ready");
+        case "control_workspace":
+          return options.controlWorkspace
+            ? options.controlWorkspace(request)
+            : unavailable("workspace control is not ready");
       }
     },
     async stagePacketSendRequest(request) {
@@ -149,9 +169,19 @@ function createSemanticObject(
   request: Extract<WebMcpAdapterRequest, { toolName: "create_object" }>,
 ): Promise<WebMcpToolResult> | WebMcpToolResult {
   const state = options.store.getState();
+  const input = request.input as
+    | SemanticCanvasObjectInput
+    | { object: NewCanvasObject };
+  if ("object" in input)
+    return executeMutation(
+      options,
+      { type: "object.create", object: input.object },
+      request.signal,
+      capabilitySource(request),
+    );
   const sourceSketchId =
-    request.input.type === "diagram" || request.input.type === "chart"
-      ? request.input.sourceSketchId
+    input.type === "diagram" || input.type === "chart"
+      ? input.sourceSketchId
       : undefined;
   if (sourceSketchId) {
     const source = state.canvas.objects[sourceSketchId];
@@ -168,7 +198,7 @@ function createSemanticObject(
         message: "Select the source sketch before creating a linked visual.",
       };
   }
-  if (request.input.placement === "right_of_selection") {
+  if (input.placement === "right_of_selection") {
     const selected = state.selectedObjectId
       ? state.canvas.objects[state.selectedObjectId]
       : undefined;
@@ -185,13 +215,14 @@ function createSemanticObject(
     options,
     {
       type: "object.create",
-      object: buildSemanticCanvasObject(request.input, {
+      object: buildSemanticCanvasObject(input, {
         viewport: state.viewport,
         objects: state.canvas.objects,
         selectedObjectId: state.selectedObjectId,
       }),
     },
     request.signal,
+    capabilitySource(request),
   );
 }
 
@@ -219,6 +250,7 @@ function appendObjectContent(
       text: request.input.text,
     },
     request.signal,
+    capabilitySource(request),
   );
 }
 
@@ -250,7 +282,7 @@ async function transformSelectedSketch(
       sketchObjectId: request.input.sketchId,
       instruction: request.input.instruction,
       outputKind,
-      source: "webmcp",
+      source: capabilitySource(request),
       signal: request.signal,
     });
     if (!result.ok)
@@ -315,10 +347,11 @@ function executeMutation(
   options: CanvasWebMcpAdapterOptions,
   command: CanvasCommand,
   signal: AbortSignal,
+  source: "webmcp" | "voice",
 ) {
   return options.dispatchMutation
-    ? options.dispatchMutation(command, signal)
-    : dispatchLocalMutation(options.store, command);
+    ? options.dispatchMutation(command, signal, source)
+    : dispatchLocalMutation(options.store, command, source);
 }
 
 function readCanvasState(
@@ -340,8 +373,11 @@ function readCanvasState(
 function dispatchLocalMutation(
   store: StoreApi<CanvasStoreState>,
   command: CanvasCommand,
+  source: "webmcp" | "voice",
 ): WebMcpToolResult {
-  const result = store.getState().dispatch(command, "webmcp", WEBMCP_AGENT);
+  const result = store
+    .getState()
+    .dispatch(command, source, localAgentForSource(source));
   if (!result.ok) return commandFailure(result.error);
 
   return {
@@ -354,6 +390,20 @@ function dispatchLocalMutation(
       affectedObjectIds: result.receipt.affectedObjectIds,
     },
   };
+}
+
+function localAgentForSource(source: CanvasCommandSource) {
+  return source === "voice"
+    ? {
+        id: "agent-live-voice",
+        displayName: "Live voice",
+        type: "agent" as const,
+      }
+    : WEBMCP_AGENT;
+}
+
+function capabilitySource(request: { source?: "webmcp" | "voice" }) {
+  return request.source ?? "webmcp";
 }
 
 function commandFailure(error: CommandError): WebMcpToolFailure {

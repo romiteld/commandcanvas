@@ -36,6 +36,7 @@ const apiProxyOrigin = process.env.WEBMCP_API_PROXY_ORIGIN;
 const expectedInitialTools =
   expectedMode === "dynamic"
     ? [
+        "control_workspace",
         "create_object",
         "discard_object",
         "get_canvas_state",
@@ -47,6 +48,7 @@ const expectedInitialTools =
         "update_object_content",
       ]
     : [
+        "control_workspace",
         "create_object",
         "discard_object",
         "get_canvas_state",

@@ -95,7 +95,7 @@ test("bridges a document.modelContext invocation into the live canvas", async ({
     page
       .getByRole("complementary", { name: "System status drawer" })
       .getByRole("region", { name: "Service status" })
-      .getByText("11 Site Tools registered", { exact: true }),
+      .getByText("12 Site Tools registered", { exact: true }),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Close system status drawer" })

@@ -12,6 +12,29 @@ describe("WebMCP live canvas state contract", () => {
     );
   });
 
+  it("keeps workspace controls local, bounded, and non-destructive", () => {
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.control_workspace.safeParse({
+        action: "fit_selected",
+      }).success,
+    ).toBe(true);
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.control_workspace.safeParse({
+        action: "set_zoom",
+        scale: 1.75,
+      }).success,
+    ).toBe(true);
+    expect(
+      WEBMCP_TOOL_INPUT_SCHEMAS.control_workspace.safeParse({
+        action: "discard_selected",
+      }).success,
+    ).toBe(false);
+    expect(WEBMCP_TOOL_CATALOG.control_workspace.annotations).toEqual({
+      readOnlyHint: false,
+      untrustedContentHint: false,
+    });
+  });
+
   it("accepts compact semantic creation input and rejects persistence-shaped objects", () => {
     expect(
       WEBMCP_TOOL_INPUT_SCHEMAS.create_object.safeParse({

@@ -8,6 +8,7 @@ import {
   createCanvasStore,
   type CanvasStoreState,
 } from "@/lib/canvas/canvas-store";
+import { createCanvasWorkspaceController } from "@/lib/canvas/workspace-controller";
 import { createCanvasWebMcpAdapters } from "@/lib/webmcp/canvas-adapters";
 import type { WebMcpExecutionContext } from "@/lib/webmcp/phase-guards";
 import { WebMcpRegistry } from "@/lib/webmcp/registry";
@@ -26,6 +27,7 @@ export function LocalCommandCanvas() {
     readonly WebMcpExecutionEvent[]
   >([]);
   const webMcpTarget = useDocumentWebMcpTarget();
+  const [workspaceController] = useState(createCanvasWorkspaceController);
   const [store] = useState(() =>
     createCanvasStore("room-local", {
       actor: {
@@ -59,7 +61,15 @@ export function LocalCommandCanvas() {
       mode,
       target: webMcpTarget,
       getContext: () => localWebMcpContext(store.getState()),
-      adapters: createCanvasWebMcpAdapters({ store }),
+      adapters: createCanvasWebMcpAdapters({
+        store,
+        controlWorkspace: (request) =>
+          workspaceController.execute(
+            request.input,
+            request.signal,
+            request.source ?? "webmcp",
+          ),
+      }),
       onExecutionEvent(event) {
         if (!active) return;
         setWebMcpExecutionActivity((current) =>
@@ -110,7 +120,7 @@ export function LocalCommandCanvas() {
       unsubscribe();
       registry.dispose();
     };
-  }, [store, webMcpTarget]);
+  }, [store, webMcpTarget, workspaceController]);
 
   return (
     <CommandCanvasRoom
@@ -118,6 +128,7 @@ export function LocalCommandCanvas() {
       serviceStatus={{ webMcp: webMcpStatus }}
       webMcpSurfaceState={webMcpSurfaceState}
       webMcpExecutionActivity={webMcpExecutionActivity}
+      workspaceController={workspaceController}
     />
   );
 }

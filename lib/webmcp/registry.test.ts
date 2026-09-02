@@ -102,6 +102,7 @@ describe("WebMcpRegistry registration", () => {
       "transform_sketch",
       "prepare_meeting_packet",
       "request_packet_send",
+      "control_workspace",
     ]);
     expect(Object.keys(target.latest("get_canvas_state")).sort()).toEqual([
       "annotations",
@@ -135,6 +136,7 @@ describe("WebMcpRegistry registration", () => {
       "get_canvas_state",
       "create_object",
       "history_action",
+      "control_workspace",
     ]);
 
     context = hostContext({
@@ -155,6 +157,7 @@ describe("WebMcpRegistry registration", () => {
       "history_action",
       "transform_sketch",
       "prepare_meeting_packet",
+      "control_workspace",
     ]);
 
     context = hostContext(emptyRoom);
@@ -204,6 +207,7 @@ describe("WebMcpRegistry registration", () => {
       "organize_objects",
       "history_action",
       "transform_sketch",
+      "control_workspace",
     ]);
   });
 
@@ -216,7 +220,7 @@ describe("WebMcpRegistry registration", () => {
       adapters: adapters(),
     });
     await registry.sync();
-    expect(target.calls).toHaveLength(11);
+    expect(target.calls).toHaveLength(12);
 
     registry.dispose();
 

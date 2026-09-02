@@ -48,6 +48,7 @@ export interface RealtimeVoiceControlProps {
   disabled?: boolean;
   onIntent: RealtimeVoiceControllerOptions["onIntent"];
   inspectCanvas?: RealtimeVoiceControllerOptions["inspectCanvas"];
+  invokeCapability?: RealtimeVoiceControllerOptions["invokeCapability"];
   onThoughtDraftChange?: (text: string | null) => void;
   onActiveChange?: (active: boolean) => void;
   createController?: (
@@ -117,6 +118,7 @@ class LatestVoiceHandlers {
     private readToken: () => string | null,
     private submitIntent: RealtimeVoiceControllerOptions["onIntent"],
     private inspectSemanticCanvas: RealtimeVoiceControllerOptions["inspectCanvas"],
+    private invokeCanonicalCapability: RealtimeVoiceControllerOptions["invokeCapability"],
     private publishThoughtDraft: (text: string | null) => void,
   ) {
     this.legacyTurn = this.createTurn(LEGACY_TURN_KEY);
@@ -126,11 +128,13 @@ class LatestVoiceHandlers {
     readToken: () => string | null,
     submitIntent: RealtimeVoiceControllerOptions["onIntent"],
     inspectSemanticCanvas: RealtimeVoiceControllerOptions["inspectCanvas"],
+    invokeCanonicalCapability: RealtimeVoiceControllerOptions["invokeCapability"],
     publishThoughtDraft: (text: string | null) => void,
   ) {
     this.readToken = readToken;
     this.submitIntent = submitIntent;
     this.inspectSemanticCanvas = inspectSemanticCanvas;
+    this.invokeCanonicalCapability = invokeCanonicalCapability;
     this.publishThoughtDraft = publishThoughtDraft;
   }
 
@@ -145,6 +149,14 @@ class LatestVoiceHandlers {
     if (!this.inspectSemanticCanvas)
       throw new Error("Canvas inspection is unavailable.");
     return this.inspectSemanticCanvas(input, signal);
+  }
+
+  invokeCapability(
+    ...args: Parameters<NonNullable<RealtimeVoiceControllerOptions["invokeCapability"]>>
+  ) {
+    if (!this.invokeCanonicalCapability)
+      throw new Error("Canonical canvas capabilities are unavailable.");
+    return this.invokeCanonicalCapability(...args);
   }
 
   async onIntent(
@@ -495,6 +507,7 @@ export const RealtimeVoiceControl = forwardRef<
   disabled = false,
   onIntent,
   inspectCanvas,
+  invokeCapability,
   onThoughtDraftChange = () => undefined,
   onActiveChange,
   createController = createRealtimeVoiceController,
@@ -507,12 +520,14 @@ export const RealtimeVoiceControl = forwardRef<
   const openAiApiKey = controlledOpenAiApiKey ?? localOpenAiApiKey;
   const updateOpenAiApiKey =
     onOpenAiApiKeyChange ?? setLocalOpenAiApiKey;
+  const capabilityInvocationAvailable = Boolean(invokeCapability);
   const [latestHandlers] = useState(
     () =>
       new LatestVoiceHandlers(
         getAccessToken,
         onIntent,
         inspectCanvas,
+        invokeCapability,
         onThoughtDraftChange,
       ),
   );
@@ -522,9 +537,17 @@ export const RealtimeVoiceControl = forwardRef<
       getAccessToken,
       onIntent,
       inspectCanvas,
+      invokeCapability,
       onThoughtDraftChange,
     );
-  }, [getAccessToken, inspectCanvas, latestHandlers, onIntent, onThoughtDraftChange]);
+  }, [
+    getAccessToken,
+    inspectCanvas,
+    invokeCapability,
+    latestHandlers,
+    onIntent,
+    onThoughtDraftChange,
+  ]);
 
   const appendActivity = useCallback((entry: Omit<VoiceActivity, "id">) => {
     setActivity((current) =>
@@ -549,6 +572,13 @@ export const RealtimeVoiceControl = forwardRef<
     NonNullable<RealtimeVoiceControllerOptions["inspectCanvas"]>
   >(
     (input, signal) => latestHandlers.inspectCanvas(input, signal),
+    [latestHandlers],
+  );
+  const invokeLatestCapability = useCallback<
+    NonNullable<RealtimeVoiceControllerOptions["invokeCapability"]>
+  >(
+    (capability, input, signal) =>
+      latestHandlers.invokeCapability(capability, input, signal),
     [latestHandlers],
   );
 
@@ -604,6 +634,9 @@ export const RealtimeVoiceControl = forwardRef<
           if (status === "error") latestHandlers.resetSessionContext();
         },
         inspectCanvas: inspectLatestCanvas,
+        ...(capabilityInvocationAvailable
+          ? { invokeCapability: invokeLatestCapability }
+          : {}),
         onPlaybackBlocked() {
           setPlaybackBlocked(true);
         },
@@ -617,6 +650,8 @@ export const RealtimeVoiceControl = forwardRef<
       roomId,
       submitLatestIntent,
       inspectLatestCanvas,
+      capabilityInvocationAvailable,
+      invokeLatestCapability,
     ],
   );
   const state = useSyncExternalStore(

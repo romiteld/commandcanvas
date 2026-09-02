@@ -61,6 +61,10 @@ import {
 } from "@/lib/canvas/coordinates";
 import type { DirectCanvasIntent } from "@/lib/canvas/direct-command";
 import type {
+  CanvasWorkspaceControlHandler,
+  CanvasWorkspaceController,
+} from "@/lib/canvas/workspace-controller";
+import type {
   HandTrackingController,
   HandTrackingObservation,
   HandTrackingStatus,
@@ -120,6 +124,7 @@ export interface CommandCanvasRoomProps {
   onOpenAiApiKeyChange?: (value: string) => void;
   webMcpSurfaceState?: WebMcpSurfaceState;
   webMcpExecutionActivity?: readonly WebMcpExecutionEvent[];
+  workspaceController?: CanvasWorkspaceController;
   meetingMediaPanel?: ReactNode;
   commandDrawerRequestKey?: string;
   meetingPacketPanel?: ReactNode;
@@ -212,6 +217,7 @@ export function CommandCanvasRoom({
   onOpenAiApiKeyChange,
   webMcpSurfaceState = { status: "unavailable" },
   webMcpExecutionActivity = [],
+  workspaceController,
   meetingMediaPanel,
   commandDrawerRequestKey,
   meetingPacketPanel,
@@ -302,6 +308,13 @@ export function CommandCanvasRoom({
   );
   const activeVoiceThoughtIdRef = useRef<string | null>(null);
   const realtimeVoiceControlRef = useRef<RealtimeVoiceControlHandle>(null);
+  const workspaceControlHandlerRef = useRef<CanvasWorkspaceControlHandler>(
+    async () => ({
+      ok: false,
+      code: "not_available",
+      message: "not available yet: workspace control is still mounting",
+    }),
+  );
   const gestureExitTimeoutsRef = useRef(new Map<string, number>());
   const pendingGestureCompletionObjectIdsRef = useRef(new Set<string>());
   const canvas = useStore(store, (state) => state.canvas);
@@ -2291,6 +2304,131 @@ export function CommandCanvasRoom({
     if (fitted) setViewport(fitted);
   }
 
+  function fitWorkspaceObjects(targets: readonly CanvasObject[]) {
+    const viewportElement = canvasViewportRef.current;
+    if (!viewportElement || targets.length === 0) return false;
+    const measured = viewportElement.getBoundingClientRect();
+    const bounds = targets.map((object) => ({
+      x: object.x,
+      y: object.y,
+      width: object.width,
+      height: object.minimized ? 62 : object.height,
+    }));
+    const fitted = fitViewportToWorldBounds(
+      store.getState().viewport,
+      bounds.length === 1 ? [bounds[0]!, bounds[0]!] : bounds,
+      { x: 0, y: 0, width: measured.width, height: measured.height },
+      Math.min(64, measured.width * 0.1),
+      0.2,
+    );
+    if (!fitted) return false;
+    setViewport(fitted);
+    return true;
+  }
+
+  function applyWorkspaceControl(
+    input: Parameters<CanvasWorkspaceControlHandler>[0],
+    signal: AbortSignal,
+  ): ReturnType<CanvasWorkspaceControlHandler> {
+    signal.throwIfAborted();
+    switch (input.action) {
+      case "start_drawing":
+        if (handInteractionMode === "draw" || sketchComposerOpen)
+          return {
+            ok: true,
+            status: "completed",
+            message: "Drawing is already active.",
+          };
+        if (handTrackingStatus.state === "ready") beginHandDrawing();
+        else openPointerSketch();
+        return {
+          ok: true,
+          status: "completed",
+          message: "Drawing surface opened.",
+        };
+      case "finish_drawing": {
+        const result = handleDirectIntent({ type: "finish_sketch" }, "voice");
+        return result.ok
+          ? { ok: true, status: "completed", message: result.message }
+          : { ok: false, code: "not_available", message: result.message };
+      }
+      case "cancel_drawing": {
+        const result = handleDirectIntent({ type: "cancel_sketch" }, "voice");
+        return result.ok
+          ? { ok: true, status: "completed", message: result.message }
+          : { ok: false, code: "not_available", message: result.message };
+      }
+      case "zoom_in":
+      case "zoom_out":
+      case "set_zoom": {
+        const element = canvasViewportRef.current;
+        if (!element)
+          return {
+            ok: false,
+            code: "not_available",
+            message: "not available yet: canvas viewport is not mounted",
+          };
+        const measured = element.getBoundingClientRect();
+        const current = store.getState().viewport;
+        const scale =
+          input.action === "set_zoom"
+            ? input.scale!
+            : current.scale * (input.action === "zoom_in" ? 1.25 : 0.8);
+        setViewport(
+          zoomViewportAt(
+            current,
+            { x: measured.width / 2, y: measured.height / 2 },
+            scale,
+          ),
+        );
+        return {
+          ok: true,
+          status: "completed",
+          message: "Local canvas zoom applied.",
+        };
+      }
+      case "fit_all":
+        return fitWorkspaceObjects(objects)
+          ? { ok: true, status: "completed", message: "Canvas fitted to all active objects." }
+          : { ok: false, code: "not_available", message: "not available yet: add canvas content first" };
+      case "fit_selected":
+        return fitWorkspaceObjects(selectedObjects)
+          ? { ok: true, status: "completed", message: "Canvas fitted to the selected objects." }
+          : { ok: false, code: "not_available", message: "not available yet: select an object first" };
+      case "focus_selected":
+        if (!selectedObject || selectedObject.deletedAt)
+          return {
+            ok: false,
+            code: "not_available",
+            message: "not available yet: select an object first",
+          };
+        focusCanvasObject(selectedObject.id);
+        return {
+          ok: true,
+          status: "completed",
+          message: "Selected object focused in the local viewport.",
+        };
+      case "restore_view":
+        setViewport({ x: 0, y: 0, scale: 1 });
+        return {
+          ok: true,
+          status: "completed",
+          message: "Local canvas view restored.",
+        };
+    }
+  }
+
+  useEffect(() => {
+    workspaceControlHandlerRef.current = applyWorkspaceControl;
+  });
+
+  useEffect(() => {
+    if (!workspaceController) return;
+    return workspaceController.attach((input, signal, source) =>
+      workspaceControlHandlerRef.current(input, signal, source),
+    );
+  }, [workspaceController]);
+
   function startCanvasPan(event: ReactPointerEvent<HTMLDivElement>) {
     if (interactionPending) return;
     if (handInteractionMode === "draw") return;
@@ -3066,11 +3204,14 @@ export function CommandCanvasRoom({
                 inspectCanvas={(input, signal) => {
                   signal.throwIfAborted();
                   const state = store.getState();
-                  return projectCanvasState(
-                    state.canvas,
-                    state.selectedObjectId,
-                    input,
-                  ) as unknown as JsonValue;
+                  return {
+                    ...projectCanvasState(
+                      state.canvas,
+                      state.selectedObjectId,
+                      input,
+                    ),
+                    selectedObjectIds: state.selectedObjectIds,
+                  } as unknown as JsonValue;
                 }}
                 onActiveChange={setRealtimeVoiceActive}
                 onThoughtDraftChange={handleVoiceThoughtDraftChange}

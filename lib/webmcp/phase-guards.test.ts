@@ -48,6 +48,7 @@ describe("WebMCP phase availability", () => {
       "get_canvas_state",
       "create_object",
       "history_action",
+      "control_workspace",
     ]);
   });
 
@@ -80,6 +81,7 @@ describe("WebMCP phase availability", () => {
       "transform_sketch",
       "prepare_meeting_packet",
       "request_packet_send",
+      "control_workspace",
     ]);
   });
 });

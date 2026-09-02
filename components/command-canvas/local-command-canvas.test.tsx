@@ -38,13 +38,13 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
 
     render(<LocalCommandCanvas />);
 
-    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(11));
-    expect(screen.getByText("11 Site Tools registered")).toBeInTheDocument();
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(12));
+    expect(screen.getByText("12 Site Tools registered")).toBeInTheDocument();
     await user.click(
       screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
     );
     expect(
-      screen.getByText("11 Site Tools registered to this page"),
+      screen.getByText("12 Site Tools registered to this page"),
     ).toBeVisible();
     expect(
       screen.getByText("No Site Tool has been invoked on this page yet."),
@@ -61,6 +61,7 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
       "transform_sketch",
       "prepare_meeting_packet",
       "request_packet_send",
+      "control_workspace",
     ]);
 
     const createObject = registered.find((tool) => tool.name === "create_object");
@@ -114,13 +115,13 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
       configurable: true,
     });
 
-    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(11));
+    await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(12));
     act(() => {
       window.dispatchEvent(new Event("focus"));
       document.dispatchEvent(new Event("visibilitychange"));
     });
     await Promise.resolve();
-    expect(registerTool).toHaveBeenCalledTimes(11);
+    expect(registerTool).toHaveBeenCalledTimes(12);
     expect(signals.every((signal) => !signal.aborted)).toBe(true);
 
     view.unmount();
@@ -147,13 +148,13 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
       });
 
       await waitFor(
-        () => expect(registerTool).toHaveBeenCalledTimes(11),
+        () => expect(registerTool).toHaveBeenCalledTimes(12),
         { timeout: 1_500 },
       );
       view.unmount();
       expect(signals.every((signal) => signal.aborted)).toBe(true);
       await new Promise((resolve) => window.setTimeout(resolve, 1_100));
-      expect(registerTool).toHaveBeenCalledTimes(11);
+      expect(registerTool).toHaveBeenCalledTimes(12);
     },
     8_000,
   );
@@ -171,7 +172,7 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
       configurable: true,
     });
     const view = render(<LocalCommandCanvas />);
-    await waitFor(() => expect(oldRegisterTool).toHaveBeenCalledTimes(11));
+    await waitFor(() => expect(oldRegisterTool).toHaveBeenCalledTimes(12));
 
     const newRegisterTool = vi.fn(
       async (_tool: RegisteredWebMcpTool, options: { signal: AbortSignal }) => {
@@ -184,7 +185,7 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
     });
     act(() => window.dispatchEvent(new Event("focus")));
 
-    await waitFor(() => expect(newRegisterTool).toHaveBeenCalledTimes(11));
+    await waitFor(() => expect(newRegisterTool).toHaveBeenCalledTimes(12));
     expect(oldSignals.every((signal) => signal.aborted)).toBe(true);
     expect(newSignals.every((signal) => !signal.aborted)).toBe(true);
 

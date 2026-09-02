@@ -1169,6 +1169,7 @@ describe("canvas WebMCP adapters", () => {
         }),
       },
       signal,
+      "webmcp",
     );
     expect(result).toMatchObject({
       ok: true,
