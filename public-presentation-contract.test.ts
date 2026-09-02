@@ -84,4 +84,21 @@ describe("public presentation contract", () => {
     expect(readme).not.toMatch(/```mermaid/i);
     expect(readme).not.toMatch(/^\s*\|.*\|\s*$/m);
   });
+
+  it("resolves every local README Markdown link in the tracked release tree", () => {
+    const readme = read("README.md");
+    const tracked = new Set(trackedFiles());
+    const localLinks = Array.from(readme.matchAll(/\[[^\]]+\]\(([^)]+)\)/g))
+      .map((match) => match[1].trim())
+      .filter((href) => href !== "" && !href.startsWith("#"))
+      .filter((href) => !/^[a-z][a-z0-9+.-]*:/i.test(href))
+      .map((href) => href.split("#", 1)[0])
+      .map((href) => path.posix.normalize(href.replaceAll("\\\\", "/")));
+
+    const missing = localLinks.filter(
+      (href) => href.startsWith("../") || !tracked.has(href),
+    );
+
+    expect(missing).toEqual([]);
+  });
 });

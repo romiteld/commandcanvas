@@ -34,18 +34,8 @@ for (const viewport of supportedViewports) {
     await expect(canvas).toBeVisible();
     await expectViewportShell(page, shell, viewport);
 
-    const dock = page.getByRole("complementary", { name: "Object tools" });
-    const commandTrigger = page.getByRole("button", {
-      name: "Open ChatGPT Site Tools and activity drawer",
-    });
-    const systemTrigger = page.getByRole("button", { name: "Open system status" });
-    const activityTrigger = page.getByRole("button", {
-      name: "Open activity drawer",
-      exact: true,
-    });
-    for (const control of [dock, commandTrigger, systemTrigger, activityTrigger])
-      await expectInViewport(control, viewport);
-    await expectNoOverlap(dock, commandTrigger, `${viewport.label} dock/ChatGPT`);
+    const { dock, commandTrigger, systemTrigger } =
+      await expectPersistentControlsInBoundsAndDisjoint(page, viewport);
 
     const primaryDockButtons = dock.locator(".tool-dock-primary > button");
     await expect(primaryDockButtons).toHaveCount(5);
@@ -113,12 +103,44 @@ test("covers the compact-control breakpoint edges", async ({ page }, testInfo) =
       page.getByRole("main", { name: "Spatial command surface" }),
       viewport,
     );
-    await expectInViewport(
-      page.getByRole("complementary", { name: "Object tools" }),
-      viewport,
-    );
+    await expectPersistentControlsInBoundsAndDisjoint(page, viewport);
   }
 });
+
+async function expectPersistentControlsInBoundsAndDisjoint(
+  page: Page,
+  viewport: { width: number; height: number; label?: string },
+) {
+  const dock = page.getByRole("complementary", { name: "Object tools" });
+  const commandTrigger = page.getByRole("button", {
+    name: "Open ChatGPT Site Tools and activity drawer",
+  });
+  const systemTrigger = page.getByRole("button", { name: "Open system status" });
+  const activityTrigger = page.getByRole("button", {
+    name: "Open activity drawer",
+    exact: true,
+  });
+  const controls = [
+    ["dock", dock],
+    ["ChatGPT", commandTrigger],
+    ["System", systemTrigger],
+    ["Activity", activityTrigger],
+  ] as const;
+  const label = viewport.label ?? `${viewport.width}x${viewport.height}`;
+
+  for (const [, control] of controls)
+    await expectInViewport(control, viewport);
+
+  for (let first = 0; first < controls.length; first += 1)
+    for (let second = first + 1; second < controls.length; second += 1)
+      await expectNoOverlap(
+        controls[first][1],
+        controls[second][1],
+        `${label} ${controls[first][0]}/${controls[second][0]}`,
+      );
+
+  return { dock, commandTrigger, systemTrigger };
+}
 
 async function expectNoHorizontalOverflow(page: Page, label: string) {
   const geometry = await page.evaluate(() => ({
