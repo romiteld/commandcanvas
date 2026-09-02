@@ -28,6 +28,14 @@ const defaultDependencies: MediaPipeHandDetectorDependencies = {
     HandLandmarker.createFromOptions(fileset, options),
 };
 
+// Keep acquisition at MediaPipe's documented defaults. Gesture safety does
+// not depend on these detector gates: keypoint confidence, physical geometry,
+// calibrated temporal votes, target presence, and the canonical state machine
+// still decide whether an observation may become an intent. Raising these
+// values discarded moving, edge, and partially visible hands before those
+// downstream refusal gates could evaluate them.
+const MEDIA_PIPE_ACQUISITION_CONFIDENCE = 0.5;
+
 export async function loadMediaPipeHandDetector(
   options: HandDetectorLoadOptions,
   dependencies: MediaPipeHandDetectorDependencies = defaultDependencies,
@@ -41,9 +49,9 @@ export async function loadMediaPipeHandDetector(
     baseOptions: { modelAssetPath: options.modelAssetUrl },
     runningMode: options.runningMode,
     numHands: options.numHands,
-    minHandDetectionConfidence: 0.75,
-    minHandPresenceConfidence: 0.75,
-    minTrackingConfidence: 0.7,
+    minHandDetectionConfidence: MEDIA_PIPE_ACQUISITION_CONFIDENCE,
+    minHandPresenceConfidence: MEDIA_PIPE_ACQUISITION_CONFIDENCE,
+    minTrackingConfidence: MEDIA_PIPE_ACQUISITION_CONFIDENCE,
   });
   return {
     async detectForVideo(frame, timestamp) {
