@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Sequence
 
+from .archive_dataset import DatasetArchiveError, archive_dataset
 from .canonical import canonical_json_bytes, write_canonical_json
 from .annotation_workbench import (
     AnnotationWorkbenchError,
@@ -17,6 +18,7 @@ from .annotation_workbench import (
 )
 from .dataset import DatasetValidationError, validate_dataset
 from .onnx_contract import OnnxContractError, validate_onnx_contract
+from .prepare_dataset import DatasetPreparationError, prepare_dataset
 from .runpod import (
     LaunchInputs,
     LaunchRefused,
@@ -58,6 +60,19 @@ def _parser() -> argparse.ArgumentParser:
     dataset.add_argument("--dataset-root", required=True, type=Path)
     dataset.add_argument("--manifest", required=True, type=Path)
     dataset.add_argument("--output", required=True, type=Path)
+
+    prepare = subcommands.add_parser("prepare-dataset")
+    prepare.add_argument("--capture-root", required=True, type=Path)
+    prepare.add_argument("--session-map", required=True, type=Path)
+    prepare.add_argument("--labels-root", required=True, type=Path)
+    prepare.add_argument("--output-dir", required=True, type=Path)
+
+    archive = subcommands.add_parser("archive-dataset")
+    archive.add_argument("--dataset-root", required=True, type=Path)
+    archive.add_argument("--manifest", required=True, type=Path)
+    archive.add_argument("--dataset-receipt", required=True, type=Path)
+    archive.add_argument("--output", required=True, type=Path)
+    archive.add_argument("--archive-receipt", required=True, type=Path)
 
     spec = subcommands.add_parser("build-training-spec")
     spec.add_argument("--receipt", required=True, type=Path)
@@ -128,6 +143,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "validate-dataset":
             result = validate_dataset(arguments.dataset_root, arguments.manifest)
             write_canonical_json(arguments.output, result)
+        elif arguments.command == "prepare-dataset":
+            result = prepare_dataset(
+                capture_root=arguments.capture_root,
+                session_map_path=arguments.session_map,
+                labels_root=arguments.labels_root,
+                output_dir=arguments.output_dir,
+            )
+        elif arguments.command == "archive-dataset":
+            result = archive_dataset(
+                dataset_root=arguments.dataset_root,
+                manifest_path=arguments.manifest,
+                dataset_receipt_path=arguments.dataset_receipt,
+                output_path=arguments.output,
+                archive_receipt_path=arguments.archive_receipt,
+            )
         elif arguments.command == "build-training-spec":
             receipt = json.loads(arguments.receipt.read_text(encoding="utf-8"))
             result = build_training_spec(receipt)
@@ -182,6 +212,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:  # pragma: no cover - argparse enforces the choices
             raise AssertionError(arguments.command)
     except (
+        DatasetArchiveError,
+        DatasetPreparationError,
         DatasetValidationError,
         AnnotationWorkbenchError,
         LaunchRefused,

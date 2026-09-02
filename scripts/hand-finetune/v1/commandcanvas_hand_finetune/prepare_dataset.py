@@ -1,0 +1,799 @@
+"""Bridge local Vision Lab recordings into the strict training dataset contract."""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+import shutil
+import subprocess
+import tempfile
+from datetime import datetime
+from pathlib import Path, PurePosixPath
+from typing import Any, Protocol, Sequence
+from uuid import UUID
+
+from PIL import Image, UnidentifiedImageError
+
+from .canonical import sha256_file, write_canonical_json
+from .dataset import HARD_SUBSETS, SPLITS, DatasetValidationError, validate_dataset
+
+
+SESSION_MAP_SCHEMA = "commandcanvas.hand-session-map/v1"
+DATASET_CONSENT_VERSION = "commandcanvas-owner-training/v1"
+VISION_CONSENT_VERSION = "vision-lab-consent-v1"
+VISION_PROTOCOL = {"id": "commandcanvas-hand-finetune", "version": 1}
+VISION_CAPTURE_TYPES = {
+    "acquisition",
+    "drawing",
+    "pinch",
+    "edges-corners",
+    "two-hand-transforms",
+    "throws",
+    "difficult-conditions",
+    "negative-no-hand",
+}
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+MIN_CADENCE_MS = 20
+MAX_CADENCE_MS = 5_000
+MAX_FRAMES_PER_SESSION = 100_000
+
+
+class DatasetPreparationError(ValueError):
+    """Raised when source evidence cannot safely become a training dataset."""
+
+
+class CommandRunner(Protocol):
+    def __call__(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]: ...
+
+
+def _default_command_runner(
+    command: Sequence[str],
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(item) for item in command],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise DatasetPreparationError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _load_strict_json(path: Path, description: str) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise DatasetPreparationError(
+            f"{description} must be an existing non-symlink regular file"
+        )
+    try:
+        value = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_strict_object
+        )
+    except DatasetPreparationError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise DatasetPreparationError(
+            f"{description} could not be read as strict JSON: {error}"
+        ) from error
+    if not isinstance(value, dict):
+        raise DatasetPreparationError(f"{description} must be a JSON object")
+    return value
+
+
+def _require_exact_keys(
+    value: Any, expected: set[str], description: str
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise DatasetPreparationError(f"{description} must be an object")
+    missing = expected - value.keys()
+    unknown = value.keys() - expected
+    if missing or unknown:
+        details: list[str] = []
+        if missing:
+            details.append(f"missing {', '.join(sorted(missing))}")
+        if unknown:
+            details.append(f"unsupported {', '.join(sorted(unknown))}")
+        raise DatasetPreparationError(f"{description} fields: {'; '.join(details)}")
+    return value
+
+
+def _canonical_uuid(value: Any, description: str) -> str:
+    if not isinstance(value, str):
+        raise DatasetPreparationError(f"{description} must be a canonical UUID")
+    try:
+        parsed = UUID(value)
+    except ValueError as error:
+        raise DatasetPreparationError(
+            f"{description} must be a canonical UUID"
+        ) from error
+    if value != str(parsed):
+        raise DatasetPreparationError(
+            f"{description} must be a lowercase canonical UUID"
+        )
+    return value
+
+
+def _nonempty_string(value: Any, description: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise DatasetPreparationError(f"{description} must be a nonempty string")
+    return value
+
+
+def _timestamp(value: Any, description: str) -> datetime:
+    raw = _nonempty_string(value, description)
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise DatasetPreparationError(f"{description} must be ISO-8601") from error
+    if parsed.tzinfo is None:
+        raise DatasetPreparationError(f"{description} must include a timezone")
+    return parsed
+
+
+def _root(path: Path, description: str) -> Path:
+    path = Path(path)
+    if path.is_symlink() or not path.is_dir():
+        raise DatasetPreparationError(
+            f"{description} must be an existing non-symlink directory"
+        )
+    return path.resolve(strict=True)
+
+
+def _safe_relative(value: Any, description: str) -> PurePosixPath:
+    if not isinstance(value, str):
+        raise DatasetPreparationError(f"{description} must be a safe relative path")
+    relative = PurePosixPath(value)
+    if (
+        not value
+        or "\\" in value
+        or relative.is_absolute()
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise DatasetPreparationError(f"{description} must be a safe relative path")
+    return relative
+
+
+def _refuse_symlink_components(
+    root: Path, relative: PurePosixPath, description: str
+) -> None:
+    candidate = root
+    for part in relative.parts:
+        candidate /= part
+        if candidate.is_symlink():
+            raise DatasetPreparationError(f"{description} may not traverse a symlink")
+
+
+def _regular_file(root: Path, value: Any, description: str) -> tuple[Path, str]:
+    relative = _safe_relative(value, description)
+    _refuse_symlink_components(root, relative, description)
+    candidate = root.joinpath(*relative.parts)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise DatasetPreparationError(f"{description} does not exist") from error
+    if candidate.is_symlink() or not resolved.is_file() or root not in resolved.parents:
+        raise DatasetPreparationError(
+            f"{description} must resolve to a regular file inside its declared root"
+        )
+    return resolved, relative.as_posix()
+
+
+def _regular_directory(root: Path, value: Any, description: str) -> Path:
+    relative = _safe_relative(value, description)
+    _refuse_symlink_components(root, relative, description)
+    candidate = root.joinpath(*relative.parts)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise DatasetPreparationError(f"{description} does not exist") from error
+    if candidate.is_symlink() or not resolved.is_dir() or root not in resolved.parents:
+        raise DatasetPreparationError(
+            f"{description} must resolve to a directory inside its declared root"
+        )
+    return resolved
+
+
+def _probe_video(
+    source: Path, command_runner: CommandRunner
+) -> tuple[int, int, float, float, str]:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name,width,height,avg_frame_rate:format=duration",
+        "-of",
+        "json",
+        str(source),
+    ]
+    completed = command_runner(command)
+    if completed.returncode != 0:
+        raise DatasetPreparationError(
+            f"ffprobe failed for {source.name}: {completed.stderr.strip()}"
+        )
+    try:
+        payload = json.loads(completed.stdout, object_pairs_hook=_strict_object)
+        streams = payload["streams"]
+        stream = streams[0]
+        width = int(stream["width"])
+        height = int(stream["height"])
+        duration = float(payload["format"]["duration"])
+        numerator, denominator = str(stream["avg_frame_rate"]).split("/", 1)
+        frame_rate = float(numerator) / float(denominator)
+        codec = str(stream["codec_name"])
+    except (
+        DatasetPreparationError,
+        KeyError,
+        IndexError,
+        TypeError,
+        ValueError,
+        ZeroDivisionError,
+    ) as error:
+        raise DatasetPreparationError(
+            f"ffprobe returned an invalid video contract for {source.name}"
+        ) from error
+    if (
+        not isinstance(streams, list)
+        or len(streams) != 1
+        or width <= 0
+        or height <= 0
+        or not math.isfinite(duration)
+        or duration <= 0
+        or not math.isfinite(frame_rate)
+        or frame_rate <= 0
+        or codec not in {"vp8", "vp9"}
+    ):
+        raise DatasetPreparationError(
+            f"ffprobe returned an unsupported video contract for {source.name}"
+        )
+    return width, height, duration, frame_rate, codec
+
+
+def _extract_png(
+    source: Path,
+    timestamp_ms: int,
+    destination: Path,
+    command_runner: CommandRunner,
+) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(source),
+        "-ss",
+        f"{timestamp_ms / 1000:.3f}",
+        "-map",
+        "0:v:0",
+        "-frames:v",
+        "1",
+        "-an",
+        "-sn",
+        "-dn",
+        "-map_metadata",
+        "-1",
+        "-threads",
+        "1",
+        "-c:v",
+        "png",
+        "-compression_level",
+        "9",
+        "-y",
+        str(destination),
+    ]
+    completed = command_runner(command)
+    if completed.returncode != 0:
+        raise DatasetPreparationError(
+            f"ffmpeg failed for {source.name} at {timestamp_ms}ms: "
+            f"{completed.stderr.strip()}"
+        )
+    if destination.is_symlink() or not destination.is_file():
+        raise DatasetPreparationError(
+            f"ffmpeg did not create the requested PNG at {timestamp_ms}ms"
+        )
+
+
+def _asset(path: Path, root: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(root).as_posix(),
+        "byteSize": path.stat().st_size,
+        "sha256": sha256_file(path),
+    }
+
+
+def _image_asset(path: Path, root: Path) -> dict[str, Any]:
+    try:
+        with Image.open(path) as decoded:
+            decoded.verify()
+        with Image.open(path) as decoded:
+            width, height = decoded.size
+    except (OSError, UnidentifiedImageError) as error:
+        raise DatasetPreparationError(
+            f"extracted frame is not a valid image: {path}"
+        ) from error
+    return {**_asset(path, root), "width": width, "height": height}
+
+
+def _validate_categories(capture_type: str, value: Any, description: str) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or not value
+        or any(not isinstance(item, str) or item not in HARD_SUBSETS for item in value)
+        or len(value) != len(set(value))
+        or value != sorted(value)
+    ):
+        raise DatasetPreparationError(
+            f"{description} must be a sorted unique list of supported categories"
+        )
+    categories = list(value)
+    if "negative" in categories and categories != ["negative"]:
+        raise DatasetPreparationError(
+            f"{description} cannot combine negative with positive categories"
+        )
+    required_category = {
+        "drawing": "drawing",
+        "pinch": "pinch",
+        "edges-corners": "edge",
+        "two-hand-transforms": "two_hand",
+    }.get(capture_type)
+    if capture_type == "negative-no-hand" and categories != ["negative"]:
+        raise DatasetPreparationError(
+            f"{description} must be exactly negative for negative-no-hand capture"
+        )
+    if capture_type != "negative-no-hand" and categories == ["negative"]:
+        raise DatasetPreparationError(
+            f"{description} may use negative only for negative-no-hand capture"
+        )
+    if required_category and required_category not in categories:
+        raise DatasetPreparationError(
+            f"{description} must include {required_category} for {capture_type} capture"
+        )
+    return categories
+
+
+def _validate_companion(
+    value: dict[str, Any], expected_session_id: str, source: Path
+) -> tuple[str, int, int, float, datetime, datetime]:
+    _require_exact_keys(
+        value,
+        {
+            "schemaVersion",
+            "sessionId",
+            "captureType",
+            "startedAt",
+            "stoppedAt",
+            "media",
+            "mirrorDisplay",
+            "consentVersion",
+            "protocol",
+            "videoSha256",
+        },
+        "Vision Lab companion manifest",
+    )
+    if isinstance(value["schemaVersion"], bool) or value["schemaVersion"] != 1:
+        raise DatasetPreparationError("Vision Lab schemaVersion must be 1")
+    if value["sessionId"] != expected_session_id:
+        raise DatasetPreparationError(
+            "Vision Lab sessionId does not match the session map"
+        )
+    capture_type = value["captureType"]
+    if not isinstance(capture_type, str) or capture_type not in VISION_CAPTURE_TYPES:
+        raise DatasetPreparationError("Vision Lab captureType is unsupported")
+    started = _timestamp(value["startedAt"], "Vision Lab startedAt")
+    stopped = _timestamp(value["stoppedAt"], "Vision Lab stoppedAt")
+    if stopped <= started:
+        raise DatasetPreparationError("Vision Lab stoppedAt must be after startedAt")
+    media = _require_exact_keys(
+        value["media"],
+        {"mimeType", "width", "height", "frameRate", "facingMode"},
+        "Vision Lab media",
+    )
+    mime_type = media["mimeType"]
+    if not isinstance(mime_type, str) or not mime_type.startswith("video/webm"):
+        raise DatasetPreparationError("Vision Lab media must be WebM")
+    width = media["width"]
+    height = media["height"]
+    frame_rate = media["frameRate"]
+    if (
+        isinstance(width, bool)
+        or not isinstance(width, int)
+        or width <= 0
+        or isinstance(height, bool)
+        or not isinstance(height, int)
+        or height <= 0
+        or isinstance(frame_rate, bool)
+        or not isinstance(frame_rate, (int, float))
+        or not math.isfinite(frame_rate)
+        or frame_rate <= 0
+    ):
+        raise DatasetPreparationError(
+            "Vision Lab media dimensions and frame rate are invalid"
+        )
+    if not isinstance(media["facingMode"], str) or not media["facingMode"]:
+        raise DatasetPreparationError("Vision Lab media facingMode must be nonempty")
+    if not isinstance(value["mirrorDisplay"], bool):
+        raise DatasetPreparationError("Vision Lab mirrorDisplay must be boolean")
+    if value["consentVersion"] != VISION_CONSENT_VERSION:
+        raise DatasetPreparationError("Vision Lab consent version is not approved")
+    protocol = _require_exact_keys(
+        value["protocol"], {"id", "version"}, "Vision Lab protocol"
+    )
+    if (
+        protocol["id"] != VISION_PROTOCOL["id"]
+        or isinstance(protocol["version"], bool)
+        or protocol["version"] != VISION_PROTOCOL["version"]
+    ):
+        raise DatasetPreparationError("Vision Lab protocol does not match")
+    declared_sha = value["videoSha256"]
+    if not isinstance(declared_sha, str) or not SHA256_PATTERN.fullmatch(declared_sha):
+        raise DatasetPreparationError("Vision Lab video SHA-256 is invalid")
+    if sha256_file(source) != declared_sha:
+        raise DatasetPreparationError(
+            "Vision Lab video SHA-256 does not match raw WebM"
+        )
+    return capture_type, width, height, float(frame_rate), started, stopped
+
+
+def _validate_session_map(
+    value: dict[str, Any],
+) -> tuple[str, str, int, list[dict[str, Any]]]:
+    _require_exact_keys(
+        value,
+        {"schemaVersion", "datasetId", "createdAt", "actorId", "cadenceMs", "sessions"},
+        "session map",
+    )
+    if value["schemaVersion"] != SESSION_MAP_SCHEMA:
+        raise DatasetPreparationError(
+            f"session map schemaVersion must be {SESSION_MAP_SCHEMA}"
+        )
+    dataset_id = _canonical_uuid(value["datasetId"], "session map datasetId")
+    _timestamp(value["createdAt"], "session map createdAt")
+    actor_id = _nonempty_string(value["actorId"], "session map actorId")
+    cadence = value["cadenceMs"]
+    if (
+        isinstance(cadence, bool)
+        or not isinstance(cadence, int)
+        or not MIN_CADENCE_MS <= cadence <= MAX_CADENCE_MS
+    ):
+        raise DatasetPreparationError(
+            f"session map cadenceMs must be between {MIN_CADENCE_MS} and {MAX_CADENCE_MS}"
+        )
+    sessions = value["sessions"]
+    if not isinstance(sessions, list) or not sessions:
+        raise DatasetPreparationError("session map sessions must be a nonempty array")
+    return dataset_id, actor_id, cadence, sessions
+
+
+def _check_destination(output_dir: Path, roots: Sequence[Path]) -> Path:
+    output_dir = Path(output_dir)
+    if output_dir.exists() or output_dir.is_symlink():
+        raise DatasetPreparationError("output directory must not already exist")
+    parent = output_dir.parent
+    if parent.is_symlink() or not parent.is_dir():
+        raise DatasetPreparationError(
+            "output parent must be an existing non-symlink directory"
+        )
+    resolved = output_dir.resolve(strict=False)
+    for root in roots:
+        if resolved == root or root in resolved.parents:
+            raise DatasetPreparationError(
+                "output directory must be outside input roots"
+            )
+    return resolved
+
+
+def prepare_dataset(
+    *,
+    capture_root: Path,
+    session_map_path: Path,
+    labels_root: Path,
+    output_dir: Path,
+    command_runner: CommandRunner = _default_command_runner,
+) -> dict[str, Any]:
+    """Validate evidence, extract deterministic PNGs, and publish one dataset."""
+
+    capture_root = _root(capture_root, "capture root")
+    labels_root = _root(labels_root, "labels root")
+    destination = _check_destination(output_dir, (capture_root, labels_root))
+    session_map = _load_strict_json(Path(session_map_path), "session map")
+    dataset_id, actor_id, cadence_ms, mapped_sessions = _validate_session_map(
+        session_map
+    )
+
+    parsed_sessions: list[dict[str, Any]] = []
+    identifiers: dict[str, set[str]] = {
+        "visionSessionId": set(),
+        "datasetSessionId": set(),
+        "videoPath": set(),
+        "manifestPath": set(),
+        "labelDir": set(),
+    }
+    capture_group_splits: dict[str, str] = {}
+    for index, raw_session in enumerate(mapped_sessions):
+        description = f"session map sessions[{index}]"
+        session = _require_exact_keys(
+            raw_session,
+            {
+                "visionSessionId",
+                "datasetSessionId",
+                "captureGroupId",
+                "split",
+                "categories",
+                "videoPath",
+                "manifestPath",
+                "labelDir",
+                "annotation",
+            },
+            description,
+        )
+        vision_session_id = _nonempty_string(
+            session["visionSessionId"], f"{description}.visionSessionId"
+        )
+        dataset_session_id = _canonical_uuid(
+            session["datasetSessionId"], f"{description}.datasetSessionId"
+        )
+        capture_group_id = _canonical_uuid(
+            session["captureGroupId"], f"{description}.captureGroupId"
+        )
+        split = session["split"]
+        if split not in SPLITS:
+            raise DatasetPreparationError(f"{description}.split is unsupported")
+        prior_split = capture_group_splits.get(capture_group_id)
+        if prior_split is not None and prior_split != split:
+            raise DatasetPreparationError(
+                f"captureGroupId {capture_group_id} leaks across split "
+                f"{prior_split} and {split}"
+            )
+        capture_group_splits[capture_group_id] = split
+        source, video_relative = _regular_file(
+            capture_root, session["videoPath"], f"{description}.videoPath"
+        )
+        companion_path, manifest_relative = _regular_file(
+            capture_root, session["manifestPath"], f"{description}.manifestPath"
+        )
+        label_directory = _regular_directory(
+            labels_root, session["labelDir"], f"{description}.labelDir"
+        )
+        label_relative = _safe_relative(
+            session["labelDir"], f"{description}.labelDir"
+        ).as_posix()
+        annotation = _require_exact_keys(
+            session["annotation"],
+            {"method", "reviewed", "tool", "toolVersion", "modelSha256"},
+            f"{description}.annotation",
+        )
+        if not isinstance(annotation["method"], str) or annotation["method"] not in {
+            "manual",
+            "model_assisted",
+        }:
+            raise DatasetPreparationError(
+                f"{description}.annotation.method must be manual or model_assisted"
+            )
+        if not isinstance(annotation["reviewed"], bool):
+            raise DatasetPreparationError(
+                f"{description}.annotation.reviewed must be boolean"
+            )
+        _nonempty_string(annotation["tool"], f"{description}.annotation.tool")
+        _nonempty_string(
+            annotation["toolVersion"], f"{description}.annotation.toolVersion"
+        )
+        model_sha = annotation["modelSha256"]
+        if annotation["method"] == "model_assisted":
+            if not isinstance(model_sha, str) or not SHA256_PATTERN.fullmatch(
+                model_sha
+            ):
+                raise DatasetPreparationError(
+                    f"{description}.annotation.modelSha256 must be a SHA-256 digest"
+                )
+        elif model_sha is not None:
+            raise DatasetPreparationError(
+                f"{description}.annotation.modelSha256 must be null for manual labels"
+            )
+        if split == "holdout" and (
+            annotation["method"] != "manual" or annotation["reviewed"] is not True
+        ):
+            raise DatasetPreparationError(
+                "holdout annotation must remain manual and reviewed"
+            )
+
+        companion = _load_strict_json(companion_path, "Vision Lab companion manifest")
+        (
+            capture_type,
+            declared_width,
+            declared_height,
+            declared_rate,
+            started,
+            stopped,
+        ) = _validate_companion(companion, vision_session_id, source)
+        categories = _validate_categories(
+            capture_type, session["categories"], f"{description}.categories"
+        )
+        width, height, duration_seconds, actual_rate, codec = _probe_video(
+            source, command_runner
+        )
+        if (width, height) != (declared_width, declared_height):
+            raise DatasetPreparationError(
+                f"Vision Lab dimensions {(declared_width, declared_height)!r} do not "
+                f"match ffprobe dimensions {(width, height)!r}"
+            )
+        if abs(actual_rate - declared_rate) > max(1.0, declared_rate * 0.05):
+            raise DatasetPreparationError(
+                "Vision Lab frame rate does not match ffprobe frame rate"
+            )
+        declared_duration = (stopped - started).total_seconds()
+        if abs(duration_seconds - declared_duration) > max(
+            0.5, declared_duration * 0.15
+        ):
+            raise DatasetPreparationError(
+                "Vision Lab duration does not match ffprobe duration"
+            )
+        mime_type = str(companion["media"]["mimeType"])
+        if "codecs=vp8" in mime_type and codec != "vp8":
+            raise DatasetPreparationError(
+                "Vision Lab VP8 declaration does not match ffprobe"
+            )
+        if "codecs=vp9" in mime_type and codec != "vp9":
+            raise DatasetPreparationError(
+                "Vision Lab VP9 declaration does not match ffprobe"
+            )
+
+        for field, value in {
+            "visionSessionId": vision_session_id,
+            "datasetSessionId": dataset_session_id,
+            "videoPath": video_relative,
+            "manifestPath": manifest_relative,
+            "labelDir": label_relative,
+        }.items():
+            if value in identifiers[field]:
+                raise DatasetPreparationError(f"duplicate {field}: {value}")
+            identifiers[field].add(value)
+
+        duration_ms = int(round(duration_seconds * 1000))
+        timestamps = list(range(0, max(1, duration_ms), cadence_ms))
+        if not timestamps or len(timestamps) > MAX_FRAMES_PER_SESSION:
+            raise DatasetPreparationError(
+                "frame extraction count is outside safe bounds"
+            )
+        parsed_sessions.append(
+            {
+                "visionSessionId": vision_session_id,
+                "datasetSessionId": dataset_session_id,
+                "captureGroupId": capture_group_id,
+                "split": split,
+                "categories": categories,
+                "source": source,
+                "sourceSha256": sha256_file(source),
+                "labelDirectory": label_directory,
+                "annotation": dict(annotation),
+                "width": width,
+                "height": height,
+                "timestamps": timestamps,
+            }
+        )
+
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}.", dir=destination.parent)
+    )
+    try:
+        manifest_sessions: list[dict[str, Any]] = []
+        split_groups: dict[str, set[str]] = {split: set() for split in SPLITS}
+        for session in sorted(
+            parsed_sessions, key=lambda item: item["datasetSessionId"]
+        ):
+            session_id = session["datasetSessionId"]
+            split_groups[session["split"]].add(session["captureGroupId"])
+            source_destination = staging / "videos" / f"{session_id}.webm"
+            source_destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(session["source"], source_destination)
+            if sha256_file(session["source"]) != session["sourceSha256"]:
+                raise DatasetPreparationError(
+                    "raw WebM changed during frame extraction"
+                )
+            if sha256_file(source_destination) != session["sourceSha256"]:
+                raise DatasetPreparationError(
+                    "copied raw WebM does not match its source"
+                )
+
+            expected_labels = {
+                f"frame-{timestamp:010d}.txt" for timestamp in session["timestamps"]
+            }
+            actual_labels: set[str] = set()
+            for candidate in session["labelDirectory"].iterdir():
+                if candidate.is_symlink() or not candidate.is_file():
+                    raise DatasetPreparationError(
+                        "corrected label directory may contain only regular label files"
+                    )
+                actual_labels.add(candidate.name)
+            if actual_labels != expected_labels:
+                raise DatasetPreparationError(
+                    "corrected label files must exactly match extracted frame timestamps"
+                )
+
+            frames: list[dict[str, Any]] = []
+            for timestamp_ms in session["timestamps"]:
+                frame_id = f"frame-{timestamp_ms:010d}"
+                image_path = staging / "images" / session_id / f"{frame_id}.png"
+                label_path = staging / "labels" / session_id / f"{frame_id}.txt"
+                _extract_png(
+                    session["source"], timestamp_ms, image_path, command_runner
+                )
+                label_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(
+                    session["labelDirectory"] / f"{frame_id}.txt", label_path
+                )
+                image_asset = _image_asset(image_path, staging)
+                if (image_asset["width"], image_asset["height"]) != (
+                    session["width"],
+                    session["height"],
+                ):
+                    raise DatasetPreparationError(
+                        "extracted frame dimensions do not match ffprobe video dimensions"
+                    )
+                frames.append(
+                    {
+                        "frameId": frame_id,
+                        "timestampMs": timestamp_ms,
+                        "categories": session["categories"],
+                        "image": image_asset,
+                        "label": _asset(label_path, staging),
+                    }
+                )
+            if sha256_file(session["source"]) != session["sourceSha256"]:
+                raise DatasetPreparationError(
+                    "raw WebM changed during frame extraction"
+                )
+            manifest_sessions.append(
+                {
+                    "sessionId": session_id,
+                    "captureGroupId": session["captureGroupId"],
+                    "actorId": actor_id,
+                    "captureCategories": session["categories"],
+                    "source": {
+                        "kind": "raw_camera",
+                        "overlayDerived": False,
+                        **_asset(source_destination, staging),
+                        "width": session["width"],
+                        "height": session["height"],
+                        "mimeType": "video/webm",
+                    },
+                    "annotation": session["annotation"],
+                    "frames": frames,
+                }
+            )
+
+        manifest = {
+            "schemaVersion": "commandcanvas.hand-dataset/v1",
+            "datasetId": dataset_id,
+            "createdAt": session_map["createdAt"],
+            "consent": {"approved": True, "version": DATASET_CONSENT_VERSION},
+            "keypointOrder": "mediapipe-hand-21",
+            "classNames": ["hand"],
+            "splits": {
+                split: sorted(split_groups[split]) for split in sorted(split_groups)
+            },
+            "sessions": manifest_sessions,
+        }
+        manifest_path = staging / "dataset-manifest.json"
+        write_canonical_json(manifest_path, manifest)
+        try:
+            receipt = validate_dataset(staging, manifest_path)
+        except DatasetValidationError as error:
+            raise DatasetPreparationError(str(error)) from error
+        write_canonical_json(staging / "dataset-receipt.json", receipt)
+        staging.rename(destination)
+        return receipt
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise

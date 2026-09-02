@@ -103,3 +103,41 @@ canonical manifest, Vision Lab session identities, source-adapter digest, and
 every edit receipt. The receipt's bridge handoff is an adapter seam, not a claim
 that the v2 bridge has run. It proves intermediate dataset validation only and
 deliberately remains `productionEligible: false`.
+
+## Vision Lab dataset bridge
+
+Materialize a dataset only from locally downloaded Vision Lab WebM files,
+their companion manifests, an explicit session/split map, and reviewed YOLO
+labels:
+
+```sh
+PYTHONPATH=scripts/hand-finetune/v1 python3 -m commandcanvas_hand_finetune \
+  prepare-dataset \
+  --capture-root /private/captures \
+  --session-map /private/session-map.json \
+  --labels-root /private/corrected-labels \
+  --output-dir /private/dataset-v1
+```
+
+`prepare-dataset` verifies each raw WebM digest, Vision Lab consent and protocol,
+the ffprobe dimensions/duration, capture-group split isolation, and the exact
+corrected-label set before publishing a canonical Task 2 manifest and receipt.
+Frame extraction writes PNGs at the map's explicit cadence; the raw WebM is
+copied byte-for-byte and is never replaced or transcoded.
+
+Create a portable, deterministic archive only after that dataset revalidates:
+
+```sh
+PYTHONPATH=scripts/hand-finetune/v1 python3 -m commandcanvas_hand_finetune \
+  archive-dataset \
+  --dataset-root /private/dataset-v1 \
+  --manifest /private/dataset-v1/dataset-manifest.json \
+  --dataset-receipt /private/dataset-v1/dataset-receipt.json \
+  --output /private/dataset-v1.tar \
+  --archive-receipt /private/dataset-v1-archive-receipt.json
+```
+
+The archive contains only the validated sources, extracted images, corrected
+labels, manifest, and dataset receipt. It uses sorted POSIX member names and
+fixed metadata, then re-extracts and revalidates itself before publishing its
+archive receipt.
