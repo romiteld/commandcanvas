@@ -34,7 +34,84 @@ export interface VisionLabEnvironment {
   now: () => Date;
   createSessionId: () => string;
   sha256: (blob: Blob) => Promise<string | null>;
-  download: (name: string, blob: Blob) => void;
+  download: (name: string, blob: Blob) => void | Promise<void>;
+}
+
+interface VisionLabWritableFile {
+  write(blob: Blob): Promise<void>;
+  close(): Promise<void>;
+}
+
+interface VisionLabFileHandle {
+  createWritable(): Promise<VisionLabWritableFile>;
+}
+
+interface VisionLabDownloadBrowser {
+  showSaveFilePicker?: (options: {
+    suggestedName: string;
+    types: Array<{
+      description: string;
+      accept: Record<string, string[]>;
+    }>;
+  }) => Promise<VisionLabFileHandle>;
+  createObjectURL?: (blob: Blob) => string;
+  revokeObjectURL?: (url: string) => void;
+  document?: Document;
+  setTimeout?: typeof globalThis.setTimeout;
+}
+
+function downloadType(
+  name: string,
+): { description: string; accept: Record<string, string[]> } {
+  if (name.toLowerCase().endsWith(".webm"))
+    return {
+      description: "Vision Lab WebM recording",
+      accept: { "video/webm": [".webm"] },
+    };
+  return {
+    description: "Vision Lab JSON manifest",
+    accept: { "application/json": [".json"] },
+  };
+}
+
+export async function downloadVisionLabBlob(
+  name: string,
+  blob: Blob,
+  browser: VisionLabDownloadBrowser = {},
+): Promise<void> {
+  const picker =
+    browser.showSaveFilePicker ??
+    (globalThis as typeof globalThis & {
+      showSaveFilePicker?: VisionLabDownloadBrowser["showSaveFilePicker"];
+    }).showSaveFilePicker;
+  if (picker) {
+    try {
+      const handle = await picker({ suggestedName: name, types: [downloadType(name)] });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      // Embedded browsers can expose the picker while refusing it. The
+      // document-attached download remains the compatibility fallback.
+    }
+  }
+
+  const currentDocument = browser.document ?? globalThis.document;
+  const createObjectURL = browser.createObjectURL ?? URL.createObjectURL.bind(URL);
+  const revokeObjectURL = browser.revokeObjectURL ?? URL.revokeObjectURL.bind(URL);
+  const schedule = browser.setTimeout ?? globalThis.setTimeout.bind(globalThis);
+  const url = createObjectURL(blob);
+  const anchor = currentDocument.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  anchor.rel = "noopener";
+  anchor.style.display = "none";
+  currentDocument.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  schedule(() => revokeObjectURL(url), 60_000);
 }
 
 interface ActiveCapture {
@@ -316,12 +393,12 @@ export function VisionLabCapture({
   }, [cancelCapture, captureType, environment, isCurrent, prepareCompletedCapture, state]);
 
   const downloadCompleted = useCallback(
-    (kind: "video" | "manifest") => {
+    async (kind: "video" | "manifest") => {
       const capture = activeCaptureRef.current;
       if (!capture || !capture.video || !capture.manifest || !isCurrent(capture.generation, capture)) return;
       try {
-        if (kind === "video") environment.download(`${capture.sessionId}.webm`, capture.video);
-        else environment.download(
+        if (kind === "video") await environment.download(`${capture.sessionId}.webm`, capture.video);
+        else await environment.download(
           `${capture.sessionId}.json`,
           new Blob([`${JSON.stringify(capture.manifest, null, 2)}\n`], { type: "application/json" }),
         );
@@ -364,8 +441,8 @@ export function VisionLabCapture({
       <p>Keep the same framing and complete the selected actions. Avoid overlays, filters, other people, and identifiable documents.</p>
       <div className="vision-lab-preview" aria-label="Camera preview with separate feedback"><video ref={videoRef} autoPlay muted playsInline aria-label="Local raw camera preview" /><p aria-live="polite">{state === "recording" ? `Recording ${VISION_LAB_CAPTURE_TYPES.find((type) => type.value === captureType)?.label} locally` : completed ? "Completed local recording. Download both files or discard them." : "Choose a named session, then deliberately start the camera."}</p></div>
       {state === "ready" || state === "error" ? <button type="button" onClick={() => void startCapture()}>Start capture</button> : null}
-      {state === "recording" ? <button type="button" onClick={() => stopCapture(true)}>Stop and download</button> : null}
-      {completed ? <><button type="button" onClick={() => downloadCompleted("video")}>Download video</button><button type="button" onClick={() => downloadCompleted("manifest")}>Download manifest</button><button type="button" onClick={discardCompleted}>Discard completed recording</button><button type="button" onClick={discardCompleted}>Finished downloading — clear recording</button>{failedDownload ? <button type="button" onClick={() => downloadCompleted(failedDownload)}>Retry download</button> : null}</> : null}
+      {state === "recording" ? <button type="button" onClick={() => stopCapture(true)}>Stop capture</button> : null}
+      {completed ? <><p role="status">Recording ready. Save both files before clearing this capture.</p><button type="button" onClick={() => void downloadCompleted("video")}>Save video</button><button type="button" onClick={() => void downloadCompleted("manifest")}>Save manifest</button><button type="button" onClick={discardCompleted}>Discard completed recording</button><button type="button" onClick={discardCompleted}>Finished saving — clear recording</button>{failedDownload ? <button type="button" onClick={() => void downloadCompleted(failedDownload)}>Retry save</button> : null}</> : null}
       {state === "acquiring" || state === "exporting" ? <p>Working locally…</p> : null}
       {error ? <p role="alert">{error}</p> : null}
     </section>
@@ -399,12 +476,5 @@ const browserEnvironment: VisionLabEnvironment = {
     const digest = await globalThis.crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
     return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
   },
-  download(name, blob) {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = name;
-    anchor.click();
-    queueMicrotask(() => URL.revokeObjectURL(url));
-  },
+  download: downloadVisionLabBlob,
 };
