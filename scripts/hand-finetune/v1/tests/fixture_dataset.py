@@ -144,6 +144,34 @@ def write_valid_dataset(root: Path) -> Path:
     return manifest_path
 
 
+def write_annotation_draft(root: Path) -> Path:
+    """Write a structurally valid but deliberately incomplete review workspace."""
+
+    canonical_path = write_valid_dataset(root)
+    canonical = read_manifest(canonical_path)
+    canonical_path.unlink()
+    canonical["schemaVersion"] = "commandcanvas.hand-annotation-draft/v1"
+    canonical["canonicalSchemaVersion"] = "commandcanvas.hand-dataset/v1"
+    canonical["sourceAdapter"] = {
+        "name": "commandcanvas-test-frame-adapter",
+        "version": "1.0.0",
+        "sourceManifestSha256": "d" * 64,
+    }
+    for session_index, session in enumerate(canonical["sessions"]):
+        session["visionSessionId"] = f"vision-lab-session-{session_index + 1}"
+        session["annotation"]["reviewed"] = False
+        for frame in session["frames"]:
+            frame["reviewed"] = False
+            label_path = root / frame["label"]["path"]
+            if frame["categories"] != ["negative"]:
+                label_path.write_bytes(b"")
+                frame["label"]["byteSize"] = 0
+                frame["label"]["sha256"] = sha256(label_path)
+    draft_path = root / "annotation-draft.json"
+    write_manifest(draft_path, canonical)
+    return draft_path
+
+
 def read_manifest(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 

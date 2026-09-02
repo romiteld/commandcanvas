@@ -34,24 +34,47 @@ PYTHONPATH=scripts/hand-finetune/v1 \
 ## Manual keypoint correction
 
 The annotation workbench opens a self-contained page on the local loopback
-interface. It accepts an already prepared, validator-compatible private dataset
+interface. It accepts either a strict dataset or an incomplete annotation draft
 located **outside this repository**. It never uploads images or loads remote
-assets.
+assets. A draft may contain empty positive labels and unreviewed frames; the
+strict training validator remains unchanged and finalization refuses until every
+frame has been reviewed.
 
 ```sh
 PYTHONPATH=scripts/hand-finetune/v1 \
   python3 -m commandcanvas_hand_finetune annotate \
   --dataset-root /absolute/private/path/hand-dataset \
-  --manifest /absolute/private/path/hand-dataset/dataset-manifest.json \
+  --manifest /absolute/private/path/hand-dataset/annotation-draft.json \
   --editor-id owner-daniel
 ```
 
 For each frame, drag existing points or add a hand by clicking the named
 MediaPipe 21-keypoint order. A frame may contain one or two hands, or it may be
 marked `no hand`, which emits an empty label with the `negative` category.
-Every save uses optimistic digest checks, rewrites the YOLO pose label and
-dataset manifest canonically, re-runs the strict dataset validator, and writes
-an immutable edit receipt without copying the private image.
+Every save uses optimistic digest checks, rewrites the YOLO pose label and draft
+manifest canonically, verifies all immutable image, source-video, and label
+digests, and writes an immutable edit receipt without copying the private image.
+Review status is recorded per frame. A model-assisted training or validation
+session preserves the prelabel model digest. A holdout draft must be manual and
+cannot use model prelabels.
+
+The adapter that extracts Vision Lab frames emits
+`commandcanvas.hand-annotation-draft/v1`. The draft is the final dataset shape
+plus these review-only fields:
+
+- top-level `canonicalSchemaVersion`, declaring the strict manifest schema to
+  emit;
+- top-level `sourceAdapter` with stable adapter name/version and the SHA-256 of
+  its source manifest;
+- per-session `visionSessionId`, paired with the immutable `captureGroupId`;
+- per-frame `reviewed`, while each `image` remains keyed by its safe relative
+  path and SHA-256.
+
+For the amended Vision Lab bridge, `canonicalSchemaVersion` is
+`commandcanvas.hand-dataset/v2`; its `producerChain` and each session's
+`producer` object pass through unchanged. The workbench deliberately does not
+re-extract media or infer producer metadata. That adapter boundary prevents a
+review UI from inventing capture provenance.
 
 After review, use the page's **Finalize dataset** action or the offline command:
 
@@ -59,10 +82,14 @@ After review, use the page's **Finalize dataset** action or the offline command:
 PYTHONPATH=scripts/hand-finetune/v1 \
   python3 -m commandcanvas_hand_finetune finalize-annotations \
   --dataset-root /absolute/private/path/hand-dataset \
-  --manifest /absolute/private/path/hand-dataset/dataset-manifest.json \
+  --manifest /absolute/private/path/hand-dataset/annotation-draft.json \
   --editor-id owner-daniel
 ```
 
-Finalization refuses missing, tampered, branched, or orphaned edit receipts and
-emits `annotation-finalization-receipt.json`. That receipt proves dataset
-validation only; it deliberately remains `productionEligible: false`.
+Finalization refuses unreviewed frames and missing, tampered, branched, or
+orphaned edit receipts. It strips only the review fields, writes the canonical
+`dataset-manifest.json`, invokes the unchanged strict dataset validator, and
+emits `annotation-finalization-receipt.json`. The receipt binds the draft,
+canonical manifest, Vision Lab session identities, source-adapter digest, and
+every edit receipt. It proves dataset validation only and deliberately remains
+`productionEligible: false`.

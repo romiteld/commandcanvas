@@ -31,6 +31,12 @@ from .dataset import HARD_SUBSETS, DatasetValidationError, validate_dataset
 
 WORKBENCH_SCHEMA_VERSION = "commandcanvas.hand-annotation-edit/v1"
 FINALIZATION_SCHEMA_VERSION = "commandcanvas.hand-annotation-finalization/v1"
+DRAFT_SCHEMA_VERSION = "commandcanvas.hand-annotation-draft/v1"
+DATASET_SCHEMA_VERSION = "commandcanvas.hand-dataset/v1"
+DATASET_SCHEMA_VERSIONS = {
+    DATASET_SCHEMA_VERSION,
+    "commandcanvas.hand-dataset/v2",
+}
 WORKBENCH_TOOL = "commandcanvas-hand-annotation-workbench"
 WORKBENCH_VERSION = "1.0.0"
 KEYPOINT_NAMES = (
@@ -230,7 +236,9 @@ def _find_frame(
     raise AnnotationWorkbenchError(f"frame not found: {session_id}/{frame_id}")
 
 
-def _parse_label(label_path: Path, *, negative: bool) -> list[dict[str, Any]]:
+def _parse_label(
+    label_path: Path, *, negative: bool, allow_empty_positive: bool = False
+) -> list[dict[str, Any]]:
     try:
         rows = [
             row
@@ -274,11 +282,273 @@ def _parse_label(label_path: Path, *, negative: bool) -> list[dict[str, Any]]:
             for index in range(21)
         ]
         hands.append({"boundingBox": bbox, "keypoints": keypoints})
+    if not hands and allow_empty_positive:
+        return []
     if not 1 <= len(hands) <= 2:
         raise AnnotationWorkbenchError(
             "positive frame label must contain one or two hands"
         )
     return hands
+
+
+def _draft_to_canonical(manifest: dict[str, Any]) -> dict[str, Any]:
+    canonical = deepcopy(manifest)
+    target_schema = canonical.pop("canonicalSchemaVersion", None)
+    if target_schema not in DATASET_SCHEMA_VERSIONS:
+        raise AnnotationWorkbenchError("draft canonicalSchemaVersion is unsupported")
+    canonical["schemaVersion"] = target_schema
+    canonical.pop("sourceAdapter", None)
+    sessions = canonical.get("sessions")
+    if not isinstance(sessions, list):
+        raise AnnotationWorkbenchError("draft sessions must be an array")
+    for session in sessions:
+        if not isinstance(session, dict):
+            raise AnnotationWorkbenchError("draft session must be an object")
+        session.pop("visionSessionId", None)
+        frames = session.get("frames")
+        if not isinstance(frames, list):
+            raise AnnotationWorkbenchError("draft session frames must be an array")
+        reviewed = True
+        for frame in frames:
+            if not isinstance(frame, dict):
+                raise AnnotationWorkbenchError("draft frame must be an object")
+            frame_reviewed = frame.pop("reviewed", None)
+            if not isinstance(frame_reviewed, bool):
+                raise AnnotationWorkbenchError("draft frame reviewed must be boolean")
+            reviewed = reviewed and frame_reviewed
+        annotation = session.get("annotation")
+        if not isinstance(annotation, dict):
+            raise AnnotationWorkbenchError("draft annotation must be an object")
+        if annotation.get("reviewed") is not reviewed:
+            raise AnnotationWorkbenchError(
+                "draft session reviewed state must equal its frame review states"
+            )
+    return canonical
+
+
+def _validate_source_adapter(value: Any) -> dict[str, Any]:
+    expected = {"name", "version", "sourceManifestSha256"}
+    if not isinstance(value, dict) or set(value) != expected:
+        raise AnnotationWorkbenchError(
+            "draft sourceAdapter fields do not match the v1 contract"
+        )
+    for field in ("name", "version"):
+        item = value.get(field)
+        if not isinstance(item, str) or not EDITOR_ID_PATTERN.fullmatch(item):
+            raise AnnotationWorkbenchError(
+                f"draft sourceAdapter.{field} must be a stable identifier"
+            )
+    digest = value.get("sourceManifestSha256")
+    if not isinstance(digest, str) or not SHA256_PATTERN.fullmatch(digest):
+        raise AnnotationWorkbenchError(
+            "draft sourceAdapter.sourceManifestSha256 must be a lowercase SHA-256 digest"
+        )
+    return value
+
+
+def _validate_draft_shape(manifest: dict[str, Any]) -> None:
+    expected_top = {
+        "schemaVersion",
+        "datasetId",
+        "createdAt",
+        "consent",
+        "keypointOrder",
+        "classNames",
+        "splits",
+        "sessions",
+        "sourceAdapter",
+        "canonicalSchemaVersion",
+    }
+    if manifest.get("canonicalSchemaVersion") == "commandcanvas.hand-dataset/v2":
+        expected_top.add("producerChain")
+    if set(manifest) != expected_top:
+        raise AnnotationWorkbenchError(
+            "draft manifest fields do not match the v1 contract"
+        )
+    _validate_source_adapter(manifest.get("sourceAdapter"))
+    target_schema = manifest.get("canonicalSchemaVersion")
+    if target_schema not in DATASET_SCHEMA_VERSIONS:
+        raise AnnotationWorkbenchError("draft canonicalSchemaVersion is unsupported")
+    sessions = manifest.get("sessions")
+    if not isinstance(sessions, list):
+        raise AnnotationWorkbenchError("draft sessions must be an array")
+    split_groups = manifest.get("splits")
+    holdout_groups = (
+        set(split_groups.get("holdout", []))
+        if isinstance(split_groups, dict)
+        else set()
+    )
+    expected_session = {
+        "sessionId",
+        "captureGroupId",
+        "visionSessionId",
+        "actorId",
+        "captureCategories",
+        "source",
+        "annotation",
+        "frames",
+    }
+    if target_schema == "commandcanvas.hand-dataset/v2":
+        expected_session.add("producer")
+    expected_frame = {
+        "frameId",
+        "timestampMs",
+        "categories",
+        "reviewed",
+        "image",
+        "label",
+    }
+    for session_index, session in enumerate(sessions):
+        if not isinstance(session, dict) or set(session) != expected_session:
+            raise AnnotationWorkbenchError(
+                f"draft session {session_index} fields do not match the v1 contract"
+            )
+        vision_session_id = session.get("visionSessionId")
+        if not isinstance(vision_session_id, str) or not EDITOR_ID_PATTERN.fullmatch(
+            vision_session_id
+        ):
+            raise AnnotationWorkbenchError(
+                f"draft session {session_index} visionSessionId is invalid"
+            )
+        if target_schema == "commandcanvas.hand-dataset/v2":
+            producer = session.get("producer")
+            if (
+                not isinstance(producer, dict)
+                or producer.get("visionLabSessionId") != vision_session_id
+            ):
+                raise AnnotationWorkbenchError(
+                    f"draft session {session_index} producer identity does not match visionSessionId"
+                )
+        annotation = session.get("annotation")
+        if not isinstance(annotation, dict):
+            raise AnnotationWorkbenchError(
+                f"draft session {session_index} annotation must be an object"
+            )
+        if session.get("captureGroupId") in holdout_groups and (
+            annotation.get("method") != "manual"
+            or annotation.get("modelSha256") is not None
+        ):
+            raise AnnotationWorkbenchError(
+                "draft holdout sessions must be manual and cannot use model prelabels"
+            )
+        frames = session.get("frames")
+        if not isinstance(frames, list):
+            raise AnnotationWorkbenchError(
+                f"draft session {session_index} frames must be an array"
+            )
+        all_reviewed = True
+        for frame_index, frame in enumerate(frames):
+            if not isinstance(frame, dict) or set(frame) != expected_frame:
+                raise AnnotationWorkbenchError(
+                    f"draft frame {session_index}/{frame_index} fields do not match the v1 contract"
+                )
+            if not isinstance(frame.get("reviewed"), bool):
+                raise AnnotationWorkbenchError(
+                    f"draft frame {session_index}/{frame_index} reviewed must be boolean"
+                )
+            all_reviewed = all_reviewed and frame["reviewed"]
+        if annotation.get("reviewed") is not all_reviewed:
+            raise AnnotationWorkbenchError(
+                f"draft session {session_index} reviewed state must equal its frame review states"
+            )
+
+
+_ALLOWED_DRAFT_VALIDATION_ERRORS = (
+    re.compile(
+        r"^sessions\[\d+\]\.frames\[\d+\] positive frame label must contain one or two hands$"
+    ),
+    re.compile(r"^holdout annotation at sessions\[\d+\] must be manual and reviewed$"),
+)
+
+
+def _validate_canonical_candidate(
+    root: Path, manifest: dict[str, Any], *, allow_incomplete: bool
+) -> dict[str, Any] | None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".annotation-candidate-", suffix=".json", dir=root
+    )
+    candidate_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(canonical_json_bytes(manifest))
+            output.flush()
+            os.fsync(output.fileno())
+        try:
+            return validate_dataset(root, candidate_path)
+        except DatasetValidationError as error:
+            if not allow_incomplete:
+                raise
+            lines = str(error).splitlines()
+            problems = [line[2:] for line in lines[1:] if line.startswith("- ")]
+            if not problems or any(
+                not any(
+                    pattern.fullmatch(problem)
+                    for pattern in _ALLOWED_DRAFT_VALIDATION_ERRORS
+                )
+                for problem in problems
+            ):
+                raise AnnotationWorkbenchError(str(error)) from error
+            return None
+    finally:
+        candidate_path.unlink(missing_ok=True)
+
+
+def validate_annotation_manifest(
+    dataset_root: Path, manifest_path: Path, *, require_complete: bool = False
+) -> dict[str, Any]:
+    """Validate either a strict dataset or its private, reviewable draft."""
+
+    root, manifest_file = _resolve_dataset_paths(dataset_root, manifest_path)
+    manifest = _load_json_object(manifest_file)
+    schema = manifest.get("schemaVersion")
+    if schema in DATASET_SCHEMA_VERSIONS:
+        validation = validate_dataset(root, manifest_file)
+        return {
+            "kind": "dataset",
+            "complete": True,
+            "reviewedFrameCount": validation["frameCount"],
+            "frameCount": validation["frameCount"],
+            "datasetValidation": validation,
+        }
+    if schema != DRAFT_SCHEMA_VERSION:
+        raise AnnotationWorkbenchError(
+            f"annotation manifest schemaVersion must be {DRAFT_SCHEMA_VERSION} or a supported strict dataset schema"
+        )
+    _validate_draft_shape(manifest)
+    canonical = _draft_to_canonical(manifest)
+    frames = [frame for session in manifest["sessions"] for frame in session["frames"]]
+    reviewed_count = sum(1 for frame in frames if frame["reviewed"])
+    for session in manifest["sessions"]:
+        for frame in session["frames"]:
+            categories = frame.get("categories")
+            label = frame.get("label")
+            if not isinstance(categories, list) or not isinstance(label, dict):
+                continue
+            label_path = _safe_asset(root, label.get("path"), location="frame label")
+            hands = _parse_label(
+                label_path,
+                negative=categories == ["negative"],
+                allow_empty_positive=not frame["reviewed"],
+            )
+            if frame["reviewed"] and categories != ["negative"] and not hands:
+                raise AnnotationWorkbenchError(
+                    "reviewed positive draft frame must contain one or two hands"
+                )
+    complete = reviewed_count == len(frames)
+    if require_complete and not complete:
+        raise AnnotationWorkbenchError(
+            f"draft is not reviewed: {reviewed_count} of {len(frames)} frames complete"
+        )
+    dataset_validation = _validate_canonical_candidate(
+        root, canonical, allow_incomplete=not require_complete
+    )
+    return {
+        "kind": "draft",
+        "complete": complete,
+        "reviewedFrameCount": reviewed_count,
+        "frameCount": len(frames),
+        "datasetValidation": dataset_validation,
+    }
 
 
 def load_frame_annotation(
@@ -291,6 +561,7 @@ def load_frame_annotation(
 
     root, manifest_file = _resolve_dataset_paths(dataset_root, manifest_path)
     manifest = _load_json_object(manifest_file)
+    draft = manifest.get("schemaVersion") == DRAFT_SCHEMA_VERSION
     session, frame = _find_frame(manifest, session_id, frame_id)
     categories = frame.get("categories")
     if not isinstance(categories, list):
@@ -308,7 +579,10 @@ def load_frame_annotation(
         "timestampMs": frame.get("timestampMs"),
         "categories": categories,
         "negative": negative,
-        "hands": _parse_label(label_path, negative=negative),
+        "hands": _parse_label(
+            label_path, negative=negative, allow_empty_positive=draft
+        ),
+        "reviewed": frame.get("reviewed", True),
         "image": {
             "path": image.get("path"),
             "width": image.get("width"),
@@ -511,6 +785,9 @@ def save_frame_annotation(
         )
 
     manifest = _load_json_object(manifest_file)
+    draft = manifest.get("schemaVersion") == DRAFT_SCHEMA_VERSION
+    if not draft and manifest.get("schemaVersion") not in DATASET_SCHEMA_VERSIONS:
+        raise AnnotationWorkbenchError("unsupported annotation manifest schema")
     session, frame = _find_frame(manifest, session_id, frame_id)
     label = frame.get("label")
     if not isinstance(label, dict):
@@ -528,11 +805,14 @@ def save_frame_annotation(
 
     previous_annotation = deepcopy(session.get("annotation"))
     previous_categories = deepcopy(frame.get("categories"))
+    previous_reviewed = frame.get("reviewed", True)
     previous_manifest_bytes = manifest_file.read_bytes()
     previous_label_bytes = label_path.read_bytes()
     new_label_bytes = _label_bytes(normalized_hands)
     new_label_sha = sha256_bytes(new_label_bytes)
     frame["categories"] = normalized_categories
+    if draft:
+        frame["reviewed"] = True
     label["byteSize"] = len(new_label_bytes)
     label["sha256"] = new_label_sha
     session["captureCategories"] = _capture_categories(session)
@@ -541,7 +821,14 @@ def save_frame_annotation(
         raise AnnotationWorkbenchError(
             "session annotation provenance must be an object"
         )
-    annotation["reviewed"] = True
+    annotation["reviewed"] = (
+        all(
+            isinstance(item, dict) and item.get("reviewed") is True
+            for item in session.get("frames", [])
+        )
+        if draft
+        else True
+    )
     annotation["tool"] = WORKBENCH_TOOL
     annotation["toolVersion"] = WORKBENCH_VERSION
     new_manifest_bytes = canonical_json_bytes(manifest)
@@ -569,6 +856,8 @@ def save_frame_annotation(
             "handCount": len(normalized_hands),
             "previousCategories": previous_categories,
             "resultCategories": normalized_categories,
+            "previousFrameReviewed": previous_reviewed,
+            "resultFrameReviewed": True,
             "previousAnnotation": previous_annotation,
             "resultAnnotation": deepcopy(annotation),
             "sourceManifestSha256": current_manifest_sha,
@@ -588,7 +877,7 @@ def save_frame_annotation(
     _atomic_write_bytes(label_path, new_label_bytes)
     _atomic_write_bytes(manifest_file, new_manifest_bytes)
     try:
-        validate_dataset(root, manifest_file)
+        validate_annotation_manifest(root, manifest_file)
         write_canonical_json(receipt_path, receipt)
     except (DatasetValidationError, OSError, UnicodeError, ValueError) as error:
         _atomic_write_bytes(label_path, previous_label_bytes)
@@ -608,7 +897,33 @@ def finalize_annotations(
     root, manifest_file = _resolve_dataset_paths(dataset_root, manifest_path)
     validate_private_workspace(root, Path(__file__).resolve().parents[4])
     editor = _validate_editor_id(editor_id)
-    validation = validate_dataset(root, manifest_file)
+    manifest = _load_json_object(manifest_file)
+    draft = manifest.get("schemaVersion") == DRAFT_SCHEMA_VERSION
+    if draft:
+        validate_annotation_manifest(root, manifest_file, require_complete=True)
+        canonical_manifest = _draft_to_canonical(manifest)
+        canonical_bytes = canonical_json_bytes(canonical_manifest)
+        canonical_manifest_file = root / "dataset-manifest.json"
+        if canonical_manifest_file.exists():
+            if (
+                canonical_manifest_file.is_symlink()
+                or not canonical_manifest_file.is_file()
+            ):
+                raise AnnotationWorkbenchError(
+                    "canonical dataset manifest output path is unsafe"
+                )
+            if canonical_manifest_file.read_bytes() != canonical_bytes:
+                raise AnnotationConflict(
+                    "canonical dataset manifest already exists with different bytes"
+                )
+        validation = _validate_canonical_candidate(
+            root, canonical_manifest, allow_incomplete=False
+        )
+        assert validation is not None
+    else:
+        canonical_manifest_file = manifest_file
+        canonical_bytes = manifest_file.read_bytes()
+        validation = validate_dataset(root, manifest_file)
     receipt_directory = root / "annotation-receipts"
     receipts: list[dict[str, Any]] = []
     if receipt_directory.exists():
@@ -658,22 +973,50 @@ def finalize_annotations(
             "annotation receipts do not form a single manifest chain"
         )
     edit_receipts = list(reversed(reverse_chain))
-    final = attach_digest(
-        {
-            "schemaVersion": FINALIZATION_SCHEMA_VERSION,
-            "finalizedAt": _utc_timestamp(),
-            "editorId": editor,
-            "datasetId": validation["datasetId"],
-            "manifestSha256": current_manifest_sha,
-            "editIds": [item["editId"] for item in edit_receipts],
-            "editReceiptSha256s": [item["receiptSha256"] for item in edit_receipts],
-            "datasetValidation": validation,
-            "eligibleForTraining": True,
-            "productionEligible": False,
-            "eligibilityScope": "dataset-for-training-only",
-        },
-        "receiptSha256",
-    )
+    if draft:
+        expected_reviews = {
+            (session["sessionId"], frame["frameId"])
+            for session in manifest["sessions"]
+            for frame in session["frames"]
+        }
+        receipted_reviews = {
+            (receipt.get("sessionId"), receipt.get("frameId"))
+            for receipt in edit_receipts
+            if receipt.get("resultFrameReviewed") is True
+        }
+        if receipted_reviews != expected_reviews:
+            missing = len(expected_reviews - receipted_reviews)
+            unexpected = len(receipted_reviews - expected_reviews)
+            raise AnnotationWorkbenchError(
+                "draft manual review requires an edit receipt for every frame "
+                f"(missing {missing}, unexpected {unexpected})"
+            )
+    final_value: dict[str, Any] = {
+        "schemaVersion": FINALIZATION_SCHEMA_VERSION,
+        "finalizedAt": _utc_timestamp(),
+        "editorId": editor,
+        "datasetId": validation["datasetId"],
+        "manifestSha256": sha256_bytes(canonical_bytes),
+        "editIds": [item["editId"] for item in edit_receipts],
+        "editReceiptSha256s": [item["receiptSha256"] for item in edit_receipts],
+        "datasetValidation": validation,
+        "eligibleForTraining": True,
+        "productionEligible": False,
+        "eligibilityScope": "dataset-for-training-only",
+    }
+    if draft:
+        final_value.update(
+            {
+                "draftManifestSha256": current_manifest_sha,
+                "sourceAdapter": deepcopy(manifest["sourceAdapter"]),
+                "visionSessionIds": [
+                    session["visionSessionId"] for session in manifest["sessions"]
+                ],
+            }
+        )
+    final = attach_digest(final_value, "receiptSha256")
+    if draft and not canonical_manifest_file.exists():
+        _atomic_write_bytes(canonical_manifest_file, canonical_bytes)
     write_canonical_json(root / "annotation-finalization-receipt.json", final)
     return final
 
@@ -754,11 +1097,11 @@ def render_workbench_html(csrf_token: str, editor_id: str = "owner-daniel") -> s
   const setStatus = (message, error=false) => {{ status.textContent = message; status.style.color = error ? "#ff9ca8" : "#aeb6ce"; }};
   const framePath = item => `/api/frame/${{encodeURIComponent(item.sessionId)}}/${{encodeURIComponent(item.frameId)}}`;
   const imagePath = item => `/api/image/${{encodeURIComponent(item.sessionId)}}/${{encodeURIComponent(item.frameId)}}`;
-  async function loadListing() {{
-    const payload = await request("/api/state"); listing = payload.frames; renderListing(); await loadFrame(0);
+  async function loadListing(keepSelection=false) {{
+    const payload = await request("/api/state"); listing = payload.frames; renderListing(); await loadFrame(keepSelection?selectedIndex:0);
   }}
   function renderListing() {{
-    framesNode.replaceChildren(...listing.map((item,index) => {{ const button=document.createElement("button"); button.textContent=`${{item.split}} · ${{item.frameId}}`; button.className=index===selectedIndex?"active":""; button.onclick=()=>loadFrame(index); return button; }}));
+    framesNode.replaceChildren(...listing.map((item,index) => {{ const button=document.createElement("button"); button.textContent=`${{item.reviewed?"✓":"○"}} ${{item.split}} · ${{item.frameId}}`; button.className=index===selectedIndex?"active":""; button.onclick=()=>loadFrame(index); return button; }}));
   }}
   async function loadFrame(index) {{
     if (!listing.length) return; selectedIndex=Math.max(0,Math.min(listing.length-1,index)); activeHand=0; activePoint=0; placing=false;
@@ -802,7 +1145,7 @@ def render_workbench_html(csrf_token: str, editor_id: str = "owner-daniel") -> s
   document.getElementById("negative").onchange=event=>{{current.negative=event.target.checked;if(current.negative){{current.hands=[];placing=false;current.categories=["negative"];}}else{{current.categories=["drawing"];}}renderCategories();updateControls();draw();}};
   document.getElementById("visibility").onchange=event=>{{const point=current.hands[activeHand]?.keypoints[activePoint];if(point){{point.visibility=Number(event.target.value);draw();}}}};
   document.getElementById("previous").onclick=()=>loadFrame(selectedIndex-1); document.getElementById("next").onclick=()=>loadFrame(selectedIndex+1);
-  document.getElementById("save").onclick=async()=>{{try{{const categories=current.negative?["negative"]:[...document.querySelectorAll("#categories input:checked")].map(input=>input.value);const receipt=await request(framePath(listing[selectedIndex]),{{method:"POST",body:JSON.stringify({{expectedManifestSha256:current.manifestSha256,expectedLabelSha256:current.labelSha256,negative:current.negative,categories,hands:current.hands.map(hand=>({{keypoints:hand.keypoints}}))}})}});setStatus(`Saved as ${{editorId}} · ${{receipt.receiptSha256.slice(0,12)}}`);await loadFrame(selectedIndex);}}catch(error){{setStatus(error.message,true);}}}};
+  document.getElementById("save").onclick=async()=>{{try{{const categories=current.negative?["negative"]:[...document.querySelectorAll("#categories input:checked")].map(input=>input.value);const receipt=await request(framePath(listing[selectedIndex]),{{method:"POST",body:JSON.stringify({{expectedManifestSha256:current.manifestSha256,expectedLabelSha256:current.labelSha256,negative:current.negative,categories,hands:current.hands.map(hand=>({{keypoints:hand.keypoints}}))}})}});setStatus(`Saved as ${{editorId}} · ${{receipt.receiptSha256.slice(0,12)}}`);await loadListing(true);}}catch(error){{setStatus(error.message,true);}}}};
   document.getElementById("finalize").onclick=async()=>{{try{{const receipt=await request("/api/finalize",{{method:"POST",body:JSON.stringify({{}})}});setStatus(`Dataset validated · ${{receipt.receiptSha256.slice(0,12)}}`);}}catch(error){{setStatus(error.message,true);}}}};
   loadListing().catch(error=>setStatus(error.message,true));
 }})();
@@ -832,6 +1175,7 @@ def _dataset_listing(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                     "timestampMs": frame.get("timestampMs"),
                     "split": group_splits.get(session.get("captureGroupId"), "unknown"),
                     "categories": frame.get("categories"),
+                    "reviewed": frame.get("reviewed", True),
                 }
             )
     return listing
@@ -852,7 +1196,7 @@ def create_workbench_server(
         raise AnnotationWorkbenchError("port must be an integer between 0 and 65535")
     root, manifest_file = _resolve_dataset_paths(dataset_root, manifest_path)
     validate_private_workspace(root, Path(__file__).resolve().parents[4])
-    validate_dataset(root, manifest_file)
+    validate_annotation_manifest(root, manifest_file)
     editor = _validate_editor_id(editor_id)
     token = secrets.token_urlsafe(32)
     page = render_workbench_html(token, editor).encode("utf-8")
@@ -959,12 +1303,16 @@ def create_workbench_server(
                     return
                 if path == "/api/state":
                     manifest = _load_json_object(manifest_file)
+                    validation = validate_annotation_manifest(root, manifest_file)
                     self._json(
                         HTTPStatus.OK,
                         {
                             "datasetId": manifest.get("datasetId"),
                             "manifestSha256": sha256_file(manifest_file),
                             "frames": _dataset_listing(manifest),
+                            "manifestKind": validation["kind"],
+                            "reviewedFrameCount": validation["reviewedFrameCount"],
+                            "frameCount": validation["frameCount"],
                         },
                     )
                     return

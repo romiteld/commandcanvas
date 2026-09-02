@@ -18,6 +18,7 @@ from commandcanvas_hand_finetune.annotation_workbench import (  # noqa: E402
     load_frame_annotation,
     render_workbench_html,
     save_frame_annotation,
+    validate_annotation_manifest,
     validate_loopback_host,
     validate_private_workspace,
     validate_request_host,
@@ -28,9 +29,18 @@ from commandcanvas_hand_finetune.canonical import (  # noqa: E402
     sha256_file,
     verify_digest,
 )
-from commandcanvas_hand_finetune.dataset import validate_dataset  # noqa: E402
+from commandcanvas_hand_finetune.dataset import (  # noqa: E402
+    DatasetValidationError,
+    validate_dataset,
+)
 
-from fixture_dataset import read_manifest, write_manifest, write_valid_dataset  # noqa: E402
+from fixture_dataset import (  # noqa: E402
+    hand_label,
+    read_manifest,
+    write_annotation_draft,
+    write_manifest,
+    write_valid_dataset,
+)
 
 
 def keypoints(offset: float = 0.0) -> list[dict[str, float | int]]:
@@ -97,6 +107,143 @@ class AnnotationWorkbenchTests(unittest.TestCase):
         self.assertEqual(state["hands"][0]["keypoints"][0]["visibility"], 2)
         self.assertEqual(state["image"]["width"], 64)
         self.assertEqual(state["image"]["height"], 48)
+
+    def test_opens_an_unreviewed_draft_with_empty_positive_labels(self) -> None:
+        draft = write_annotation_draft(self.root)
+        manifest = read_manifest(draft)
+        session = manifest["sessions"][0]
+        frame = session["frames"][0]
+
+        validation = validate_annotation_manifest(self.root, draft)
+        state = load_frame_annotation(
+            self.root, draft, session["sessionId"], frame["frameId"]
+        )
+
+        self.assertEqual(validation["kind"], "draft")
+        self.assertFalse(validation["complete"])
+        self.assertEqual(validation["reviewedFrameCount"], 0)
+        self.assertEqual(state["hands"], [])
+        self.assertFalse(state["reviewed"])
+
+    def test_draft_save_marks_only_one_frame_reviewed_without_weakening_validator(
+        self,
+    ) -> None:
+        draft = write_annotation_draft(self.root)
+        manifest = read_manifest(draft)
+        session = manifest["sessions"][0]
+        frame = session["frames"][0]
+        state = load_frame_annotation(
+            self.root, draft, session["sessionId"], frame["frameId"]
+        )
+
+        save_frame_annotation(
+            dataset_root=self.root,
+            manifest_path=draft,
+            session_id=session["sessionId"],
+            frame_id=frame["frameId"],
+            editor_id="owner-daniel",
+            expected_manifest_sha256=state["manifestSha256"],
+            expected_label_sha256=state["labelSha256"],
+            negative=False,
+            categories=frame["categories"],
+            hands=[{"keypoints": keypoints()}],
+        )
+
+        updated = read_manifest(draft)
+        self.assertTrue(updated["sessions"][0]["frames"][0]["reviewed"])
+        self.assertFalse(updated["sessions"][0]["frames"][1]["reviewed"])
+        self.assertFalse(updated["sessions"][0]["annotation"]["reviewed"])
+        self.assertEqual(
+            validate_annotation_manifest(self.root, draft)["kind"], "draft"
+        )
+        with self.assertRaises(DatasetValidationError):
+            validate_dataset(self.root, draft)
+
+    def test_draft_finalization_requires_every_frame_then_emits_strict_manifest(
+        self,
+    ) -> None:
+        draft = write_annotation_draft(self.root)
+        manifest = read_manifest(draft)
+
+        with self.assertRaisesRegex(AnnotationWorkbenchError, "not reviewed"):
+            finalize_annotations(
+                dataset_root=self.root,
+                manifest_path=draft,
+                editor_id="owner-daniel",
+            )
+
+        for session in manifest["sessions"]:
+            for frame in session["frames"]:
+                state = load_frame_annotation(
+                    self.root, draft, session["sessionId"], frame["frameId"]
+                )
+                negative = frame["categories"] == ["negative"]
+                save_frame_annotation(
+                    dataset_root=self.root,
+                    manifest_path=draft,
+                    session_id=session["sessionId"],
+                    frame_id=frame["frameId"],
+                    editor_id="owner-daniel",
+                    expected_manifest_sha256=state["manifestSha256"],
+                    expected_label_sha256=state["labelSha256"],
+                    negative=negative,
+                    categories=frame["categories"],
+                    hands=[] if negative else [{"keypoints": keypoints()}],
+                )
+
+        final = finalize_annotations(
+            dataset_root=self.root,
+            manifest_path=draft,
+            editor_id="owner-daniel",
+        )
+        canonical_path = self.root / "dataset-manifest.json"
+        canonical = read_manifest(canonical_path)
+
+        self.assertEqual(canonical["schemaVersion"], "commandcanvas.hand-dataset/v1")
+        self.assertNotIn("sourceAdapter", canonical)
+        self.assertNotIn("visionSessionId", canonical["sessions"][0])
+        self.assertNotIn("reviewed", canonical["sessions"][0]["frames"][0])
+        self.assertTrue(canonical["sessions"][0]["annotation"]["reviewed"])
+        self.assertTrue(
+            validate_dataset(self.root, canonical_path)["eligibleForTraining"]
+        )
+        self.assertEqual(final["draftManifestSha256"], sha256_file(draft))
+        self.assertEqual(final["manifestSha256"], sha256_file(canonical_path))
+        self.assertEqual(final["sourceAdapter"]["sourceManifestSha256"], "d" * 64)
+        self.assertEqual(
+            final["visionSessionIds"],
+            ["vision-lab-session-1", "vision-lab-session-2", "vision-lab-session-3"],
+        )
+
+    def test_draft_refuses_tampered_frame_bytes_before_review(self) -> None:
+        draft = write_annotation_draft(self.root)
+        manifest = read_manifest(draft)
+        image_path = self.root / manifest["sessions"][0]["frames"][0]["image"]["path"]
+        image_path.write_bytes(b"tampered")
+
+        with self.assertRaisesRegex(AnnotationWorkbenchError, "SHA-256|decodable"):
+            validate_annotation_manifest(self.root, draft)
+
+    def test_draft_cannot_claim_manual_review_without_frame_edit_receipts(self) -> None:
+        draft = write_annotation_draft(self.root)
+        manifest = read_manifest(draft)
+        for session in manifest["sessions"]:
+            session["annotation"]["reviewed"] = True
+            for frame in session["frames"]:
+                frame["reviewed"] = True
+                if frame["categories"] != ["negative"]:
+                    label_path = self.root / frame["label"]["path"]
+                    label_path.write_text(hand_label(), encoding="utf-8")
+                    frame["label"]["byteSize"] = label_path.stat().st_size
+                    frame["label"]["sha256"] = sha256_file(label_path)
+        write_manifest(draft, manifest)
+
+        with self.assertRaisesRegex(AnnotationWorkbenchError, "edit receipt"):
+            finalize_annotations(
+                dataset_root=self.root,
+                manifest_path=draft,
+                editor_id="owner-daniel",
+            )
 
     def test_saves_two_hands_as_canonical_yolo_pose_and_valid_manifest(self) -> None:
         original_manifest_sha = sha256_file(self.manifest_path)
