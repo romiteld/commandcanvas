@@ -2422,3 +2422,149 @@ green unit-test claim.
 - No Devpost submission has been made. Submission remains blocked until Danny
   personally accepts the physical hand flow and a real ChatGPT-host Site Tool
   mutation is recorded against the frozen Production release.
+
+## Checkpoint 41: trained pose evidence and Production acceptance candidate
+
+Runtime application commit:
+`0c4002386b4126c6feca624a8093ce44bd1369e1`. Vercel Production deployment:
+`dpl_9CehNDtaYgBVsvyaiy3U7SyKAUq7`, aliased to
+`https://commandcanvas.vercel.app`. This append-only checkpoint is recorded by
+a later documentation commit and does not change runtime behavior.
+
+### WORKING
+
+- A bounded multinomial logistic classifier was trained on real HaGRID v2
+  annotations after converting each accepted hand to normalized 21-landmark
+  features. The five output classes are `idle`, `point`, `open_palm`, `pinch`,
+  and `held`. The disjoint held-out test split contained 12,500 samples and
+  recorded 97.616% accuracy, 95.92% lowest-class recall, and a 0.68%
+  false-grab rate.
+- The training run used the locally reported `NVIDIA GeForce RTX 3090`, not a
+  relabeled 3090 Ti and not RunPod. Peak Torch allocation was 129,758,208 bytes
+  and peak reserved memory was 155,189,248 bytes. The bounded run completed
+  locally, so no remote GPU billing or secret transfer was justified for this
+  experiment.
+- The exact Production compact artifact has SHA-256
+  `5ef015bdf99bbe1301beb6dd36616f8c9e2a9661fad042ac8e0e839691b4df42`.
+  Runtime provenance validation fails closed unless the artifact has the
+  expected dataset revision, source hash, custom HaGRID license reference,
+  pinned license URL, class set, dimensions, promotion decision, and explicit
+  license approval.
+- Learned output is supporting evidence only. Raw observation validity,
+  landmark confidence, physical index and pinch geometry, calibrated temporal
+  votes, target presence, hysteresis, canonical gesture transitions, and
+  mutation policy remain authoritative. Learned output cannot directly arm an
+  edge action, acquire or discard an object, approve a packet, send email, or
+  perform another consequential mutation.
+- The official HaGRID custom “Public license with attribution and conditions
+  reserved” is recorded accurately instead of being mislabeled as standard
+  CC BY-SA. The corresponding-source model, compact model, source archive,
+  modifications, attribution, disclaimer, and pinned license-document hashes
+  are recorded in `THIRD_PARTY_NOTICES.md`. The root application remains MIT.
+- The University of Sheffield In-Air Hand-Drawn Number and Shape Dataset was
+  evaluated for trajectory filtering. The candidate reduced measured segment
+  jitter by 35.62865% but failed the short-gap RMSE gate at 1.012556 versus a
+  required maximum of 1.0. Its decision is `refused`,
+  `production_eligible: false`, and it is not wired into the runtime.
+- Sketch narration and active-thought dictation now terminate in canonical
+  canvas capabilities. Live Voice and WebMCP derive equivalent operations and
+  guards from the shared capability path instead of maintaining independent
+  object-creation behavior.
+- Calibration now temporarily owns the interaction surface. Competing room
+  overlays are input-inert or hidden during calibration and return afterward;
+  the meeting-media stream itself remains live.
+- At immutable commit `0c400238...`, Node 22.17.0 `npm run check` passed ESLint,
+  raw TypeScript `tsc --noEmit`, 159 test files and 1,660 tests, Python Ruff
+  lint and formatting, raw mypy, 12 drawing-trajectory tests, hand-worker
+  bundling, and an optimized Next.js 16.3.3 build of all 15 pages and dynamic
+  routes. `npm audit --omit=dev --audit-level=high` reported zero
+  vulnerabilities. GitHub Actions run `33678231900` independently passed the
+  same build-and-unit gate on the exact commit.
+
+### VERIFIED IN BROWSER
+
+- Vercel reported deployment `dpl_9CehNDtaYgBVsvyaiy3U7SyKAUq7` as `READY`
+  with target `Production`, and attached the canonical aliases. The served
+  `/demo` JavaScript contained exact source revision
+  `0c4002386b4126c6feca624a8093ce44bd1369e1`; `/`, `/demo`, and `/meet` each
+  returned HTTP 200.
+- The Production compact pose artifact downloaded over HTTPS and hashed to
+  `5ef015bdf99bbe1301beb6dd36616f8c9e2a9661fad042ac8e0e839691b4df42`,
+  matching the reviewed release artifact byte for byte.
+- The complete Production Playwright matrix enumerated 101 project scenarios:
+  40 applicable scenarios passed, 61 provider, physical-device, or
+  project-gated scenarios skipped intentionally, and none failed. This covered
+  desktop Chromium, mobile Chromium, mobile WebKit, responsive sizes from
+  320x568 through 1440x900, pointer/touch/pen browser events, deterministic
+  speech, canonical mutations, receipts, Undo, and native system-Chrome WebMCP
+  registration.
+- Two independent no-signup browser contexts created and joined one real
+  Supabase room, reached two-participant Presence, exchanged cursors and a
+  durable object mutation, displayed the attributable receipt, and cleaned up
+  the hosted room. A fresh tab with the same anonymous identity recovered the
+  recent room. Both Production collaboration scenarios passed.
+- Browser-controlled mobile media exercised the enlarged calibration surface,
+  removed competing room overlays during calibration, and restored the
+  hideable hand PiP afterward. Two applicable calibration scenarios passed and
+  one project-mismatched scenario skipped.
+- Two independent Production browser contexts opted into fake camera and
+  microphone media, negotiated direct WebRTC through authenticated Supabase
+  signaling, and rendered remote media on both sides. The 390-pixel meeting
+  controls also met the 44-pixel target requirement. Two applicable scenarios
+  passed and two project-mismatched scenarios skipped. This is not a physical
+  camera, microphone, cellular-network, or TURN claim.
+- Native Chrome registered and exercised the current WebMCP catalog on the
+  Production page. This does not prove invocation by the surrounding ChatGPT
+  Site Tools host.
+
+### UNVERIFIED
+
+- No hand or object **tracker** was fine-tuned in this checkpoint. The shipped
+  learned model classifies static poses after 21 landmarks already exist. It is
+  not a YOLO detector fine-tune, MediaPipe landmark-estimator fine-tune,
+  temporal tracker, two-hand re-identification model, drawing detector, or
+  object tracker. It cannot by itself recover a lost hand, correct ROI drift,
+  prevent identity swaps, reduce camera latency, or prove smooth physical
+  motion.
+- The drawing trajectory candidate was refused and therefore provides no
+  Production smoothing claim. Index-tip drawing continuity, edge and corner
+  reach, physical jitter, pinch acquire / hold / release, two-hand resize and
+  rotation, canvas and focused-content zoom, open-palm pan, edge actions,
+  throw-to-trash, occlusion, lighting, latency, thermals, and ergonomics still
+  require Danny's physical desktop-camera acceptance against this exact
+  Production release.
+- A real ChatGPT built-in-browser Site Tool invocation remains required. Native
+  Chrome registration proves the browser API and page execution, not the
+  user's ChatGPT rollout, model host, Available Site Tools surface, or a
+  ChatGPT-originated mutation.
+- The private GPU relay remains an implemented, signed, owner-only path with
+  local fallback, but this checkpoint did not exercise an authenticated live
+  owner stream, the pfSense connector, remote YOLO/pose inference, measured
+  relay latency, or automatic failover. The HaGRID training result is not
+  evidence for that separate runtime.
+- Physical microphone Realtime Voice with the owner's saved credential, a
+  current-release paid vision transformation, generated imagery, OTP delivery
+  through Resend SMTP, email-bound invitation acceptance, Resend webhook
+  reconciliation, and a host-confirmed packet send remain external checks.
+- TURN remains unconfigured in Production. The verified peer media used direct
+  WebRTC on one host; Wi-Fi-to-cellular or restrictive-NAT reliability remains
+  unverified.
+- The old GitGuardian incident commit is unreachable from every current ref
+  but remains retrievable from GitHub by its exact dangling object id. GitHub
+  Support or server-side garbage collection is required before claiming the
+  object is unavailable. No credential was rotated or altered.
+- CodeRabbit review remains unverified and is not claimed.
+
+### CUT
+
+- No approved spatial manipulation, hand control, drawing, object creation,
+  history, grouping, frame, collaboration, participant-media, Site Tools, Live
+  Voice, authentication, invitation, packet, vision, image, or Resend
+  capability was silently removed.
+- A general-purpose SFU, recording, screen sharing, billing, enterprise
+  identity, native mobile or headset application, plugin marketplace, desktop
+  automation, and direct conferencing-suite integrations remain outside this
+  browser challenge product.
+- No Devpost submission has been made. Submission remains blocked until Danny
+  personally accepts the physical-hand flow and a real ChatGPT-host Site Tool
+  mutation is recorded against the frozen Production release.
