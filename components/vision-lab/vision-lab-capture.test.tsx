@@ -446,6 +446,30 @@ describe("VisionLabCapture", () => {
     expect(setup.recorder.start).toHaveBeenCalledOnce();
   });
 
+  it("recovers when recorder start throws after capture ownership is installed", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment({ stopMode: "delayed" });
+    setup.recorder.start.mockImplementationOnce(() => {
+      throw new Error("recorder start failed");
+    });
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(await screen.findByRole("button", { name: "Start capture" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Camera access was not available. Nothing was recorded or uploaded.",
+    );
+    expect(setup.stream.track.stop).toHaveBeenCalledOnce();
+    act(() => setup.emitStop());
+    expect(setup.stream.track.stop).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Download video" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Start capture" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Start capture" }));
+    expect(setup.environment.getUserMedia).toHaveBeenCalledTimes(2);
+    expect(setup.recorder.start).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps completed capture controls until the user explicitly discards them", async () => {
     const user = userEvent.setup();
     const setup = createEnvironment();

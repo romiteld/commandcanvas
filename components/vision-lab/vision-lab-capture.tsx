@@ -305,9 +305,10 @@ export function VisionLabCapture({
       recorder.start(1_000);
       if (isCurrent(generation, capture)) setState("recording");
     } catch {
+      const failedAttemptWasCurrent = isCurrent(generation);
       if (streamRef.current) cancelCapture();
       else if (stream) stopVisionLabTracks(stream);
-      if (isCurrent(generation)) {
+      if (failedAttemptWasCurrent && mountedRef.current && eligibleRef.current) {
         setError("Camera access was not available. Nothing was recorded or uploaded.");
         setState("error");
       }
