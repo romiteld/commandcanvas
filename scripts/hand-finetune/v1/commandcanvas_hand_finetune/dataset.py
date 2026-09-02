@@ -6,6 +6,8 @@ import json
 import math
 import re
 from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import UUID
@@ -32,10 +34,24 @@ VISION_CAPTURE_TYPES = {
     "difficult-conditions",
     "negative-no-hand",
 }
+VISION_CONSENT_VERSION = "vision-lab-consent-v1"
+VISION_PROTOCOL = {"id": "commandcanvas-hand-finetune", "version": 1}
 
 
 class DatasetValidationError(ValueError):
     """Raised after collecting every actionable dataset validation error."""
+
+
+@dataclass(frozen=True)
+class VisionCompanionFacts:
+    """Validated facts preserved from one canonical Vision Lab companion."""
+
+    capture_type: str
+    width: int | None
+    height: int | None
+    frame_rate: float | None
+    started_at: datetime
+    stopped_at: datetime
 
 
 def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -101,6 +117,172 @@ def _allowed_keys(
             f"{location} has unsupported fields: {', '.join(sorted(unknown))}"
         )
     return not missing and not unknown
+
+
+def _zoned_timestamp(value: Any, location: str, errors: list[str]) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"{location} must be a nonempty ISO-8601 timestamp")
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        errors.append(f"{location} must be ISO-8601")
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        errors.append(f"{location} must include a timezone")
+        return None
+    return parsed
+
+
+def validate_vision_companion(
+    value: Any,
+    *,
+    location: str,
+    errors: list[str],
+    expected_session_id: str | None = None,
+    actual_video_sha256: str | None = None,
+) -> VisionCompanionFacts | None:
+    """Validate the exact Vision Lab companion contract for every consumer."""
+
+    initial_error_count = len(errors)
+    required = {
+        "schemaVersion",
+        "sessionId",
+        "captureType",
+        "startedAt",
+        "stoppedAt",
+        "media",
+        "mirrorDisplay",
+        "consentVersion",
+        "protocol",
+    }
+    if not _allowed_keys(value, required, {"videoSha256"}, location, errors):
+        return None
+    assert isinstance(value, dict)
+
+    if isinstance(value.get("schemaVersion"), bool) or value.get("schemaVersion") != 1:
+        errors.append(f"{location}.schemaVersion must be 1")
+
+    session_id = value.get("sessionId")
+    if (
+        not isinstance(session_id, str)
+        or not session_id.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in session_id)
+    ):
+        errors.append(f"{location}.sessionId must be a nonempty safe string")
+    elif expected_session_id is not None and session_id != expected_session_id:
+        errors.append(f"{location}.sessionId does not match the expected session")
+
+    capture_type = value.get("captureType")
+    if not isinstance(capture_type, str) or capture_type not in VISION_CAPTURE_TYPES:
+        errors.append(f"{location}.captureType is unsupported")
+
+    started_at = _zoned_timestamp(
+        value.get("startedAt"), f"{location}.startedAt", errors
+    )
+    stopped_at = _zoned_timestamp(
+        value.get("stoppedAt"), f"{location}.stoppedAt", errors
+    )
+    if started_at is not None and stopped_at is not None and stopped_at <= started_at:
+        errors.append(f"{location}.stoppedAt must be after startedAt")
+
+    media = value.get("media")
+    width: int | None = None
+    height: int | None = None
+    frame_rate: float | None = None
+    if _allowed_keys(
+        media,
+        {"mimeType"},
+        {"width", "height", "frameRate", "facingMode"},
+        f"{location}.media",
+        errors,
+    ):
+        assert isinstance(media, dict)
+        mime_type = media.get("mimeType")
+        if (
+            not isinstance(mime_type, str)
+            or re.fullmatch(r"video/webm(?:;codecs=(?:vp8|vp9))?", mime_type) is None
+        ):
+            errors.append(f"{location}.media.mimeType must be a supported WebM type")
+
+        width_value = media.get("width")
+        if width_value is not None:
+            if (
+                isinstance(width_value, bool)
+                or not isinstance(width_value, int)
+                or width_value <= 0
+            ):
+                errors.append(f"{location}.media.width must be a positive integer")
+            else:
+                width = width_value
+
+        height_value = media.get("height")
+        if height_value is not None:
+            if (
+                isinstance(height_value, bool)
+                or not isinstance(height_value, int)
+                or height_value <= 0
+            ):
+                errors.append(f"{location}.media.height must be a positive integer")
+            else:
+                height = height_value
+
+        frame_rate_value = media.get("frameRate")
+        if frame_rate_value is not None:
+            if (
+                isinstance(frame_rate_value, bool)
+                or not isinstance(frame_rate_value, (int, float))
+                or not math.isfinite(frame_rate_value)
+                or frame_rate_value <= 0
+            ):
+                errors.append(f"{location}.media.frameRate must be a positive number")
+            else:
+                frame_rate = float(frame_rate_value)
+
+        if "facingMode" in media and (
+            not isinstance(media.get("facingMode"), str)
+            or not str(media.get("facingMode", "")).strip()
+        ):
+            errors.append(f"{location}.media.facingMode must be a nonempty string")
+
+    if not isinstance(value.get("mirrorDisplay"), bool):
+        errors.append(f"{location}.mirrorDisplay must be boolean")
+    if value.get("consentVersion") != VISION_CONSENT_VERSION:
+        errors.append(f"{location}.consentVersion is not approved")
+
+    protocol = value.get("protocol")
+    if _exact_keys(protocol, {"id", "version"}, f"{location}.protocol", errors):
+        assert isinstance(protocol, dict)
+        if protocol.get("id") != VISION_PROTOCOL["id"] or (
+            isinstance(protocol.get("version"), bool)
+            or protocol.get("version") != VISION_PROTOCOL["version"]
+        ):
+            errors.append(f"{location}.protocol does not match Vision Lab")
+
+    declared_sha = value.get("videoSha256")
+    if declared_sha is not None:
+        if not isinstance(declared_sha, str) or not SHA256_PATTERN.fullmatch(
+            declared_sha
+        ):
+            errors.append(f"{location} video SHA-256 must be a lowercase digest")
+        elif actual_video_sha256 is not None and declared_sha != actual_video_sha256:
+            errors.append(f"{location} video SHA-256 does not match the raw WebM")
+
+    if (
+        len(errors) != initial_error_count
+        or not isinstance(capture_type, str)
+        or started_at is None
+        or stopped_at is None
+    ):
+        return None
+    return VisionCompanionFacts(
+        capture_type=capture_type,
+        width=width,
+        height=height,
+        frame_rate=frame_rate,
+        started_at=started_at,
+        stopped_at=stopped_at,
+    )
 
 
 def _canonical_uuid(value: Any, location: str, errors: list[str]) -> str | None:
@@ -497,7 +679,7 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
     image_digest_splits: dict[str, set[str]] = defaultdict(set)
     source_digests: list[str] = []
     split_counts: Counter[str] = Counter()
-    capture_group_counts: Counter[str] = Counter()
+    capture_groups_by_split: dict[str, set[str]] = {split: set() for split in SPLITS}
     hard_subset_counts: Counter[str] = Counter()
     annotation_counts: Counter[str] = Counter()
     total_frames = 0
@@ -770,95 +952,37 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                     errors,
                 )
                 if companion is not None:
-                    required_companion = {
-                        "schemaVersion",
-                        "sessionId",
-                        "captureType",
-                        "startedAt",
-                        "stoppedAt",
-                        "media",
-                        "mirrorDisplay",
-                        "consentVersion",
-                        "protocol",
-                    }
-                    if _allowed_keys(
+                    companion_facts = validate_vision_companion(
                         companion,
-                        required_companion,
-                        {"videoSha256"},
-                        f"{location}.producer companion",
-                        errors,
-                    ):
-                        if (
-                            isinstance(companion.get("schemaVersion"), bool)
-                            or companion.get("schemaVersion") != 1
-                        ):
-                            errors.append(
-                                f"{location}.producer companion schemaVersion is invalid"
-                            )
-                        if companion.get("sessionId") != vision_session_id:
-                            errors.append(
-                                f"{location}.producer companion sessionId does not match"
-                            )
-                        if companion.get("captureType") != capture_type:
+                        location=f"{location}.producer companion",
+                        errors=errors,
+                        expected_session_id=(
+                            vision_session_id
+                            if isinstance(vision_session_id, str)
+                            else None
+                        ),
+                        actual_video_sha256=actual_source_sha,
+                    )
+                    if companion_facts is not None:
+                        if companion_facts.capture_type != capture_type:
                             errors.append(
                                 f"{location}.producer companion captureType does not match"
                             )
-                        if companion.get("consentVersion") != "vision-lab-consent-v1":
-                            errors.append(
-                                f"{location}.producer companion consent does not match"
-                            )
-                        companion_protocol = companion.get("protocol")
-                        protocol_valid = _exact_keys(
-                            companion_protocol,
-                            {"id", "version"},
-                            f"{location}.producer companion protocol",
-                            errors,
-                        )
-                        if (
-                            not protocol_valid
-                            or not isinstance(companion_protocol, dict)
-                            or (
-                                companion_protocol.get("id")
-                                != "commandcanvas-hand-finetune"
-                                or isinstance(companion_protocol.get("version"), bool)
-                                or companion_protocol.get("version") != 1
-                            )
-                        ):
-                            errors.append(
-                                f"{location}.producer companion protocol does not match"
-                            )
-                        if companion.get("videoSha256", observed_sha) != observed_sha:
-                            errors.append(
-                                f"{location}.producer companion video SHA-256 does not match"
-                            )
-                        media = companion.get("media")
-                        if _allowed_keys(
-                            media,
-                            {"mimeType"},
-                            {"width", "height", "frameRate", "facingMode"},
-                            f"{location}.producer companion media",
-                            errors,
-                        ):
-                            assert isinstance(media, dict)
-                            if not str(media.get("mimeType", "")).startswith(
-                                "video/webm"
+                        if isinstance(source, dict):
+                            if (
+                                companion_facts.width is not None
+                                and companion_facts.width != source.get("width")
                             ):
                                 errors.append(
-                                    f"{location}.producer companion media must be WebM"
+                                    f"{location}.producer companion width does not match source"
                                 )
-                            if isinstance(source, dict):
-                                if "width" in media and media.get(
-                                    "width"
-                                ) != source.get("width"):
-                                    errors.append(
-                                        f"{location}.producer companion width does not match source"
-                                    )
-                                if "height" in media and media.get(
-                                    "height"
-                                ) != source.get("height"):
-                                    errors.append(
-                                        f"{location}.producer companion height does not match source"
-                                    )
+                            if (
+                                companion_facts.height is not None
+                                and companion_facts.height != source.get("height")
+                            ):
+                                errors.append(
+                                    f"{location}.producer companion height does not match source"
+                                )
                 mapping = producer_mappings.get(session_id or "")
                 if mapping is None:
                     errors.append(f"{location}.producer has no session-map binding")
@@ -882,7 +1006,7 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                             f"{location}.producer session-map actorId does not match"
                         )
         if session_split and capture_group:
-            capture_group_counts[session_split] += 1
+            capture_groups_by_split[session_split].add(capture_group)
 
     assigned_groups = set(split_for_group)
     for group in sorted(assigned_groups - capture_groups_seen):
@@ -919,7 +1043,7 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
         "frameCount": total_frames,
         "splitCounts": {split: split_counts[split] for split in sorted(SPLITS)},
         "captureGroupCounts": {
-            split: capture_group_counts[split] for split in sorted(SPLITS)
+            split: len(capture_groups_by_split[split]) for split in sorted(SPLITS)
         },
         "hardSubsetCounts": {
             subset: hard_subset_counts[subset] for subset in HARD_SUBSETS

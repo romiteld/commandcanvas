@@ -16,23 +16,19 @@ from uuid import UUID
 from PIL import Image, UnidentifiedImageError
 
 from .canonical import sha256_file, write_canonical_json
-from .dataset import HARD_SUBSETS, SPLITS, DatasetValidationError, validate_dataset
+from .dataset import (
+    HARD_SUBSETS,
+    SPLITS,
+    DatasetValidationError,
+    VISION_CONSENT_VERSION,
+    VISION_PROTOCOL,
+    validate_dataset,
+    validate_vision_companion,
+)
 
 
 SESSION_MAP_SCHEMA = "commandcanvas.hand-session-map/v1"
 DATASET_CONSENT_VERSION = "commandcanvas-owner-training/v1"
-VISION_CONSENT_VERSION = "vision-lab-consent-v1"
-VISION_PROTOCOL = {"id": "commandcanvas-hand-finetune", "version": 1}
-VISION_CAPTURE_TYPES = {
-    "acquisition",
-    "drawing",
-    "pinch",
-    "edges-corners",
-    "two-hand-transforms",
-    "throws",
-    "difficult-conditions",
-    "negative-no-hand",
-}
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MIN_CADENCE_MS = 20
 MAX_CADENCE_MS = 5_000
@@ -94,26 +90,6 @@ def _require_exact_keys(
         raise DatasetPreparationError(f"{description} must be an object")
     missing = expected - value.keys()
     unknown = value.keys() - expected
-    if missing or unknown:
-        details: list[str] = []
-        if missing:
-            details.append(f"missing {', '.join(sorted(missing))}")
-        if unknown:
-            details.append(f"unsupported {', '.join(sorted(unknown))}")
-        raise DatasetPreparationError(f"{description} fields: {'; '.join(details)}")
-    return value
-
-
-def _require_allowed_keys(
-    value: Any,
-    required: set[str],
-    optional: set[str],
-    description: str,
-) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise DatasetPreparationError(f"{description} must be an object")
-    missing = required - value.keys()
-    unknown = value.keys() - required - optional
     if missing or unknown:
         details: list[str] = []
         if missing:
@@ -390,96 +366,23 @@ def _validate_categories(capture_type: str, value: Any, description: str) -> lis
 def _validate_companion(
     value: dict[str, Any], expected_session_id: str, source: Path
 ) -> tuple[str, int | None, int | None, float | None, datetime, datetime]:
-    _require_allowed_keys(
+    errors: list[str] = []
+    facts = validate_vision_companion(
         value,
-        {
-            "schemaVersion",
-            "sessionId",
-            "captureType",
-            "startedAt",
-            "stoppedAt",
-            "media",
-            "mirrorDisplay",
-            "consentVersion",
-            "protocol",
-        },
-        {"videoSha256"},
-        "Vision Lab companion manifest",
+        location="Vision Lab companion manifest",
+        errors=errors,
+        expected_session_id=expected_session_id,
+        actual_video_sha256=sha256_file(source),
     )
-    if isinstance(value["schemaVersion"], bool) or value["schemaVersion"] != 1:
-        raise DatasetPreparationError("Vision Lab schemaVersion must be 1")
-    if value["sessionId"] != expected_session_id:
-        raise DatasetPreparationError(
-            "Vision Lab sessionId does not match the session map"
-        )
-    capture_type = value["captureType"]
-    if not isinstance(capture_type, str) or capture_type not in VISION_CAPTURE_TYPES:
-        raise DatasetPreparationError("Vision Lab captureType is unsupported")
-    started = _timestamp(value["startedAt"], "Vision Lab startedAt")
-    stopped = _timestamp(value["stoppedAt"], "Vision Lab stoppedAt")
-    if stopped <= started:
-        raise DatasetPreparationError("Vision Lab stoppedAt must be after startedAt")
-    media = _require_allowed_keys(
-        value["media"],
-        {"mimeType"},
-        {"width", "height", "frameRate", "facingMode"},
-        "Vision Lab media",
-    )
-    mime_type = media["mimeType"]
-    if not isinstance(mime_type, str) or not mime_type.startswith("video/webm"):
-        raise DatasetPreparationError("Vision Lab media must be WebM")
-    width = media.get("width")
-    height = media.get("height")
-    frame_rate = media.get("frameRate")
-    if width is not None and (
-        isinstance(width, bool) or not isinstance(width, int) or width <= 0
-    ):
-        raise DatasetPreparationError("Vision Lab media width is invalid")
-    if height is not None and (
-        isinstance(height, bool) or not isinstance(height, int) or height <= 0
-    ):
-        raise DatasetPreparationError("Vision Lab media height is invalid")
-    if frame_rate is not None and (
-        isinstance(frame_rate, bool)
-        or not isinstance(frame_rate, (int, float))
-        or not math.isfinite(frame_rate)
-        or frame_rate <= 0
-    ):
-        raise DatasetPreparationError("Vision Lab media frame rate is invalid")
-    if "facingMode" in media and (
-        not isinstance(media["facingMode"], str) or not media["facingMode"]
-    ):
-        raise DatasetPreparationError("Vision Lab media facingMode must be nonempty")
-    if not isinstance(value["mirrorDisplay"], bool):
-        raise DatasetPreparationError("Vision Lab mirrorDisplay must be boolean")
-    if value["consentVersion"] != VISION_CONSENT_VERSION:
-        raise DatasetPreparationError("Vision Lab consent version is not approved")
-    protocol = _require_exact_keys(
-        value["protocol"], {"id", "version"}, "Vision Lab protocol"
-    )
-    if (
-        protocol["id"] != VISION_PROTOCOL["id"]
-        or isinstance(protocol["version"], bool)
-        or protocol["version"] != VISION_PROTOCOL["version"]
-    ):
-        raise DatasetPreparationError("Vision Lab protocol does not match")
-    declared_sha = value.get("videoSha256")
-    if declared_sha is not None:
-        if not isinstance(declared_sha, str) or not SHA256_PATTERN.fullmatch(
-            declared_sha
-        ):
-            raise DatasetPreparationError("Vision Lab video SHA-256 is invalid")
-        if sha256_file(source) != declared_sha:
-            raise DatasetPreparationError(
-                "Vision Lab video SHA-256 does not match raw WebM"
-            )
+    if facts is None or errors:
+        raise DatasetPreparationError("\n- ".join(errors))
     return (
-        capture_type,
-        width,
-        height,
-        float(frame_rate) if frame_rate is not None else None,
-        started,
-        stopped,
+        facts.capture_type,
+        facts.width,
+        facts.height,
+        facts.frame_rate,
+        facts.started_at,
+        facts.stopped_at,
     )
 
 

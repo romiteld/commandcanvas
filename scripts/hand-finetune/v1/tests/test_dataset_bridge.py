@@ -22,7 +22,15 @@ from commandcanvas_hand_finetune.archive_dataset import (  # noqa: E402
     DatasetArchiveError,
     archive_dataset,
 )
-from commandcanvas_hand_finetune.dataset import validate_dataset  # noqa: E402
+from commandcanvas_hand_finetune.canonical import (  # noqa: E402
+    attach_digest,
+    sha256_file,
+    write_canonical_json,
+)
+from commandcanvas_hand_finetune.dataset import (  # noqa: E402
+    DatasetValidationError,
+    validate_dataset,
+)
 from commandcanvas_hand_finetune.prepare_dataset import (  # noqa: E402
     DatasetPreparationError,
     prepare_dataset,
@@ -227,6 +235,7 @@ class DatasetPreparationTests(unittest.TestCase):
             receipt, validate_dataset(output, output / "dataset-manifest.json")
         )
         self.assertEqual(receipt["frameCount"], 8)
+        self.assertFalse(receipt["productionEligible"])
         self.assertEqual(
             receipt["splitCounts"], {"holdout": 2, "train": 4, "validation": 2}
         )
@@ -454,7 +463,7 @@ class DatasetPreparationTests(unittest.TestCase):
             command_runner=FakeMediaRunner(),
         )
 
-        self.assertEqual(receipt["captureGroupCounts"]["train"], 2)
+        self.assertEqual(receipt["captureGroupCounts"]["train"], 1)
 
         captures, labels, session_map_path, session_map = write_bridge_inputs(
             self.root / "cross-split"
@@ -515,6 +524,48 @@ class DatasetPreparationTests(unittest.TestCase):
                 command_runner=FakeMediaRunner(frame_width=640),
             )
         self.assertFalse((self.root / "wrong-frame-size").exists())
+
+    def test_validator_refuses_malformed_companion_fields(self) -> None:
+        cases = (
+            ("startedAt", "2026-09-02T12:00:00", "startedAt"),
+            ("stoppedAt", "2026-09-02T11:59:59.000Z", "stoppedAt"),
+            ("mirrorDisplay", "true", "mirrorDisplay"),
+            ("media.width", 1280.0, "width"),
+            ("media.height", 720.0, "height"),
+            ("media.frameRate", "30", "frameRate"),
+            ("media.facingMode", "", "facingMode"),
+            ("media.mimeType", "video/webm-danger", "WebM"),
+        )
+        for case_index, (field, invalid_value, expected_error) in enumerate(cases):
+            with self.subTest(field=field):
+                case_root = self.root / f"malformed-companion-{case_index}"
+                captures, labels, session_map_path, _ = write_bridge_inputs(case_root)
+                dataset = case_root / "dataset"
+                prepare_dataset(
+                    capture_root=captures,
+                    session_map_path=session_map_path,
+                    labels_root=labels,
+                    output_dir=dataset,
+                    command_runner=FakeMediaRunner(),
+                )
+                manifest_path = dataset / "dataset-manifest.json"
+                manifest = json.loads(manifest_path.read_text())
+                companion_asset = manifest["sessions"][0]["producer"][
+                    "companionManifest"
+                ]
+                companion_path = dataset / companion_asset["path"]
+                companion = json.loads(companion_path.read_text())
+                if field.startswith("media."):
+                    companion["media"][field.removeprefix("media.")] = invalid_value
+                else:
+                    companion[field] = invalid_value
+                write_canonical_json(companion_path, companion)
+                companion_asset["byteSize"] = companion_path.stat().st_size
+                companion_asset["sha256"] = sha256_file(companion_path)
+                write_canonical_json(manifest_path, manifest)
+
+                with self.assertRaisesRegex(DatasetValidationError, expected_error):
+                    validate_dataset(dataset, manifest_path)
 
 
 class DatasetArchiveTests(unittest.TestCase):
@@ -626,6 +677,34 @@ class DatasetArchiveTests(unittest.TestCase):
                 dataset_receipt_path=receipt_path,
                 output_path=self.root / "tampered.tar",
                 archive_receipt_path=self.root / "tampered.json",
+            )
+
+    def test_archive_revalidation_refuses_semantically_invalid_companion(self) -> None:
+        manifest_path = self.dataset / "dataset-manifest.json"
+        receipt_path = self.dataset / "dataset-receipt.json"
+        manifest = json.loads(manifest_path.read_text())
+        companion_asset = manifest["sessions"][0]["producer"]["companionManifest"]
+        companion_path = self.dataset / companion_asset["path"]
+        companion = json.loads(companion_path.read_text())
+        companion["mirrorDisplay"] = "true"
+        write_canonical_json(companion_path, companion)
+        companion_asset["byteSize"] = companion_path.stat().st_size
+        companion_asset["sha256"] = sha256_file(companion_path)
+        write_canonical_json(manifest_path, manifest)
+
+        prior_receipt = json.loads(receipt_path.read_text())
+        prior_receipt["manifestSha256"] = sha256_file(manifest_path)
+        write_canonical_json(
+            receipt_path, attach_digest(prior_receipt, "receiptSha256")
+        )
+
+        with self.assertRaisesRegex(DatasetArchiveError, "mirrorDisplay"):
+            archive_dataset(
+                dataset_root=self.dataset,
+                manifest_path=manifest_path,
+                dataset_receipt_path=receipt_path,
+                output_path=self.root / "invalid-companion.tar",
+                archive_receipt_path=self.root / "invalid-companion.json",
             )
 
 
