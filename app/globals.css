@@ -25,6 +25,76 @@ body {
   min-height: 100%;
 }
 
+.vision-lab-card {
+  width: min(100% - 32px, 680px);
+  display: grid;
+  gap: 14px;
+  margin: 48px auto;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--white);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+}
+
+.vision-lab-card h1,
+.vision-lab-card p {
+  margin: 0;
+}
+
+.vision-lab-card label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.vision-lab-card select,
+.vision-lab-card button {
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--white);
+  color: var(--ink);
+  font: inherit;
+}
+
+.vision-lab-card button {
+  border: 0;
+  background: var(--ink);
+  color: white;
+  cursor: pointer;
+}
+
+.vision-lab-preview {
+  position: relative;
+  overflow: hidden;
+  min-height: 240px;
+  border-radius: 14px;
+  background: #0c1828;
+  color: white;
+}
+
+.vision-lab-preview video {
+  display: block;
+  width: 100%;
+  min-height: 240px;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+.vision-lab-preview p {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  left: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgb(12 24 40 / 78%);
+  font-size: 13px;
+}
+
 .meeting-lobby,
 .meeting-room-stage {
   min-height: 100dvh;
