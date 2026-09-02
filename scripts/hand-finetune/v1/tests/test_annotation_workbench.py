@@ -214,6 +214,25 @@ class AnnotationWorkbenchTests(unittest.TestCase):
             final["visionSessionIds"],
             ["vision-lab-session-1", "vision-lab-session-2", "vision-lab-session-3"],
         )
+        handoff = final["bridgeHandoff"]
+        self.assertEqual(
+            handoff["schemaVersion"], "commandcanvas.hand-annotation-handoff/v1"
+        )
+        self.assertEqual(handoff["datasetId"], canonical["datasetId"])
+        self.assertEqual(len(handoff["sessions"]), 3)
+        self.assertEqual(
+            handoff["sessions"][0]["visionSessionId"], "vision-lab-session-1"
+        )
+        self.assertEqual(
+            handoff["sessions"][0]["datasetSessionId"],
+            canonical["sessions"][0]["sessionId"],
+        )
+        self.assertTrue(handoff["sessions"][0]["annotation"]["reviewed"])
+        self.assertEqual(len(handoff["sessions"][0]["labels"]), 2)
+        self.assertEqual(
+            handoff["sessions"][0]["labels"][0]["sha256"],
+            canonical["sessions"][0]["frames"][0]["label"]["sha256"],
+        )
 
     def test_draft_refuses_tampered_frame_bytes_before_review(self) -> None:
         draft = write_annotation_draft(self.root)
@@ -222,6 +241,16 @@ class AnnotationWorkbenchTests(unittest.TestCase):
         image_path.write_bytes(b"tampered")
 
         with self.assertRaisesRegex(AnnotationWorkbenchError, "SHA-256|decodable"):
+            validate_annotation_manifest(self.root, draft)
+
+    def test_draft_requires_bridge_compatible_timestamp_and_asset_paths(self) -> None:
+        draft = write_annotation_draft(self.root)
+        manifest = read_manifest(draft)
+        frame = manifest["sessions"][0]["frames"][0]
+        frame["frameId"] = "frame-friendly-but-not-canonical"
+        write_manifest(draft, manifest)
+
+        with self.assertRaisesRegex(AnnotationWorkbenchError, "timestamp|path"):
             validate_annotation_manifest(self.root, draft)
 
     def test_draft_cannot_claim_manual_review_without_frame_edit_receipts(self) -> None:

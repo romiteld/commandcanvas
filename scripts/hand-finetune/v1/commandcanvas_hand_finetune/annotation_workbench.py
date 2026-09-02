@@ -31,12 +31,10 @@ from .dataset import HARD_SUBSETS, DatasetValidationError, validate_dataset
 
 WORKBENCH_SCHEMA_VERSION = "commandcanvas.hand-annotation-edit/v1"
 FINALIZATION_SCHEMA_VERSION = "commandcanvas.hand-annotation-finalization/v1"
+DRAFT_HANDOFF_SCHEMA_VERSION = "commandcanvas.hand-annotation-handoff/v1"
 DRAFT_SCHEMA_VERSION = "commandcanvas.hand-annotation-draft/v1"
 DATASET_SCHEMA_VERSION = "commandcanvas.hand-dataset/v1"
-DATASET_SCHEMA_VERSIONS = {
-    DATASET_SCHEMA_VERSION,
-    "commandcanvas.hand-dataset/v2",
-}
+DATASET_SCHEMA_VERSIONS = {DATASET_SCHEMA_VERSION}
 WORKBENCH_TOOL = "commandcanvas-hand-annotation-workbench"
 WORKBENCH_VERSION = "1.0.0"
 KEYPOINT_NAMES = (
@@ -326,6 +324,59 @@ def _draft_to_canonical(manifest: dict[str, Any]) -> dict[str, Any]:
     return canonical
 
 
+def _bridge_handoff(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Bind reviewed labels to capture identities without inventing bridge provenance."""
+
+    group_splits = {
+        group: split
+        for split, groups in manifest.get("splits", {}).items()
+        if isinstance(groups, list)
+        for group in groups
+    }
+    sessions: list[dict[str, Any]] = []
+    for session in manifest["sessions"]:
+        label_directories: set[str] = set()
+        labels: list[dict[str, Any]] = []
+        for frame in session["frames"]:
+            label = frame["label"]
+            label_path = PurePosixPath(label["path"])
+            label_directories.add(label_path.parent.as_posix())
+            labels.append(
+                {
+                    "frameId": frame["frameId"],
+                    "timestampMs": frame["timestampMs"],
+                    "path": label["path"],
+                    "byteSize": label["byteSize"],
+                    "sha256": label["sha256"],
+                }
+            )
+        if len(label_directories) != 1:
+            raise AnnotationWorkbenchError(
+                "each draft session must use exactly one canonical label directory"
+            )
+        capture_group_id = session["captureGroupId"]
+        sessions.append(
+            {
+                "visionSessionId": session["visionSessionId"],
+                "datasetSessionId": session["sessionId"],
+                "captureGroupId": capture_group_id,
+                "split": group_splits.get(capture_group_id),
+                "captureCategories": deepcopy(session["captureCategories"]),
+                "sourceVideo": deepcopy(session["source"]),
+                "labelDirectory": next(iter(label_directories)),
+                "labels": labels,
+                "annotation": deepcopy(session["annotation"]),
+            }
+        )
+    return {
+        "schemaVersion": DRAFT_HANDOFF_SCHEMA_VERSION,
+        "datasetId": manifest["datasetId"],
+        "sourceAdapter": deepcopy(manifest["sourceAdapter"]),
+        "sessions": sessions,
+        "productionEligible": False,
+    }
+
+
 def _validate_source_adapter(value: Any) -> dict[str, Any]:
     expected = {"name", "version", "sourceManifestSha256"}
     if not isinstance(value, dict) or set(value) != expected:
@@ -359,8 +410,6 @@ def _validate_draft_shape(manifest: dict[str, Any]) -> None:
         "sourceAdapter",
         "canonicalSchemaVersion",
     }
-    if manifest.get("canonicalSchemaVersion") == "commandcanvas.hand-dataset/v2":
-        expected_top.add("producerChain")
     if set(manifest) != expected_top:
         raise AnnotationWorkbenchError(
             "draft manifest fields do not match the v1 contract"
@@ -388,8 +437,6 @@ def _validate_draft_shape(manifest: dict[str, Any]) -> None:
         "annotation",
         "frames",
     }
-    if target_schema == "commandcanvas.hand-dataset/v2":
-        expected_session.add("producer")
     expected_frame = {
         "frameId",
         "timestampMs",
@@ -410,15 +457,6 @@ def _validate_draft_shape(manifest: dict[str, Any]) -> None:
             raise AnnotationWorkbenchError(
                 f"draft session {session_index} visionSessionId is invalid"
             )
-        if target_schema == "commandcanvas.hand-dataset/v2":
-            producer = session.get("producer")
-            if (
-                not isinstance(producer, dict)
-                or producer.get("visionLabSessionId") != vision_session_id
-            ):
-                raise AnnotationWorkbenchError(
-                    f"draft session {session_index} producer identity does not match visionSessionId"
-                )
         annotation = session.get("annotation")
         if not isinstance(annotation, dict):
             raise AnnotationWorkbenchError(
@@ -445,6 +483,35 @@ def _validate_draft_shape(manifest: dict[str, Any]) -> None:
             if not isinstance(frame.get("reviewed"), bool):
                 raise AnnotationWorkbenchError(
                     f"draft frame {session_index}/{frame_index} reviewed must be boolean"
+                )
+            timestamp_ms = frame.get("timestampMs")
+            expected_frame_id = (
+                f"frame-{timestamp_ms:010d}"
+                if isinstance(timestamp_ms, int) and not isinstance(timestamp_ms, bool)
+                else None
+            )
+            session_id = session.get("sessionId")
+            expected_image_path = (
+                f"images/{session_id}/{expected_frame_id}.png"
+                if expected_frame_id is not None and isinstance(session_id, str)
+                else None
+            )
+            expected_label_path = (
+                f"labels/{session_id}/{expected_frame_id}.txt"
+                if expected_frame_id is not None and isinstance(session_id, str)
+                else None
+            )
+            image = frame.get("image")
+            label = frame.get("label")
+            if (
+                frame.get("frameId") != expected_frame_id
+                or not isinstance(image, dict)
+                or image.get("path") != expected_image_path
+                or not isinstance(label, dict)
+                or label.get("path") != expected_label_path
+            ):
+                raise AnnotationWorkbenchError(
+                    f"draft frame {session_index}/{frame_index} timestamp and asset paths do not match the bridge contract"
                 )
             all_reviewed = all_reviewed and frame["reviewed"]
         if annotation.get("reviewed") is not all_reviewed:
@@ -1012,6 +1079,7 @@ def finalize_annotations(
                 "visionSessionIds": [
                     session["visionSessionId"] for session in manifest["sessions"]
                 ],
+                "bridgeHandoff": _bridge_handoff(manifest),
             }
         )
     final = attach_digest(final_value, "receiptSha256")

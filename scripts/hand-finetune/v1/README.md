@@ -70,11 +70,20 @@ plus these review-only fields:
 - per-frame `reviewed`, while each `image` remains keyed by its safe relative
   path and SHA-256.
 
-For the amended Vision Lab bridge, `canonicalSchemaVersion` is
-`commandcanvas.hand-dataset/v2`; its `producerChain` and each session's
-`producer` object pass through unchanged. The workbench deliberately does not
-re-extract media or infer producer metadata. That adapter boundary prevents a
-review UI from inventing capture provenance.
+Draft frames use the bridge's exact deterministic paths:
+`images/<datasetSessionId>/frame-<timestampMs padded to 10 digits>.png` and
+`labels/<datasetSessionId>/frame-<timestampMs padded to 10 digits>.txt`.
+
+The workbench emits a strict intermediate `commandcanvas.hand-dataset/v1`
+manifest and a `commandcanvas.hand-annotation-handoff/v1` object in its final
+receipt. The handoff binds every corrected label to its Vision Lab session,
+dataset session, capture group, split, annotation record, source-video digest,
+and source-adapter digest. The provenance-aware Vision Lab bridge consumes that
+review evidence and the corrected labels, then produces the final
+`commandcanvas.hand-dataset/v2` manifest from its canonical session map and
+companion manifests. The workbench deliberately does not pass through or
+invent v2 `producerChain` metadata: v2 binds `session.annotation` to the source
+session map, so review must happen before that bridge is finalized.
 
 After review, use the page's **Finalize dataset** action or the offline command:
 
@@ -91,5 +100,6 @@ orphaned edit receipts. It strips only the review fields, writes the canonical
 `dataset-manifest.json`, invokes the unchanged strict dataset validator, and
 emits `annotation-finalization-receipt.json`. The receipt binds the draft,
 canonical manifest, Vision Lab session identities, source-adapter digest, and
-every edit receipt. It proves dataset validation only and deliberately remains
-`productionEligible: false`.
+every edit receipt. The receipt's bridge handoff is an adapter seam, not a claim
+that the v2 bridge has run. It proves intermediate dataset validation only and
+deliberately remains `productionEligible: false`.

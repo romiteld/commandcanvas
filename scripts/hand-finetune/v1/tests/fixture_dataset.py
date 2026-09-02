@@ -161,12 +161,23 @@ def write_annotation_draft(root: Path) -> Path:
         session["visionSessionId"] = f"vision-lab-session-{session_index + 1}"
         session["annotation"]["reviewed"] = False
         for frame in session["frames"]:
+            frame_id = f"frame-{frame['timestampMs']:010d}"
+            previous_image = root / frame["image"]["path"]
+            image_path = root / "images" / session["sessionId"] / f"{frame_id}.png"
+            previous_image.replace(image_path)
+            previous_label = root / frame["label"]["path"]
+            label_path = root / "labels" / session["sessionId"] / f"{frame_id}.txt"
+            previous_label.replace(label_path)
+            frame["frameId"] = frame_id
+            frame["image"]["path"] = image_path.relative_to(root).as_posix()
+            frame["image"]["byteSize"] = image_path.stat().st_size
+            frame["image"]["sha256"] = sha256(image_path)
+            frame["label"]["path"] = label_path.relative_to(root).as_posix()
             frame["reviewed"] = False
-            label_path = root / frame["label"]["path"]
             if frame["categories"] != ["negative"]:
                 label_path.write_bytes(b"")
-                frame["label"]["byteSize"] = 0
-                frame["label"]["sha256"] = sha256(label_path)
+            frame["label"]["byteSize"] = label_path.stat().st_size
+            frame["label"]["sha256"] = sha256(label_path)
     draft_path = root / "annotation-draft.json"
     write_manifest(draft_path, canonical)
     return draft_path
