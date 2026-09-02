@@ -430,6 +430,8 @@ describe("DemoCommandCanvas", () => {
     expect(createCredentialApi).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Save key to my account" }))
       .not.toBeInTheDocument();
+    expect(screen.queryAllByText(/other@example\.com/i)).toHaveLength(0);
+    expect(screen.getByText("Signed-in CommandCanvas account")).toBeVisible();
   });
 
   it("shares one in-memory OpenAI key with room providers and clears it on unmount", async () => {

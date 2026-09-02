@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useEffect } from "react";
 import { hydrateRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -642,5 +643,348 @@ describe("DemoEntry", () => {
       }),
     );
     expect(screen.getByText("Hosted preview mounted")).toBeVisible();
+  });
+
+  it("keeps a newer confirmed actor authoritative when initial recovery resolves last", async () => {
+    let emitAuthEvent: ((event: string, session: unknown) => void) | undefined;
+    let resolveRecovery!: (value: {
+      data: { session: null };
+      error: null;
+    }) => void;
+    const Child = () => {
+      const identity = useDemoAuthenticatedIdentity();
+      return <div>Hosted as {identity?.email ?? "anonymous"}</div>;
+    };
+    vi.spyOn(browserClientModule, "createBrowserSupabaseClient").mockReturnValue({
+      ok: true,
+      client: {
+        auth: {
+          getSession: vi.fn(
+            () =>
+              new Promise<Parameters<typeof resolveRecovery>[0]>((resolve) => {
+                resolveRecovery = resolve;
+              }),
+          ),
+          onAuthStateChange: vi.fn((callback) => {
+            emitAuthEvent = callback;
+            return { data: { subscription: { unsubscribe: vi.fn() } } };
+          }),
+        },
+      },
+    } as never);
+
+    render(
+      <DemoEntry>
+        <Child />
+      </DemoEntry>,
+    );
+    await waitFor(() => expect(emitAuthEvent).toBeTypeOf("function"));
+
+    await act(async () =>
+      emitAuthEvent?.("SIGNED_IN", {
+        user: {
+          id: "replacement-actor",
+          email: "replacement@example.com",
+          is_anonymous: false,
+          email_confirmed_at: "2026-09-01T00:00:00.000Z",
+        },
+      }),
+    );
+    expect(screen.getByText("Hosted as replacement@example.com")).toBeVisible();
+
+    await act(async () => {
+      resolveRecovery({ data: { session: null }, error: null });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Hosted as replacement@example.com")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Enter no-signup preview" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("ignores a late OTP request after a different confirmed actor signs in", async () => {
+    let emitAuthEvent: ((event: string, session: unknown) => void) | undefined;
+    let resolveRequest!: (value: { data: object; error: null }) => void;
+    const Child = () => {
+      const identity = useDemoAuthenticatedIdentity();
+      return <div>Hosted as {identity?.email ?? "anonymous"}</div>;
+    };
+    vi.spyOn(browserClientModule, "createBrowserSupabaseClient").mockReturnValue({
+      ok: true,
+      client: {
+        auth: {
+          getSession: vi.fn(async () => ({ data: { session: null }, error: null })),
+          onAuthStateChange: vi.fn((callback) => {
+            emitAuthEvent = callback;
+            return { data: { subscription: { unsubscribe: vi.fn() } } };
+          }),
+          signInWithOtp: vi.fn(
+            () =>
+              new Promise<Parameters<typeof resolveRequest>[0]>((resolve) => {
+                resolveRequest = resolve;
+              }),
+          ),
+        },
+      },
+    } as never);
+    const user = userEvent.setup();
+
+    render(
+      <DemoEntry>
+        <Child />
+      </DemoEntry>,
+    );
+    await user.click(await screen.findByRole("button", { name: "Account sign-in" }));
+    await user.type(screen.getByLabelText("Email"), "first@example.com");
+    await user.click(screen.getByRole("button", { name: "Email me a code" }));
+
+    await act(async () =>
+      emitAuthEvent?.("SIGNED_IN", {
+        user: {
+          id: "replacement-actor",
+          email: "replacement@example.com",
+          is_anonymous: false,
+          email_confirmed_at: "2026-09-01T00:00:00.000Z",
+        },
+      }),
+    );
+    expect(screen.getByText("Hosted as replacement@example.com")).toBeVisible();
+
+    await act(async () => {
+      resolveRequest({ data: {}, error: null });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Hosted as replacement@example.com")).toBeVisible();
+    expect(screen.queryByLabelText("Six-digit code")).not.toBeInTheDocument();
+  });
+
+  it("ignores a late OTP verification failure after a different actor signs in", async () => {
+    let emitAuthEvent: ((event: string, session: unknown) => void) | undefined;
+    let resolveVerification!: (value: {
+      data: { session: null; user: null };
+      error: { message: string };
+    }) => void;
+    const Child = () => {
+      const identity = useDemoAuthenticatedIdentity();
+      return <div>Hosted as {identity?.email ?? "anonymous"}</div>;
+    };
+    vi.spyOn(browserClientModule, "createBrowserSupabaseClient").mockReturnValue({
+      ok: true,
+      client: {
+        auth: {
+          getSession: vi.fn(async () => ({ data: { session: null }, error: null })),
+          onAuthStateChange: vi.fn((callback) => {
+            emitAuthEvent = callback;
+            return { data: { subscription: { unsubscribe: vi.fn() } } };
+          }),
+          signInWithOtp: vi.fn(async () => ({ data: {}, error: null })),
+          verifyOtp: vi.fn(
+            () =>
+              new Promise<Parameters<typeof resolveVerification>[0]>((resolve) => {
+                resolveVerification = resolve;
+              }),
+          ),
+        },
+      },
+    } as never);
+    const user = userEvent.setup();
+
+    render(
+      <DemoEntry>
+        <Child />
+      </DemoEntry>,
+    );
+    await user.click(await screen.findByRole("button", { name: "Account sign-in" }));
+    await user.type(screen.getByLabelText("Email"), "first@example.com");
+    await user.click(screen.getByRole("button", { name: "Email me a code" }));
+    await user.type(await screen.findByLabelText("Six-digit code"), "123456");
+    await user.click(screen.getByRole("button", { name: "Verify code" }));
+
+    await act(async () =>
+      emitAuthEvent?.("SIGNED_IN", {
+        user: {
+          id: "replacement-actor",
+          email: "replacement@example.com",
+          is_anonymous: false,
+          email_confirmed_at: "2026-09-01T00:00:00.000Z",
+        },
+      }),
+    );
+    expect(screen.getByText("Hosted as replacement@example.com")).toBeVisible();
+
+    await act(async () => {
+      resolveVerification({
+        data: { session: null, user: null },
+        error: { message: "expired" },
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Hosted as replacement@example.com")).toBeVisible();
+    expect(screen.queryByLabelText("Six-digit code")).not.toBeInTheDocument();
+  });
+
+  it("invalidates the old runtime even when recovery storage removal throws", async () => {
+    let emitAuthEvent: ((event: string, session: unknown) => void) | undefined;
+    const cleanup = vi.fn();
+    const Child = () => {
+      const identity = useDemoAuthenticatedIdentity();
+      useEffect(() => cleanup, []);
+      return <div>Hosted as {identity?.email ?? "anonymous"}</div>;
+    };
+    vi.spyOn(browserClientModule, "createBrowserSupabaseClient").mockReturnValue({
+      ok: true,
+      client: {
+        auth: {
+          getSession: vi.fn(async () => ({
+            data: {
+              session: {
+                user: {
+                  id: "first-actor",
+                  email: "first@example.com",
+                  is_anonymous: false,
+                  email_confirmed_at: "2026-09-01T00:00:00.000Z",
+                },
+              },
+            },
+            error: null,
+          })),
+          onAuthStateChange: vi.fn((callback) => {
+            emitAuthEvent = callback;
+            return { data: { subscription: { unsubscribe: vi.fn() } } };
+          }),
+        },
+      },
+    } as never);
+
+    render(
+      <DemoEntry>
+        <Child />
+      </DemoEntry>,
+    );
+    expect(await screen.findByText("Hosted as first@example.com")).toBeVisible();
+    const removeItem = vi
+      .spyOn(Storage.prototype, "removeItem")
+      .mockImplementation(() => {
+        throw new DOMException("Storage denied", "SecurityError");
+      });
+
+    try {
+      await act(async () => {
+        try {
+          emitAuthEvent?.("SIGNED_IN", {
+            user: {
+              id: "second-actor",
+              email: "second@example.com",
+              is_anonymous: false,
+              email_confirmed_at: "2026-09-01T00:00:00.000Z",
+            },
+          });
+        } catch {
+          // The assertion below proves storage cannot stop in-memory teardown.
+        }
+      });
+    } finally {
+      removeItem.mockRestore();
+    }
+
+    expect(screen.getByText("Hosted as second@example.com")).toBeVisible();
+    expect(screen.queryByText("Hosted as first@example.com")).not.toBeInTheDocument();
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("recovers when the same actor changes from unconfirmed to confirmed", async () => {
+    let emitAuthEvent: ((event: string, session: unknown) => void) | undefined;
+    const Child = () => {
+      const identity = useDemoAuthenticatedIdentity();
+      return <div>Hosted as {identity?.email ?? "anonymous"}</div>;
+    };
+    vi.spyOn(browserClientModule, "createBrowserSupabaseClient").mockReturnValue({
+      ok: true,
+      client: {
+        auth: {
+          getSession: vi.fn(async () => ({
+            data: {
+              session: {
+                user: {
+                  id: "same-actor",
+                  email: "same@example.com",
+                  is_anonymous: false,
+                  email_confirmed_at: null,
+                },
+              },
+            },
+            error: null,
+          })),
+          onAuthStateChange: vi.fn((callback) => {
+            emitAuthEvent = callback;
+            return { data: { subscription: { unsubscribe: vi.fn() } } };
+          }),
+        },
+      },
+    } as never);
+
+    render(
+      <DemoEntry>
+        <Child />
+      </DemoEntry>,
+    );
+    await waitFor(() => expect(emitAuthEvent).toBeTypeOf("function"));
+    expect(screen.queryByText("Hosted as same@example.com")).not.toBeInTheDocument();
+
+    await act(async () =>
+      emitAuthEvent?.("USER_UPDATED", {
+        user: {
+          id: "same-actor",
+          email: "same@example.com",
+          is_anonymous: false,
+          email_confirmed_at: "2026-09-01T00:00:00.000Z",
+        },
+      }),
+    );
+
+    expect(screen.getByText("Hosted as same@example.com")).toBeVisible();
+  });
+
+  it("offers an actionable verification gate instead of a dead unconfirmed preview CTA", async () => {
+    vi.spyOn(browserClientModule, "createBrowserSupabaseClient").mockReturnValue({
+      ok: true,
+      client: {
+        auth: {
+          getSession: vi.fn(async () => ({
+            data: {
+              session: {
+                user: {
+                  id: "unconfirmed-actor",
+                  email: "unconfirmed@example.com",
+                  is_anonymous: false,
+                  email_confirmed_at: null,
+                },
+              },
+            },
+            error: null,
+          })),
+        },
+      },
+    } as never);
+    const user = userEvent.setup();
+
+    render(
+      <DemoEntry>
+        <div>Hosted preview mounted</div>
+      </DemoEntry>,
+    );
+
+    expect(
+      await screen.findByText(/current CommandCanvas session is not confirmed/i),
+    ).toBeVisible();
+    const preview = screen.getByRole("button", {
+      name: "Enter no-signup preview",
+    });
+    expect(preview).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Verify account with email code" }));
+    expect(screen.getByLabelText("Email")).toHaveValue("unconfirmed@example.com");
   });
 });

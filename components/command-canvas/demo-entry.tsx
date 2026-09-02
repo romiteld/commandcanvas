@@ -57,6 +57,20 @@ type EntryPhase =
 
 type EntryActorKind = "none" | "anonymous" | "permanent" | "unconfirmed";
 
+interface EntryActorState {
+  actorId: string | null;
+  kind: EntryActorKind;
+  email: string | null;
+  identity: DemoAuthenticatedIdentity | null;
+}
+
+const EMPTY_ENTRY_ACTOR: EntryActorState = {
+  actorId: null,
+  kind: "none",
+  email: null,
+  identity: null,
+};
+
 function readConfirmedIdentity(session: DemoEntrySession | null): DemoAuthenticatedIdentity | null {
   const user = session?.user;
   const parsedEmail = normalizedEmailSchema.safeParse(user?.email);
@@ -75,6 +89,25 @@ function readActorKind(session: DemoEntrySession | null): EntryActorKind {
   if (!session?.user) return "none";
   if (session.user.is_anonymous === true) return "anonymous";
   return readConfirmedIdentity(session) ? "permanent" : "unconfirmed";
+}
+
+function readActorState(session: DemoEntrySession | null): EntryActorState {
+  const identity = readConfirmedIdentity(session);
+  const parsedEmail = normalizedEmailSchema.safeParse(session?.user.email);
+  return {
+    actorId: session?.user.id ?? null,
+    kind: readActorKind(session),
+    email: parsedEmail.success ? parsedEmail.data : null,
+    identity,
+  };
+}
+
+function sameActorState(left: EntryActorState, right: EntryActorState) {
+  return (
+    left.actorId === right.actorId &&
+    left.kind === right.kind &&
+    left.email === right.email
+  );
 }
 
 function subscribeToDemoEntry(onChange: () => void) {
@@ -143,10 +176,9 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     () => false,
   );
   const [memoryAccepted, setMemoryAccepted] = useState(false);
-  const [authenticatedIdentity, setAuthenticatedIdentity] =
-    useState<DemoAuthenticatedIdentity | null>(null);
+  const [acceptanceRevoked, setAcceptanceRevoked] = useState(false);
+  const [actorState, setActorState] = useState<EntryActorState>(EMPTY_ENTRY_ACTOR);
   const [runtimeEpoch, setRuntimeEpoch] = useState(0);
-  const [actorKind, setActorKind] = useState<EntryActorKind>("none");
   const [phase, setPhase] = useState<EntryPhase>({
     kind: "choice",
     permanentEmail: null,
@@ -162,9 +194,10 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     readMountedServer,
   );
   const siteToolsSurfaceAvailable = useDocumentWebMcpTarget() !== null;
-  const accepted = storedAccepted || memoryAccepted;
+  const accepted = !acceptanceRevoked && (storedAccepted || memoryAccepted);
   const acceptedRef = useRef(accepted);
-  const currentActorRef = useRef<string | null>(null);
+  const currentActorStateRef = useRef<EntryActorState>(EMPTY_ENTRY_ACTOR);
+  const authGenerationRef = useRef(0);
 
   useEffect(() => {
     acceptedRef.current = accepted;
@@ -176,6 +209,7 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     let active = true;
 
     async function recoverEntryIdentity() {
+      const recoveryGeneration = authGenerationRef.current;
       const clientResult = createBrowserSupabaseClient({
         NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
         NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
@@ -196,22 +230,33 @@ export function DemoEntry({ children }: { children: ReactNode }) {
       clientRef.current = client;
       try {
         const current = await client.auth.getSession();
-        if (lifecycle.signal.aborted || !active) return;
+        if (
+          lifecycle.signal.aborted ||
+          !active ||
+          authGenerationRef.current !== recoveryGeneration
+        )
+          return;
         clientRef.current = client;
-        const identity = current.error ? null : readConfirmedIdentity(current.data.session);
-        const actor = current.data.session?.user;
-        setAuthenticatedIdentity(identity);
-        setActorKind(current.error ? "none" : readActorKind(current.data.session));
-        currentActorRef.current = actor?.id ?? null;
+        const nextActor = current.error
+          ? EMPTY_ENTRY_ACTOR
+          : readActorState(current.data.session);
+        if (!sameActorState(currentActorStateRef.current, nextActor))
+          authGenerationRef.current += 1;
+        currentActorStateRef.current = nextActor;
+        setActorState(nextActor);
         setPhase({
           kind: "choice",
-          permanentEmail: identity?.email ?? null,
+          permanentEmail: nextActor.identity?.email ?? null,
           error: current.error
             ? "Your current CommandCanvas session could not be checked."
             : null,
         });
       } catch {
-        if (!lifecycle.signal.aborted && active) {
+        if (
+          !lifecycle.signal.aborted &&
+          active &&
+          authGenerationRef.current === recoveryGeneration
+        ) {
           clientRef.current = null;
           setPhase({
             kind: "choice",
@@ -225,28 +270,39 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     void recoverEntryIdentity();
     const client = clientRef.current;
     const subscription = client?.auth.onAuthStateChange?.((event, session) => {
-      if (lifecycle.signal.aborted || event === "TOKEN_REFRESHED") return;
-      const nextActor = session?.user.id ?? null;
-      if (nextActor === currentActorRef.current) return;
+      if (lifecycle.signal.aborted) return;
+      const nextActor = readActorState(session);
+      if (sameActorState(nextActor, currentActorStateRef.current)) return;
+      const previousActor = currentActorStateRef.current;
+      currentActorStateRef.current = nextActor;
+      authGenerationRef.current += 1;
       if (
-        currentActorRef.current === null &&
+        previousActor.kind === "none" &&
         acceptedRef.current &&
-        readActorKind(session) === "anonymous"
+        nextActor.kind === "anonymous"
       ) {
-        currentActorRef.current = nextActor;
-        setActorKind("anonymous");
+        setActorState(nextActor);
         return;
       }
-      currentActorRef.current = nextActor;
-      clearStoredDemoRoom(window.sessionStorage);
-      window.sessionStorage.removeItem(DEMO_ENTRY_ACCEPTED_KEY);
-      window.dispatchEvent(new Event(DEMO_ENTRY_ACCEPTED_EVENT));
+
+      acceptedRef.current = false;
+      setAcceptanceRevoked(true);
       setMemoryAccepted(false);
-      const identity = readConfirmedIdentity(session);
-      setAuthenticatedIdentity(identity);
-      setActorKind(readActorKind(session));
+      setActorState(nextActor);
       setRuntimeEpoch((epoch) => epoch + 1);
-      setPhase({ kind: "choice", permanentEmail: identity?.email ?? null, error: null });
+      setPhase({
+        kind: "choice",
+        permanentEmail: nextActor.identity?.email ?? null,
+        error: null,
+      });
+      try {
+        const storage = window.sessionStorage;
+        clearStoredDemoRoom(storage);
+        storage.removeItem(DEMO_ENTRY_ACCEPTED_KEY);
+        window.dispatchEvent(new Event(DEMO_ENTRY_ACCEPTED_EVENT));
+      } catch {
+        // In-memory revocation remains authoritative when storage is disabled.
+      }
     });
     return () => {
       active = false;
@@ -265,6 +321,9 @@ export function DemoEntry({ children }: { children: ReactNode }) {
   }, [phase]);
 
   function acceptEntry() {
+    if (currentActorStateRef.current.kind === "unconfirmed") return;
+    acceptedRef.current = true;
+    setAcceptanceRevoked(false);
     try {
       window.sessionStorage.setItem(DEMO_ENTRY_ACCEPTED_KEY, "accepted");
       window.dispatchEvent(new Event(DEMO_ENTRY_ACCEPTED_EVENT));
@@ -274,6 +333,9 @@ export function DemoEntry({ children }: { children: ReactNode }) {
   }
 
   function clearEntryRecovery() {
+    acceptedRef.current = false;
+    setAcceptanceRevoked(true);
+    setMemoryAccepted(false);
     try {
       clearStoredDemoRoom(window.sessionStorage);
       window.sessionStorage.removeItem(DEMO_ENTRY_ACCEPTED_KEY);
@@ -297,9 +359,14 @@ export function DemoEntry({ children }: { children: ReactNode }) {
       return;
     }
     const previous = phase;
+    const operationGeneration = authGenerationRef.current;
     setPhase({ kind: "working", email: previous.email, message: "Sending a six-digit code…" });
     const result = await requestEmailOtp(client, previous.email);
-    if (signal.aborted) return;
+    if (
+      signal.aborted ||
+      authGenerationRef.current !== operationGeneration
+    )
+      return;
     if (!result.ok) {
       setPhase({ kind: "email", email: previous.email, error: result.message });
       return;
@@ -314,19 +381,33 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     const signal = lifecycleAbortRef.current?.signal;
     if (!client || !signal || signal.aborted) return;
     const previous = phase;
+    const operationGeneration = authGenerationRef.current;
     const code = String(new FormData(event.currentTarget).get("code") ?? "");
     setPhase({ kind: "working", email: previous.email, message: "Verifying your code…" });
     const result = await verifyEmailOtp(client, previous.email, code);
     if (signal.aborted) return;
     if (!result.ok) {
+      if (authGenerationRef.current !== operationGeneration) return;
       setPhase({ kind: "otp", email: previous.email, error: result.message });
       return;
     }
+    const verifiedActor: EntryActorState = {
+      actorId: result.value.user.id,
+      kind: "permanent",
+      email: result.value.email,
+      identity: { actorId: result.value.user.id, email: result.value.email },
+    };
+    if (
+      authGenerationRef.current !== operationGeneration &&
+      !sameActorState(currentActorStateRef.current, verifiedActor)
+    )
+      return;
     clearEntryRecovery();
     replaceDemoPath("/demo");
-    currentActorRef.current = result.value.user.id;
-    setActorKind("permanent");
-    setAuthenticatedIdentity({ actorId: result.value.user.id, email: result.value.email });
+    if (!sameActorState(currentActorStateRef.current, verifiedActor))
+      authGenerationRef.current += 1;
+    currentActorStateRef.current = verifiedActor;
+    setActorState(verifiedActor);
     setPhase({ kind: "choice", permanentEmail: result.value.email, error: null });
     acceptEntry();
   }
@@ -335,10 +416,10 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     !signInIntent &&
     accepted &&
     phase.kind === "choice" &&
-    (actorKind === "none" || actorKind === "anonymous");
+    (actorState.kind === "none" || actorState.kind === "anonymous");
   if (allowAnonymousResume)
     return (
-      <DemoAuthenticatedIdentityProvider identity={authenticatedIdentity}>
+      <DemoAuthenticatedIdentityProvider identity={actorState.identity}>
         <Fragment key={runtimeEpoch}>{children}</Fragment>
       </DemoAuthenticatedIdentityProvider>
     );
@@ -348,7 +429,7 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     phase.permanentEmail !== null
   )
     return (
-      <DemoAuthenticatedIdentityProvider identity={authenticatedIdentity}>
+      <DemoAuthenticatedIdentityProvider identity={actorState.identity}>
         <Fragment key={runtimeEpoch}>{children}</Fragment>
       </DemoAuthenticatedIdentityProvider>
     );
@@ -440,7 +521,35 @@ export function DemoEntry({ children }: { children: ReactNode }) {
         <p role="status">{phase.message}</p>
       ) : (
         <div className="demo-entry-actions">
-          {signInIntent ? (
+          {actorState.kind === "unconfirmed" ? (
+            <>
+              <p role="alert">
+                Your current CommandCanvas session is not confirmed. Verify the
+                account before entering a room.
+              </p>
+              <button
+                className="demo-entry-primary"
+                disabled={!mounted}
+                type="button"
+                onClick={() =>
+                  setPhase({
+                    kind: "email",
+                    email: actorState.email ?? "",
+                    error: null,
+                  })
+                }
+              >
+                Verify account with email code
+              </button>
+              <button
+                className="demo-entry-secondary"
+                disabled
+                type="button"
+              >
+                Enter no-signup preview
+              </button>
+            </>
+          ) : signInIntent ? (
             <button
               className="demo-entry-primary"
               disabled={!mounted}

@@ -673,10 +673,15 @@ export function DemoCommandCanvas({
 
   const { room, snapshot } = view;
   const isAnonymousDemo = snapshot.identity?.isAnonymous !== false;
+  const matchedAuthenticatedIdentity =
+    !isAnonymousDemo &&
+    authenticatedIdentity?.actorId === snapshot.identity?.userId
+      ? authenticatedIdentity
+      : null;
   const accountLabel = isAnonymousDemo
     ? "No-signup preview"
-    : authenticatedIdentity?.email
-      ? `Signed in as ${authenticatedIdentity.email}`
+    : matchedAuthenticatedIdentity?.email
+      ? `Signed in as ${matchedAuthenticatedIdentity.email}`
       : "Signed-in CommandCanvas account";
   const collaborationStatus = describeCollaboration(snapshot);
   const participants = snapshot.presence.map((participant) => ({
