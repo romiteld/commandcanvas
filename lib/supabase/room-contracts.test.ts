@@ -46,7 +46,7 @@ describe("room API contracts", () => {
   it("requires a bounded high-entropy join capability", () => {
     const input = {
       slug: "launch-room-4k29x",
-      joinToken: "pZP2zbyAClWj3rRcR3xgb_O0u7cF1h7D3C3FsTd3d_I",
+      joinToken: `test-join-token-${"a".repeat(27)}`,
       displayName: "Sarah",
       color: "#7558cf",
     };
