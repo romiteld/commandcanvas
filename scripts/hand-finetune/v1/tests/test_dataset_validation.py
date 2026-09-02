@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import sys
 import tempfile
 import unittest
@@ -184,6 +185,31 @@ class DatasetValidationTests(unittest.TestCase):
         manifest["sessions"][0]["source"]["path"] = "../outside.webm"
         write_manifest(self.manifest_path, manifest)
         with self.assertRaisesRegex(DatasetValidationError, "safe relative path"):
+            validate_dataset(self.root, self.manifest_path)
+
+    def test_manifest_paths_refuse_every_control_character(self) -> None:
+        original = read_manifest(self.manifest_path)
+
+        for codepoint in [*range(32), 127]:
+            with self.subTest(codepoint=codepoint):
+                manifest = copy.deepcopy(original)
+                manifest["sessions"][0]["source"]["path"] = (
+                    f"videos/capture{chr(codepoint)}.webm"
+                )
+                write_manifest(self.manifest_path, manifest)
+
+                with self.assertRaisesRegex(
+                    DatasetValidationError, "control characters"
+                ):
+                    validate_dataset(self.root, self.manifest_path)
+
+    def test_manifest_paths_must_be_canonical_posix(self) -> None:
+        manifest = read_manifest(self.manifest_path)
+        source_path = manifest["sessions"][0]["source"]["path"]
+        manifest["sessions"][0]["source"]["path"] = source_path.replace("/", "//", 1)
+        write_manifest(self.manifest_path, manifest)
+
+        with self.assertRaisesRegex(DatasetValidationError, "canonical POSIX"):
             validate_dataset(self.root, self.manifest_path)
 
     def test_manifest_session_ids_are_canonical_uuids(self) -> None:

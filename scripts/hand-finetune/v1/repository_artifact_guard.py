@@ -13,6 +13,17 @@ from typing import Iterable, Sequence
 MAX_TRACKED_BYTES = 1_048_576
 PRIVATE_CAPTURE_PREFIX = PurePosixPath("private/vision-lab")
 TRAINING_PREFIX = PurePosixPath("scripts/hand-finetune/v1")
+PRIVATE_TRAINING_PREFIXES = tuple(
+    TRAINING_PREFIX / directory
+    for directory in (
+        "captures",
+        "datasets",
+        "models",
+        "outputs",
+        "runs",
+        "archives",
+    )
+)
 FORBIDDEN_SUFFIXES = (
     ".webm",
     ".mp4",
@@ -37,6 +48,7 @@ SECRET_PATTERNS = (
     re.compile(rb"\brpa_[A-Za-z0-9]{20,}\b"),
     re.compile(rb"\bre_[A-Za-z0-9_-]{20,}\b"),
     re.compile(rb"\bsb_secret_[A-Za-z0-9_-]{20,}\b"),
+    re.compile(rb"\bhf_[A-Za-z0-9]{20,}\b"),
 )
 
 
@@ -76,6 +88,10 @@ def validate_tracked_artifacts(
         if _is_within(relative, PRIVATE_CAPTURE_PREFIX):
             violations.append(
                 f"{relative.as_posix()} is private Vision Lab material and cannot be tracked"
+            )
+        if any(_is_within(relative, prefix) for prefix in PRIVATE_TRAINING_PREFIXES):
+            violations.append(
+                f"{relative.as_posix()} is a private training artifact and cannot be tracked"
             )
         if any(lowered.endswith(suffix) for suffix in FORBIDDEN_SUFFIXES):
             violations.append(

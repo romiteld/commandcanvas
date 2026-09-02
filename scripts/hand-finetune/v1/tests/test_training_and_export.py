@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import sys
 import tempfile
@@ -11,6 +12,10 @@ import numpy as np
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE_ROOT))
 
+from commandcanvas_hand_finetune.canonical import (  # noqa: E402
+    canonical_json_bytes,
+    verify_digest,
+)
 from commandcanvas_hand_finetune.dataset import validate_dataset  # noqa: E402
 from commandcanvas_hand_finetune.onnx_contract import (  # noqa: E402
     OnnxContractError,
@@ -21,11 +26,54 @@ from commandcanvas_hand_finetune.training_spec import (  # noqa: E402
     TrainingSpecError,
     build_training_spec,
 )
+from commandcanvas_hand_finetune import training_spec as training_spec_module  # noqa: E402
 
 from fixture_dataset import write_valid_dataset  # noqa: E402
 
 
 class TrainingSpecTests(unittest.TestCase):
+    def test_runtime_lock_is_canonical_self_digested_and_dependency_complete(
+        self,
+    ) -> None:
+        loader = getattr(training_spec_module, "load_training_runtime_lock", None)
+        self.assertTrue(callable(loader))
+        lock = loader()
+
+        self.assertEqual(lock["schemaVersion"], "commandcanvas.hand-runtime-lock/v1")
+        self.assertEqual(lock["pythonVersion"], "3.12.3")
+        self.assertEqual(lock["ultralyticsVersion"], "8.4.33")
+        self.assertEqual(lock["pytorchVersion"], "2.8.0+cu128")
+        self.assertEqual(lock["cudaVersion"], "12.8")
+        self.assertEqual(lock["onnxVersion"], "1.17.0")
+        self.assertEqual(lock["onnxRuntimeVersion"], "1.23.2")
+        self.assertEqual(lock["onnxRuntimeProvider"], "CUDAExecutionProvider")
+        self.assertEqual(lock["baseImageRole"], "foundation-only")
+        self.assertIsNone(lock["trainerImageDigest"])
+        self.assertFalse(lock["executionEligible"])
+        self.assertEqual(
+            lock["buildDefinition"]["repository"], "commandcanvas-hand-relay"
+        )
+        self.assertEqual(lock["buildDefinition"]["license"], "AGPL-3.0-only")
+        self.assertEqual(
+            lock["buildDefinition"]["status"],
+            "required-follow-up-not-in-mit-application",
+        )
+        self.assertTrue(verify_digest(lock, "runtimeLockSha256"))
+
+        lock_path = training_spec_module.RUNTIME_LOCK_PATH
+        self.assertEqual(lock_path.read_bytes(), canonical_json_bytes(lock))
+
+        with tempfile.TemporaryDirectory() as directory:
+            tampered_path = Path(directory) / "runtime.lock.json"
+            tampered = dict(lock)
+            tampered["pythonVersion"] = "0.0.0"
+            tampered_path.write_text(
+                json.dumps(tampered, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(TrainingSpecError, "digest"):
+                loader(tampered_path)
+
     def test_spec_is_bounded_pinned_and_never_production_eligible(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -47,6 +95,11 @@ class TrainingSpecTests(unittest.TestCase):
             "CC-BY-NC-SA-4.0",
         )
         self.assertEqual(spec["runtime"]["ultralyticsVersion"], "8.4.33")
+        self.assertEqual(spec["runtime"]["pytorchVersion"], "2.8.0+cu128")
+        self.assertEqual(spec["runtime"]["onnxVersion"], "1.17.0")
+        self.assertEqual(spec["runtime"]["onnxRuntimeVersion"], "1.23.2")
+        self.assertFalse(spec["runtime"]["executionEligible"])
+        self.assertTrue(verify_digest(spec["runtime"], "runtimeLockSha256"))
         self.assertRegex(
             spec["runtime"]["baseImage"],
             r"@sha256:[0-9a-f]{64}$",

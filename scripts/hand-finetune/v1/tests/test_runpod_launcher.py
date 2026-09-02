@@ -107,6 +107,13 @@ class RunPodLauncherTests(unittest.TestCase):
         self.assertNotIn("minVcpuCount", prepared["request"])
         self.assertNotIn("minMemoryInGb", prepared["request"])
         self.assertRegex(prepared["datasetArchive"]["sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            prepared.get("runtimeLockSha256"), TRAINING_RUNTIME["runtimeLockSha256"]
+        )
+        self.assertIn(
+            "separately licensed dependency-locked trainer image",
+            prepared["unresolvedExecuteGates"],
+        )
         self.assertNotIn("RUNPOD_API_KEY", rendered)
         self.assertNotIn("synthetic-private-key-fixture", rendered)
 
@@ -138,12 +145,14 @@ class RunPodLauncherTests(unittest.TestCase):
             execute_launch(self.inputs, environ={}, transport=transport)
         self.assertEqual(transport.calls, [])
 
-        with self.assertRaisesRegex(LaunchRefused, "secure SSH transfer"):
+        with self.assertRaises(LaunchRefused) as caught:
             execute_launch(
                 self.inputs,
                 environ={"RUNPOD_API_KEY": "not-printed-test-secret"},
                 transport=transport,
             )
+        self.assertIn("dependency-locked trainer image", str(caught.exception))
+        self.assertIn("secure SSH transfer", str(caught.exception))
         self.assertEqual(transport.calls, [])
 
     def test_client_exposes_only_cleanup_until_execute_gates_exist(self) -> None:

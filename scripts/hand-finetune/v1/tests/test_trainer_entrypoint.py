@@ -18,7 +18,9 @@ from commandcanvas_hand_finetune.trainer import (  # noqa: E402
     TrainerRefused,
     run_owner_experiment,
 )
+from commandcanvas_hand_finetune import trainer as trainer_module  # noqa: E402
 from commandcanvas_hand_finetune.training_spec import (  # noqa: E402
+    TRAINING_RUNTIME,
     UPSTREAM_CHECKPOINT,
     build_training_spec,
 )
@@ -69,6 +71,39 @@ def valid_inspection() -> OnnxInspection:
 
 
 class TrainerEntrypointTests(unittest.TestCase):
+    def test_runtime_observation_must_match_every_locked_training_dependency(
+        self,
+    ) -> None:
+        validator = getattr(trainer_module, "validate_training_runtime", None)
+        self.assertTrue(callable(validator))
+        valid = {
+            "pythonVersion": TRAINING_RUNTIME["pythonVersion"],
+            "ultralyticsVersion": TRAINING_RUNTIME["ultralyticsVersion"],
+            "pytorchVersion": TRAINING_RUNTIME["pytorchVersion"],
+            "cudaVersion": TRAINING_RUNTIME["cudaVersion"],
+            "onnxVersion": TRAINING_RUNTIME["onnxVersion"],
+            "onnxRuntimeVersion": TRAINING_RUNTIME["onnxRuntimeVersion"],
+            "onnxRuntimeProviders": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        }
+
+        validator(valid)
+
+        for field in (
+            "pythonVersion",
+            "ultralyticsVersion",
+            "pytorchVersion",
+            "cudaVersion",
+            "onnxVersion",
+            "onnxRuntimeVersion",
+        ):
+            with self.subTest(field=field):
+                mismatched = {**valid, field: "not-the-locked-version"}
+                with self.assertRaisesRegex(TrainerRefused, field):
+                    validator(mismatched)
+
+        with self.assertRaisesRegex(TrainerRefused, "onnxRuntimeProviders"):
+            validator({**valid, "onnxRuntimeProviders": ["CPUExecutionProvider"]})
+
     def test_executes_pinned_bounded_two_phase_recipe_and_non_promoting_export(
         self,
     ) -> None:

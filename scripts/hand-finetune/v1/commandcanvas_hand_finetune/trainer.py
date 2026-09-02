@@ -7,9 +7,10 @@ vendor Ultralytics, the upstream checkpoint, training media, or output weights.
 from __future__ import annotations
 
 import json
+import platform
 import shutil
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from .canonical import canonical_json_bytes, sha256_file, write_canonical_json
 from .dataset import DatasetValidationError, validate_dataset
@@ -19,6 +20,28 @@ from .training_spec import TRAINING_RUNTIME, UPSTREAM_CHECKPOINT, build_training
 
 class TrainerRefused(RuntimeError):
     pass
+
+
+def validate_training_runtime(observation: Mapping[str, Any]) -> None:
+    for field in (
+        "pythonVersion",
+        "ultralyticsVersion",
+        "pytorchVersion",
+        "cudaVersion",
+        "onnxVersion",
+        "onnxRuntimeVersion",
+    ):
+        if observation.get(field) != TRAINING_RUNTIME[field]:
+            raise TrainerRefused(f"{field} does not match the training runtime lock")
+    providers = observation.get("onnxRuntimeProviders")
+    if (
+        not isinstance(providers, (list, tuple))
+        or not providers
+        or providers[0] != TRAINING_RUNTIME["onnxRuntimeProvider"]
+    ):
+        raise TrainerRefused(
+            "onnxRuntimeProviders must use the locked CUDA execution provider first"
+        )
 
 
 class TrainingBackend(Protocol):
@@ -44,6 +67,8 @@ class UltralyticsBackend:
 
     def load(self, checkpoint: Path) -> None:
         try:
+            import onnx  # type: ignore[import-not-found]
+            import onnxruntime as ort  # type: ignore[import-untyped]
             import torch
             import ultralytics  # type: ignore[import-not-found]
             from ultralytics import YOLO  # type: ignore[import-not-found]
@@ -52,16 +77,17 @@ class UltralyticsBackend:
                 "Ultralytics is absent; run this entrypoint only inside the digest-pinned "
                 "separately licensed owner training container"
             ) from error
-        if ultralytics.__version__ != TRAINING_RUNTIME["ultralyticsVersion"]:
-            raise TrainerRefused(
-                "Ultralytics runtime version is not the pinned version"
-            )
-        if not torch.__version__.startswith(f"{TRAINING_RUNTIME['pytorchVersion']}+"):
-            raise TrainerRefused("PyTorch runtime version is not the pinned version")
-        if torch.version.cuda != TRAINING_RUNTIME["cudaVersion"]:
-            raise TrainerRefused(
-                "PyTorch CUDA runtime version is not the pinned version"
-            )
+        validate_training_runtime(
+            {
+                "pythonVersion": platform.python_version(),
+                "ultralyticsVersion": ultralytics.__version__,
+                "pytorchVersion": torch.__version__,
+                "cudaVersion": torch.version.cuda,
+                "onnxVersion": onnx.__version__,
+                "onnxRuntimeVersion": ort.__version__,
+                "onnxRuntimeProviders": ort.get_available_providers(),
+            }
+        )
         self._model = YOLO(str(checkpoint))
 
     def train_phase(

@@ -195,10 +195,12 @@ def prepare_launch(
             "pathExposed": False,
         },
         "containerRef": inputs.container_ref,
+        "runtimeLockSha256": TRAINING_RUNTIME["runtimeLockSha256"],
         "maxRuntimeMinutes": inputs.max_runtime_minutes,
         "maxSpendUsd": format(inputs.max_spend_usd, ".2f"),
         "request": request,
         "unresolvedExecuteGates": [
+            "separately licensed dependency-locked trainer image",
             "secure SSH upload/download implementation and host-key pinning",
             "independent runtime guardian and forced pod termination",
         ],
@@ -219,8 +221,9 @@ def execute_launch(
     if not environment.get("RUNPOD_API_KEY"):
         raise LaunchRefused("RUNPOD_API_KEY must be present in the current environment")
     raise LaunchRefused(
-        "secure SSH transfer with host-key pinning and an independent termination guardian "
-        "remain unresolved; refusing before POST /v1/pods"
+        "the separately licensed dependency-locked trainer image, secure SSH transfer with "
+        "host-key pinning, and an independent termination guardian remain unresolved; "
+        "refusing before POST /v1/pods"
     )
 
 

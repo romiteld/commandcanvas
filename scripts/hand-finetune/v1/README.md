@@ -7,10 +7,18 @@ contain Ultralytics or model bytes, camera footage, or a production model. Its
 the separately licensed runtime and exact pinned checkpoint are supplied at
 execution time.
 
+The canonical, self-digested `training-runtime.lock.json` records the exact
+Python, Ultralytics, PyTorch/CUDA, ONNX, and ONNX Runtime contract. The pinned
+RunPod image is explicitly a foundation image, not a finished trainer. The
+executable Dockerfile and dependency installation lock belong in the separate
+AGPL `commandcanvas-hand-relay` source boundary; they are not copied into this
+MIT application.
+
 The default RunPod path is a network-free dry run. The `--execute` path
-currently refuses before creating a Pod because secure SSH transfer with host
-key pinning and an independent termination guardian are not implemented. This
-is an intentional cost and data-safety gate.
+currently refuses before creating a Pod because the separately licensed
+trainer image, secure SSH transfer with host-key pinning, and an independent
+termination guardian are not implemented. This is an intentional cost,
+licensing, and data-safety gate.
 
 The pinned upstream checkpoint is isolated by an AGPL runtime and CC-BY-NC-SA
 training-data license boundary. Every generated candidate begins with

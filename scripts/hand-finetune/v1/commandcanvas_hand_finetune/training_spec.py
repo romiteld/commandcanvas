@@ -2,13 +2,84 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
-from .canonical import attach_digest, verify_digest
+from .canonical import attach_digest, canonical_json_bytes, verify_digest
 
 
 class TrainingSpecError(ValueError):
     pass
+
+
+RUNTIME_LOCK_PATH = Path(__file__).resolve().parents[1] / "training-runtime.lock.json"
+RUNTIME_LOCK_FIELDS = {
+    "baseImage",
+    "baseImageRole",
+    "buildDefinition",
+    "candidateRedistributionApproved",
+    "cudaVersion",
+    "executionEligible",
+    "onnxRuntimeProvider",
+    "onnxRuntimeVersion",
+    "onnxVersion",
+    "pythonVersion",
+    "pytorchVersion",
+    "runtimeLockSha256",
+    "schemaVersion",
+    "trainerImageDigest",
+    "ultralyticsLicense",
+    "ultralyticsVersion",
+}
+
+
+def load_training_runtime_lock(path: Path = RUNTIME_LOCK_PATH) -> dict[str, Any]:
+    runtime_path = Path(path)
+    if runtime_path.is_symlink() or not runtime_path.is_file():
+        raise TrainingSpecError("training runtime lock must be a regular file")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                raise TrainingSpecError(
+                    f"training runtime lock contains duplicate JSON key: {key}"
+                )
+            result[key] = item
+        return result
+
+    try:
+        lock = json.loads(
+            runtime_path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+        )
+    except TrainingSpecError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise TrainingSpecError(
+            f"training runtime lock could not be read: {error}"
+        ) from error
+    if not isinstance(lock, dict):
+        raise TrainingSpecError("training runtime lock must be a JSON object")
+    if set(lock) != RUNTIME_LOCK_FIELDS:
+        raise TrainingSpecError(
+            "training runtime lock fields do not match the v1 schema"
+        )
+    if runtime_path.read_bytes() != canonical_json_bytes(lock):
+        raise TrainingSpecError("training runtime lock must use canonical JSON")
+    if not verify_digest(lock, "runtimeLockSha256"):
+        raise TrainingSpecError("training runtime lock digest is missing or tampered")
+    if lock.get("schemaVersion") != "commandcanvas.hand-runtime-lock/v1":
+        raise TrainingSpecError("training runtime lock schema version is unsupported")
+    if (
+        lock.get("executionEligible") is not False
+        or lock.get("trainerImageDigest") is not None
+    ):
+        raise TrainingSpecError(
+            "training runtime remains contract-only until the separate runtime image is built"
+        )
+    return lock
 
 
 UPSTREAM_CHECKPOINT = {
@@ -32,14 +103,7 @@ UPSTREAM_CHECKPOINT = {
     },
 }
 
-TRAINING_RUNTIME = {
-    "baseImage": "docker.io/runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404@sha256:4d1721e62b56d345c83b4fd6090664be6daf9312caab5b2e76f23d8231941851",
-    "ultralyticsVersion": "8.4.33",
-    "pytorchVersion": "2.8.0",
-    "cudaVersion": "12.8",
-    "ultralyticsLicense": "AGPL-3.0-or-Enterprise",
-    "candidateRedistributionApproved": False,
-}
+TRAINING_RUNTIME = load_training_runtime_lock()
 
 
 def build_training_spec(dataset_receipt: dict[str, Any]) -> dict[str, Any]:

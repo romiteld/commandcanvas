@@ -306,7 +306,13 @@ def _safe_file(
     if not isinstance(relative, str):
         errors.append(f"{location} must be a safe relative path")
         return None
+    if any(ord(character) < 32 or ord(character) == 127 for character in relative):
+        errors.append(f"{location} must not contain control characters")
+        return None
     pure = PurePosixPath(relative)
+    if pure.as_posix() != relative:
+        errors.append(f"{location} must be a canonical POSIX path")
+        return None
     if (
         not relative
         or "\\" in relative

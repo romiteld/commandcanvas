@@ -111,6 +111,44 @@ class RepositoryArtifactGuardTests(unittest.TestCase):
                 2,
             )
 
+    def test_refuses_every_forced_tracked_private_training_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            private_paths = [
+                "scripts/hand-finetune/v1/captures/session.json",
+                "scripts/hand-finetune/v1/datasets/frame.jpg",
+                "scripts/hand-finetune/v1/datasets/labels/frame.txt",
+                "scripts/hand-finetune/v1/models/metadata.json",
+                "scripts/hand-finetune/v1/outputs/metrics.csv",
+                "scripts/hand-finetune/v1/runs/events.txt",
+                "scripts/hand-finetune/v1/archives/member-manifest.json",
+            ]
+            for relative_path in private_paths:
+                path = root / relative_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("private training artifact", encoding="utf-8")
+
+            with self.assertRaises(ArtifactGuardError) as context:
+                validate_tracked_artifacts(root, private_paths)
+
+            message = str(context.exception)
+            for relative_path in private_paths:
+                self.assertIn(relative_path, message)
+            self.assertEqual(
+                message.count("private training artifact"), len(private_paths)
+            )
+
+    def test_refuses_hugging_face_token_material(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            relative_path = "scripts/hand-finetune/v1/config/provider.txt"
+            provider_key = root / relative_path
+            provider_key.parent.mkdir(parents=True, exist_ok=True)
+            provider_key.write_text("hf_" + "A" * 40, encoding="utf-8")
+
+            with self.assertRaisesRegex(ArtifactGuardError, "provider-secret material"):
+                validate_tracked_artifacts(root, [relative_path])
+
 
 if __name__ == "__main__":
     unittest.main()
