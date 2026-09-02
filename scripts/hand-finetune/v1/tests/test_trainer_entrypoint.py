@@ -114,6 +114,13 @@ class TrainerEntrypointTests(unittest.TestCase):
             [True, False],
         )
         self.assertTrue(all(phase["common"]["amp"] for phase in backend.phases))
+        self.assertTrue(
+            all(phase["common"]["batchSize"] == 64 for phase in backend.phases)
+        )
+        self.assertEqual(
+            [phase["phase"]["initialLearningRate"] for phase in backend.phases],
+            [0.001, 0.0002],
+        )
         self.assertEqual(backend.export_arguments["outputShape"], [1, 300, 69])
         self.assertFalse(candidate["productionEligible"])
         self.assertEqual(

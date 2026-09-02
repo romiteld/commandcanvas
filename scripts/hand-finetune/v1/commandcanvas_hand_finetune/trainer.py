@@ -74,6 +74,8 @@ class UltralyticsBackend:
             freeze=10 if bool(phase["freezeBackbone"]) else 0,
             patience=int(phase["earlyStoppingPatience"]),
             imgsz=int(common["imageSize"]),
+            batch=int(common["batchSize"]),
+            lr0=float(phase["initialLearningRate"]),
             amp=bool(common["amp"]),
             seed=int(common["seed"]),
             deterministic=True,
@@ -257,6 +259,7 @@ def run_owner_experiment(
     common: dict[str, Any] = {
         "seed": expected_spec["seed"],
         "imageSize": expected_spec["imageSize"],
+        "batchSize": expected_spec["batchSize"],
         "amp": expected_spec["amp"],
         "augmentation": expected_spec["augmentation"],
         "wallTimeMinutes": expected_spec["wallTimeMinutes"],

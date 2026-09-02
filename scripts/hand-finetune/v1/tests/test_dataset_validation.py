@@ -56,6 +56,25 @@ class DatasetValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(DatasetValidationError, "overlayDerived"):
             validate_dataset(self.root, self.manifest_path)
 
+    def test_accepts_verified_actual_camera_dimensions_and_refuses_invalid_bounds(
+        self,
+    ) -> None:
+        manifest = read_manifest(self.manifest_path)
+        for session in manifest["sessions"]:
+            session["source"]["width"] = 1280
+            session["source"]["height"] = 720
+        write_manifest(self.manifest_path, manifest)
+
+        receipt = validate_dataset(self.root, self.manifest_path)
+        self.assertTrue(receipt["eligibleForTraining"])
+
+        manifest["sessions"][0]["source"]["width"] = 0
+        manifest["sessions"][0]["source"]["height"] = 20000
+        write_manifest(self.manifest_path, manifest)
+        with self.assertRaises(DatasetValidationError) as caught:
+            validate_dataset(self.root, self.manifest_path)
+        self.assertIn("source dimensions", str(caught.exception))
+
     def test_mismatched_frame_hash_and_dimensions_are_refused(self) -> None:
         manifest = read_manifest(self.manifest_path)
         manifest["sessions"][0]["frames"][0]["image"]["sha256"] = "0" * 64

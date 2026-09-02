@@ -19,6 +19,8 @@ SCHEMA_VERSION = "commandcanvas.hand-dataset/v1"
 HARD_SUBSETS = ("drawing", "edge", "negative", "pinch", "two_hand")
 SPLITS = ("train", "validation", "holdout")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+MIN_SOURCE_DIMENSION = 64
+MAX_SOURCE_DIMENSION = 8192
 
 
 class DatasetValidationError(ValueError):
@@ -382,8 +384,20 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                 errors.append(f"{location}.source.overlayDerived must be false")
             if source.get("mimeType") != "video/webm":
                 errors.append(f"{location}.source.mimeType must be video/webm")
-            if source.get("width") != 640 or source.get("height") != 480:
-                errors.append(f"{location}.source dimensions must be 640x480")
+            width = source.get("width")
+            height = source.get("height")
+            if (
+                isinstance(width, bool)
+                or not isinstance(width, int)
+                or isinstance(height, bool)
+                or not isinstance(height, int)
+                or not MIN_SOURCE_DIMENSION <= width <= MAX_SOURCE_DIMENSION
+                or not MIN_SOURCE_DIMENSION <= height <= MAX_SOURCE_DIMENSION
+            ):
+                errors.append(
+                    f"{location}.source dimensions must be integer camera dimensions "
+                    f"between {MIN_SOURCE_DIMENSION} and {MAX_SOURCE_DIMENSION} pixels"
+                )
             source_asset = {key: source[key] for key in ("path", "byteSize", "sha256")}
             _, actual_source_sha = _validate_asset(
                 resolved_root,

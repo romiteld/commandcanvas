@@ -165,6 +165,7 @@ def prepare_launch(
         "name": "commandcanvas-owner-hand-finetune-v1",
         "cloudType": "SECURE",
         "computeType": "GPU",
+        "allowedCudaVersions": ["12.8"],
         "gpuCount": 1,
         "gpuTypeIds": list(ALLOWED_GPU_IDS),
         "gpuTypePriority": "custom",
@@ -172,16 +173,14 @@ def prepare_launch(
         "containerDiskInGb": 30,
         "volumeInGb": 0,
         "interruptible": False,
-        "minVcpuCount": 8,
-        "minMemoryInGb": 64,
+        "minVCPUPerGPU": 8,
+        "minRAMPerGPU": 64,
+        "supportPublicIp": True,
         "ports": ["22/tcp"],
-        "env": [
-            {"key": "COMMANDCANVAS_TRAINING_SPEC", "value": "hand-finetune/v1"},
-            {
-                "key": "COMMANDCANVAS_MAX_RUNTIME_MINUTES",
-                "value": str(inputs.max_runtime_minutes),
-            },
-        ],
+        "env": {
+            "COMMANDCANVAS_TRAINING_SPEC": "hand-finetune/v1",
+            "COMMANDCANVAS_MAX_RUNTIME_MINUTES": str(inputs.max_runtime_minutes),
+        },
     }
     prepared = {
         "schemaVersion": "commandcanvas.runpod-launch-plan/v1",

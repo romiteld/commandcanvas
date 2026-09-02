@@ -43,7 +43,17 @@ class TrainingSpecTests(unittest.TestCase):
         )
         self.assertTrue(spec["sourceCheckpoint"]["ownerOnlyExperimental"])
         self.assertFalse(spec["productionEligible"])
+        self.assertEqual(spec["seed"], 20260902)
+        self.assertEqual(spec["batchSize"], 64)
         self.assertEqual([phase["epochs"] for phase in spec["phases"]], [12, 36])
+        self.assertEqual(
+            [phase["initialLearningRate"] for phase in spec["phases"]],
+            [0.001, 0.0002],
+        )
+        self.assertEqual(
+            [phase["earlyStoppingPatience"] for phase in spec["phases"]],
+            [5, 8],
+        )
         self.assertTrue(spec["amp"])
         self.assertEqual(spec["augmentation"]["horizontalFlipProbability"], 0.15)
         self.assertEqual(spec["outputVersion"], "commandcanvas-hand-pose-candidate/v1")
