@@ -43,6 +43,31 @@ describe("DemoEntry", () => {
     expect(screen.queryByText("Hosted preview mounted")).not.toBeInTheDocument();
   });
 
+  it("keeps the no-signup action usable while session recovery never settles", async () => {
+    vi.spyOn(browserClientModule, "createBrowserSupabaseClient").mockReturnValue({
+      ok: true,
+      client: {
+        auth: {
+          getSession: vi.fn(() => new Promise(() => undefined)),
+        },
+      },
+    } as never);
+
+    const user = userEvent.setup();
+    render(
+      <DemoEntry>
+        <div>Hosted preview mounted</div>
+      </DemoEntry>,
+    );
+
+    const enter = await screen.findByRole("button", {
+      name: "Enter no-signup preview",
+    });
+    expect(enter).toBeEnabled();
+    await user.click(enter);
+    expect(screen.getByText("Hosted preview mounted")).toBeVisible();
+  });
+
   it("recognizes an existing permanent session without presenting a second sign-in gate", async () => {
     vi.spyOn(browserClientModule, "createBrowserSupabaseClient").mockReturnValue({
       ok: true,
@@ -55,6 +80,7 @@ describe("DemoEntry", () => {
                   id: "11111111-1111-4111-8111-111111111111",
                   email: "Danny@Example.com",
                   is_anonymous: false,
+                  email_confirmed_at: "2026-09-01T00:00:00.000Z",
                 },
               },
             },
@@ -206,7 +232,9 @@ describe("DemoEntry", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "The sign-in code could not be sent.",
     );
-    expect(email).toHaveValue("danny@example.com");
+    const recoveredEmail = screen.getByLabelText("Email");
+    expect(recoveredEmail).toHaveValue("danny@example.com");
+    expect(recoveredEmail).toHaveFocus();
   });
 
   it("returns an actionable error when OTP verification throws", async () => {
@@ -239,6 +267,7 @@ describe("DemoEntry", () => {
       "The code is invalid or expired.",
     );
     expect(screen.getByLabelText("Six-digit code")).toBeVisible();
+    expect(screen.getByLabelText("Six-digit code")).toHaveFocus();
   });
 
   it("makes ?signin=1 override a prior preview acceptance", async () => {

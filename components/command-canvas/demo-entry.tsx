@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  Fragment,
   useRef,
   useState,
   useSyncExternalStore,
@@ -10,6 +11,10 @@ import {
 } from "react";
 
 import { clearStoredDemoRoom } from "@/lib/demo/room-link";
+import {
+  DemoAuthenticatedIdentityProvider,
+  type DemoAuthenticatedIdentity,
+} from "@/components/command-canvas/demo-auth-context";
 import {
   requestEmailOtp,
   verifyEmailOtp,
@@ -27,6 +32,7 @@ interface DemoEntrySession {
     id: string;
     email?: string;
     is_anonymous?: boolean;
+    email_confirmed_at?: string | null;
   };
 }
 
@@ -36,6 +42,9 @@ interface DemoEntryAuthClient extends PasswordlessAuthClient {
       data: { session: DemoEntrySession | null };
       error: { message: string } | null;
     }>;
+    onAuthStateChange?: (
+      callback: (event: string, session: DemoEntrySession | null) => void,
+    ) => { data: { subscription: { unsubscribe: () => void } } };
   };
 }
 
@@ -112,9 +121,18 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     () => false,
   );
   const [memoryAccepted, setMemoryAccepted] = useState(false);
-  const [phase, setPhase] = useState<EntryPhase>({ kind: "checking" });
+  const [authenticatedIdentity, setAuthenticatedIdentity] =
+    useState<DemoAuthenticatedIdentity | null>(null);
+  const [runtimeEpoch, setRuntimeEpoch] = useState(0);
+  const [phase, setPhase] = useState<EntryPhase>({
+    kind: "choice",
+    permanentEmail: null,
+    error: null,
+  });
   const clientRef = useRef<DemoEntryAuthClient | null>(null);
   const lifecycleAbortRef = useRef<AbortController | null>(null);
+  const emailInputRef = useRef<HTMLInputElement>(null);
+  const codeInputRef = useRef<HTMLInputElement>(null);
   const mounted = useSyncExternalStore(
     subscribeToClientMount,
     readMountedClient,
@@ -122,6 +140,7 @@ export function DemoEntry({ children }: { children: ReactNode }) {
   );
   const siteToolsSurfaceAvailable = useDocumentWebMcpTarget() !== null;
   const accepted = storedAccepted || memoryAccepted;
+  const currentActorRef = useRef<string | null>(null);
 
   useEffect(() => {
     const lifecycle = new AbortController();
@@ -146,20 +165,31 @@ export function DemoEntry({ children }: { children: ReactNode }) {
         return;
       }
       const client = clientResult.client as unknown as DemoEntryAuthClient;
+      clientRef.current = client;
       try {
         const current = await client.auth.getSession();
         if (lifecycle.signal.aborted || !active) return;
         clientRef.current = client;
-        const parsedEmail = normalizedEmailSchema.safeParse(
-          current.data.session?.user.email,
-        );
+        const user = current.data.session?.user;
+        const parsedEmail = normalizedEmailSchema.safeParse(user?.email);
         const permanentEmail =
           current.error ||
-          !current.data.session ||
-          current.data.session.user.is_anonymous === true ||
+          !user ||
+          user.is_anonymous === true ||
+          typeof user.email_confirmed_at !== "string" ||
+          user.email_confirmed_at.trim() === "" ||
           !parsedEmail.success
             ? null
             : parsedEmail.data;
+        setAuthenticatedIdentity(
+          permanentEmail && user
+            ? {
+                actorId: user.id,
+                email: permanentEmail,
+              }
+            : null,
+        );
+        currentActorRef.current = permanentEmail && user ? user.id : null;
         setPhase({
           kind: "choice",
           permanentEmail,
@@ -180,13 +210,35 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     }
 
     void recoverEntryIdentity();
+    const client = clientRef.current;
+    const subscription = client?.auth.onAuthStateChange?.((event, session) => {
+      if (lifecycle.signal.aborted || event === "TOKEN_REFRESHED") return;
+      const nextActor = session?.user.id ?? null;
+      if (nextActor === currentActorRef.current) return;
+      currentActorRef.current = nextActor;
+      clearStoredDemoRoom(window.sessionStorage);
+      window.sessionStorage.removeItem(DEMO_ENTRY_ACCEPTED_KEY);
+      window.dispatchEvent(new Event(DEMO_ENTRY_ACCEPTED_EVENT));
+      setMemoryAccepted(false);
+      setAuthenticatedIdentity(null);
+      setRuntimeEpoch((epoch) => epoch + 1);
+      setPhase({ kind: "choice", permanentEmail: null, error: null });
+    });
     return () => {
       active = false;
       lifecycle.abort();
       if (lifecycleAbortRef.current === lifecycle)
         lifecycleAbortRef.current = null;
+      subscription?.data.subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (phase.kind === "email" && phase.error)
+      emailInputRef.current?.focus();
+    if (phase.kind === "otp" && phase.error)
+      codeInputRef.current?.focus();
+  }, [phase]);
 
   function acceptEntry() {
     try {
@@ -201,6 +253,7 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     try {
       clearStoredDemoRoom(window.sessionStorage);
       window.sessionStorage.removeItem(DEMO_ENTRY_ACCEPTED_KEY);
+      window.dispatchEvent(new Event(DEMO_ENTRY_ACCEPTED_EVENT));
     } catch {
       // The new permanent session remains valid even when tab storage is unavailable.
     }
@@ -247,19 +300,29 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     }
     clearEntryRecovery();
     replaceDemoPath("/demo");
+    setAuthenticatedIdentity({ actorId: result.value.user.id, email: result.value.email });
     setPhase({ kind: "choice", permanentEmail: result.value.email, error: null });
     acceptEntry();
   }
 
   const allowAnonymousResume =
     !signInIntent && accepted && phase.kind === "choice";
-  if (allowAnonymousResume) return children;
+  if (allowAnonymousResume)
+    return (
+      <DemoAuthenticatedIdentityProvider identity={authenticatedIdentity}>
+        <Fragment key={runtimeEpoch}>{children}</Fragment>
+      </DemoAuthenticatedIdentityProvider>
+    );
   if (
     !signInIntent &&
     phase.kind === "choice" &&
     phase.permanentEmail !== null
   )
-    return children;
+    return (
+      <DemoAuthenticatedIdentityProvider identity={authenticatedIdentity}>
+        <Fragment key={runtimeEpoch}>{children}</Fragment>
+      </DemoAuthenticatedIdentityProvider>
+    );
 
   return (
     <main className="demo-gate demo-entry" aria-labelledby="demo-entry-title">
@@ -292,8 +355,9 @@ export function DemoEntry({ children }: { children: ReactNode }) {
             Email
             <input
               autoComplete="email"
-              inputMode="email"
-              name="email"
+            inputMode="email"
+            name="email"
+            ref={emailInputRef}
               required
               type="email"
               value={phase.email}
@@ -324,8 +388,9 @@ export function DemoEntry({ children }: { children: ReactNode }) {
             <input
               autoComplete="one-time-code"
               inputMode="numeric"
-              maxLength={6}
-              name="code"
+            maxLength={6}
+            name="code"
+            ref={codeInputRef}
               pattern="[0-9]{6}"
               required
             />

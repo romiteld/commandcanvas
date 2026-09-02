@@ -26,6 +26,8 @@ const browserClientOptions = {
   },
 } as const;
 
+let sharedBrowserClient: SupabaseClient | null = null;
+
 type BrowserClientFactory<Client> = (
   url: string,
   publishableKey: string,
@@ -58,14 +60,16 @@ export function createBrowserSupabaseClient<Client = SupabaseClient>(
   const config = readPublicSupabaseConfig(environment);
   if (!config.ok) return config;
 
-  return {
-    ok: true,
-    client: factory(
-      config.config.url,
-      config.config.publishableKey,
-      browserClientOptions,
-    ),
-  };
+  if (factory === createClient && sharedBrowserClient)
+    return { ok: true, client: sharedBrowserClient as Client };
+
+  const client = factory(
+    config.config.url,
+    config.config.publishableKey,
+    browserClientOptions,
+  );
+  if (factory === createClient) sharedBrowserClient = client as SupabaseClient;
+  return { ok: true, client };
 }
 
 function isTrustedSupabaseUrl(value: string) {

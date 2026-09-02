@@ -284,7 +284,7 @@ describe("DemoCommandCanvas", () => {
 
     render(<DemoCommandCanvas environment={harness.environment} />);
 
-    expect(await screen.findByText("Signed in as Daniel")).toBeVisible();
+    expect(await screen.findByText("Signed-in CommandCanvas account")).toBeVisible();
     expect(screen.getByText(/saved OpenAI key eligibility/i)).toBeVisible();
     expect(screen.queryByText(/Temporary Supabase room/i)).not.toBeInTheDocument();
   });
@@ -1327,6 +1327,24 @@ describe("DemoCommandCanvas", () => {
       "https://commandcanvas.example/demo?room=room&join=token",
     );
     expect(await screen.findByText("Invite unavailable")).toBeVisible();
+  });
+
+  it("does not copy a capability invite when the native share sheet is cancelled", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: vi.fn(async () => {
+        throw new DOMException("Share cancelled", "AbortError");
+      }),
+    });
+    const { environment, copyInvite } = readyEnvironment();
+    render(<DemoCommandCanvas environment={environment} />);
+    await screen.findByText("Live demo room");
+
+    await user.click(screen.getByRole("button", { name: "Invite people" }));
+
+    expect(copyInvite).not.toHaveBeenCalled();
+    expect(await screen.findByText("Share cancelled")).toBeVisible();
   });
 
   it("does not clear or reload the demo when durable room deletion fails", async () => {

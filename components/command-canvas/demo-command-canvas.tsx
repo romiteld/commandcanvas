@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CommandCanvasRoom } from "@/components/command-canvas/command-canvas-room";
+import { useDemoAuthenticatedIdentity } from "@/components/command-canvas/demo-auth-context";
 import { returnToDemoSignIn } from "@/components/command-canvas/demo-entry";
 import type { WebMcpSurfaceState } from "@/components/command-canvas/chatgpt-command-surface";
 import type { SpatialCameraControllerPreferences } from "@/components/command-canvas/spatial-camera-control";
@@ -111,9 +112,10 @@ export function DemoCommandCanvas({
   environment = defaultEnvironment,
   privateGpuRelayEnabled = false,
 }: DemoCommandCanvasProps) {
+  const authenticatedIdentity = useDemoAuthenticatedIdentity();
   const [view, setView] = useState<DemoView>({ status: "loading" });
   const [inviteState, setInviteState] = useState<
-    "idle" | "sharing" | "shared" | "copied" | "failed"
+    "idle" | "sharing" | "shared" | "copied" | "cancelled" | "failed"
   >("idle");
   const [webMcpStatus, setWebMcpStatus] = useState<{
     value: string;
@@ -224,7 +226,11 @@ export function DemoCommandCanvas({
         });
         setInviteState("shared");
         return;
-      } catch {
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          setInviteState("cancelled");
+          return;
+        }
         // Native sharing is an optional transport. Clipboard is the honest
         // fallback when a browser cannot complete the share sheet.
       }
@@ -666,7 +672,9 @@ export function DemoCommandCanvas({
   const isAnonymousDemo = snapshot.identity?.isAnonymous !== false;
   const accountLabel = isAnonymousDemo
     ? "No-signup preview"
-    : `Signed in as ${snapshot.membership?.displayName ?? "verified member"}`;
+    : authenticatedIdentity?.email
+      ? `Signed in as ${authenticatedIdentity.email}`
+      : "Signed-in CommandCanvas account";
   const collaborationStatus = describeCollaboration(snapshot);
   const participants = snapshot.presence.map((participant) => ({
     id: participant.participantId,
@@ -780,6 +788,8 @@ export function DemoCommandCanvas({
                     ? "Invite shared"
                     : inviteState === "copied"
                       ? "Invite link copied"
+                      : inviteState === "cancelled"
+                        ? "Share cancelled"
                       : inviteState === "failed"
                         ? "Invite unavailable"
                         : "Invite people"}
