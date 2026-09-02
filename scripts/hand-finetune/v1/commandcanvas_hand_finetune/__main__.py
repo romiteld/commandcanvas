@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .canonical import canonical_json_bytes, write_canonical_json
+from .annotation_workbench import (
+    AnnotationWorkbenchError,
+    finalize_annotations,
+    run_annotation_workbench,
+)
 from .dataset import DatasetValidationError, validate_dataset
 from .onnx_contract import OnnxContractError, validate_onnx_contract
 from .runpod import (
@@ -96,6 +101,24 @@ def _parser() -> argparse.ArgumentParser:
     cleanup = subcommands.add_parser("cleanup-pod")
     cleanup.add_argument("--pod-id", required=True)
     cleanup.add_argument("--execute", action="store_true", required=True)
+
+    annotate = subcommands.add_parser(
+        "annotate",
+        help="run the manual hand-keypoint workbench on loopback only",
+    )
+    annotate.add_argument("--dataset-root", required=True, type=Path)
+    annotate.add_argument("--manifest", required=True, type=Path)
+    annotate.add_argument("--editor-id", required=True)
+    annotate.add_argument("--host", default="127.0.0.1")
+    annotate.add_argument("--port", default=8765, type=int)
+
+    finalize = subcommands.add_parser(
+        "finalize-annotations",
+        help="validate corrected labels and write the final annotation receipt",
+    )
+    finalize.add_argument("--dataset-root", required=True, type=Path)
+    finalize.add_argument("--manifest", required=True, type=Path)
+    finalize.add_argument("--editor-id", required=True)
     return parser
 
 
@@ -141,10 +164,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             RunPodClient(api_key=api_key).delete_pod(arguments.pod_id)
             result = {"deleted": True, "podId": arguments.pod_id}
+        elif arguments.command == "annotate":
+            run_annotation_workbench(
+                dataset_root=arguments.dataset_root,
+                manifest_path=arguments.manifest,
+                host=arguments.host,
+                port=arguments.port,
+                editor_id=arguments.editor_id,
+            )
+            result = {"stopped": True}
+        elif arguments.command == "finalize-annotations":
+            result = finalize_annotations(
+                dataset_root=arguments.dataset_root,
+                manifest_path=arguments.manifest,
+                editor_id=arguments.editor_id,
+            )
         else:  # pragma: no cover - argparse enforces the choices
             raise AssertionError(arguments.command)
     except (
         DatasetValidationError,
+        AnnotationWorkbenchError,
         LaunchRefused,
         OnnxContractError,
         TrainerRefused,

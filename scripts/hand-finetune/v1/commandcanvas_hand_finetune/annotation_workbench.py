@@ -1,0 +1,1101 @@
+"""Local-only browser workbench for correcting 21-point hand-pose labels."""
+
+from __future__ import annotations
+
+import ipaddress
+import json
+import math
+import os
+import re
+import secrets
+import tempfile
+from copy import deepcopy
+from datetime import datetime, timezone
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path, PurePosixPath
+from typing import Any, Sequence
+from urllib.parse import unquote, urlparse
+from uuid import UUID, uuid4
+
+from .canonical import (
+    attach_digest,
+    canonical_json_bytes,
+    sha256_bytes,
+    sha256_file,
+    verify_digest,
+    write_canonical_json,
+)
+from .dataset import HARD_SUBSETS, DatasetValidationError, validate_dataset
+
+
+WORKBENCH_SCHEMA_VERSION = "commandcanvas.hand-annotation-edit/v1"
+FINALIZATION_SCHEMA_VERSION = "commandcanvas.hand-annotation-finalization/v1"
+WORKBENCH_TOOL = "commandcanvas-hand-annotation-workbench"
+WORKBENCH_VERSION = "1.0.0"
+KEYPOINT_NAMES = (
+    "Wrist",
+    "Thumb CMC",
+    "Thumb MCP",
+    "Thumb IP",
+    "Thumb tip",
+    "Index MCP",
+    "Index PIP",
+    "Index DIP",
+    "Index tip",
+    "Middle MCP",
+    "Middle PIP",
+    "Middle DIP",
+    "Middle tip",
+    "Ring MCP",
+    "Ring PIP",
+    "Ring DIP",
+    "Ring tip",
+    "Pinky MCP",
+    "Pinky PIP",
+    "Pinky DIP",
+    "Pinky tip",
+)
+FRAME_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+EDITOR_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+MAX_REQUEST_BYTES = 1_048_576
+
+
+class AnnotationWorkbenchError(ValueError):
+    """Raised when annotation input violates the workbench contract."""
+
+
+class AnnotationConflict(AnnotationWorkbenchError):
+    """Raised when an editor attempts to overwrite newer annotation work."""
+
+
+def _utc_timestamp() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise AnnotationWorkbenchError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def _load_json_object(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_strict_object
+        )
+    except AnnotationWorkbenchError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise AnnotationWorkbenchError(
+            f"could not read strict JSON at {path}: {error}"
+        ) from error
+    if not isinstance(value, dict):
+        raise AnnotationWorkbenchError(f"JSON at {path} must be an object")
+    return value
+
+
+def _resolve_dataset_paths(
+    dataset_root: Path, manifest_path: Path
+) -> tuple[Path, Path]:
+    root = Path(dataset_root)
+    manifest = Path(manifest_path)
+    try:
+        resolved_root = root.resolve(strict=True)
+        resolved_manifest = manifest.resolve(strict=True)
+    except OSError as error:
+        raise AnnotationWorkbenchError(
+            f"dataset and manifest must exist: {error}"
+        ) from error
+    if root.is_symlink() or not resolved_root.is_dir():
+        raise AnnotationWorkbenchError("dataset root must be a non-symlink directory")
+    if (
+        manifest.is_symlink()
+        or not resolved_manifest.is_file()
+        or resolved_root not in resolved_manifest.parents
+    ):
+        raise AnnotationWorkbenchError(
+            "manifest must be a regular file inside the dataset root"
+        )
+    return resolved_root, resolved_manifest
+
+
+def validate_private_workspace(dataset_root: Path, repository_root: Path) -> None:
+    """Refuse private annotation work inside the tracked source repository."""
+
+    root = Path(dataset_root).resolve(strict=False)
+    repository = Path(repository_root).resolve(strict=True)
+    if root == repository or repository in root.parents:
+        raise AnnotationWorkbenchError(
+            "private annotation data must remain outside the repository"
+        )
+
+
+def validate_loopback_host(host: str) -> str:
+    """Accept only an explicit local loopback bind."""
+
+    if host == "localhost":
+        return host
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as error:
+        raise AnnotationWorkbenchError(
+            "workbench host must be a loopback address"
+        ) from error
+    if not address.is_loopback:
+        raise AnnotationWorkbenchError("workbench host must be a loopback address")
+    return host
+
+
+def validate_request_host(host_header: str) -> str:
+    """Refuse DNS-rebinding Host headers before serving private material."""
+
+    if (
+        not isinstance(host_header, str)
+        or not host_header
+        or any(character.isspace() for character in host_header)
+        or any(character in host_header for character in "/\\@?#")
+    ):
+        raise AnnotationWorkbenchError("request Host must identify loopback")
+    parsed = urlparse(f"//{host_header}")
+    try:
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError as error:
+        raise AnnotationWorkbenchError("request Host must identify loopback") from error
+    if not hostname:
+        raise AnnotationWorkbenchError("request Host must identify loopback")
+    try:
+        validate_loopback_host(hostname)
+    except AnnotationWorkbenchError as error:
+        raise AnnotationWorkbenchError("request Host must identify loopback") from error
+    return host_header
+
+
+def _safe_asset(root: Path, relative: Any, *, location: str) -> Path:
+    if not isinstance(relative, str):
+        raise AnnotationWorkbenchError(f"{location} must be a safe relative path")
+    pure = PurePosixPath(relative)
+    if (
+        not relative
+        or "\\" in relative
+        or pure.is_absolute()
+        or any(part in {"", ".", ".."} for part in pure.parts)
+    ):
+        raise AnnotationWorkbenchError(f"{location} must be a safe relative path")
+    candidate = root.joinpath(*pure.parts)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise AnnotationWorkbenchError(f"{location} does not exist") from error
+    if candidate.is_symlink() or not resolved.is_file() or root not in resolved.parents:
+        raise AnnotationWorkbenchError(
+            f"{location} must remain inside the dataset root"
+        )
+    return resolved
+
+
+def _find_frame(
+    manifest: dict[str, Any], session_id: str, frame_id: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    try:
+        canonical_session = str(UUID(session_id))
+    except (ValueError, TypeError) as error:
+        raise AnnotationWorkbenchError("session_id must be a canonical UUID") from error
+    if canonical_session != session_id:
+        raise AnnotationWorkbenchError("session_id must be a lowercase canonical UUID")
+    if not FRAME_ID_PATTERN.fullmatch(frame_id):
+        raise AnnotationWorkbenchError("frame_id is invalid")
+    sessions = manifest.get("sessions")
+    if not isinstance(sessions, list):
+        raise AnnotationWorkbenchError("manifest sessions must be an array")
+    for session in sessions:
+        if not isinstance(session, dict) or session.get("sessionId") != session_id:
+            continue
+        frames = session.get("frames")
+        if not isinstance(frames, list):
+            break
+        for frame in frames:
+            if isinstance(frame, dict) and frame.get("frameId") == frame_id:
+                return session, frame
+        break
+    raise AnnotationWorkbenchError(f"frame not found: {session_id}/{frame_id}")
+
+
+def _parse_label(label_path: Path, *, negative: bool) -> list[dict[str, Any]]:
+    try:
+        rows = [
+            row
+            for row in label_path.read_text(encoding="utf-8").splitlines()
+            if row.strip()
+        ]
+    except (OSError, UnicodeError) as error:
+        raise AnnotationWorkbenchError(f"label cannot be read: {error}") from error
+    if negative:
+        if rows:
+            raise AnnotationWorkbenchError("negative frame label must be empty")
+        return []
+    hands: list[dict[str, Any]] = []
+    for row_index, row in enumerate(rows):
+        tokens = row.split()
+        if len(tokens) != 68 or tokens[0] != "0":
+            raise AnnotationWorkbenchError(
+                f"label row {row_index + 1} must be class 0 with exactly 68 tokens"
+            )
+        try:
+            numbers = [float(token) for token in tokens[1:]]
+        except ValueError as error:
+            raise AnnotationWorkbenchError(
+                f"label row {row_index + 1} is not numeric"
+            ) from error
+        if any(not math.isfinite(number) for number in numbers):
+            raise AnnotationWorkbenchError(f"label row {row_index + 1} is not finite")
+        bbox = {
+            "centerX": numbers[0],
+            "centerY": numbers[1],
+            "width": numbers[2],
+            "height": numbers[3],
+        }
+        keypoint_values = numbers[4:]
+        keypoints = [
+            {
+                "x": keypoint_values[index * 3],
+                "y": keypoint_values[index * 3 + 1],
+                "visibility": int(keypoint_values[index * 3 + 2]),
+            }
+            for index in range(21)
+        ]
+        hands.append({"boundingBox": bbox, "keypoints": keypoints})
+    if not 1 <= len(hands) <= 2:
+        raise AnnotationWorkbenchError(
+            "positive frame label must contain one or two hands"
+        )
+    return hands
+
+
+def load_frame_annotation(
+    dataset_root: Path,
+    manifest_path: Path,
+    session_id: str,
+    frame_id: str,
+) -> dict[str, Any]:
+    """Load a frame and its exact current annotation with concurrency digests."""
+
+    root, manifest_file = _resolve_dataset_paths(dataset_root, manifest_path)
+    manifest = _load_json_object(manifest_file)
+    session, frame = _find_frame(manifest, session_id, frame_id)
+    categories = frame.get("categories")
+    if not isinstance(categories, list):
+        raise AnnotationWorkbenchError("frame categories must be an array")
+    negative = categories == ["negative"]
+    image = frame.get("image")
+    label = frame.get("label")
+    if not isinstance(image, dict) or not isinstance(label, dict):
+        raise AnnotationWorkbenchError("frame image and label assets must be objects")
+    image_path = _safe_asset(root, image.get("path"), location="frame image")
+    label_path = _safe_asset(root, label.get("path"), location="frame label")
+    return {
+        "sessionId": session_id,
+        "frameId": frame_id,
+        "timestampMs": frame.get("timestampMs"),
+        "categories": categories,
+        "negative": negative,
+        "hands": _parse_label(label_path, negative=negative),
+        "image": {
+            "path": image.get("path"),
+            "width": image.get("width"),
+            "height": image.get("height"),
+            "sha256": sha256_file(image_path),
+        },
+        "annotation": deepcopy(session.get("annotation")),
+        "manifestSha256": sha256_file(manifest_file),
+        "labelSha256": sha256_file(label_path),
+    }
+
+
+def _validate_editor_id(editor_id: Any) -> str:
+    if not isinstance(editor_id, str) or not EDITOR_ID_PATTERN.fullmatch(editor_id):
+        raise AnnotationWorkbenchError(
+            "editor_id must be a stable non-secret identifier"
+        )
+    return editor_id
+
+
+def _validate_categories(categories: Any, *, negative: bool) -> list[str]:
+    if not isinstance(categories, list) or any(
+        not isinstance(item, str) for item in categories
+    ):
+        raise AnnotationWorkbenchError("categories must be an array of strings")
+    if negative:
+        if categories != ["negative"]:
+            raise AnnotationWorkbenchError(
+                'no-hand annotations require categories ["negative"]'
+            )
+        return ["negative"]
+    allowed = set(HARD_SUBSETS) - {"negative"}
+    if (
+        not categories
+        or len(categories) != len(set(categories))
+        or any(item not in allowed for item in categories)
+    ):
+        raise AnnotationWorkbenchError(
+            "positive categories must be unique supported hard subsets"
+        )
+    return sorted(categories)
+
+
+def _validated_hands(
+    hands: Any, *, negative: bool
+) -> list[list[tuple[float, float, int]]]:
+    if not isinstance(hands, list):
+        raise AnnotationWorkbenchError("hands must be an array")
+    if negative:
+        if hands:
+            raise AnnotationWorkbenchError("no-hand annotations cannot contain hands")
+        return []
+    if not 1 <= len(hands) <= 2:
+        raise AnnotationWorkbenchError("positive annotations require one or two hands")
+    validated: list[list[tuple[float, float, int]]] = []
+    for hand_index, hand in enumerate(hands):
+        if not isinstance(hand, dict) or set(hand) != {"keypoints"}:
+            raise AnnotationWorkbenchError(
+                f"hand {hand_index + 1} must contain only keypoints"
+            )
+        keypoints = hand.get("keypoints")
+        if not isinstance(keypoints, list) or len(keypoints) != 21:
+            raise AnnotationWorkbenchError(
+                f"hand {hand_index + 1} must contain exactly 21 keypoints"
+            )
+        normalized: list[tuple[float, float, int]] = []
+        for point_index, point in enumerate(keypoints):
+            if not isinstance(point, dict) or set(point) != {
+                "x",
+                "y",
+                "visibility",
+            }:
+                raise AnnotationWorkbenchError(
+                    f"hand {hand_index + 1} keypoint {point_index + 1} has invalid fields"
+                )
+            x = point.get("x")
+            y = point.get("y")
+            visibility = point.get("visibility")
+            if (
+                isinstance(x, bool)
+                or not isinstance(x, (int, float))
+                or isinstance(y, bool)
+                or not isinstance(y, (int, float))
+                or not math.isfinite(float(x))
+                or not math.isfinite(float(y))
+                or not 0 <= float(x) <= 1
+                or not 0 <= float(y) <= 1
+            ):
+                raise AnnotationWorkbenchError(
+                    f"hand {hand_index + 1} keypoint {point_index + 1} must be normalized"
+                )
+            if isinstance(visibility, bool) or visibility not in {0, 1, 2}:
+                raise AnnotationWorkbenchError(
+                    f"hand {hand_index + 1} keypoint {point_index + 1} visibility must be 0, 1, or 2"
+                )
+            normalized.append((float(x), float(y), int(visibility)))
+        if not any(point[2] > 0 for point in normalized):
+            raise AnnotationWorkbenchError(
+                f"hand {hand_index + 1} has no visible keypoints"
+            )
+        validated.append(normalized)
+    return validated
+
+
+def _format_number(value: float) -> str:
+    return f"{value:.6f}"
+
+
+def _label_bytes(hands: Sequence[Sequence[tuple[float, float, int]]]) -> bytes:
+    rows: list[str] = []
+    for hand in hands:
+        visible = [(x, y) for x, y, visibility in hand if visibility > 0]
+        minimum_x = min(point[0] for point in visible)
+        maximum_x = max(point[0] for point in visible)
+        minimum_y = min(point[1] for point in visible)
+        maximum_y = max(point[1] for point in visible)
+        padding = 0.02
+        left = max(0.0, minimum_x - padding)
+        right = min(1.0, maximum_x + padding)
+        top = max(0.0, minimum_y - padding)
+        bottom = min(1.0, maximum_y + padding)
+        if right <= left:
+            right = min(1.0, left + 0.001)
+        if bottom <= top:
+            bottom = min(1.0, top + 0.001)
+        tokens = [
+            "0",
+            _format_number((left + right) / 2),
+            _format_number((top + bottom) / 2),
+            _format_number(right - left),
+            _format_number(bottom - top),
+        ]
+        for x, y, visibility in hand:
+            tokens.extend((_format_number(x), _format_number(y), str(visibility)))
+        if len(tokens) != 68:  # pragma: no cover - construction invariant
+            raise AssertionError("YOLO hand-pose row must contain 68 tokens")
+        rows.append(" ".join(tokens))
+    return (("\n".join(rows) + "\n") if rows else "").encode("utf-8")
+
+
+def _atomic_write_bytes(path: Path, contents: bytes) -> None:
+    if path.is_symlink():
+        raise AnnotationWorkbenchError(f"refusing to overwrite symlink: {path}")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(contents)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _capture_categories(session: dict[str, Any]) -> list[str]:
+    frames = session.get("frames")
+    if not isinstance(frames, list):
+        raise AnnotationWorkbenchError("session frames must be an array")
+    return sorted(
+        {
+            category
+            for frame in frames
+            if isinstance(frame, dict) and isinstance(frame.get("categories"), list)
+            for category in frame["categories"]
+            if isinstance(category, str)
+        }
+    )
+
+
+def save_frame_annotation(
+    *,
+    dataset_root: Path,
+    manifest_path: Path,
+    session_id: str,
+    frame_id: str,
+    editor_id: str,
+    expected_manifest_sha256: str,
+    expected_label_sha256: str,
+    negative: bool,
+    categories: list[str],
+    hands: list[dict[str, object]],
+) -> dict[str, Any]:
+    """Save one corrected annotation and an immutable provenance receipt."""
+
+    root, manifest_file = _resolve_dataset_paths(dataset_root, manifest_path)
+    validate_private_workspace(root, Path(__file__).resolve().parents[4])
+    editor = _validate_editor_id(editor_id)
+    if not isinstance(negative, bool):
+        raise AnnotationWorkbenchError("negative must be boolean")
+    normalized_categories = _validate_categories(categories, negative=negative)
+    normalized_hands = _validated_hands(hands, negative=negative)
+    if not SHA256_PATTERN.fullmatch(
+        expected_manifest_sha256 or ""
+    ) or not SHA256_PATTERN.fullmatch(expected_label_sha256 or ""):
+        raise AnnotationWorkbenchError(
+            "expected digests must be lowercase SHA-256 values"
+        )
+
+    manifest = _load_json_object(manifest_file)
+    session, frame = _find_frame(manifest, session_id, frame_id)
+    label = frame.get("label")
+    if not isinstance(label, dict):
+        raise AnnotationWorkbenchError("frame label asset must be an object")
+    label_path = _safe_asset(root, label.get("path"), location="frame label")
+    current_manifest_sha = sha256_file(manifest_file)
+    current_label_sha = sha256_file(label_path)
+    if (
+        current_manifest_sha != expected_manifest_sha256
+        or current_label_sha != expected_label_sha256
+    ):
+        raise AnnotationConflict(
+            "annotation changed since it was loaded; reload before saving"
+        )
+
+    previous_annotation = deepcopy(session.get("annotation"))
+    previous_categories = deepcopy(frame.get("categories"))
+    previous_manifest_bytes = manifest_file.read_bytes()
+    previous_label_bytes = label_path.read_bytes()
+    new_label_bytes = _label_bytes(normalized_hands)
+    new_label_sha = sha256_bytes(new_label_bytes)
+    frame["categories"] = normalized_categories
+    label["byteSize"] = len(new_label_bytes)
+    label["sha256"] = new_label_sha
+    session["captureCategories"] = _capture_categories(session)
+    annotation = session.get("annotation")
+    if not isinstance(annotation, dict):
+        raise AnnotationWorkbenchError(
+            "session annotation provenance must be an object"
+        )
+    annotation["reviewed"] = True
+    annotation["tool"] = WORKBENCH_TOOL
+    annotation["toolVersion"] = WORKBENCH_VERSION
+    new_manifest_bytes = canonical_json_bytes(manifest)
+    if (
+        new_label_bytes == previous_label_bytes
+        and new_manifest_bytes == previous_manifest_bytes
+    ):
+        raise AnnotationWorkbenchError("annotation is unchanged")
+    result_manifest_sha = sha256_bytes(new_manifest_bytes)
+
+    edit_id = str(uuid4())
+    edited_at = _utc_timestamp()
+    relative_receipt = PurePosixPath(
+        "annotation-receipts", f"{edited_at.replace(':', '-')}-{edit_id}.json"
+    )
+    receipt = attach_digest(
+        {
+            "schemaVersion": WORKBENCH_SCHEMA_VERSION,
+            "editId": edit_id,
+            "editedAt": edited_at,
+            "editorId": editor,
+            "sessionId": session_id,
+            "frameId": frame_id,
+            "negative": negative,
+            "handCount": len(normalized_hands),
+            "previousCategories": previous_categories,
+            "resultCategories": normalized_categories,
+            "previousAnnotation": previous_annotation,
+            "resultAnnotation": deepcopy(annotation),
+            "sourceManifestSha256": current_manifest_sha,
+            "resultManifestSha256": result_manifest_sha,
+            "sourceLabelSha256": current_label_sha,
+            "resultLabelSha256": new_label_sha,
+            "receiptPath": relative_receipt.as_posix(),
+            "productionEligible": False,
+        },
+        "receiptSha256",
+    )
+    receipt_path = root.joinpath(*relative_receipt.parts)
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    if receipt_path.exists() or receipt_path.is_symlink():
+        raise AnnotationWorkbenchError("annotation receipt path already exists")
+
+    _atomic_write_bytes(label_path, new_label_bytes)
+    _atomic_write_bytes(manifest_file, new_manifest_bytes)
+    try:
+        validate_dataset(root, manifest_file)
+        write_canonical_json(receipt_path, receipt)
+    except (DatasetValidationError, OSError, UnicodeError, ValueError) as error:
+        _atomic_write_bytes(label_path, previous_label_bytes)
+        _atomic_write_bytes(manifest_file, previous_manifest_bytes)
+        receipt_path.unlink(missing_ok=True)
+        raise AnnotationWorkbenchError(
+            f"corrected annotation would invalidate dataset: {error}"
+        ) from error
+    return receipt
+
+
+def finalize_annotations(
+    *, dataset_root: Path, manifest_path: Path, editor_id: str
+) -> dict[str, Any]:
+    """Validate the complete dataset and bind every edit into one final receipt."""
+
+    root, manifest_file = _resolve_dataset_paths(dataset_root, manifest_path)
+    validate_private_workspace(root, Path(__file__).resolve().parents[4])
+    editor = _validate_editor_id(editor_id)
+    validation = validate_dataset(root, manifest_file)
+    receipt_directory = root / "annotation-receipts"
+    receipts: list[dict[str, Any]] = []
+    if receipt_directory.exists():
+        if receipt_directory.is_symlink() or not receipt_directory.is_dir():
+            raise AnnotationWorkbenchError("annotation receipt directory is unsafe")
+        for path in sorted(receipt_directory.glob("*.json")):
+            if path.is_symlink() or not path.is_file():
+                raise AnnotationWorkbenchError(
+                    "annotation receipt must be a regular file"
+                )
+            receipt = _load_json_object(path)
+            if receipt.get(
+                "schemaVersion"
+            ) != WORKBENCH_SCHEMA_VERSION or not verify_digest(
+                receipt, "receiptSha256"
+            ):
+                raise AnnotationWorkbenchError(
+                    f"invalid annotation receipt: {path.name}"
+                )
+            receipts.append(receipt)
+    current_manifest_sha = sha256_file(manifest_file)
+    receipts_by_result: dict[str, dict[str, Any]] = {}
+    for receipt in receipts:
+        source_sha = receipt.get("sourceManifestSha256")
+        result_sha = receipt.get("resultManifestSha256")
+        if not isinstance(source_sha, str) or not SHA256_PATTERN.fullmatch(source_sha):
+            raise AnnotationWorkbenchError(
+                "annotation receipt has invalid source manifest digest"
+            )
+        if not isinstance(result_sha, str) or not SHA256_PATTERN.fullmatch(result_sha):
+            raise AnnotationWorkbenchError(
+                "annotation receipt has invalid result manifest digest"
+            )
+        if result_sha in receipts_by_result:
+            raise AnnotationWorkbenchError(
+                "annotation receipts do not form a single manifest chain"
+            )
+        receipts_by_result[result_sha] = receipt
+    reverse_chain: list[dict[str, Any]] = []
+    cursor = current_manifest_sha
+    while cursor in receipts_by_result:
+        receipt = receipts_by_result.pop(cursor)
+        reverse_chain.append(receipt)
+        cursor = receipt["sourceManifestSha256"]
+    if receipts_by_result:
+        raise AnnotationWorkbenchError(
+            "annotation receipts do not form a single manifest chain"
+        )
+    edit_receipts = list(reversed(reverse_chain))
+    final = attach_digest(
+        {
+            "schemaVersion": FINALIZATION_SCHEMA_VERSION,
+            "finalizedAt": _utc_timestamp(),
+            "editorId": editor,
+            "datasetId": validation["datasetId"],
+            "manifestSha256": current_manifest_sha,
+            "editIds": [item["editId"] for item in edit_receipts],
+            "editReceiptSha256s": [item["receiptSha256"] for item in edit_receipts],
+            "datasetValidation": validation,
+            "eligibleForTraining": True,
+            "productionEligible": False,
+            "eligibilityScope": "dataset-for-training-only",
+        },
+        "receiptSha256",
+    )
+    write_canonical_json(root / "annotation-finalization-receipt.json", final)
+    return final
+
+
+def render_workbench_html(csrf_token: str, editor_id: str = "owner-daniel") -> str:
+    """Return a self-contained editor; no external scripts, fonts, or assets."""
+
+    if not csrf_token or any(character in csrf_token for character in "<>\"'"):
+        raise AnnotationWorkbenchError("invalid workbench token")
+    editor = _validate_editor_id(editor_id)
+    names = json.dumps(KEYPOINT_NAMES)
+    token = json.dumps(csrf_token)
+    editor_json = json.dumps(editor)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CommandCanvas Hand Annotation</title>
+  <style>
+    :root {{ color-scheme: dark; font: 15px/1.4 ui-sans-serif, system-ui, sans-serif; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; min-height: 100vh; background: #090b12; color: #f7f8ff; }}
+    header {{ display:flex; gap:16px; align-items:center; justify-content:space-between; padding:14px 18px; border-bottom:1px solid #2a3044; }}
+    h1 {{ font-size:18px; margin:0; }}
+    main {{ display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:14px; padding:14px; min-height:calc(100vh - 58px); }}
+    .stage {{ display:grid; place-items:center; min-width:0; overflow:hidden; border:1px solid #2a3044; border-radius:16px; background:#02030a; }}
+    canvas {{ display:block; max-width:100%; max-height:calc(100vh - 90px); touch-action:none; cursor:crosshair; }}
+    aside {{ display:flex; flex-direction:column; gap:12px; overflow:auto; }}
+    section {{ border:1px solid #2a3044; border-radius:14px; padding:12px; background:#111522; }}
+    button, select {{ min-height:42px; border:1px solid #46506c; border-radius:10px; background:#1c2234; color:inherit; padding:8px 11px; }}
+    button.primary {{ background:#6657ee; border-color:#8478ff; font-weight:700; }}
+    button:disabled {{ opacity:.45; }}
+    .row {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }}
+    .frames {{ max-height:180px; overflow:auto; display:grid; gap:4px; }}
+    .frames button {{ text-align:left; }}
+    .active {{ outline:2px solid #8e83ff; }}
+    .muted {{ color:#aeb6ce; font-size:13px; }}
+    .status {{ min-height:42px; white-space:pre-wrap; }}
+    label {{ display:flex; align-items:center; gap:7px; }}
+    @media (max-width:800px) {{ main {{ grid-template-columns:1fr; }} canvas {{ max-height:62vh; }} }}
+  </style>
+</head>
+<body>
+  <header><h1>CommandCanvas Hand Annotation</h1><div class="muted">Local only · exact 21-point review · {editor}</div></header>
+  <main>
+    <div class="stage"><canvas id="canvas" aria-label="Hand keypoint annotation canvas"></canvas></div>
+    <aside>
+      <section><strong id="counter">Frame 0 / 0</strong><div class="frames" id="frames"></div></section>
+      <section>
+        <div class="row"><button id="previous">Previous</button><button id="next">Next</button></div>
+        <p id="pointName">Wrist · 1 / 21</p>
+        <div class="row"><button id="addHand">Add hand</button><button id="removeHand">Remove hand</button></div>
+        <div class="row"><button id="undoPoint">Undo point</button><label><input id="negative" type="checkbox"> Mark no hand</label></div>
+        <label>Visibility <select id="visibility"><option value="2">Visible</option><option value="1">Occluded</option><option value="0">Absent</option></select></label>
+      </section>
+      <section><strong>Frame categories</strong><div id="categories"></div><p class="muted">Each hand must reach 21 / 21 points before save.</p></section>
+      <section><div class="row"><button class="primary" id="save">Save correction</button><button id="finalize">Finalize dataset</button></div><div class="status muted" id="status">Loading…</div></section>
+    </aside>
+  </main>
+<script>
+(() => {{
+  "use strict";
+  const token = {token};
+  const editorId = {editor_json};
+  const pointNames = {names};
+  const bones = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+  const canvas = document.getElementById("canvas"), context = canvas.getContext("2d");
+  const status = document.getElementById("status"), framesNode = document.getElementById("frames");
+  let listing = [], selectedIndex = 0, current = null, image = null, activeHand = 0, activePoint = 0, placing = false, drag = null;
+  const request = async (path, options={{}}) => {{
+    options.headers = {{...(options.headers || {{}}), "X-CommandCanvas-Workbench-Token": token}};
+    if (options.body) options.headers["Content-Type"] = "application/json";
+    const response = await fetch(path, options), payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `Request failed (${{response.status}})`);
+    return payload;
+  }};
+  const setStatus = (message, error=false) => {{ status.textContent = message; status.style.color = error ? "#ff9ca8" : "#aeb6ce"; }};
+  const framePath = item => `/api/frame/${{encodeURIComponent(item.sessionId)}}/${{encodeURIComponent(item.frameId)}}`;
+  const imagePath = item => `/api/image/${{encodeURIComponent(item.sessionId)}}/${{encodeURIComponent(item.frameId)}}`;
+  async function loadListing() {{
+    const payload = await request("/api/state"); listing = payload.frames; renderListing(); await loadFrame(0);
+  }}
+  function renderListing() {{
+    framesNode.replaceChildren(...listing.map((item,index) => {{ const button=document.createElement("button"); button.textContent=`${{item.split}} · ${{item.frameId}}`; button.className=index===selectedIndex?"active":""; button.onclick=()=>loadFrame(index); return button; }}));
+  }}
+  async function loadFrame(index) {{
+    if (!listing.length) return; selectedIndex=Math.max(0,Math.min(listing.length-1,index)); activeHand=0; activePoint=0; placing=false;
+    current=await request(framePath(listing[selectedIndex]));
+    const imageResponse=await fetch(imagePath(listing[selectedIndex]),{{headers:{{"X-CommandCanvas-Workbench-Token":token}}}});
+    if(!imageResponse.ok) throw new Error(`Image failed (${{imageResponse.status}})`);
+    const imageUrl=URL.createObjectURL(await imageResponse.blob()); image=new Image();
+    image.onload=()=>{{ canvas.width=image.naturalWidth; canvas.height=image.naturalHeight; draw(); URL.revokeObjectURL(imageUrl); }};
+    image.onerror=()=>{{URL.revokeObjectURL(imageUrl);setStatus("Frame image could not be decoded",true);}}; image.src=imageUrl;
+    document.getElementById("counter").textContent=`Frame ${{selectedIndex+1}} / ${{listing.length}}`;
+    document.getElementById("negative").checked=current.negative; renderCategories(); renderListing(); updateControls(); setStatus("Ready");
+  }}
+  function renderCategories() {{
+    const parent=document.getElementById("categories"), supported=["drawing","edge","pinch","two_hand"];
+    parent.replaceChildren(...supported.map(name=>{{ const label=document.createElement("label"), input=document.createElement("input"); input.type="checkbox"; input.value=name; input.checked=current.categories.includes(name); input.disabled=current.negative; label.append(input,document.createTextNode(name.replace("_"," "))); return label; }}));
+  }}
+  function updateControls() {{
+    const hand=current && current.hands[activeHand], points=hand?hand.keypoints:[]; activePoint=placing?points.length:Math.min(activePoint,Math.max(0,points.length-1));
+    const pointLabel=pointNames[Math.min(activePoint,20)];
+    document.getElementById("pointName").textContent=`${{pointLabel}} · ${{points.length}} / 21 · hand ${{activeHand+1}}`;
+    document.getElementById("visibility").value=points[activePoint]?.visibility ?? 2;
+    document.getElementById("addHand").disabled=!current||current.negative||current.hands.length>=2;
+    document.getElementById("removeHand").disabled=!current||current.negative||!current.hands.length;
+  }}
+  function draw() {{
+    if (!image) return; context.clearRect(0,0,canvas.width,canvas.height); context.drawImage(image,0,0);
+    current.hands.forEach((hand,handIndex)=>{{
+      context.strokeStyle=handIndex===0?"#55f2db":"#ffb45c"; context.fillStyle=context.strokeStyle; context.lineWidth=Math.max(2,canvas.width/500);
+      bones.forEach(([a,b])=>{{ const p=hand.keypoints[a],q=hand.keypoints[b]; if(!p||!q||p.visibility===0||q.visibility===0)return; context.beginPath();context.moveTo(p.x*canvas.width,p.y*canvas.height);context.lineTo(q.x*canvas.width,q.y*canvas.height);context.stroke(); }});
+      hand.keypoints.forEach((point,index)=>{{ context.save();context.globalAlpha=point.visibility===0?.3:1;context.beginPath();context.arc(point.x*canvas.width,point.y*canvas.height,index===activePoint&&handIndex===activeHand?8:5,0,Math.PI*2);context.fill();context.strokeStyle="#10131f";context.stroke();context.restore(); }});
+    }});
+  }}
+  function coordinates(event) {{ const rect=canvas.getBoundingClientRect(); return {{x:Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width)),y:Math.max(0,Math.min(1,(event.clientY-rect.top)/rect.height))}}; }}
+  function nearest(point) {{ let best=null,distance=Infinity; current.hands.forEach((hand,h)=>hand.keypoints.forEach((p,k)=>{{ const d=Math.hypot(p.x-point.x,p.y-point.y); if(d<distance){{distance=d;best={{h,k}};}} }})); return distance<0.04?best:null; }}
+  canvas.addEventListener("pointerdown",event=>{{ if(!current||current.negative)return; canvas.setPointerCapture(event.pointerId); const point=coordinates(event); if(placing){{ current.hands[activeHand].keypoints.push({{...point,visibility:2}}); activePoint=current.hands[activeHand].keypoints.length; if(current.hands[activeHand].keypoints.length===21){{placing=false;activePoint=20;}} }} else {{ drag=nearest(point); if(drag){{activeHand=drag.h;activePoint=drag.k;}} }} updateControls();draw(); }});
+  canvas.addEventListener("pointermove",event=>{{ if(!drag||!canvas.hasPointerCapture(event.pointerId))return; Object.assign(current.hands[drag.h].keypoints[drag.k],coordinates(event));draw(); }});
+  canvas.addEventListener("pointerup",event=>{{ drag=null; if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId); }});
+  document.getElementById("addHand").onclick=()=>{{current.hands.push({{keypoints:[]}});activeHand=current.hands.length-1;activePoint=0;placing=true;updateControls();draw();setStatus("Click the 21 named points in order.");}};
+  document.getElementById("removeHand").onclick=()=>{{current.hands.splice(activeHand,1);activeHand=Math.max(0,activeHand-1);placing=false;updateControls();draw();}};
+  document.getElementById("undoPoint").onclick=()=>{{if(!placing)return;current.hands[activeHand].keypoints.pop();activePoint=Math.max(0,current.hands[activeHand].keypoints.length-1);updateControls();draw();}};
+  document.getElementById("negative").onchange=event=>{{current.negative=event.target.checked;if(current.negative){{current.hands=[];placing=false;current.categories=["negative"];}}else{{current.categories=["drawing"];}}renderCategories();updateControls();draw();}};
+  document.getElementById("visibility").onchange=event=>{{const point=current.hands[activeHand]?.keypoints[activePoint];if(point){{point.visibility=Number(event.target.value);draw();}}}};
+  document.getElementById("previous").onclick=()=>loadFrame(selectedIndex-1); document.getElementById("next").onclick=()=>loadFrame(selectedIndex+1);
+  document.getElementById("save").onclick=async()=>{{try{{const categories=current.negative?["negative"]:[...document.querySelectorAll("#categories input:checked")].map(input=>input.value);const receipt=await request(framePath(listing[selectedIndex]),{{method:"POST",body:JSON.stringify({{expectedManifestSha256:current.manifestSha256,expectedLabelSha256:current.labelSha256,negative:current.negative,categories,hands:current.hands.map(hand=>({{keypoints:hand.keypoints}}))}})}});setStatus(`Saved as ${{editorId}} · ${{receipt.receiptSha256.slice(0,12)}}`);await loadFrame(selectedIndex);}}catch(error){{setStatus(error.message,true);}}}};
+  document.getElementById("finalize").onclick=async()=>{{try{{const receipt=await request("/api/finalize",{{method:"POST",body:JSON.stringify({{}})}});setStatus(`Dataset validated · ${{receipt.receiptSha256.slice(0,12)}}`);}}catch(error){{setStatus(error.message,true);}}}};
+  loadListing().catch(error=>setStatus(error.message,true));
+}})();
+</script>
+</body>
+</html>"""
+
+
+def _dataset_listing(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    group_splits = {
+        group: split
+        for split, groups in manifest.get("splits", {}).items()
+        if isinstance(groups, list)
+        for group in groups
+    }
+    listing: list[dict[str, Any]] = []
+    for session in manifest.get("sessions", []):
+        if not isinstance(session, dict):
+            continue
+        for frame in session.get("frames", []):
+            if not isinstance(frame, dict):
+                continue
+            listing.append(
+                {
+                    "sessionId": session.get("sessionId"),
+                    "frameId": frame.get("frameId"),
+                    "timestampMs": frame.get("timestampMs"),
+                    "split": group_splits.get(session.get("captureGroupId"), "unknown"),
+                    "categories": frame.get("categories"),
+                }
+            )
+    return listing
+
+
+def create_workbench_server(
+    *,
+    dataset_root: Path,
+    manifest_path: Path,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    editor_id: str = "owner-daniel",
+) -> HTTPServer:
+    """Create a loopback-only server without starting a background thread."""
+
+    validate_loopback_host(host)
+    if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65535:
+        raise AnnotationWorkbenchError("port must be an integer between 0 and 65535")
+    root, manifest_file = _resolve_dataset_paths(dataset_root, manifest_path)
+    validate_private_workspace(root, Path(__file__).resolve().parents[4])
+    validate_dataset(root, manifest_file)
+    editor = _validate_editor_id(editor_id)
+    token = secrets.token_urlsafe(32)
+    page = render_workbench_html(token, editor).encode("utf-8")
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "CommandCanvasAnnotation/1.0"
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+        def _headers(self, status: HTTPStatus, content_type: str, length: int) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(length))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; img-src 'self'; style-src 'unsafe-inline'; "
+                "script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'",
+            )
+            self.end_headers()
+
+        def _json(self, status: HTTPStatus, value: Any) -> None:
+            contents = canonical_json_bytes(value)
+            self._headers(status, "application/json; charset=utf-8", len(contents))
+            self.wfile.write(contents)
+
+        def _authorized(self) -> bool:
+            if self.headers.get("X-CommandCanvas-Workbench-Token") != token:
+                self._json(
+                    HTTPStatus.FORBIDDEN,
+                    {"error": "invalid local workbench token"},
+                )
+                return False
+            origin = self.headers.get("Origin")
+            if origin:
+                parsed = urlparse(origin)
+                try:
+                    validate_loopback_host(parsed.hostname or "")
+                except AnnotationWorkbenchError:
+                    self._json(
+                        HTTPStatus.FORBIDDEN,
+                        {"error": "cross-origin request refused"},
+                    )
+                    return False
+            return True
+
+        def _trusted_request_host(self) -> bool:
+            try:
+                validate_request_host(self.headers.get("Host", ""))
+            except AnnotationWorkbenchError as error:
+                self._json(HTTPStatus.FORBIDDEN, {"error": str(error)})
+                return False
+            return True
+
+        def _route_frame(self, prefix: str) -> tuple[str, str] | None:
+            path = urlparse(self.path).path
+            if not path.startswith(prefix):
+                return None
+            parts = [unquote(part) for part in path[len(prefix) :].split("/") if part]
+            if len(parts) != 2:
+                return None
+            return parts[0], parts[1]
+
+        def _body(self) -> dict[str, Any]:
+            raw_length = self.headers.get("Content-Length")
+            if raw_length is None:
+                raise AnnotationWorkbenchError("Content-Length is required")
+            try:
+                length = int(raw_length)
+            except ValueError as error:
+                raise AnnotationWorkbenchError(
+                    "Content-Length must be an integer"
+                ) from error
+            if not 0 < length <= MAX_REQUEST_BYTES:
+                raise AnnotationWorkbenchError(
+                    "request body is outside the allowed size"
+                )
+            try:
+                value = json.loads(
+                    self.rfile.read(length), object_pairs_hook=_strict_object
+                )
+            except json.JSONDecodeError as error:
+                raise AnnotationWorkbenchError(
+                    "request body must be strict JSON"
+                ) from error
+            if not isinstance(value, dict):
+                raise AnnotationWorkbenchError("request body must be an object")
+            return value
+
+        def do_GET(self) -> None:
+            try:
+                if not self._trusted_request_host():
+                    return
+                path = urlparse(self.path).path
+                if path == "/":
+                    self._headers(HTTPStatus.OK, "text/html; charset=utf-8", len(page))
+                    self.wfile.write(page)
+                    return
+                if not self._authorized():
+                    return
+                if path == "/api/state":
+                    manifest = _load_json_object(manifest_file)
+                    self._json(
+                        HTTPStatus.OK,
+                        {
+                            "datasetId": manifest.get("datasetId"),
+                            "manifestSha256": sha256_file(manifest_file),
+                            "frames": _dataset_listing(manifest),
+                        },
+                    )
+                    return
+                frame_route = self._route_frame("/api/frame/")
+                if frame_route:
+                    self._json(
+                        HTTPStatus.OK,
+                        load_frame_annotation(root, manifest_file, *frame_route),
+                    )
+                    return
+                image_route = self._route_frame("/api/image/")
+                if image_route:
+                    manifest = _load_json_object(manifest_file)
+                    _, frame = _find_frame(manifest, *image_route)
+                    image = frame.get("image")
+                    if not isinstance(image, dict):
+                        raise AnnotationWorkbenchError("frame image must be an object")
+                    image_path = _safe_asset(
+                        root, image.get("path"), location="frame image"
+                    )
+                    contents = image_path.read_bytes()
+                    content_type = (
+                        "image/png"
+                        if image_path.suffix.lower() == ".png"
+                        else "image/jpeg"
+                    )
+                    self._headers(HTTPStatus.OK, content_type, len(contents))
+                    self.wfile.write(contents)
+                    return
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            except (
+                AnnotationWorkbenchError,
+                DatasetValidationError,
+                OSError,
+                UnicodeError,
+            ) as error:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+
+        def do_POST(self) -> None:
+            try:
+                if not self._trusted_request_host():
+                    return
+                if not self._authorized():
+                    return
+                body = self._body()
+                path = urlparse(self.path).path
+                if path == "/api/finalize":
+                    if body:
+                        raise AnnotationWorkbenchError(
+                            "finalize body has unsupported fields"
+                        )
+                    self._json(
+                        HTTPStatus.OK,
+                        finalize_annotations(
+                            dataset_root=root,
+                            manifest_path=manifest_file,
+                            editor_id=editor,
+                        ),
+                    )
+                    return
+                frame_route = self._route_frame("/api/frame/")
+                expected = {
+                    "expectedManifestSha256",
+                    "expectedLabelSha256",
+                    "negative",
+                    "categories",
+                    "hands",
+                }
+                if frame_route is None or set(body) != expected:
+                    raise AnnotationWorkbenchError(
+                        "annotation body or route has unsupported fields"
+                    )
+                self._json(
+                    HTTPStatus.OK,
+                    save_frame_annotation(
+                        dataset_root=root,
+                        manifest_path=manifest_file,
+                        session_id=frame_route[0],
+                        frame_id=frame_route[1],
+                        editor_id=editor,
+                        expected_manifest_sha256=body["expectedManifestSha256"],
+                        expected_label_sha256=body["expectedLabelSha256"],
+                        negative=body["negative"],
+                        categories=body["categories"],
+                        hands=body["hands"],
+                    ),
+                )
+            except AnnotationConflict as error:
+                self._json(HTTPStatus.CONFLICT, {"error": str(error)})
+            except (
+                AnnotationWorkbenchError,
+                DatasetValidationError,
+                OSError,
+                UnicodeError,
+            ) as error:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+
+    if ":" in host:
+        import socket
+
+        class IPv6HTTPServer(HTTPServer):
+            address_family = socket.AF_INET6
+
+        return IPv6HTTPServer((host, port, 0, 0), Handler)
+    return HTTPServer((host, port), Handler)
+
+
+def run_annotation_workbench(
+    *,
+    dataset_root: Path,
+    manifest_path: Path,
+    host: str,
+    port: int,
+    editor_id: str,
+) -> None:
+    """Serve the private workbench until interrupted by the local operator."""
+
+    server = create_workbench_server(
+        dataset_root=dataset_root,
+        manifest_path=manifest_path,
+        host=host,
+        port=port,
+        editor_id=editor_id,
+    )
+    bound_port = int(server.server_address[1])
+    displayed_host = f"[{host}]" if ":" in host else host
+    print(f"CommandCanvas annotation workbench: http://{displayed_host}:{bound_port}")
+    print("Private frames remain on this machine. Press Ctrl+C to stop.")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
