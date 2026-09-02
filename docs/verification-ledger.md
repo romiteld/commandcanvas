@@ -2568,3 +2568,106 @@ a later documentation commit and does not change runtime behavior.
 - No Devpost submission has been made. Submission remains blocked until Danny
   personally accepts the physical-hand flow and a real ChatGPT-host Site Tool
   mutation is recorded against the frozen Production release.
+
+## Checkpoint 42: local hand acquisition recovery
+
+Runtime application commit:
+`c84178a09da8c4a126f6f83646e95d453458ee63`. Vercel Production deployment:
+`dpl_4taqmiYEi61sXWWXf54UKSeBHsxJ`, aliased to
+`https://commandcanvas.vercel.app`. This append-only checkpoint is recorded by
+a later documentation commit and does not change runtime behavior.
+
+### WORKING
+
+- The local MediaPipe adapter previously required 0.75 detection confidence,
+  0.75 hand-presence confidence, and 0.70 tracking confidence. Those values
+  discarded moving, frame-edge, and partially visible hands before the
+  downstream physical and temporal policy could evaluate them. The adapter now
+  uses MediaPipe's documented 0.50 defaults for all three acquisition gates.
+- Lower acquisition confidence does not lower the command safety boundary.
+  Keypoint confidence, physical index and pinch geometry, per-hand calibrated
+  temporal voting, target presence, hysteresis, canonical gesture transitions,
+  edge-action arming, and mutation policy remain authoritative.
+- The change was test-first. The updated detector contract failed against the
+  previous 0.75 / 0.75 / 0.70 implementation, then passed after the adapter
+  changed. The focused detector, worker, controller, and intent suite passed 87
+  of 87 tests.
+- At immutable commit `c84178a...`, the complete local release gate again
+  passed 159 test files and 1,660 tests, raw TypeScript, ESLint, Python Ruff,
+  raw mypy, 12 trajectory tests, the hand-worker build, optimized Next.js
+  build, and a zero-vulnerability Production dependency audit. GitHub Actions
+  run `33680417579` independently passed on the same commit.
+- The separately deployed owner relay remained publicly warm and ready during
+  this checkpoint. Its capability response identified the pinned YOLO26 hand-
+  pose model, 21 keypoints, CUDA on `NVIDIA GeForce RTX 3090 (CUDA device 0)`,
+  semantic-results-only output, zero raw-frame persistence, and zero retention.
+  That read-only capability response does not prove an authenticated browser
+  streamed a frame through the relay.
+
+### VERIFIED IN BROWSER
+
+- Vercel reported deployment `dpl_4taqmiYEi61sXWWXf54UKSeBHsxJ` as `READY`
+  with target `Production` and canonical aliases. The served JavaScript
+  contained exact source revision
+  `c84178a09da8c4a126f6f83646e95d453458ee63`; `/`, `/demo`, and `/meet` each
+  returned HTTP 200.
+- The complete ordinary Production Playwright matrix enumerated 101 project
+  scenarios: 40 applicable scenarios passed, 61 provider, physical-device, or
+  project-gated scenarios skipped intentionally, and none failed.
+- The explicit Production collaboration and calibration run passed five
+  applicable scenarios with five project-mismatched skips: two real no-signup
+  Supabase browser contexts synchronized Presence, cursors, and a durable
+  object mutation; recent-room recovery passed; desktop calibration remained
+  bounded; and mobile calibration suspended competing overlays before
+  restoring the hand PiP.
+- A four-second replay was cropped from the owner's supplied desktop recording
+  and converted to a bounded Y4M camera fixture with SHA-256
+  `07e0d608b0cc67f6d43fc321844e225825367ae874404d55ee6a0df0dc0b3166`.
+  Production Chrome loaded the worker, classic WASM runtime, and model; found a
+  human hand; emitted one skeleton, 21 keypoints, a tracked pointer, and
+  calibration progress; then released the camera lifecycle. The in-page
+  recovery path also passed. Both recorded-media scenarios passed.
+- The replay is deliberately not training data or physical acceptance. It is a
+  screen recording with burned-in CommandCanvas UI and landmark overlays, so
+  it proves only a deterministic browser regression path on those exact pixels.
+
+### UNVERIFIED
+
+- The acquisition change is expected to retain more moving, edge, and partially
+  visible hands, but no unit, browser-controlled-media, or replay result proves
+  it is more comfortable with a live physical camera. Danny must compare the
+  exact Production build against the prior behavior across center, edges,
+  corners, blur, partial occlusion, drawing, one-hand pinch, and two-hand
+  movement.
+- No hand detector, landmark estimator, temporal tracker, two-hand re-
+  identification model, drawing detector, or canvas-object tracker was fine-
+  tuned in this checkpoint. The prior HaGRID-derived model remains a static
+  landmark classifier, not a tracking model.
+- A defensible target-domain YOLO pose fine-tune still requires clean raw
+  camera sessions and human-corrected boxes and landmarks. The supplied screen
+  recordings contain UI and predicted skeleton overlays and must not be used as
+  ground truth. Repeating upstream training on the same public dataset would
+  not adapt the model to the demonstrated camera failures.
+- The authenticated owner browser has not yet exercised the live private relay
+  or its automatic fallback on this release. The already-packaged RTMDet-nano
+  plus RTMPose-m Distill hybrid remains a candidate that requires a same-input
+  physical A/B before promotion.
+- Real ChatGPT built-in-browser Site Tool invocation, physical microphone Live
+  Voice, current-release OTP and invitation delivery, current-release paid
+  vision or image generation, Resend webhook reconciliation, host-confirmed
+  packet email, and cross-network TURN remain separate external checks.
+- No Devpost submission has been made.
+
+### CUT
+
+- No approved spatial manipulation, hand control, drawing, object creation,
+  history, grouping, frame, collaboration, participant-media, Site Tools, Live
+  Voice, authentication, invitation, packet, vision, image, or Resend
+  capability was removed.
+- A general-purpose SFU, recording, screen sharing, billing, enterprise
+  identity, native mobile or headset application, plugin marketplace, desktop
+  automation, and direct conferencing-suite integrations remain outside this
+  browser challenge product.
+- Submission remains blocked until Danny accepts the physical-hand flow and a
+  real ChatGPT-host Site Tool mutation is recorded against the frozen
+  Production release.
