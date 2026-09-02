@@ -2282,3 +2282,143 @@ commit that records it does not alter application behavior.
 - No Devpost submission has been made. Submission remains blocked until the
   owner personally accepts the physical-hand flow and a real ChatGPT-host Site
   Tool mutation is recorded against the frozen Production release.
+
+## Checkpoint 40: production collaboration and meeting-media recovery
+
+Runtime application commit:
+`f6b1d5c162e1c1ad6d882ac4ab73414bcf350ada`. First verified Vercel
+Production deployment: `dpl_9MhxmSHNbQTBVSjJFAePKiARPr2X`, aliased to
+`https://commandcanvas.vercel.app`. This append-only checkpoint is recorded by
+a later documentation commit and does not change runtime behavior.
+
+### WORKING
+
+- Meeting-media sender attribution is bound to the authenticated publisher
+  topic, not trusted from client JSON. Supabase Realtime authorizes
+  `room-media:<room-id>:<publisher-user-id>` against the publisher's JWT and
+  `auth.uid()`. A receiver subscribes from the server-authoritative room roster,
+  closes over the topic's publisher id, and drops a payload whose redundant
+  `senderId` disagrees with that bound id. Current Supabase Broadcast callbacks
+  do not expose a server-attested actor id, so no nonexistent metadata is
+  claimed. See the official [Realtime Authorization](https://supabase.com/docs/guides/realtime/authorization)
+  and [protocol](https://supabase.com/docs/guides/realtime/protocol)
+  documentation.
+- The remote-video failure was reproduced as an ephemeral-Broadcast readiness
+  race. One browser could answer `ready` before the deterministic offerer had
+  subscribed to that publisher topic. The old `readyAcknowledged` cache then
+  treated server acceptance as peer delivery and suppressed the later answer.
+  The non-offering peer now answers every valid readiness announcement; the
+  offering peer's existing local-description guard keeps offer creation
+  idempotent. Supabase documents Broadcast acknowledgement as server receipt,
+  not receiver delivery.
+- Presence membership changes now trigger an immediate authoritative media-
+  roster refresh instead of waiting up to 15 seconds. Presence remains only a
+  refresh signal; it never becomes the authorization source. Identical
+  participant-id sets do not retrigger the effect merely because React renders
+  a new array.
+- Production browser tests use the current `Invite people` and `Invite link
+  copied` interface instead of stale pre-productization selectors.
+
+### VERIFIED LOCALLY
+
+- Red-first media regression: the repeated late-join readiness test failed on
+  the previous implementation with one targeted acknowledgement where two
+  were required. It passed after removing one-shot receiver-delivery
+  suppression.
+- The focused filmstrip, media-controller, media-protocol, and Realtime sender-
+  binding suites passed 50 of 50 tests.
+- Node 22.17.0 `npm run check`: ESLint exited 0; raw TypeScript `tsc --noEmit`
+  exited 0; 147 test files and 1,608 tests passed; the hand worker and optimized
+  Next.js 16.3.3 application built successfully with all 15 pages and dynamic
+  API routes.
+- The complete local Playwright matrix enumerated 99 project scenarios: 40
+  applicable scenarios passed, 59 environment-gated scenarios skipped
+  intentionally, and none failed.
+- A local application process was not credited with Production Supabase proof:
+  that worktree intentionally lacked the Production server credential and
+  correctly stopped at `service_unavailable`. The actual external proof below
+  ran against the Vercel Production application and its configured server
+  boundary.
+
+### VERIFIED IN BROWSER
+
+- Vercel reported deployment `dpl_9MhxmSHNbQTBVSjJFAePKiARPr2X` as `READY`,
+  target `Production`, for Git commit
+  `f6b1d5c162e1c1ad6d882ac4ab73414bcf350ada`; the canonical
+  `commandcanvas.vercel.app` alias resolved to that deployment during the
+  acceptance run.
+- The complete ordinary Production browser matrix enumerated 99 scenarios: 40
+  applicable scenarios passed, 59 provider/device/environment-gated scenarios
+  skipped intentionally, and none failed. Desktop Chromium, mobile Chromium,
+  mobile WebKit, responsive layouts, pointer/touch/pen events, deterministic
+  speech, canonical mutations, receipts, Undo, and native system-Chrome WebMCP
+  registration were included where applicable.
+- The explicit Production Supabase collaboration suite ran serially to avoid
+  demo-admission amplification. Four applicable scenarios passed and four
+  project-gated scenarios skipped, with zero failures.
+- Two independent no-signup browser contexts received distinct anonymous
+  Supabase identities, joined one room, reached two-participant Presence,
+  exchanged cursor and durable object changes, and displayed the attributable
+  collaboration receipt.
+- Both independent browser contexts obtained local fake camera and microphone
+  tracks, subscribed to the authenticated participant topics, negotiated direct
+  WebRTC, rendered remote meeting video on both sides, exposed live local and
+  remote audio/video tracks, and removed remote media after leave. This is a
+  real Production Realtime/WebRTC signaling test using browser-controlled
+  media; it is not a physical-camera or cross-network TURN claim.
+- The same Production run verified same-identity recent-room recovery and
+  mobile meeting controls of at least 44 CSS pixels.
+
+### UNVERIFIED
+
+- The remaining hand-input boundaries require a physical human and camera:
+  index-tip drawing continuity, comfortable full-canvas reach, pinch acquire /
+  hold / release, two-hand resize and rotation, canvas and focused-content
+  zoom, open-palm pan, edge actions, throw-to-trash, lighting, occlusion,
+  latency, thermals, and ergonomics. Recorded pixels, fake media, and event
+  profiles are not promoted to physical-device evidence.
+- A real ChatGPT built-in-browser Site Tool invocation remains required. Native
+  Chrome proves registration and page execution, but it cannot prove the
+  user's ChatGPT rollout, model host, permission setting, Available Site Tools
+  surface, or a mutation initiated by ChatGPT against this Production page.
+- The owner-only private GPU relay is configured behind signed, short-lived
+  capability issuance and local MediaPipe fallback, but an authenticated owner
+  camera session has not exercised relay authorization, frame delivery,
+  measured latency, model confidence, or automatic fallback on this release.
+- Physical microphone Realtime voice, a current-release paid vision transform,
+  generated imagery, OTP delivery through Resend SMTP, email-bound invitation
+  acceptance, Resend delivery webhook reconciliation, and a host-confirmed
+  meeting-packet send remain honest external-provider checks.
+- TURN is not configured in Production. The verified two-browser media run was
+  direct WebRTC on one host. Wi-Fi-to-cellular, restrictive NAT, and symmetric-
+  NAT behavior remain unverified and are not represented as reliable until a
+  real relay is configured and exercised.
+- Physical touch and stylus hardware remain unverified. Trusted browser events
+  and WebKit profiles do not prove palm rejection, pressure, tilt, or real-
+  device comfort.
+- The prior GitGuardian incident commit remains unreachable from every public
+  ref but retrievable from GitHub by its exact dangling object id. GitHub
+  Support or server-side garbage collection is still required before claiming
+  that object is unavailable. No credential was rotated or altered.
+- CodeRabbit CLI authentication did not complete through the non-interactive
+  callback. The repository audit is not represented as a CodeRabbit review.
+
+These are intentionally unverified boundaries: each requires an external
+provider, the exact ChatGPT host, a physical device/human, a separately
+configured TURN service, or GitHub server-side action. None is hidden behind a
+green unit-test claim.
+
+### CUT
+
+- No approved spatial manipulation, hand control, object creation, history,
+  grouping, frame, collaboration, participant-video, Site Tools, Live Voice,
+  authentication, invitation, packet, vision, image, or Resend capability was
+  removed by the recovery.
+- A general-purpose SFU, recording, screen sharing, billing, enterprise
+  identity, native mobile or headset application, plugin marketplace, desktop
+  automation, physical-marker tracking before finger acceptance, and direct
+  conferencing-suite integrations remain outside this browser challenge
+  product.
+- No Devpost submission has been made. Submission remains blocked until Danny
+  personally accepts the physical hand flow and a real ChatGPT-host Site Tool
+  mutation is recorded against the frozen Production release.
