@@ -22,6 +22,7 @@ from commandcanvas_hand_finetune.runpod import (  # noqa: E402
     execute_launch,
     prepare_launch,
 )
+from commandcanvas_hand_finetune.training_spec import TRAINING_RUNTIME  # noqa: E402
 
 from fixture_dataset import write_valid_dataset  # noqa: E402
 
@@ -76,8 +77,7 @@ class RunPodLauncherTests(unittest.TestCase):
             archive_path=self.archive_path,
             output_dir=self.output_dir,
             ssh_private_key=self.ssh_key_path,
-            container_ref="ghcr.io/romiteld/commandcanvas-hand-trainer@sha256:"
-            + "c" * 64,
+            container_ref=TRAINING_RUNTIME["baseImage"],
             max_runtime_minutes=90,
             max_spend_usd=Decimal("10.00"),
         )
@@ -146,71 +146,39 @@ class RunPodLauncherTests(unittest.TestCase):
             )
         self.assertEqual(transport.calls, [])
 
-    def test_client_uses_official_create_and_delete_endpoints_without_serializing_key(
-        self,
-    ) -> None:
-        create_response = RunPodHttpResponse(
-            status=201,
-            body=json.dumps(
-                {
-                    "id": "pod-123",
-                    "desiredStatus": "RUNNING",
-                    "adjustedCostPerHr": 3.0,
-                    "costPerHr": "3.20",
-                    "gpu": {"id": "NVIDIA H200", "count": 1, "displayName": "H200 SXM"},
-                }
-            ).encode(),
-        )
-        transport = RecordingTransport(
-            [create_response, RunPodHttpResponse(status=204, body=b"")]
-        )
+    def test_client_exposes_only_cleanup_until_execute_gates_exist(self) -> None:
+        transport = RecordingTransport([RunPodHttpResponse(status=204, body=b"")])
         client = RunPodClient(api_key="not-printed-test-secret", transport=transport)
-        prepared = prepare_launch(self.inputs)
-
-        run_receipt = client.create_bounded_pod(
-            prepared["request"],
-            max_runtime_minutes=90,
-            cleanup_grace_minutes=10,
-            max_spend_usd=Decimal("10.00"),
-            started_at="2026-09-02T12:00:00Z",
-        )
         client.delete_pod("pod-123")
 
-        self.assertEqual(transport.calls[0]["method"], "POST")
-        self.assertEqual(transport.calls[0]["url"], "https://rest.runpod.io/v1/pods")
-        self.assertEqual(transport.calls[1]["method"], "DELETE")
+        self.assertEqual(transport.calls[0]["method"], "DELETE")
         self.assertEqual(
-            transport.calls[1]["url"], "https://rest.runpod.io/v1/pods/pod-123"
+            transport.calls[0]["url"], "https://rest.runpod.io/v1/pods/pod-123"
         )
-        self.assertEqual(run_receipt["selectedGpuId"], "NVIDIA H200")
-        self.assertEqual(run_receipt["estimatedMaximumSpendUsd"], "5.000000")
-        self.assertNotIn("not-printed-test-secret", json.dumps(run_receipt))
+        self.assertFalse(hasattr(client, "create_bounded_pod"))
 
-    def test_over_budget_or_unexpected_gpu_is_deleted_immediately(self) -> None:
-        response = {
-            "id": "pod-over-budget",
-            "desiredStatus": "RUNNING",
-            "adjustedCostPerHr": 12.0,
-            "costPerHr": "12.00",
-            "gpu": {"id": "NVIDIA H200", "count": 1, "displayName": "H200 SXM"},
-        }
-        transport = RecordingTransport(
-            [
-                RunPodHttpResponse(status=201, body=json.dumps(response).encode()),
-                RunPodHttpResponse(status=204, body=b""),
-            ]
-        )
-        client = RunPodClient(api_key="not-printed-test-secret", transport=transport)
-        with self.assertRaisesRegex(LaunchRefused, "maximum spend"):
-            client.create_bounded_pod(
-                prepare_launch(self.inputs)["request"],
-                max_runtime_minutes=90,
-                cleanup_grace_minutes=10,
-                max_spend_usd=Decimal("10.00"),
-                started_at="2026-09-02T12:00:00Z",
-            )
+    def test_prepared_request_uses_only_the_approved_openapi_contract(self) -> None:
+        request = prepare_launch(self.inputs)["request"]
         self.assertEqual(
-            [call["method"] for call in transport.calls], ["POST", "DELETE"]
+            set(request),
+            {
+                "allowedCudaVersions",
+                "cloudType",
+                "computeType",
+                "containerDiskInGb",
+                "env",
+                "gpuCount",
+                "gpuTypeIds",
+                "gpuTypePriority",
+                "imageName",
+                "interruptible",
+                "minRAMPerGPU",
+                "minVCPUPerGPU",
+                "name",
+                "ports",
+                "supportPublicIp",
+                "volumeInGb",
+            },
         )
 
 

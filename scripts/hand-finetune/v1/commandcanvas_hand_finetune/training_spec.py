@@ -17,7 +17,28 @@ UPSTREAM_CHECKPOINT = {
     "path": "checkpoints/yolo26_hand_pose.pt",
     "sha256": "39cb54e63cac0d8905d7cab2112430dc9bf60a26779e361165fc03bf9c6ca36d",
     "ownerOnlyExperimental": True,
-    "licenseBoundary": "AGPL runtime and CC-BY-NC-SA dataset boundary; not redistributable in MIT app",
+    "licenseBoundary": "Ultralytics AGPL-3.0 or Enterprise runtime; upstream source dataset is CC-BY-NC-SA-4.0; candidate remains owner-only, noncommercial, and outside the MIT app until license review",
+    "sourceDataset": {
+        "name": "Ultralytics Hand Keypoints Dataset",
+        "creator": "Rion Dsilva",
+        "license": "CC-BY-NC-SA-4.0",
+        "licenseUri": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+        "documentationUri": "https://docs.ultralytics.com/datasets/pose/hand-keypoints",
+        "creditedImageSources": [
+            "11k Hands",
+            "2000 Hand Gestures",
+            "Gesture Recognition",
+        ],
+    },
+}
+
+TRAINING_RUNTIME = {
+    "baseImage": "docker.io/runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404@sha256:4d1721e62b56d345c83b4fd6090664be6daf9312caab5b2e76f23d8231941851",
+    "ultralyticsVersion": "8.4.33",
+    "pytorchVersion": "2.8.0",
+    "cudaVersion": "12.8",
+    "ultralyticsLicense": "AGPL-3.0-or-Enterprise",
+    "candidateRedistributionApproved": False,
 }
 
 
@@ -34,6 +55,7 @@ def build_training_spec(dataset_receipt: dict[str, Any]) -> dict[str, Any]:
         "schemaVersion": "commandcanvas.hand-training-spec/v1",
         "datasetReceiptSha256": dataset_receipt["receiptSha256"],
         "sourceCheckpoint": dict(UPSTREAM_CHECKPOINT),
+        "runtime": dict(TRAINING_RUNTIME),
         "productionEligible": False,
         "promotionState": "owner-only-experimental",
         "seed": 20260902,

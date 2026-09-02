@@ -14,7 +14,7 @@ from typing import Any, Protocol
 from .canonical import canonical_json_bytes, sha256_file, write_canonical_json
 from .dataset import DatasetValidationError, validate_dataset
 from .onnx_contract import OnnxInspection, validate_onnx_contract
-from .training_spec import UPSTREAM_CHECKPOINT, build_training_spec
+from .training_spec import TRAINING_RUNTIME, UPSTREAM_CHECKPOINT, build_training_spec
 
 
 class TrainerRefused(RuntimeError):
@@ -44,12 +44,24 @@ class UltralyticsBackend:
 
     def load(self, checkpoint: Path) -> None:
         try:
+            import torch
+            import ultralytics  # type: ignore[import-not-found]
             from ultralytics import YOLO  # type: ignore[import-not-found]
         except ImportError as error:
             raise TrainerRefused(
                 "Ultralytics is absent; run this entrypoint only inside the digest-pinned "
                 "separately licensed owner training container"
             ) from error
+        if ultralytics.__version__ != TRAINING_RUNTIME["ultralyticsVersion"]:
+            raise TrainerRefused(
+                "Ultralytics runtime version is not the pinned version"
+            )
+        if not torch.__version__.startswith(f"{TRAINING_RUNTIME['pytorchVersion']}+"):
+            raise TrainerRefused("PyTorch runtime version is not the pinned version")
+        if torch.version.cuda != TRAINING_RUNTIME["cudaVersion"]:
+            raise TrainerRefused(
+                "PyTorch CUDA runtime version is not the pinned version"
+            )
         self._model = YOLO(str(checkpoint))
 
     def train_phase(

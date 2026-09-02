@@ -9,12 +9,13 @@ import stat
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 from .canonical import attach_digest, canonical_json_bytes, sha256_file
 from .dataset import DatasetValidationError, validate_dataset
+from .training_spec import TRAINING_RUNTIME
 
 
 RUNPOD_BASE_URL = "https://rest.runpod.io/v1"
@@ -110,6 +111,8 @@ def _validate_launch_inputs(inputs: LaunchInputs) -> dict[str, Any]:
         )
     if not CONTAINER_PATTERN.fullmatch(inputs.container_ref):
         raise LaunchRefused("container reference must be digest-qualified with @sha256")
+    if inputs.container_ref != TRAINING_RUNTIME["baseImage"]:
+        raise LaunchRefused("container reference is not the approved training runtime")
     archive = Path(inputs.archive_path)
     if archive.is_symlink() or not archive.is_file() or archive.stat().st_size == 0:
         raise LaunchRefused("dataset archive must be a non-empty regular file")
@@ -249,76 +252,3 @@ class RunPodClient:
         response = self._request("DELETE", f"/pods/{pod_id}")
         if response.status not in {200, 202, 204, 404}:
             raise LaunchRefused(f"RunPod delete failed with HTTP {response.status}")
-
-    def create_bounded_pod(
-        self,
-        request: dict[str, Any],
-        *,
-        max_runtime_minutes: int,
-        cleanup_grace_minutes: int,
-        max_spend_usd: Decimal,
-        started_at: str,
-    ) -> dict[str, Any]:
-        if not 5 <= max_runtime_minutes <= 120:
-            raise LaunchRefused("max runtime must be between 5 and 120 minutes")
-        if not 1 <= cleanup_grace_minutes <= 15:
-            raise LaunchRefused("cleanup grace must be between 1 and 15 minutes")
-        if not max_spend_usd.is_finite() or not Decimal(
-            "0.01"
-        ) <= max_spend_usd <= Decimal("50.00"):
-            raise LaunchRefused("max spend must be between $0.01 and $50.00")
-        response = self._request("POST", "/pods", request)
-        if response.status not in {200, 201, 202}:
-            raise LaunchRefused(f"RunPod create failed with HTTP {response.status}")
-        try:
-            payload = json.loads(response.body)
-            pod_id = payload["id"]
-            selected_gpu = payload["gpu"]["id"]
-            gpu_count = int(payload["gpu"]["count"])
-            hourly_rate = Decimal(str(payload["adjustedCostPerHr"]))
-        except (
-            KeyError,
-            TypeError,
-            ValueError,
-            InvalidOperation,
-            json.JSONDecodeError,
-        ) as error:
-            raise LaunchRefused(
-                f"RunPod create response did not satisfy the expected contract: {error}"
-            ) from error
-        estimated_spend = (
-            hourly_rate
-            * Decimal(max_runtime_minutes + cleanup_grace_minutes)
-            / Decimal(60)
-        ).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
-        refusal: str | None = None
-        if selected_gpu not in ALLOWED_GPU_IDS or gpu_count != 1:
-            refusal = "RunPod selected an unexpected GPU allocation"
-        elif estimated_spend > max_spend_usd:
-            refusal = (
-                f"RunPod estimated maximum spend {estimated_spend} exceeds "
-                f"maximum spend {max_spend_usd}"
-            )
-        if refusal:
-            try:
-                self.delete_pod(str(pod_id))
-            except LaunchRefused as cleanup_error:
-                raise LaunchRefused(
-                    f"{refusal}; immediate delete also failed: {cleanup_error}"
-                ) from cleanup_error
-            raise LaunchRefused(refusal)
-        receipt = {
-            "schemaVersion": "commandcanvas.runpod-run-receipt/v1",
-            "podId": str(pod_id),
-            "startedAt": started_at,
-            "selectedGpuId": selected_gpu,
-            "gpuCount": gpu_count,
-            "hourlyRateUsd": format(hourly_rate, "f"),
-            "maxRuntimeMinutes": max_runtime_minutes,
-            "cleanupGraceMinutes": cleanup_grace_minutes,
-            "estimatedMaximumSpendUsd": format(estimated_spend, ".6f"),
-            "maxSpendUsd": format(max_spend_usd, ".2f"),
-            "terminationRequired": True,
-            "productionEligible": False,
-        }
-        return attach_digest(receipt, "runReceiptSha256")

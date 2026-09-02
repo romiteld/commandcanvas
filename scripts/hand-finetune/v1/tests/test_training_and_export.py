@@ -42,6 +42,15 @@ class TrainingSpecTests(unittest.TestCase):
             "39cb54e63cac0d8905d7cab2112430dc9bf60a26779e361165fc03bf9c6ca36d",
         )
         self.assertTrue(spec["sourceCheckpoint"]["ownerOnlyExperimental"])
+        self.assertEqual(
+            spec["sourceCheckpoint"]["sourceDataset"]["license"],
+            "CC-BY-NC-SA-4.0",
+        )
+        self.assertEqual(spec["runtime"]["ultralyticsVersion"], "8.4.33")
+        self.assertRegex(
+            spec["runtime"]["baseImage"],
+            r"@sha256:[0-9a-f]{64}$",
+        )
         self.assertFalse(spec["productionEligible"])
         self.assertEqual(spec["seed"], 20260902)
         self.assertEqual(spec["batchSize"], 64)

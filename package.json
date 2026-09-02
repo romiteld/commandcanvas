@@ -28,7 +28,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "check:training": "ruff check scripts/drawing-training scripts/gesture-training scripts/hand-finetune/v1 && ruff format --check scripts/drawing-training scripts/gesture-training scripts/hand-finetune/v1 && mypy scripts/drawing-training scripts/hand-finetune/v1/commandcanvas_hand_finetune && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/drawing-training -p 'test_*.py' -v && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/hand-finetune/v1/tests -p 'test_*.py' -v",
+    "check:training": "ruff check scripts/drawing-training scripts/gesture-training scripts/hand-finetune/v1 && ruff format --check scripts/drawing-training scripts/gesture-training scripts/hand-finetune/v1 && mypy --cache-dir=/dev/null scripts/drawing-training scripts/hand-finetune/v1/commandcanvas_hand_finetune scripts/hand-finetune/v1/repository_artifact_guard.py && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/drawing-training -p 'test_*.py' -v && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/hand-finetune/v1/tests -p 'test_*.py' -v && python3 scripts/hand-finetune/v1/repository_artifact_guard.py --repository-root .",
     "check": "npm run lint && npm run typecheck && npm run test && npm run check:training && npm run build"
   },
   "dependencies": {

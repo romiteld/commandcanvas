@@ -37,7 +37,7 @@ class DatasetValidationTests(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertTrue(first["eligibleForTraining"])
-        self.assertTrue(first["productionEligible"])
+        self.assertFalse(first["productionEligible"])
         self.assertEqual(first["eligibilityScope"], "dataset-for-training-only")
         self.assertEqual(
             first["splitCounts"], {"holdout": 2, "train": 2, "validation": 2}
@@ -87,6 +87,27 @@ class DatasetValidationTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("SHA-256", message)
         self.assertIn("dimensions", message)
+
+    def test_manifest_label_must_be_the_exact_file_ultralytics_will_consume(
+        self,
+    ) -> None:
+        manifest = read_manifest(self.manifest_path)
+        frame = manifest["sessions"][0]["frames"][0]
+        original = self.root / frame["label"]["path"]
+        alternate = self.root / "reviewed" / "arbitrary-label.txt"
+        alternate.parent.mkdir(parents=True)
+        alternate.write_bytes(original.read_bytes())
+        frame["label"] = {
+            "path": alternate.relative_to(self.root).as_posix(),
+            "byteSize": alternate.stat().st_size,
+            "sha256": sha256(alternate),
+        }
+        write_manifest(self.manifest_path, manifest)
+
+        with self.assertRaisesRegex(
+            DatasetValidationError, "exact path consumed by Ultralytics"
+        ):
+            validate_dataset(self.root, self.manifest_path)
 
     def test_capture_group_and_source_video_leakage_across_splits_are_refused(
         self,

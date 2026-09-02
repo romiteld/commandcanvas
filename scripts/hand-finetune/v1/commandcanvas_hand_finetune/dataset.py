@@ -499,16 +499,35 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                     f"{frame_location}.negative cannot be combined with positive categories"
                 )
             derived_categories.update(categories)
+            image_value = frame.get("image")
+            label_value = frame.get("label")
+            if isinstance(image_value, dict) and isinstance(label_value, dict):
+                image_relative = image_value.get("path")
+                label_relative = label_value.get("path")
+                if isinstance(image_relative, str):
+                    image_parts = PurePosixPath(image_relative).parts
+                    expected_label = (
+                        PurePosixPath("labels", *image_parts[1:])
+                        .with_suffix(".txt")
+                        .as_posix()
+                        if image_parts and image_parts[0] == "images"
+                        else None
+                    )
+                    if expected_label is None or label_relative != expected_label:
+                        errors.append(
+                            f"{frame_location}.label.path must be the exact path "
+                            "consumed by Ultralytics for the declared image"
+                        )
             image_path, image_sha = _validate_asset(
                 resolved_root,
-                frame.get("image"),
+                image_value,
                 f"{frame_location}.image",
                 errors,
                 image=True,
             )
             label_path, _ = _validate_asset(
                 resolved_root,
-                frame.get("label"),
+                label_value,
                 f"{frame_location}.label",
                 errors,
                 image=False,
@@ -576,7 +595,7 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
         },
         "annotationProvenance": dict(sorted(annotation_counts.items())),
         "eligibleForTraining": True,
-        "productionEligible": True,
+        "productionEligible": False,
         "eligibilityScope": "dataset-for-training-only",
     }
     return attach_digest(receipt, "receiptSha256")

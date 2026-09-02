@@ -42,6 +42,15 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# private hand-capture and training artifacts
+/private/vision-lab/
+/scripts/hand-finetune/v1/captures/
+/scripts/hand-finetune/v1/datasets/
+/scripts/hand-finetune/v1/models/
+/scripts/hand-finetune/v1/outputs/
+/scripts/hand-finetune/v1/runs/
+/scripts/hand-finetune/v1/archives/
+
 # env files (can opt-in for committing if needed)
 .env*
 !.env.example
