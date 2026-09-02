@@ -82,7 +82,7 @@ test("renders a fluid, scrollable landing page with real destinations", async ({
   await expect(
     page.getByRole("heading", { name: "Choose how to enter CommandCanvas" }),
   ).toBeVisible();
-  await expect(page.getByText(/temporary Supabase identity/i)).toBeVisible();
+  await expect(page.getByText(/anonymous Supabase identity/i)).toBeVisible();
   await expect(page.getByLabel("Spatial command surface")).toHaveCount(0);
 
   expect(pageErrors).toEqual([]);
