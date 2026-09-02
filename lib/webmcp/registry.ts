@@ -32,7 +32,7 @@ export interface RegisteredWebMcpTool {
   };
   execute(
     input: unknown,
-    options: { signal: AbortSignal },
+    options?: { signal: AbortSignal },
   ): Promise<WebMcpToolResult>;
 }
 
@@ -201,8 +201,12 @@ export class WebMcpRegistry {
         unknown
       >,
       annotations: Object.freeze({ ...definition.annotations }),
-      execute: (input: unknown, options: { signal: AbortSignal }) =>
-        this.#execute(toolName, input, options.signal),
+      execute: (input: unknown, options?: { signal: AbortSignal }) =>
+        this.#execute(
+          toolName,
+          input,
+          options?.signal ?? new AbortController().signal,
+        ),
     });
   }
 

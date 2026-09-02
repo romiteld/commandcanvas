@@ -282,6 +282,22 @@ describe("WebMcpRegistry registration", () => {
 });
 
 describe("WebMcpRegistry execution boundary", () => {
+  it("executes on Chromium implementations that omit callback options", async () => {
+    const target = new RecordingRegistrationTarget();
+    const registry = new WebMcpRegistry({
+      mode: "static",
+      target,
+      getContext: () => hostContext(),
+      adapters: adapters(),
+    });
+    await registry.sync();
+
+    const executeWithoutOptions = target.latest("get_canvas_state")
+      .execute as (input: unknown) => Promise<WebMcpToolResult>;
+
+    await expect(executeWithoutOptions({})).resolves.toEqual(completed());
+  });
+
   it("reports one privacy-minimal invocation lifecycle for a guard refusal", async () => {
     const target = new RecordingRegistrationTarget();
     const events: WebMcpExecutionEvent[] = [];
