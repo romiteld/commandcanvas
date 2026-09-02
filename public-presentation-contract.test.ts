@@ -75,6 +75,22 @@ describe("public presentation contract", () => {
     );
   });
 
+  it("describes optional TURN and participant-bound media signaling accurately", () => {
+    const releaseCopy = [
+      read("README.md"),
+      read("docs/devpost-submission.md"),
+      read("docs/judge-instructions.md"),
+    ].join("\n");
+
+    expect(releaseCopy).not.toMatch(
+      /(?:has|there is|with) no TURN relay|does not include TURN/i,
+    );
+    expect(read("README.md")).toContain("optional TURN relay");
+    expect(read("docs/devpost-submission.md")).toContain(
+      "room-media:<room-id>:<participant-id>",
+    );
+  });
+
   it("keeps vulnerability reporting conditional with a verifiable fallback", () => {
     const securityPolicy = read("SECURITY.md");
     const maintainerEmailMatch = read(".mailmap").match(/^[^<]+<([^>]+)>/);

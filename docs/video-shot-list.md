@@ -104,7 +104,7 @@ Record these outside the 90-second core only after a current BYOK provider rehea
 - Verify that the exact source commit is on the canonical Vercel alias before recording the public URL.
 - Use a real browser B for Presence, cursor, collaborator mutation, and the filmstrip.
 - Do not describe a demo collaborator as seeded Presence.
-- Start meeting media only after both browser contexts are present. Do not claim arbitrary cross-network connectivity or TURN support.
+- Start meeting media only after both browser contexts are present. Do not claim arbitrary cross-network or configured-TURN reliability until the exact Production path passes that acceptance run.
 - Use a real paid `gpt-realtime-2.1` session with a deliberately supplied project-scoped per-tab key for the Live voice shot. The tool receipt, not the spoken response, proves the shared mutation. Do not show the key.
 - Confirm that reloading the tab clears the user-entered key and that missing-key Live voice and sketch interpretation fail honestly. Do not claim the no-owner-key boundary from source tests alone; verify it on the exact deployed release without printing either the user key or deployment environment values.
 - If the authenticated `/meet` credential path is shown, verify explicit save, replacement, deletion, encrypted Vault storage, and server-side provider resolution without displaying the raw value. Do not claim that a saved key is returned to the browser.

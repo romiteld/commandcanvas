@@ -92,9 +92,9 @@ provides or selects their own project API key. A ChatGPT subscription does not
 fund OpenAI API use inside the page. The current verification boundary is
 recorded in [the verification ledger](docs/verification-ledger.md).
 
-Meeting media is a small opt-in peer-to-peer layer, not conferencing
-infrastructure. It has no TURN relay, SFU, recording, screen sharing, or call
-moderation. Restrictive networks may prevent a direct connection.
+Meeting media is a small opt-in peer-to-peer layer that attempts direct STUN.
+An optional TURN relay uses short-lived, server-authorized credentials when
+configured. Cross-network TURN remains unverified; there is no SFU, recording, screen sharing, or call moderation.
 
 ## One command architecture
 

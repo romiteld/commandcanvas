@@ -20,7 +20,7 @@ The current structured-output surface supports a generic diagram, architecture d
 
 Click **Copy invite**, open the capability link in a second private or incognito browser window, and move the second participant’s cursor or create a note. Both windows should show actual Supabase Presence and the same durable revision.
 
-Meeting media is optional. In both windows, press **Start camera + mic**. The filmstrip is limited to four present participants. Audio and video travel peer-to-peer; Supabase carries only bounded signaling on the dedicated private media topic. The controlled two-browser path is verified, but physical iPhone devices, arbitrary cross-network traversal, and TURN behavior are not. There is no TURN relay, so a restrictive network may prevent the media connection without affecting the canvas.
+Meeting media is optional. In both windows, press **Start camera + mic**. The filmstrip is limited to four present participants. Audio and video travel peer-to-peer; Supabase carries only bounded signaling on participant-bound private media topics. Direct STUN is the baseline. When a separate TURN service is enabled, authorized members receive short-lived relay credentials from the server. The controlled two-browser path is verified, but physical iPhone devices, arbitrary cross-network traversal, and configured TURN behavior are not yet accepted on this release. A restrictive network may therefore prevent media without affecting the canvas.
 
 ## Standard passwordless meeting path
 

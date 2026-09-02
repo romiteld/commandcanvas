@@ -32,7 +32,7 @@ Optional continuous voice is a separate, narrower supporting surface. The implem
 
 Meeting packets preserve human control over consequential actions. The host reviews the exact object snapshot, edits recipients, and approves a version that locks both content and recipient hashes. An agent can stage a send, but the site still requires an explicit host click. The no-signup judge preview always records an honest preview-only outcome and never calls Resend. Eligible standard-room packet recipients must match the server-side allowlist; missing or rejected provider configuration produces a preview-only or failed result rather than a delivery claim. Supabase Auth OTP mail, host-authorized exact-email meeting invitations, and allowlisted Resend packet delivery are separate paths with separate authority and configuration.
 
-An optional meeting filmstrip lets up to four room members start peer-to-peer audio and video. Supabase carries schema-validated signaling on a dedicated private media topic, while WebRTC carries the media directly between browsers. It is intentionally not a conferencing replacement and does not include TURN, an SFU, recording, or screen sharing.
+An optional meeting filmstrip lets up to four room members start peer-to-peer audio and video. Supabase carries schema-validated signaling on participant-bound private media topics, while WebRTC carries media directly when possible. The server can mint short-lived TURN credentials for authorized members when a separate relay is configured. It is intentionally not a conferencing replacement and does not include an SFU, recording, or screen sharing.
 
 ## How it was built
 
@@ -41,7 +41,7 @@ An optional meeting filmstrip lets up to four room members start peer-to-peer au
 - Supabase Anonymous Auth for the no-signup `/demo` judge preview and Email OTP for standard `/meet` rooms
 - Supabase Postgres for rooms, semantic objects, immutable receipts, packet snapshots, send requests, and vision-admission records
 - Supabase Realtime Presence for connected participants and Broadcast for high-frequency cursors and compact revision notifications
-- Browser WebRTC for an opt-in small-room meeting filmstrip, with signaling isolated on `room-media:<room-id>`
+- Browser WebRTC for an opt-in small-room meeting filmstrip, with signaling isolated on `room-media:<room-id>:<participant-id>`
 - MediaPipe Hand Landmarker with exactly 21 landmarks, running locally in a browser worker with a same-model in-page recovery path
 - An optional separately operated private CUDA relay, selected only after explicit camera-upload consent and always recoverable to local MediaPipe
 - OpenAI `gpt-realtime-2.1` over WebRTC for opt-in continuous voice, with a narrower tool catalog and durable paid-session admission limits
@@ -99,7 +99,7 @@ The memorable interaction is not gesture control by itself. A person can draw an
 - Object and packet schemas reject unknown or malformed data before mutation.
 - Vision work uses durable leases, rate limits, exact-request caching, and compare-and-set completion so retries do not silently duplicate paid work.
 - Packet approval snapshots exact content and recipients. Cancellation is durable and a cancelled request cannot later execute.
-- Private credentials remain server-side. The no-signup judge preview presents no signup form, login form, or password. After explicit entry it reuses an existing authenticated CommandCanvas browser identity or creates a temporary anonymous authenticated identity and a capped room. Canvas, collaboration, hand input, typed commands, and deterministic transformations need no provider configuration; optional embedded Live voice and direct OpenAI image interpretation require the judge's own OpenAI API key for that tab.
+- Private credentials remain server-side. The no-signup judge preview presents no signup form, login form, or password. A no-signup visitor enters with one click and receives a temporary anonymous Supabase identity; a returning email-authenticated CommandCanvas user can resume automatically and use only credentials saved for that actor identity. Canvas, collaboration, hand input, typed commands, and deterministic transformations need no provider configuration; optional embedded Live voice and direct OpenAI image interpretation require the visitor's own OpenAI API key for that tab or an actor-owned saved credential.
 
 ## Challenges
 
@@ -134,7 +134,7 @@ Spatial interaction becomes reliable when gesture recognition produces the same 
 
 ## What is next
 
-The immediate next work is measured real-hand calibration across webcams and lighting conditions, ChatGPT Site Tools verification where that rollout is available, physical iPhone testing, cross-network WebRTC testing, and richer semantic object types built on the same contracts. Physical marker tracking, TURN or SFU infrastructure, broad document integrations, and enterprise identity remain deliberately outside this submission.
+The immediate next work is measured real-hand calibration across webcams and lighting conditions, ChatGPT Site Tools verification where that rollout is available, physical iPhone testing, cross-network WebRTC and configured-TURN acceptance, and richer semantic object types built on the same contracts. Physical marker tracking, SFU infrastructure, broad document integrations, and enterprise identity remain deliberately outside this submission.
 
 ## Honest verification boundary
 
