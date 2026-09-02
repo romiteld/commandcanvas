@@ -5,6 +5,7 @@ import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DemoEntry } from "@/components/command-canvas/demo-entry";
+import { useDemoAuthenticatedIdentity } from "@/components/command-canvas/demo-auth-context";
 import * as browserClientModule from "@/lib/supabase/browser-client";
 
 describe("DemoEntry", () => {
@@ -441,5 +442,205 @@ describe("DemoEntry", () => {
     );
     expect(screen.queryByText(/ChatGPT Site Tools can register/i)).toBeNull();
     expect(screen.queryByText(/signed in as/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps an accepted no-signup room mounted when Supabase emits its expected anonymous sign-in", async () => {
+    let emitAuthEvent: ((event: string, session: unknown) => void) | undefined;
+    const unsubscribe = vi.fn();
+    vi.spyOn(browserClientModule, "createBrowserSupabaseClient").mockReturnValue({
+      ok: true,
+      client: {
+        auth: {
+          getSession: vi.fn(async () => ({ data: { session: null }, error: null })),
+          onAuthStateChange: vi.fn((callback) => {
+            emitAuthEvent = callback;
+            return { data: { subscription: { unsubscribe } } };
+          }),
+        },
+      },
+    } as never);
+    window.sessionStorage.setItem("commandcanvas.demo-entry.accepted.v1", "accepted");
+
+    render(
+      <DemoEntry>
+        <div>Hosted preview mounted</div>
+      </DemoEntry>,
+    );
+    expect(await screen.findByText("Hosted preview mounted")).toBeVisible();
+
+    await act(async () =>
+      emitAuthEvent?.("SIGNED_IN", {
+        user: {
+          id: "anonymous-actor",
+          is_anonymous: true,
+        },
+      }),
+    );
+
+    expect(screen.getByText("Hosted preview mounted")).toBeVisible();
+    expect(window.sessionStorage.getItem("commandcanvas.demo-entry.accepted.v1")).toBe(
+      "accepted",
+    );
+    expect(unsubscribe).not.toHaveBeenCalled();
+  });
+
+  it("blocks an accepted preview from mounting under an unconfirmed replacement actor", async () => {
+    let emitAuthEvent: ((event: string, session: unknown) => void) | undefined;
+    vi.spyOn(browserClientModule, "createBrowserSupabaseClient").mockReturnValue({
+      ok: true,
+      client: {
+        auth: {
+          getSession: vi.fn(async () => ({
+            data: {
+              session: {
+                user: {
+                  id: "confirmed-actor",
+                  email: "danny@example.com",
+                  is_anonymous: false,
+                  email_confirmed_at: "2026-09-01T00:00:00.000Z",
+                },
+              },
+            },
+            error: null,
+          })),
+          onAuthStateChange: vi.fn((callback) => {
+            emitAuthEvent = callback;
+            return { data: { subscription: { unsubscribe: vi.fn() } } };
+          }),
+        },
+      },
+    } as never);
+
+    render(
+      <DemoEntry>
+        <div>Hosted preview mounted</div>
+      </DemoEntry>,
+    );
+    expect(await screen.findByText("Hosted preview mounted")).toBeVisible();
+
+    await act(async () =>
+      emitAuthEvent?.("SIGNED_IN", {
+        user: {
+          id: "unconfirmed-actor",
+          email: "unconfirmed@example.com",
+          is_anonymous: false,
+          email_confirmed_at: null,
+        },
+      }),
+    );
+
+    expect(screen.queryByText("Hosted preview mounted")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enter no-signup preview" })).toBeVisible();
+    await userEvent.setup().click(
+      screen.getByRole("button", { name: "Enter no-signup preview" }),
+    );
+    expect(screen.queryByText("Hosted preview mounted")).not.toBeInTheDocument();
+  });
+
+  it("tears down then recovers a replacement confirmed actor before mounting its child", async () => {
+    let emitAuthEvent: ((event: string, session: unknown) => void) | undefined;
+    const Child = () => {
+      const identity = useDemoAuthenticatedIdentity();
+      return <div>Hosted as {identity?.email ?? "anonymous"}</div>;
+    };
+    vi.spyOn(browserClientModule, "createBrowserSupabaseClient").mockReturnValue({
+      ok: true,
+      client: {
+        auth: {
+          getSession: vi.fn(async () => ({
+            data: {
+              session: {
+                user: {
+                  id: "first-actor",
+                  email: "first@example.com",
+                  is_anonymous: false,
+                  email_confirmed_at: "2026-09-01T00:00:00.000Z",
+                },
+              },
+            },
+            error: null,
+          })),
+          onAuthStateChange: vi.fn((callback) => {
+            emitAuthEvent = callback;
+            return { data: { subscription: { unsubscribe: vi.fn() } } };
+          }),
+        },
+      },
+    } as never);
+
+    render(
+      <DemoEntry>
+        <Child />
+      </DemoEntry>,
+    );
+    expect(await screen.findByText("Hosted as first@example.com")).toBeVisible();
+
+    await act(async () =>
+      emitAuthEvent?.("SIGNED_IN", {
+        user: {
+          id: "second-actor",
+          email: "second@example.com",
+          is_anonymous: false,
+          email_confirmed_at: "2026-09-01T00:00:00.000Z",
+        },
+      }),
+    );
+
+    expect(screen.getByText("Hosted as second@example.com")).toBeVisible();
+    expect(screen.queryByText("Hosted as first@example.com")).not.toBeInTheDocument();
+  });
+
+  it("adopts the verified OTP actor before its delayed sign-in event arrives", async () => {
+    let emitAuthEvent: ((event: string, session: unknown) => void) | undefined;
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/demo?signin=1");
+    vi.spyOn(browserClientModule, "createBrowserSupabaseClient").mockReturnValue({
+      ok: true,
+      client: {
+        auth: {
+          getSession: vi.fn(async () => ({ data: { session: null }, error: null })),
+          onAuthStateChange: vi.fn((callback) => {
+            emitAuthEvent = callback;
+            return { data: { subscription: { unsubscribe: vi.fn() } } };
+          }),
+          signInWithOtp: vi.fn(async () => ({ data: {}, error: null })),
+          verifyOtp: vi.fn(async () => ({
+            data: {
+              session: { access_token: "header.payload.signature" },
+              user: {
+                id: "otp-actor",
+                email: "danny@example.com",
+                is_anonymous: false,
+              },
+            },
+            error: null,
+          })),
+        },
+      },
+    } as never);
+
+    render(
+      <DemoEntry>
+        <div>Hosted preview mounted</div>
+      </DemoEntry>,
+    );
+    await user.click(await screen.findByRole("button", { name: "Sign in with email code" }));
+    await user.type(screen.getByLabelText("Email"), "danny@example.com");
+    await user.click(screen.getByRole("button", { name: "Email me a code" }));
+    await user.type(await screen.findByLabelText("Six-digit code"), "123456");
+    await user.click(screen.getByRole("button", { name: "Verify code" }));
+    expect(await screen.findByText("Hosted preview mounted")).toBeVisible();
+
+    await act(async () =>
+      emitAuthEvent?.("SIGNED_IN", {
+        user: {
+          id: "otp-actor",
+          email: "danny@example.com",
+          is_anonymous: false,
+          email_confirmed_at: "2026-09-01T00:00:00.000Z",
+        },
+      }),
+    );
+    expect(screen.getByText("Hosted preview mounted")).toBeVisible();
   });
 });

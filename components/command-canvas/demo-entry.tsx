@@ -55,6 +55,28 @@ type EntryPhase =
   | { kind: "otp"; email: string; error: string | null }
   | { kind: "working"; email: string; message: string };
 
+type EntryActorKind = "none" | "anonymous" | "permanent" | "unconfirmed";
+
+function readConfirmedIdentity(session: DemoEntrySession | null): DemoAuthenticatedIdentity | null {
+  const user = session?.user;
+  const parsedEmail = normalizedEmailSchema.safeParse(user?.email);
+  if (
+    !user ||
+    user.is_anonymous === true ||
+    typeof user.email_confirmed_at !== "string" ||
+    user.email_confirmed_at.trim() === "" ||
+    !parsedEmail.success
+  )
+    return null;
+  return { actorId: user.id, email: parsedEmail.data };
+}
+
+function readActorKind(session: DemoEntrySession | null): EntryActorKind {
+  if (!session?.user) return "none";
+  if (session.user.is_anonymous === true) return "anonymous";
+  return readConfirmedIdentity(session) ? "permanent" : "unconfirmed";
+}
+
 function subscribeToDemoEntry(onChange: () => void) {
   window.addEventListener(DEMO_ENTRY_ACCEPTED_EVENT, onChange);
   return () => window.removeEventListener(DEMO_ENTRY_ACCEPTED_EVENT, onChange);
@@ -124,6 +146,7 @@ export function DemoEntry({ children }: { children: ReactNode }) {
   const [authenticatedIdentity, setAuthenticatedIdentity] =
     useState<DemoAuthenticatedIdentity | null>(null);
   const [runtimeEpoch, setRuntimeEpoch] = useState(0);
+  const [actorKind, setActorKind] = useState<EntryActorKind>("none");
   const [phase, setPhase] = useState<EntryPhase>({
     kind: "choice",
     permanentEmail: null,
@@ -140,7 +163,12 @@ export function DemoEntry({ children }: { children: ReactNode }) {
   );
   const siteToolsSurfaceAvailable = useDocumentWebMcpTarget() !== null;
   const accepted = storedAccepted || memoryAccepted;
+  const acceptedRef = useRef(accepted);
   const currentActorRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    acceptedRef.current = accepted;
+  }, [accepted]);
 
   useEffect(() => {
     const lifecycle = new AbortController();
@@ -170,29 +198,14 @@ export function DemoEntry({ children }: { children: ReactNode }) {
         const current = await client.auth.getSession();
         if (lifecycle.signal.aborted || !active) return;
         clientRef.current = client;
-        const user = current.data.session?.user;
-        const parsedEmail = normalizedEmailSchema.safeParse(user?.email);
-        const permanentEmail =
-          current.error ||
-          !user ||
-          user.is_anonymous === true ||
-          typeof user.email_confirmed_at !== "string" ||
-          user.email_confirmed_at.trim() === "" ||
-          !parsedEmail.success
-            ? null
-            : parsedEmail.data;
-        setAuthenticatedIdentity(
-          permanentEmail && user
-            ? {
-                actorId: user.id,
-                email: permanentEmail,
-              }
-            : null,
-        );
-        currentActorRef.current = permanentEmail && user ? user.id : null;
+        const identity = current.error ? null : readConfirmedIdentity(current.data.session);
+        const actor = current.data.session?.user;
+        setAuthenticatedIdentity(identity);
+        setActorKind(current.error ? "none" : readActorKind(current.data.session));
+        currentActorRef.current = actor?.id ?? null;
         setPhase({
           kind: "choice",
-          permanentEmail,
+          permanentEmail: identity?.email ?? null,
           error: current.error
             ? "Your current CommandCanvas session could not be checked."
             : null,
@@ -215,14 +228,25 @@ export function DemoEntry({ children }: { children: ReactNode }) {
       if (lifecycle.signal.aborted || event === "TOKEN_REFRESHED") return;
       const nextActor = session?.user.id ?? null;
       if (nextActor === currentActorRef.current) return;
+      if (
+        currentActorRef.current === null &&
+        acceptedRef.current &&
+        readActorKind(session) === "anonymous"
+      ) {
+        currentActorRef.current = nextActor;
+        setActorKind("anonymous");
+        return;
+      }
       currentActorRef.current = nextActor;
       clearStoredDemoRoom(window.sessionStorage);
       window.sessionStorage.removeItem(DEMO_ENTRY_ACCEPTED_KEY);
       window.dispatchEvent(new Event(DEMO_ENTRY_ACCEPTED_EVENT));
       setMemoryAccepted(false);
-      setAuthenticatedIdentity(null);
+      const identity = readConfirmedIdentity(session);
+      setAuthenticatedIdentity(identity);
+      setActorKind(readActorKind(session));
       setRuntimeEpoch((epoch) => epoch + 1);
-      setPhase({ kind: "choice", permanentEmail: null, error: null });
+      setPhase({ kind: "choice", permanentEmail: identity?.email ?? null, error: null });
     });
     return () => {
       active = false;
@@ -300,13 +324,18 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     }
     clearEntryRecovery();
     replaceDemoPath("/demo");
+    currentActorRef.current = result.value.user.id;
+    setActorKind("permanent");
     setAuthenticatedIdentity({ actorId: result.value.user.id, email: result.value.email });
     setPhase({ kind: "choice", permanentEmail: result.value.email, error: null });
     acceptEntry();
   }
 
   const allowAnonymousResume =
-    !signInIntent && accepted && phase.kind === "choice";
+    !signInIntent &&
+    accepted &&
+    phase.kind === "choice" &&
+    (actorKind === "none" || actorKind === "anonymous");
   if (allowAnonymousResume)
     return (
       <DemoAuthenticatedIdentityProvider identity={authenticatedIdentity}>

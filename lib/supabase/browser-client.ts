@@ -26,6 +26,13 @@ const browserClientOptions = {
   },
 } as const;
 
+/**
+ * The default Supabase browser client is intentionally page-lifetime owned.
+ * React entry and room components may subscribe to it, but must unsubscribe
+ * during their own cleanup; they never dispose the shared GoTrue lifecycle
+ * while another surface on the same page can still use it. Browser teardown
+ * owns final disposal when the document unloads.
+ */
 let sharedBrowserClient: SupabaseClient | null = null;
 
 type BrowserClientFactory<Client> = (

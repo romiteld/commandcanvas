@@ -7,6 +7,8 @@ import {
   DemoCommandCanvas,
   type DemoCommandCanvasEnvironment,
 } from "@/components/command-canvas/demo-command-canvas";
+import { DemoAuthenticatedIdentityProvider } from "@/components/command-canvas/demo-auth-context";
+import { DemoEntry } from "@/components/command-canvas/demo-entry";
 import { createCanvasStore } from "@/lib/canvas/canvas-store";
 import { createEmptyCanvasState } from "@/lib/canvas/command-engine";
 import type {
@@ -409,6 +411,27 @@ describe("DemoCommandCanvas", () => {
     }
   });
 
+  it("does not load a saved credential when a permanent room actor is not the confirmed entry actor", async () => {
+    const createCredentialApi = vi.spyOn(
+      browserCredentialModule,
+      "createBrowserOpenAiCredentialApi",
+    );
+    const harness = readyEnvironment({ isAnonymous: false });
+
+    render(
+      <DemoAuthenticatedIdentityProvider
+        identity={{ actorId: "replacement-actor", email: "other@example.com" }}
+      >
+        <DemoCommandCanvas environment={harness.environment} />
+      </DemoAuthenticatedIdentityProvider>,
+    );
+
+    expect(await screen.findByText("Live demo room")).toBeVisible();
+    expect(createCredentialApi).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Save key to my account" }))
+      .not.toBeInTheDocument();
+  });
+
   it("shares one in-memory OpenAI key with room providers and clears it on unmount", async () => {
     const user = userEvent.setup();
     const harness = readyEnvironment();
@@ -448,6 +471,50 @@ describe("DemoCommandCanvas", () => {
 
     view.unmount();
     await waitFor(() => expect(harness.session.dispose).toHaveBeenCalledOnce());
+  });
+
+  it("keeps one live auth observer and one room allocation through the real entry and canvas StrictMode composition", async () => {
+    let activeObservers = 0;
+    let maxActiveObservers = 0;
+    const unsubscribe = vi.fn(() => {
+      activeObservers -= 1;
+    });
+    const client = {
+      auth: {
+        getSession: vi.fn(async () => ({ data: { session: null }, error: null })),
+        onAuthStateChange: vi.fn(() => {
+          activeObservers += 1;
+          maxActiveObservers = Math.max(maxActiveObservers, activeObservers);
+          return { data: { subscription: { unsubscribe } } };
+        }),
+      },
+    };
+    vi.spyOn(browserClientModule, "createBrowserSupabaseClient").mockReturnValue({
+      ok: true,
+      client,
+    } as never);
+    const harness = readyEnvironment();
+    const bootstrap = vi.spyOn(harness.environment, "bootstrap");
+    const user = userEvent.setup();
+
+    const view = render(
+      <StrictMode>
+        <DemoEntry>
+          <DemoCommandCanvas environment={harness.environment} />
+        </DemoEntry>
+      </StrictMode>,
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Enter no-signup preview" }),
+    );
+    expect(await screen.findByText("Live demo room")).toBeVisible();
+    expect(bootstrap).toHaveBeenCalledOnce();
+    expect(maxActiveObservers).toBe(1);
+    expect(activeObservers).toBe(1);
+
+    view.unmount();
+    await waitFor(() => expect(harness.session.dispose).toHaveBeenCalledOnce());
+    expect(activeObservers).toBe(0);
   });
 
   it("wires authenticated sketch and packet APIs into the default room session", async () => {

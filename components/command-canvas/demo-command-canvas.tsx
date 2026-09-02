@@ -306,7 +306,10 @@ export function DemoCommandCanvas({
   }, [environment]);
 
   const permanentIdentityId =
-    view.status === "ready" && view.snapshot.identity?.isAnonymous === false
+    view.status === "ready" &&
+    view.snapshot.identity?.isAnonymous === false &&
+    (authenticatedIdentity === undefined ||
+      authenticatedIdentity?.actorId === view.snapshot.identity.userId)
       ? view.snapshot.identity.userId
       : null;
 

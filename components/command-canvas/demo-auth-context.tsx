@@ -8,7 +8,7 @@ export interface DemoAuthenticatedIdentity {
 }
 
 const DemoAuthenticatedIdentityContext =
-  createContext<DemoAuthenticatedIdentity | null>(null);
+  createContext<DemoAuthenticatedIdentity | null | undefined>(undefined);
 
 export function DemoAuthenticatedIdentityProvider({
   identity,
