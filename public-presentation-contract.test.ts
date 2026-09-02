@@ -75,6 +75,22 @@ describe("public presentation contract", () => {
     );
   });
 
+  it("keeps vulnerability reporting conditional with a verifiable fallback", () => {
+    const securityPolicy = read("SECURITY.md");
+    const maintainerEmailMatch = read(".mailmap").match(/^[^<]+<([^>]+)>/);
+
+    expect(securityPolicy).not.toMatch(
+      /use this repository's private GitHub vulnerability-reporting channel/i,
+    );
+    expect(securityPolicy).toMatch(
+      /if GitHub (?:shows|offers) (?:a|the) [^\n]*report a vulnerability/i,
+    );
+    expect(maintainerEmailMatch).not.toBeNull();
+    expect(securityPolicy).toContain(
+      `mailto:${maintainerEmailMatch?.[1] ?? "missing-maintainer-email"}`,
+    );
+  });
+
   it("keeps the root README concise and narrow-screen friendly", () => {
     const readme = read("README.md");
     const lineCount = readme.trimEnd().split("\n").length;

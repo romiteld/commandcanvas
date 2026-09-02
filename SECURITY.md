@@ -7,10 +7,13 @@ public deployment. Historical commits and local forks are not supported.
 
 ## Report a vulnerability responsibly
 
-Use this repository's private GitHub vulnerability-reporting channel. Do not
-open a public issue, pull request, discussion, or social post with exploit
-details. Include a concise reproduction, affected route or component, impact,
-and any safe remediation notes. We will acknowledge the report, assess it, and
+If GitHub shows a **Report a vulnerability** action for this repository, you may
+use that private channel; its availability depends on the repository's current
+GitHub settings. If that action is unavailable, email the maintainer at
+[danny.romitelli@gmail.com](mailto:danny.romitelli@gmail.com). Do not open a
+public issue, pull request, discussion, or social post with exploit details.
+Include a concise reproduction, affected route or component, impact, and any
+safe remediation notes. We will acknowledge the report, assess it, and
 coordinate disclosure after a fix is available.
 
 ## Scope and privacy
