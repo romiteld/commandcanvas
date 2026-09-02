@@ -926,6 +926,27 @@
   transform: translateX(-50%);
 }
 
+/* Calibration is the active workspace surface, not another floating panel.
+   Suspend duplicate video, tools, drawers, and agent controls while the full
+   camera preview is open so no hidden hit target competes with calibration.
+   Media tracks stay live and every surface returns when calibration closes. */
+.command-canvas-shell:has(.spatial-camera-control.is-calibrating-full-canvas)
+  > .meeting-media-slot,
+.command-canvas-shell:has(.spatial-camera-control.is-calibrating-full-canvas)
+  .tool-dock,
+.command-canvas-shell:has(.spatial-camera-control.is-calibrating-full-canvas)
+  .persistent-system-drawer,
+.command-canvas-shell:has(.spatial-camera-control.is-calibrating-full-canvas)
+  .persistent-command-drawer,
+.command-canvas-shell:has(.spatial-camera-control.is-calibrating-full-canvas)
+  .chatgpt-command-pill,
+.command-canvas-shell:has(.spatial-camera-control.is-calibrating-full-canvas)
+  .latest-activity-toast {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .command-canvas-shell .spatial-camera-control.is-calibrating-full-canvas .spatial-camera-heading strong {
   font-size: 18px;
 }

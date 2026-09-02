@@ -1254,6 +1254,44 @@ describe("canvas WebMCP adapters", () => {
     });
   });
 
+  it("forwards canonical spoken narration to the shared vision transformer", async () => {
+    const { store } = fixture();
+    seedSelectedSketch(store);
+    const transformSketch = vi.fn().mockResolvedValue({
+      ok: true,
+      diagramObjectId: "diagram-result",
+      receiptId: "receipt-transform",
+      revision: 7,
+      provider: "openai",
+      model: "gpt-5.6-sol",
+    });
+    const adapters = createCanvasWebMcpAdapters({ store, transformSketch });
+
+    await adapters.executeTool({
+      toolName: "transform_sketch",
+      input: {
+        sketchId: "sketch-source",
+        instruction: "Turn this into a clean process map.",
+        narration:
+          "The left box is intake, and the diamond is the approval decision.",
+      },
+      signal: new AbortController().signal,
+      context: {
+        ...context,
+        phase: { ...context.phase, hasContent: true, selection: "sketch" },
+      },
+    });
+
+    expect(transformSketch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        sketchObjectId: "sketch-source",
+        narration:
+          "The left box is intake, and the diamond is the approval decision.",
+        source: "webmcp",
+      }),
+    );
+  });
+
   it("maps shared transformer failures without returning a fake completion", async () => {
     const { store } = fixture();
     seedSelectedSketch(store);

@@ -107,6 +107,7 @@ export interface RealtimeVoiceControllerOptions {
   onToolAction?: (action: RealtimeVoiceToolAction) => void;
   inspectCanvas?: RealtimeVoiceCanvasInspector;
   invokeCapability?: RealtimeVoiceCapabilityInvoker;
+  consumeSketchNarration?: () => string | undefined;
   onPlaybackBlocked?: () => void;
   platform?: RealtimeVoicePlatform;
 }
@@ -630,6 +631,7 @@ export function createRealtimeVoiceController(
         signal: intentSignal,
         inspectCanvas: options.inspectCanvas,
         invokeCapability: options.invokeCapability,
+        consumeSketchNarration: options.consumeSketchNarration,
       },
     );
     if (result.outcome === "cancelled")

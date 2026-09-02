@@ -49,6 +49,12 @@ import {
   type HandRuntimePreferenceStorage,
   type HandRuntimeProfile,
 } from "@/lib/gesture/hand-runtime-profile";
+import {
+  classifyWithBundledStaticHandPose,
+  type LearnedStaticPoseEvidence,
+  type StaticHandPoseClassifier,
+  type StaticHandPoseObservation,
+} from "@/lib/gesture/learning/static-pose-runtime";
 
 export type HandTrackingStatus =
   | { state: "off" | "starting" | "ready" }
@@ -240,6 +246,8 @@ export interface HandTrackingControllerDependencies {
   now?: () => number;
   preferenceStorage?: HandRuntimePreferenceStorage;
   privateHandRelay?: PrivateHandRelayControllerOptions;
+  /** Optional, license-gated static-pose hint. Canonical geometry remains authoritative. */
+  classifyStaticPose?: StaticHandPoseClassifier["classify"];
 }
 
 const UNAVAILABLE_MESSAGE =
@@ -804,6 +812,16 @@ export function createHandTrackingController(
     const interpreted = message.hands.map((hand, index) => {
       const key = stateKeys[index]!;
       activeKeys.add(key);
+      const learnedPoseEvidence = safelyClassifyStaticPose(
+        dependencies.classifyStaticPose,
+        {
+          trackId: key,
+          handedness: hand.handedness,
+          confidence: hand.confidence,
+          landmarks: hand.landmarks as HandLandmarks,
+        },
+        hand.predicted === true,
+      );
       const transition = interpretHandFrame(
         run.intentStates.get(key) ?? createInitialHandIntentState(),
         {
@@ -831,6 +849,7 @@ export function createHandTrackingController(
               )
             : {}),
         },
+        learnedPoseEvidence,
       );
       if (
         transition.output.accepted ||
@@ -1660,6 +1679,7 @@ function semanticModeForTrack(
     hand.handedness,
     hand.handednessConfidence,
   );
+  const voteThresholds = learnedPinchVoteThresholds(transition, thresholds);
   const vote = voteCalibratedPinch(
     run.pinchVoteStates.get(trackId) ?? createInitialPinchVoteState(),
     {
@@ -1670,12 +1690,46 @@ function semanticModeForTrack(
       predicted: transition.prediction.predicted,
       pinchRatio: measurements.pinchRatio,
     },
-    thresholds,
+    voteThresholds,
   );
   run.pinchVoteStates.set(trackId, vote.state);
   if (!transition.output.accepted) return null;
   if (transition.output.mode === "open_palm") return "open_palm";
   return vote.snapshot.pinched ? "pinch" : "point";
+}
+
+function learnedPinchVoteThresholds(
+  transition: HandIntentTransition,
+  thresholds: CalibratedPinchThresholds,
+): CalibratedPinchThresholds {
+  if (
+    transition.supportingEvidence?.assisted !== "pinch" ||
+    !transition.measurements
+  )
+    return thresholds;
+  return {
+    engage: Math.max(
+      thresholds.engage,
+      Math.min(
+        transition.measurements.pinchRatio + Number.EPSILON,
+        thresholds.release - Number.EPSILON,
+      ),
+    ),
+    release: thresholds.release,
+  };
+}
+
+function safelyClassifyStaticPose(
+  classify: StaticHandPoseClassifier["classify"] | undefined,
+  observation: StaticHandPoseObservation,
+  predicted: boolean,
+): LearnedStaticPoseEvidence | null {
+  if (!classify || predicted || observation.confidence < 0.5) return null;
+  try {
+    return classify(observation);
+  } catch {
+    return null;
+  }
 }
 
 function pinchIntentOverrides(thresholds: CalibratedPinchThresholds) {
@@ -1929,6 +1983,8 @@ function resolveDependencies(
     now: provided.now ?? (() => performance.now()),
     preferenceStorage:
       provided.preferenceStorage ?? safeSessionPreferenceStorage(),
+    classifyStaticPose:
+      provided.classifyStaticPose ?? classifyWithBundledStaticHandPose,
   };
 }
 
@@ -1991,6 +2047,7 @@ interface ResolvedHandTrackingControllerDependencies {
   workerReadyTimeoutMs: number;
   now: NonNullable<HandTrackingControllerDependencies["now"]>;
   preferenceStorage?: HandRuntimePreferenceStorage;
+  classifyStaticPose?: HandTrackingControllerDependencies["classifyStaticPose"];
 }
 
 function safeSessionPreferenceStorage(): HandRuntimePreferenceStorage | undefined {

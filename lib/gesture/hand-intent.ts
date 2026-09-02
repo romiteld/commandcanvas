@@ -16,6 +16,7 @@ import {
   filterOneEuroPoint,
   type OneEuroPointState,
 } from "@/lib/gesture/one-euro-filter";
+import type { LearnedStaticPoseEvidence } from "@/lib/gesture/learning/static-pose-runtime";
 
 export type {
   HandEngineSource,
@@ -101,6 +102,10 @@ export interface HandIntentTransition {
   /** Physical geometry, intentionally independent of the semantic mode. */
   readonly measurements: HandPhysicalMeasurements | null;
   readonly prediction: HandPredictionMarker;
+  /** Optional model evidence that relaxed a semantic observation, never a command. */
+  readonly supportingEvidence?: LearnedStaticPoseEvidence & {
+    readonly assisted: "point" | "pinch" | "open_palm";
+  };
 }
 
 export interface HandIntentConfig {
@@ -214,6 +219,7 @@ export function interpretHandFrame(
   rawFrame: unknown,
   now: number,
   overrides: Partial<HandIntentConfig> = {},
+  learnedPoseEvidence: LearnedStaticPoseEvidence | null = null,
 ): HandIntentTransition {
   const config = resolveConfig(overrides);
   const parsed = parseFrame(rawFrame);
@@ -296,19 +302,39 @@ export function interpretHandFrame(
     landmarkVisibility(frame.landmarks[INDEX_TIP_INDEX]) >=
     config.minKeypointVisibility;
   const pinchKeypointsReliable = thumbReliable && indexReliable;
-  const pinchLatched =
+  const learnedPose = acceptedLearnedPoseEvidence(learnedPoseEvidence);
+  const canonicalPinchLatched =
     pinchKeypointsReliable
       ? state.pinchLatched
         ? pinchRatio < config.pinchReleaseRatio
         : pinchRatio <= config.pinchEngageRatio
       : state.pinchLatched;
-  const openPalm =
+  const learnedPinchSupport =
+    pinchKeypointsReliable &&
+    (learnedPose?.label === "pinch" || learnedPose?.label === "held") &&
+    pinchRatio <= learnedPinchEngageCeiling(config);
+  const learnedPinchEngaged =
+    !state.pinchLatched &&
+    !canonicalPinchLatched &&
+    learnedPinchSupport;
+  const pinchLatched =
+    canonicalPinchLatched || learnedPinchEngaged;
+  const canonicalOpenPalm =
     indexReliable &&
     hasReliableOpenPalmLandmarks(
       frame.landmarks,
       config.minKeypointVisibility,
     ) &&
     isOpenPalm(frame.landmarks);
+  const learnedOpenPalmAssisted =
+    !canonicalOpenPalm &&
+    learnedPose?.label === "open_palm" &&
+    hasReliableOpenPalmLandmarks(
+      frame.landmarks,
+      config.minKeypointVisibility,
+    ) &&
+    isPlausiblyOpenPalm(frame.landmarks);
+  const openPalm = canonicalOpenPalm || learnedOpenPalmAssisted;
   if (!indexReliable)
     return refuse(
       "low_keypoint_confidence",
@@ -334,7 +360,7 @@ export function interpretHandFrame(
     pinchLatched,
     lastAcceptedTimestamp: frame.timestamp,
   };
-  const deliberatePoint =
+  const canonicalDeliberatePoint =
     isIndexExtended(frame.landmarks) &&
     (config.pointPolicy === "draw-index-led"
       ? hasReliableIndexPointLandmarks(
@@ -345,6 +371,15 @@ export function interpretHandFrame(
           frame.landmarks,
           config.minKeypointVisibility,
         ) && areOtherFingersRelaxedForPoint(frame.landmarks));
+  const learnedPointAssisted =
+    !canonicalDeliberatePoint &&
+    learnedPose?.label === "point" &&
+    hasReliableIndexPointLandmarks(
+      frame.landmarks,
+      config.minKeypointVisibility,
+    ) &&
+    isPlausiblyIndexExtended(frame.landmarks);
+  const deliberatePoint = canonicalDeliberatePoint || learnedPointAssisted;
   if (!pinchLatched && !openPalm && !deliberatePoint)
     return refuse(
       "no_deliberate_gesture",
@@ -356,11 +391,22 @@ export function interpretHandFrame(
       roundedMeasurements(physical),
     );
 
+  const mode = pinchLatched ? "pinch" : openPalm ? "open_palm" : "point";
+  const supportingEvidence =
+    mode === "pinch" &&
+    learnedPinchSupport &&
+    pinchRatio > config.pinchEngageRatio
+      ? { ...learnedPose!, assisted: "pinch" as const }
+      : mode === "open_palm" && learnedOpenPalmAssisted
+        ? { ...learnedPose!, assisted: "open_palm" as const }
+        : mode === "point" && learnedPointAssisted
+          ? { ...learnedPose!, assisted: "point" as const }
+          : null;
   return {
     state: nextState,
     output: {
       accepted: true,
-      mode: pinchLatched ? "pinch" : openPalm ? "open_palm" : "point",
+      mode,
       pointer,
       motionPointer,
       confidence: frame.confidence,
@@ -370,6 +416,7 @@ export function interpretHandFrame(
     },
     measurements: roundedMeasurements(physical),
     prediction: { predicted: false },
+    ...(supportingEvidence ? { supportingEvidence } : {}),
   };
 }
 
@@ -388,6 +435,24 @@ function isIndexExtended(landmarks: HandLandmarks) {
     pipDistance >= 0.02 &&
     distance(wrist, landmarks[INDEX_TIP_INDEX]) >= pipDistance * 1.15 &&
     indexReach >= indexPathLength * 0.86
+  );
+}
+
+function isPlausiblyIndexExtended(landmarks: HandLandmarks) {
+  const wrist = landmarks[WRIST_INDEX];
+  const pipDistance = distance(wrist, landmarks[INDEX_PIP_INDEX]);
+  const indexPathLength =
+    distance(landmarks[INDEX_MCP_INDEX], landmarks[INDEX_PIP_INDEX]) +
+    distance(landmarks[INDEX_PIP_INDEX], landmarks[INDEX_DIP_INDEX]) +
+    distance(landmarks[INDEX_DIP_INDEX], landmarks[INDEX_TIP_INDEX]);
+  const indexReach = distance(
+    landmarks[INDEX_MCP_INDEX],
+    landmarks[INDEX_TIP_INDEX],
+  );
+  return (
+    pipDistance >= 0.015 &&
+    distance(wrist, landmarks[INDEX_TIP_INDEX]) >= pipDistance * 1.05 &&
+    indexReach >= indexPathLength * 0.72
   );
 }
 
@@ -432,6 +497,49 @@ function isOpenPalm(landmarks: HandLandmarks) {
       const pipDistance = distance(wrist, landmarks[pip]);
       return distance(wrist, landmarks[tip]) >= pipDistance * 1.15;
     },
+  );
+}
+
+function isPlausiblyOpenPalm(landmarks: HandLandmarks) {
+  const wrist = landmarks[WRIST_INDEX];
+  const palmWidth = distance(landmarks[5], landmarks[17]);
+  if (palmWidth < 0.02) return false;
+  const extendedCount = [
+    { pip: INDEX_PIP_INDEX, tip: INDEX_TIP_INDEX },
+    ...OTHER_FINGER_JOINTS,
+  ].filter(
+    ({ pip, tip }) =>
+      distance(wrist, landmarks[tip]) >=
+      distance(wrist, landmarks[pip]) * 1.1,
+  ).length;
+  return extendedCount >= 3;
+}
+
+function acceptedLearnedPoseEvidence(
+  evidence: LearnedStaticPoseEvidence | null,
+): LearnedStaticPoseEvidence | null {
+  if (
+    !evidence ||
+    evidence.source !== "hagrid-v2-static-pose-v1" ||
+    ![
+      "idle",
+      "point",
+      "open_palm",
+      "pinch",
+      "held",
+    ].includes(evidence.label) ||
+    !Number.isFinite(evidence.confidence) ||
+    evidence.confidence < 0.9 ||
+    evidence.confidence > 1
+  )
+    return null;
+  return evidence;
+}
+
+function learnedPinchEngageCeiling(config: HandIntentConfig) {
+  return Math.max(
+    config.pinchEngageRatio,
+    Math.min(0.42, config.pinchReleaseRatio * 0.9),
   );
 }
 

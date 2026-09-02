@@ -202,6 +202,59 @@ describe("RealtimeVoiceControl", () => {
     expect(drafts.at(-1)).toBeNull();
   });
 
+  it("appends active-thought speech through the canonical content capability when available", async () => {
+    let callbacks: RealtimeVoiceControllerOptions | undefined;
+    const setup = controllerHarness();
+    const onIntent = successfulIntentSpy();
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Thought updated.",
+      receiptId: "receipt-thought-update",
+    }));
+    render(
+      <RealtimeVoiceControl
+        roomId={ROOM_ID}
+        getAccessToken={() => "header.payload.signature"}
+        onIntent={onIntent}
+        invokeCapability={invokeCapability}
+        createController={(options) => {
+          callbacks = options;
+          return setup.controller;
+        }}
+      />,
+    );
+
+    await callbacks?.onIntent(
+      { type: "start_thought", objectId: "note-thought-1" },
+      "voice",
+    );
+    callbacks?.onUserSpeechStarted?.("thought-capability-turn");
+    callbacks?.onTranscript?.(
+      "Turn this spoken idea into durable card text.",
+      "thought-capability-turn",
+    );
+    await callbacks?.onResponseSettled?.(
+      "completed",
+      "thought-capability-turn",
+    );
+
+    await vi.waitFor(() => expect(invokeCapability).toHaveBeenCalledOnce());
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "update_object_content",
+      {
+        objectId: "note-thought-1",
+        text: "Turn this spoken idea into durable card text.",
+      },
+      expect.any(AbortSignal),
+    );
+    expect(onIntent).toHaveBeenCalledTimes(1);
+    expect(onIntent).toHaveBeenCalledWith(
+      { type: "start_thought", objectId: "note-thought-1" },
+      "voice",
+    );
+  });
+
   it("keeps provisional thought text visible after a non-aborting append refusal", async () => {
     let callbacks: RealtimeVoiceControllerOptions | undefined;
     const setup = controllerHarness();
@@ -382,6 +435,34 @@ describe("RealtimeVoiceControl", () => {
       { type: "transform_selected_sketch" },
       "voice",
     );
+  });
+
+  it("offers buffered spoken drawing context to canonical capability tools exactly once", async () => {
+    let callbacks: RealtimeVoiceControllerOptions | undefined;
+    const setup = controllerHarness();
+    render(
+      <RealtimeVoiceControl
+        roomId={ROOM_ID}
+        getAccessToken={() => "header.payload.signature"}
+        onIntent={successfulIntentSpy()}
+        createController={(options) => {
+          callbacks = options;
+          return setup.controller;
+        }}
+      />,
+    );
+
+    callbacks?.onUserSpeechStarted?.("drawing-explanation-1");
+    callbacks?.onTranscript?.(
+      "This curve is revenue and the dashed line is the target.",
+      "drawing-explanation-1",
+    );
+    await callbacks?.onResponseSettled?.("completed", "drawing-explanation-1");
+
+    expect(callbacks?.consumeSketchNarration?.()).toBe(
+      "This curve is revenue and the dashed line is the target.",
+    );
+    expect(callbacks?.consumeSketchNarration?.()).toBeUndefined();
   });
 
   it("starts spoken sketch context after the voice drawing command", async () => {

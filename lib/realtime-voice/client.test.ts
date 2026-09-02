@@ -81,6 +81,8 @@ function harness(options?: {
   fetchResponse?: Response;
   onIntent?: RealtimeVoiceControllerOptions["onIntent"];
   inspectCanvas?: RealtimeVoiceControllerOptions["inspectCanvas"];
+  invokeCapability?: RealtimeVoiceControllerOptions["invokeCapability"];
+  consumeSketchNarration?: RealtimeVoiceControllerOptions["consumeSketchNarration"];
   onPlaybackBlocked?: () => void;
 }) {
   const channel = new FakeDataChannel();
@@ -150,6 +152,8 @@ function harness(options?: {
     },
     onToolAction: (action) => toolActions.push(action),
     inspectCanvas: options?.inspectCanvas,
+    invokeCapability: options?.invokeCapability,
+    consumeSketchNarration: options?.consumeSketchNarration,
     onPlaybackBlocked: options?.onPlaybackBlocked,
     platform: {
       createPeerConnection: () => peer,
@@ -587,6 +591,58 @@ describe("Realtime voice WebRTC controller", () => {
           "Canvas action submitted; check the canvas receipt for the result.",
       },
     ]);
+  });
+
+  it("forwards buffered drawing narration into a canonical sketch transformation", async () => {
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Transformed.",
+    }));
+    const consumeSketchNarration = vi.fn(
+      () => "The curve is revenue and the line is the target.",
+    );
+    const setup = harness({
+      invokeCapability,
+      consumeSketchNarration,
+      inspectCanvas: async () => ({
+        roomId: "room-1",
+        revision: 9,
+        selectedObjectId: "sketch-1",
+        objects: [{ id: "sketch-1", type: "sketch" }],
+        receipts: [],
+        truncation: {},
+      }),
+    });
+    await setup.controller.start();
+    setup.channel.open();
+    setup.channel.message({
+      type: "session.created",
+      session: { type: "realtime" },
+    });
+    setup.channel.sent.length = 0;
+
+    setup.channel.message({
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        call_id: "call-transform-with-narration",
+        name: "transform_selected_sketch",
+        arguments: "{}",
+      },
+    });
+
+    await vi.waitFor(() => expect(invokeCapability).toHaveBeenCalledOnce());
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "transform_sketch",
+      {
+        sketchId: "sketch-1",
+        instruction: "Make that usable.",
+        narration: "The curve is revenue and the line is the target.",
+      },
+      expect.any(AbortSignal),
+    );
+    expect(consumeSketchNarration).toHaveBeenCalledOnce();
   });
 
   it("passes the originating input item to its canvas tool", async () => {

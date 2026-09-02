@@ -1,7 +1,14 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+import { requireProductionApiProxyOrigin } from "../lib/testing/live-probe-guards";
+import {
+  captureCreatedRoom,
+  deleteHostedRoom,
+} from "./support/hosted-room";
+import { enterLimitedJudgePreview } from "./support/limited-judge-preview";
 
 test.use({
-  permissions: ["camera"],
+  permissions: ["camera", "microphone"],
   launchOptions: {
     ...(process.env.COMMANDCANVAS_CHROME_PATH
       ? { executablePath: process.env.COMMANDCANVAS_CHROME_PATH }
@@ -12,6 +19,118 @@ test.use({
     ],
   },
 });
+
+test("suspends mobile room overlays during hand calibration", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    process.env.RUN_SUPABASE_E2E !== "true" ||
+      testInfo.project.name !== "chromium-mobile",
+  );
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installApiProxyIfConfigured(page);
+  const roomCapture = captureCreatedRoom(page);
+  let roomId: string | null = null;
+
+  try {
+    await page.goto("/demo", { waitUntil: "domcontentloaded" });
+    await enterLimitedJudgePreview(page);
+    await expect(page.getByText("Live demo room")).toBeVisible({
+      timeout: 20_000,
+    });
+    roomId = await roomCapture.resolveRoomId();
+
+    await page
+      .getByRole("button", { name: "Start camera and microphone" })
+      .click();
+    await expect(page.getByTestId("local-meeting-video")).toBeVisible({
+      timeout: 30_000,
+    });
+    await page.getByRole("button", { name: "Enable hand input" }).click();
+    const calibration = page.locator(
+      ".spatial-camera-control.is-calibrating-full-canvas",
+    );
+    await expect(calibration).toBeVisible({ timeout: 60_000 });
+
+    await expect(
+      page.locator(".meeting-media-slot"),
+      "The calibration preview replaces the duplicate meeting-video surface.",
+    ).toBeHidden();
+    await expect(
+      page.locator(".tool-dock"),
+      "The modal calibration surface must not leave clickable tools behind it.",
+    ).toBeHidden();
+    await expect(
+      page.locator(".persistent-system-drawer"),
+      "The calibration surface replaces the system drawer while it is active.",
+    ).toBeHidden();
+    await expect(
+      page.locator(".chatgpt-command-pill"),
+      "Agent controls must not remain clickable behind calibration.",
+    ).toBeHidden();
+    await expect(page.locator(".room-header")).toBeVisible();
+
+    for (const viewport of [
+      { width: 320, height: 568 },
+      { width: 390, height: 844 },
+      { width: 430, height: 932 },
+      { width: 768, height: 1024 },
+      { width: 844, height: 390 },
+      { width: 1024, height: 768 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await expect(calibration).toBeVisible();
+      await expect(page.locator(".meeting-media-slot")).toBeHidden();
+      await expect(page.locator(".tool-dock")).toBeHidden();
+      await expect(page.locator(".chatgpt-command-pill")).toBeHidden();
+      const bounds = await calibration.boundingBox();
+      if (!bounds)
+        throw new Error(
+          `Calibration geometry is unavailable at ${viewport.width}x${viewport.height}.`,
+        );
+      expect(bounds.x).toBeGreaterThanOrEqual(0);
+      expect(bounds.y).toBeGreaterThanOrEqual(0);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width + 1);
+      expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height + 1);
+    }
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole("button", { name: "Skip hand calibration" }).click();
+    await expect(page.locator(".meeting-media-slot")).toBeVisible();
+    await expect(page.locator(".tool-dock")).toBeVisible();
+    await expect(page.locator(".chatgpt-command-pill")).toBeVisible();
+  } finally {
+    try {
+      roomId ??= await roomCapture.resolveRoomId();
+    } finally {
+      roomCapture.stop();
+    }
+    if (roomId) await deleteHostedRoom(page, roomId);
+  }
+});
+
+async function installApiProxyIfConfigured(page: Page) {
+  const proxyOrigin = process.env.COMMANDCANVAS_API_PROXY_ORIGIN;
+  if (!proxyOrigin) return;
+  const targetOrigin = requireProductionApiProxyOrigin(proxyOrigin);
+  await page.route("**/api/**", async (route) => {
+    const source = new URL(route.request().url());
+    if (
+      source.pathname !== "/api/rooms" &&
+      !/^\/api\/rooms\/[0-9a-f-]{36}(?:\/commands|\/media\/(?:roster|turn))?$/.test(
+        source.pathname,
+      )
+    ) {
+      await route.abort("blockedbyclient");
+      return;
+    }
+    const response = await route.fetch({
+      url: `${targetOrigin}${source.pathname}${source.search}`,
+    });
+    await route.fulfill({ response });
+  });
+}
 
 test("uses a large mobile calibration surface then returns to a hideable PiP", async ({
   page,

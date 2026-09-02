@@ -35,6 +35,13 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# python training/evaluation caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
 # env files (can opt-in for committing if needed)
 .env*
 !.env.example

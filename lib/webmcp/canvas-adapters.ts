@@ -281,6 +281,9 @@ async function transformSelectedSketch(
     const result = await options.transformSketch({
       sketchObjectId: request.input.sketchId,
       instruction: request.input.instruction,
+      ...(request.input.narration
+        ? { narration: request.input.narration }
+        : {}),
       outputKind,
       source: capabilitySource(request),
       signal: request.signal,

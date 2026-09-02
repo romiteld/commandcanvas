@@ -119,6 +119,26 @@ describe("CanvasCapabilityCatalog transport projections", () => {
       false,
     );
   });
+
+  it("accepts bounded spoken narration in the canonical sketch transform input", () => {
+    const schema = CANVAS_CAPABILITY_CATALOG.transform_sketch.inputSchema;
+
+    expect(
+      schema.safeParse({
+        sketchId: "sketch-1",
+        instruction: "Make this explanation usable.",
+        narration:
+          "The left shape is the source, and the right shape is the result.",
+      }).success,
+    ).toBe(true);
+    expect(
+      schema.safeParse({
+        sketchId: "sketch-1",
+        instruction: "Make this explanation usable.",
+        narration: "x".repeat(8_001),
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe("shared capability execution boundary", () => {

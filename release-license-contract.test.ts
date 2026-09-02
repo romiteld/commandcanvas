@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
@@ -90,11 +91,40 @@ describe("MIT application and external AGPL relay boundary", () => {
     expect(read(".gitignore")).toContain("/.superpowers/");
   });
 
-  it("does not leave a hidden model under the public model directory", () => {
+  it("publishes only the named refusal-gated HaGRID pose artifact under its exact custom license", () => {
     const modelDirectory = path.join(root, "public", "models");
     const entries = existsSync(modelDirectory)
       ? readdirSync(modelDirectory).filter((entry) => entry !== ".gitkeep")
       : [];
-    expect(entries).toEqual([]);
+    expect(entries).toEqual([
+      "commandcanvas-hagrid-v2-static-pose-model-v1.json",
+    ]);
+    const bytes = readFileSync(path.join(modelDirectory, entries[0]!));
+    const artifact = JSON.parse(bytes.toString("utf8")) as {
+      schemaVersion?: string;
+      productionEligible?: boolean;
+      sourceAttribution?: {
+        license?: string;
+        licenseUrl?: string;
+        derivedArtifactLicense?: string;
+      };
+    };
+    const customLicense =
+      "LicenseRef-HaGRID-Public-License-With-Attribution-And-Conditions-Reserved";
+    const customLicenseUrl =
+      "https://raw.githubusercontent.com/hukenovs/hagrid/080e18917376ec935e453cd0e599c23478c7e98f/license/en_us.pdf";
+    expect(artifact).toMatchObject({
+      schemaVersion: "commandcanvas.static-hand-pose-model/v1",
+      productionEligible: true,
+      sourceAttribution: {
+        license: customLicense,
+        licenseUrl: customLicenseUrl,
+        derivedArtifactLicense: customLicense,
+      },
+    });
+    expect(read("THIRD_PARTY_NOTICES.md")).toContain(customLicenseUrl);
+    expect(read("THIRD_PARTY_NOTICES.md")).toContain(
+      createHash("sha256").update(bytes).digest("hex"),
+    );
   });
 });

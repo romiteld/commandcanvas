@@ -1,0 +1,101 @@
+{
+  "acceptance_thresholds": {
+    "maximum_corner_rmse": 0.04,
+    "maximum_gap_rmse_ratio": 1.0,
+    "maximum_path_length_ratio": 1.05,
+    "maximum_position_rmse_ratio": 1.1,
+    "minimum_error_reduction_ratio": -0.1,
+    "minimum_jitter_reduction_ratio": 0.2,
+    "minimum_path_length_ratio": 0.85
+  },
+  "dataset": {
+    "archive_sha256": "321c0f53ce2f1f33aa821a36df3ed29261d11934dc945d47a9d3abf79daf4c1e",
+    "license": "CC-BY-4.0",
+    "name": "In-Air Hand-Drawn Number and Shape Dataset",
+    "split_unit": "example_index_not_subject"
+  },
+  "decision": "refused",
+  "failed_thresholds": [
+    "gap_rmse_ratio"
+  ],
+  "limitations": [
+    "Noise and dropout corruption are synthetic; they are not captured CommandCanvas camera noise.",
+    "The source archive provides no subject identifiers, so holdouts are example-disjoint, not subject-disjoint.",
+    "The archive provides coordinate samples without timestamps; evaluation assumes a nominal 30 Hz cadence.",
+    "This artifact tunes a causal trajectory filter and does not train hand detection or landmark estimation."
+  ],
+  "production_eligible": false,
+  "schema_version": "commandcanvas.drawing-filter-tuning/v1",
+  "selected_filter": {
+    "alpha": 0.6,
+    "beta": 0.2,
+    "dropout_velocity_damping": 0.8,
+    "kind": "alpha_beta"
+  },
+  "selection": {
+    "candidate_count": 62,
+    "nominal_hz_assumption": 30.0,
+    "procedure": "rank all candidates on train, choose among the top eight on validation, evaluate test once",
+    "seed": 20260902,
+    "synthetic_noise": {
+      "dropout_start_probability_per_frame": 0.015,
+      "jitter_sigma_fraction_of_xy_diagonal": 0.012,
+      "maximum_dropout_frames": 2
+    }
+  },
+  "split_counts": {
+    "test": 120,
+    "train": 240,
+    "validation": 120
+  },
+  "split_metrics": {
+    "test": {
+      "corner_rmse": 0.012656447504950352,
+      "error_reduction_ratio": -0.016219252937039182,
+      "filtered_jitter_rmse": 0.015874452746393448,
+      "filtered_path_length_ratio": 1.0074393248442393,
+      "filtered_rmse": 0.018031356296685782,
+      "gap_rmse_ratio": 1.0125561206822482,
+      "jitter_reduction_ratio": 0.3562865009561478,
+      "observed_jitter_rmse": 0.024776179937421944,
+      "observed_rmse": 0.01786118802361437,
+      "position_rmse_ratio": 1.016219252937039
+    },
+    "train": {
+      "corner_rmse": 0.012403717588998619,
+      "error_reduction_ratio": 0.007174542612514407,
+      "filtered_jitter_rmse": 0.015798647057035316,
+      "filtered_path_length_ratio": 1.006549383109873,
+      "filtered_rmse": 0.01813662296358841,
+      "gap_rmse_ratio": 0.8885473791369497,
+      "jitter_reduction_ratio": 0.3667965377855367,
+      "observed_jitter_rmse": 0.02499913006340297,
+      "observed_rmse": 0.018295974093458213,
+      "position_rmse_ratio": 0.9928254573874856
+    },
+    "validation": {
+      "corner_rmse": 0.011727832771249521,
+      "error_reduction_ratio": 0.010254013121132093,
+      "filtered_jitter_rmse": 0.015688017360797276,
+      "filtered_path_length_ratio": 1.0120594553496545,
+      "filtered_rmse": 0.018370106959094183,
+      "gap_rmse_ratio": 0.8743350033794087,
+      "jitter_reduction_ratio": 0.37805112373358524,
+      "observed_jitter_rmse": 0.025366604837731736,
+      "observed_rmse": 0.018688229774852412,
+      "position_rmse_ratio": 0.9897459868788678
+    }
+  },
+  "test_metrics": {
+    "corner_rmse": 0.012656447504950352,
+    "error_reduction_ratio": -0.016219252937039182,
+    "filtered_jitter_rmse": 0.015874452746393448,
+    "filtered_path_length_ratio": 1.0074393248442393,
+    "filtered_rmse": 0.018031356296685782,
+    "gap_rmse_ratio": 1.0125561206822482,
+    "jitter_reduction_ratio": 0.3562865009561478,
+    "observed_jitter_rmse": 0.024776179937421944,
+    "observed_rmse": 0.01786118802361437,
+    "position_rmse_ratio": 1.016219252937039
+  }
+}

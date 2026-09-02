@@ -1,8 +1,6 @@
 # CommandCanvas
 
-CommandCanvas is a shared spatial workspace where people, hands, voice, collaborators,
-and supported agent hosts operate on the same semantic objects. Rough sketches, notes,
-boards, schedules, diagrams, charts, and meeting packets remain visible, attributable, and reversible on one infinite canvas.
+CommandCanvas is a shared spatial workspace where people, hands, voice, collaborators, and supported agent hosts operate on the same semantic objects. Rough sketches, notes, boards, schedules, diagrams, charts, and meeting packets remain visible, attributable, and reversible on one infinite canvas.
 
 - Production: <https://commandcanvas.vercel.app>
 - Email-OTP workspace: <https://commandcanvas.vercel.app/meet>
@@ -15,15 +13,11 @@ boards, schedules, diagrams, charts, and meeting packets remain visible, attribu
 six-digit email code, chooses a display name, creates or joins a room, and can
 send an exact-email invitation. There are no passwords.
 
-**No-signup judge preview:** `/demo` is a temporary, bounded competition path.
-It presents no signup form, login form, password, third-party account, or
-configuration before entry. After the visitor explicitly enters, Supabase may
-create a temporary anonymous authenticated identity and capped preview room.
+**No-signup judge preview:** `/demo` presents no signup form, login form,
+password, third-party account, or configuration. Supabase may create a bounded
+temporary identity and room only after the visitor explicitly enters.
 
-The preview cannot send production email. Provider-backed voice and direct image interpretation require the visitor's own temporary OpenAI API key.
-A verified email user can instead choose to reuse an account-owned key that
-they previously saved through the encrypted server-side credential boundary.
-The application has no deployment-owner OpenAI key fallback.
+The preview cannot send production email. Provider-backed voice and direct image interpretation use the visitor's temporary key; verified users may choose a previously saved, encrypted account-owned key. There is no deployment-owner key fallback.
 
 ## Five-step workflow
 
@@ -77,11 +71,9 @@ permission. It supports index-finger drawing, one-hand pinch movement, two-hand
 resize and canvas zoom, open-palm pan, and recoverable edge discard. Camera
 frames stay out of ChatGPT, OpenAI, Supabase, and WebMCP on the local path.
 
-An optional separately operated private CUDA relay can receive bounded newest-
-only frames after separate consent and return semantic landmarks. It is not
-distributed as part of this MIT application. Its corresponding source and
-license boundary are documented in [SOURCE.md](SOURCE.md) and
-[private relay documentation](docs/private-hand-relay.md).
+A compact HaGRIDv2-derived classifier adds refusal-gated static-pose evidence after landmarks exist. It cannot acquire an object, perform bimanual or edge actions, or replace canonical geometry and temporal state. Its custom same-license boundary is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+After separate consent, an optional private CUDA relay can receive bounded newest-only frames and return semantic landmarks. It is not part of this MIT application; see [SOURCE.md](SOURCE.md) and [private relay documentation](docs/private-hand-relay.md).
 
 Physical-hand accuracy, lighting tolerance, occlusion behavior, and ergonomics
 remain experimental until named device rehearsals pass. Pointer, touch, typed,
@@ -159,12 +151,14 @@ Requirements:
 
 - Node.js 22.14 through 22.x (`.nvmrc` pins 22.17.0)
 - npm 11.5.2
+- Python 3.11 plus pinned dependencies for the complete release gate
 - A Supabase project for durable rooms and `/demo`
 
 Install and configure:
 
 ```bash
 npm ci
+python -m pip install -r scripts/requirements-training.txt
 cp .env.example .env.local
 ```
 

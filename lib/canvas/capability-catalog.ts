@@ -5,7 +5,10 @@ import {
   newCanvasObjectSchema,
 } from "@/lib/canvas/object-model";
 import { semanticCanvasObjectInputSchema } from "@/lib/canvas/semantic-object";
-import { sketchTransformOutputKindSchema } from "@/lib/vision/diagram-transform";
+import {
+  MAX_DIAGRAM_TRANSFORM_NARRATION_CHARS,
+  sketchTransformOutputKindSchema,
+} from "@/lib/vision/diagram-transform";
 
 export const CANVAS_CAPABILITY_NAMES = [
   "get_canvas_state",
@@ -140,6 +143,12 @@ export const CANVAS_CAPABILITY_INPUT_SCHEMAS = {
     .object({
       sketchId: objectIdSchema,
       instruction: z.string().trim().min(1).max(500),
+      narration: z
+        .string()
+        .trim()
+        .min(1)
+        .max(MAX_DIAGRAM_TRANSFORM_NARRATION_CHARS)
+        .optional(),
       outputKind: sketchTransformOutputKindSchema.optional(),
     })
     .strict(),

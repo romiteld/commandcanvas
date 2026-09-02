@@ -103,6 +103,7 @@ interface BufferedVoiceTurn {
 class LatestVoiceHandlers {
   private recentSpokenContext: readonly string[] = [];
   private thoughtCaptureActive = false;
+  private activeThoughtObjectId: string | null = null;
   private thoughtAppendQueue: Promise<void> = Promise.resolve();
   private currentTurnKey = LEGACY_TURN_KEY;
   private legacyTurn: BufferedVoiceTurn;
@@ -159,6 +160,12 @@ class LatestVoiceHandlers {
     return this.invokeCanonicalCapability(...args);
   }
 
+  consumeSketchNarration() {
+    const narration = spokenNarration(this.recentSpokenContext);
+    this.resetSpokenContext();
+    return narration;
+  }
+
   async onIntent(
     intent: DirectCanvasIntent,
     source: "voice",
@@ -173,6 +180,7 @@ class LatestVoiceHandlers {
       const result = await this.submit(intent, source, turnContext);
       if (result.ok) {
         this.thoughtCaptureActive = true;
+        this.activeThoughtObjectId = intent.objectId ?? null;
         this.activeSessionSignal = turnContext?.signal;
       }
       return result;
@@ -183,8 +191,10 @@ class LatestVoiceHandlers {
       if (
         result.ok ||
         (!result.ok && result.thoughtCapture === "aborted")
-      )
+      ) {
         this.thoughtCaptureActive = false;
+        this.activeThoughtObjectId = null;
+      }
       this.clearThoughtDraft();
       this.activeSessionSignal = undefined;
       return result;
@@ -415,13 +425,29 @@ class LatestVoiceHandlers {
         };
       }
       try {
-        outcome = await this.submit(
-          { type: "append_thought", text },
-          "voice",
-          this.activeSessionSignal
-            ? { signal: this.activeSessionSignal }
-            : undefined,
-        );
+        if (this.invokeCanonicalCapability && this.activeThoughtObjectId) {
+          const capabilityResult = await this.invokeCanonicalCapability(
+            "update_object_content",
+            { objectId: this.activeThoughtObjectId, text },
+            this.activeSessionSignal ?? new AbortController().signal,
+          );
+          outcome = capabilityResult.ok
+            ? { ok: true, message: capabilityResult.message }
+            : {
+                ok: false,
+                message: capabilityResult.message,
+                ...(capabilityResult.code === "invalid_input"
+                  ? { thoughtCapture: "aborted" as const }
+                  : {}),
+              };
+        } else
+          outcome = await this.submit(
+            { type: "append_thought", text },
+            "voice",
+            this.activeSessionSignal
+              ? { signal: this.activeSessionSignal }
+              : undefined,
+          );
       } catch {
         outcome = {
           ok: false as const,
@@ -451,6 +477,7 @@ class LatestVoiceHandlers {
     this.clearThoughtDraft();
     this.resetSpokenContext();
     this.thoughtCaptureActive = false;
+    this.activeThoughtObjectId = null;
     this.currentTurnKey = LEGACY_TURN_KEY;
     this.turns.clear();
     this.orderedTurnKeys = [];
@@ -581,6 +608,10 @@ export const RealtimeVoiceControl = forwardRef<
       latestHandlers.invokeCapability(capability, input, signal),
     [latestHandlers],
   );
+  const consumeLatestSketchNarration = useCallback(
+    () => latestHandlers.consumeSketchNarration(),
+    [latestHandlers],
+  );
 
   const reportThoughtResults = useCallback(
     (results: readonly VoiceIntentResult[]) => {
@@ -637,6 +668,7 @@ export const RealtimeVoiceControl = forwardRef<
         ...(capabilityInvocationAvailable
           ? { invokeCapability: invokeLatestCapability }
           : {}),
+        consumeSketchNarration: consumeLatestSketchNarration,
         onPlaybackBlocked() {
           setPlaybackBlocked(true);
         },
@@ -652,6 +684,7 @@ export const RealtimeVoiceControl = forwardRef<
       inspectLatestCanvas,
       capabilityInvocationAvailable,
       invokeLatestCapability,
+      consumeLatestSketchNarration,
     ],
   );
   const state = useSyncExternalStore(

@@ -29,6 +29,15 @@ describe("Realtime voice tools", () => {
     );
   });
 
+  it("tells the voice model that spoken drawing explanation belongs to the sketch transform", () => {
+    expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
+      "Treat descriptive speech during a drawing as sketch narration",
+    );
+    expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
+      "CommandCanvas attaches the bounded completed narration",
+    );
+  });
+
   it("exposes only the approved reversible canvas vocabulary", () => {
     expect(
       REALTIME_VOICE_TOOL_DEFINITIONS.map((tool) => tool.name),
@@ -254,6 +263,61 @@ describe("Realtime voice tools", () => {
       },
       expect.any(AbortSignal),
     );
+  });
+
+  it("adds buffered spoken drawing context to the canonical sketch transform exactly once", async () => {
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Transformed.",
+    }));
+    const inspectCanvas = vi.fn(async () => ({
+      roomId: "room-1",
+      revision: 9,
+      selectedObjectId: "sketch-1",
+      objects: [{ id: "sketch-1", type: "sketch" }],
+      receipts: [],
+      truncation: {},
+    }));
+    const consumeSketchNarration = vi
+      .fn<() => string | undefined>()
+      .mockReturnValueOnce(
+        "The circle is inventory and the arrow means daily replenishment.",
+      )
+      .mockReturnValueOnce(undefined);
+
+    await executeRealtimeVoiceTool(
+      { name: "transform_selected_sketch", arguments: "{}" },
+      vi.fn(),
+      { invokeCapability, inspectCanvas, consumeSketchNarration },
+    );
+    await executeRealtimeVoiceTool(
+      { name: "transform_selected_sketch", arguments: "{}" },
+      vi.fn(),
+      { invokeCapability, inspectCanvas, consumeSketchNarration },
+    );
+
+    expect(invokeCapability).toHaveBeenNthCalledWith(
+      1,
+      "transform_sketch",
+      {
+        sketchId: "sketch-1",
+        instruction: "Make that usable.",
+        narration:
+          "The circle is inventory and the arrow means daily replenishment.",
+      },
+      expect.any(AbortSignal),
+    );
+    expect(invokeCapability).toHaveBeenNthCalledWith(
+      2,
+      "transform_sketch",
+      {
+        sketchId: "sketch-1",
+        instruction: "Make that usable.",
+      },
+      expect.any(AbortSignal),
+    );
+    expect(consumeSketchNarration).toHaveBeenCalledTimes(2);
   });
 
   it("returns a specific selection refusal before canonical selected-object invocation", async () => {

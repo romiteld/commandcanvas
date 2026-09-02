@@ -9,6 +9,7 @@ const read = (relativePath: string) =>
 const packageJson = JSON.parse(read("package.json")) as {
   dependencies: Record<string, string>;
   devDependencies: Record<string, string>;
+  scripts: Record<string, string>;
 };
 const packageLock = JSON.parse(read("package-lock.json")) as {
   packages: Record<
@@ -217,5 +218,27 @@ describe("release dependency and README wording", () => {
 
     expect(readme).toContain("The local build and unit gate is:");
     expect(readme).not.toContain("The complete local gate is:");
+  });
+
+  it("declares and exercises the Python training dependencies in CI", () => {
+    const workflow = read(".github/workflows/ci.yml");
+    const requirements = read("scripts/requirements-training.txt");
+    const scripts = packageJson.scripts as Record<string, string>;
+
+    expect(workflow).toContain("actions/setup-python@");
+    expect(workflow).toContain("python-version: \"3.11\"");
+    expect(workflow).toContain(
+      "python -m pip install -r scripts/requirements-training.txt",
+    );
+    expect(scripts["check:training"]).toContain("ruff check");
+    expect(scripts["check:training"]).toContain("ruff format --check");
+    expect(scripts["check:training"]).toContain("mypy scripts/drawing-training");
+    expect(scripts["check:training"]).toContain("unittest discover");
+    expect(scripts.check).toContain("npm run check:training");
+    expect(requirements).toContain("numpy==2.2.6");
+    expect(requirements).toContain("scipy==1.15.3");
+    expect(requirements).toContain("torch==2.5.1+cpu");
+    expect(requirements).toContain("mypy==1.18.2");
+    expect(requirements).toContain("ruff==0.14.14");
   });
 });
