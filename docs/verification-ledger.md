@@ -2158,3 +2158,127 @@ count do not verify the later calibration-lifecycle source.
 - No Devpost submission has been made. Submission remains blocked on the
   owner's physical-hand acceptance and a real ChatGPT-host Site Tools
   invocation.
+
+## Checkpoint 39: production-acceptance source candidate
+
+Source candidate: `38f14ef` on `feat/finish-production-acceptance`. This
+checkpoint is appended after the source verification run; the documentation
+commit that records it does not alter application behavior.
+
+### WORKING
+
+- Realtime meeting signaling no longer trusts a Broadcast payload's
+  client-authored `senderId` by itself. Each persisted room member publishes
+  only to `room-media:<room-id>:<authenticated-user-id>`; Realtime RLS binds
+  the topic suffix to `auth.uid()`, receivers subscribe from the authorized
+  room-member roster, and payloads whose `senderId` disagrees with that topic
+  identity are rejected.
+- The meeting-media controller maintains a maximum four-person roster,
+  refreshes membership, revokes departed peers, shares one camera acquisition
+  with hand tracking through cloned tracks, and requests optional short-lived
+  TURN credentials only for permanent authenticated room members. Direct
+  P2P/STUN remains the honest fallback when TURN is not configured or refused.
+- The private hand-relay path remains opt-in and fail-closed. It requires a
+  permanent actor, current room membership, a server-side owner allowlist,
+  explicit raw-camera-upload consent, bounded admission, and a short-lived
+  relay capability. Local MediaPipe remains the automatic fallback.
+- The `user_profiles` migration is executable on an empty or existing
+  database and preserves the OTP display-profile recovery contract.
+- WebMCP registered callbacks accept both Chrome 152's one-argument lifecycle
+  and Chrome 153's callback-options signal. Registration abort, caller
+  cancellation, JSON-string invocation, compact result serialization, and
+  execute-time room/role/phase guards remain covered.
+- Public README, Devpost, judge, and video materials describe participant-
+  specific signaling, optional TURN, no-signup identity, and unverified
+  external boundaries without claiming deployment evidence that does not yet
+  exist.
+
+### VERIFIED LOCALLY
+
+- Node 22.17.0 `npm run check`: ESLint exited 0; raw TypeScript `tsc --noEmit`
+  exited 0; 147 files and 1,608 tests passed; the same-origin hand worker and
+  optimized Next.js 16.3.3 production application built successfully with all
+  15 static pages and dynamic API routes.
+- The complete ordinary-browser Playwright matrix enumerated 99 project
+  scenarios: 40 applicable scenarios passed, 59 environment-gated scenarios
+  skipped intentionally, and none failed. The run covered desktop Chromium,
+  mobile Chromium, mobile WebKit, system Chrome WebMCP, pointer/touch/pen
+  mutations, deterministic speech, responsive layouts, receipts, Undo,
+  Realtime offline recovery, and the no-DOM worker fallback.
+- Responsive browser acceptance passed at 320x568, 390x844, 430x932,
+  768x1024, 844x390, 1024x768, 1280x720, and 1440x900.
+- The official Gitleaks 8.30.1 binary scanned all reachable refs: 151 commits,
+  approximately 6.9 MB, zero findings. A detector-shaped deterministic test
+  token was replaced with a constructed fixture; one exact historical
+  fingerprint is documented in `.gitleaksignore` rather than suppressing a
+  file or detector rule.
+- The local Supabase migration and authorization probes applied migrations
+  through `20260902012302`, exercised profile recovery, participant-specific
+  media sender binding, TURN admission, and permitted/forbidden Realtime
+  topics. The pre-mutation local database snapshot is retained at
+  `/tmp/commandcanvas-pre-release-f7d182e.dump` with SHA-256
+  `d5a669adcd8c6c502d715bb1b6c911eb72bbce57cd0ca88c31429cf8a135962f`.
+
+### VERIFIED IN BROWSER
+
+- System Chrome 152.0.7977.75 registered the stable native WebMCP catalog,
+  invoked `get_canvas_state` and `create_object`, rendered the created note,
+  and displayed an attributable `webmcp` receipt. Chrome 152 omits callback
+  options, so native caller cancellation cannot be reconstructed by page code.
+- Official Chrome for Testing 153.0.8010.12 passed the strict static lifecycle
+  suite against the exact production bundle: JSON-string invocation,
+  registration lifecycle abort, Chrome 153 caller-cancellation propagation,
+  page mutation, receipt creation, and temporary-room cleanup all completed.
+- The same official Chrome 153 binary previously passed the dynamic-
+  registration feature-flagged suite against the same application source.
+  Production remains static because that is the lower-churn compatibility
+  mode; static and dynamic registrations use identical execute-time guards.
+- Desktop, narrow mobile, tablet, landscape, and WebKit-controlled browser
+  profiles passed the listed responsive states. These are browser-controlled
+  profiles, not physical touch, camera, microphone, or ChatGPT-host evidence.
+
+### UNVERIFIED
+
+- The candidate has not yet been pushed to public `main`, applied to the
+  Production Supabase project, or deployed to the canonical Vercel Production
+  URL. No result in this checkpoint is a production-deployment claim.
+- A real ChatGPT built-in-browser Site Tools invocation remains required.
+  Native Chrome proves the current browser API contract and page behavior; it
+  does not prove the user's ChatGPT rollout, model host, Available Site Tools
+  surface, or a Site Tool invocation initiated by ChatGPT.
+- A physical human-hand pass remains required for index-tip drawing, pinch
+  acquisition, one- and two-hand transformations, full-canvas reach, smoothing,
+  edge actions, lighting, occlusion, thermals, latency, and ergonomics.
+- Production private-GPU inference, physical microphone Realtime voice, a
+  current-release paid vision transform, real OTP delivery, real invitation
+  delivery, Resend webhook reconciliation, and a host-confirmed packet email
+  have not been executed on this source candidate.
+- Cross-network participant media over an actually configured TURN relay has
+  not been tested between Wi-Fi and cellular devices. Direct/local WebRTC and
+  the optional server-authorized credential path are implementation evidence,
+  not that external network receipt.
+- Physical touch and stylus behavior remains unverified; browser event and
+  WebKit profiles do not prove palm rejection, pressure, tilt, or real-device
+  comfort.
+- The previously removed GitGuardian incident object is unreachable from all
+  repository refs but remains retrievable from GitHub by its exact object URL.
+  GitHub Support or server-side garbage collection is required before claiming
+  that the dangling object itself is unavailable. No credential was rotated or
+  altered during this release work.
+- CodeRabbit CLI authentication did not complete through the non-interactive
+  agent callback. The independent public-release audit completed, but it is not
+  represented as a CodeRabbit review.
+
+### CUT
+
+- No approved spatial manipulation, hand control, object creation, history,
+  frame, collaboration, participant-media, Site Tools, Live Voice,
+  authentication, invitation, packet, vision, image, or Resend capability was
+  silently removed.
+- A general-purpose SFU, meeting recording, screen sharing, billing, enterprise
+  identity, native mobile or headset applications, a plugin marketplace,
+  desktop automation, and direct conferencing-suite integrations are not
+  claimed by this browser challenge product.
+- No Devpost submission has been made. Submission remains blocked until the
+  owner personally accepts the physical-hand flow and a real ChatGPT-host Site
+  Tool mutation is recorded against the frozen Production release.
