@@ -156,6 +156,7 @@ def write_annotation_draft(root: Path) -> Path:
         "name": "commandcanvas-test-frame-adapter",
         "version": "1.0.0",
         "sourceManifestSha256": "d" * 64,
+        "actorId": "owner-daniel",
     }
     for session_index, session in enumerate(canonical["sessions"]):
         session["visionSessionId"] = f"vision-lab-session-{session_index + 1}"

@@ -137,7 +137,7 @@ def validate_private_workspace(dataset_root: Path, repository_root: Path) -> Non
 
     root = Path(dataset_root).resolve(strict=False)
     repository = Path(repository_root).resolve(strict=True)
-    if root == repository or repository in root.parents:
+    if root == repository or repository in root.parents or root in repository.parents:
         raise AnnotationWorkbenchError(
             "private annotation data must remain outside the repository"
         )
@@ -359,6 +359,7 @@ def _bridge_handoff(manifest: dict[str, Any]) -> dict[str, Any]:
             {
                 "visionSessionId": session["visionSessionId"],
                 "datasetSessionId": session["sessionId"],
+                "actorId": session["actorId"],
                 "captureGroupId": capture_group_id,
                 "split": group_splits.get(capture_group_id),
                 "captureCategories": deepcopy(session["captureCategories"]),
@@ -378,12 +379,12 @@ def _bridge_handoff(manifest: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate_source_adapter(value: Any) -> dict[str, Any]:
-    expected = {"name", "version", "sourceManifestSha256"}
+    expected = {"name", "version", "sourceManifestSha256", "actorId"}
     if not isinstance(value, dict) or set(value) != expected:
         raise AnnotationWorkbenchError(
             "draft sourceAdapter fields do not match the v1 contract"
         )
-    for field in ("name", "version"):
+    for field in ("name", "version", "actorId"):
         item = value.get(field)
         if not isinstance(item, str) or not EDITOR_ID_PATTERN.fullmatch(item):
             raise AnnotationWorkbenchError(
@@ -414,7 +415,7 @@ def _validate_draft_shape(manifest: dict[str, Any]) -> None:
         raise AnnotationWorkbenchError(
             "draft manifest fields do not match the v1 contract"
         )
-    _validate_source_adapter(manifest.get("sourceAdapter"))
+    source_adapter = _validate_source_adapter(manifest.get("sourceAdapter"))
     target_schema = manifest.get("canonicalSchemaVersion")
     if target_schema not in DATASET_SCHEMA_VERSIONS:
         raise AnnotationWorkbenchError("draft canonicalSchemaVersion is unsupported")
@@ -445,6 +446,13 @@ def _validate_draft_shape(manifest: dict[str, Any]) -> None:
         "image",
         "label",
     }
+    vision_session_ids: set[str] = set()
+    dataset_session_ids: set[str] = set()
+    source_paths: set[str] = set()
+    source_digests: set[str] = set()
+    image_paths: set[str] = set()
+    label_paths: set[str] = set()
+    frame_identities: set[tuple[str, str]] = set()
     for session_index, session in enumerate(sessions):
         if not isinstance(session, dict) or set(session) != expected_session:
             raise AnnotationWorkbenchError(
@@ -457,6 +465,30 @@ def _validate_draft_shape(manifest: dict[str, Any]) -> None:
             raise AnnotationWorkbenchError(
                 f"draft session {session_index} visionSessionId is invalid"
             )
+        session_id = session.get("sessionId")
+        if vision_session_id in vision_session_ids:
+            raise AnnotationWorkbenchError("draft visionSessionId must be unique")
+        if not isinstance(session_id, str) or session_id in dataset_session_ids:
+            raise AnnotationWorkbenchError("draft dataset sessionId must be unique")
+        vision_session_ids.add(vision_session_id)
+        dataset_session_ids.add(session_id)
+        if session.get("actorId") != source_adapter["actorId"]:
+            raise AnnotationWorkbenchError(
+                "draft session actor must match the source adapter actor"
+            )
+        source = session.get("source")
+        if not isinstance(source, dict):
+            raise AnnotationWorkbenchError(
+                f"draft session {session_index} source must be an object"
+            )
+        source_path = source.get("path")
+        source_digest = source.get("sha256")
+        if not isinstance(source_path, str) or source_path in source_paths:
+            raise AnnotationWorkbenchError("draft source path must be unique")
+        if not isinstance(source_digest, str) or source_digest in source_digests:
+            raise AnnotationWorkbenchError("draft source identity must be unique")
+        source_paths.add(source_path)
+        source_digests.add(source_digest)
         annotation = session.get("annotation")
         if not isinstance(annotation, dict):
             raise AnnotationWorkbenchError(
@@ -490,7 +522,6 @@ def _validate_draft_shape(manifest: dict[str, Any]) -> None:
                 if isinstance(timestamp_ms, int) and not isinstance(timestamp_ms, bool)
                 else None
             )
-            session_id = session.get("sessionId")
             expected_image_path = (
                 f"images/{session_id}/{expected_frame_id}.png"
                 if expected_frame_id is not None and isinstance(session_id, str)
@@ -513,6 +544,17 @@ def _validate_draft_shape(manifest: dict[str, Any]) -> None:
                 raise AnnotationWorkbenchError(
                     f"draft frame {session_index}/{frame_index} timestamp and asset paths do not match the bridge contract"
                 )
+            frame_id = frame["frameId"]
+            frame_identity = (session_id, frame_id)
+            if frame_identity in frame_identities:
+                raise AnnotationWorkbenchError("draft frame identity must be unique")
+            if image["path"] in image_paths:
+                raise AnnotationWorkbenchError("draft image path must be unique")
+            if label["path"] in label_paths:
+                raise AnnotationWorkbenchError("draft label path must be unique")
+            frame_identities.add(frame_identity)
+            image_paths.add(image["path"])
+            label_paths.add(label["path"])
             all_reviewed = all_reviewed and frame["reviewed"]
         if annotation.get("reviewed") is not all_reviewed:
             raise AnnotationWorkbenchError(
@@ -807,6 +849,63 @@ def _atomic_write_bytes(path: Path, contents: bytes) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+def _write_bytes_exclusive(path: Path, contents: bytes) -> None:
+    """Create an immutable receipt without replacing a concurrent writer."""
+
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(path)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(contents)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def _load_finalization_receipt(path: Path, *, draft: bool) -> dict[str, Any]:
+    expected = {
+        "schemaVersion",
+        "finalizedAt",
+        "editorId",
+        "datasetId",
+        "manifestSha256",
+        "editIds",
+        "editReceiptSha256s",
+        "datasetValidation",
+        "eligibleForTraining",
+        "productionEligible",
+        "eligibilityScope",
+        "receiptSha256",
+    }
+    if draft:
+        expected.update(
+            {
+                "draftManifestSha256",
+                "sourceAdapter",
+                "visionSessionIds",
+                "bridgeHandoff",
+            }
+        )
+    if path.is_symlink() or not path.is_file():
+        raise AnnotationWorkbenchError("finalization receipt path is unsafe")
+    receipt = _load_json_object(path)
+    if set(receipt) != expected:
+        raise AnnotationWorkbenchError(
+            "finalization receipt fields do not match the immutable contract"
+        )
+    if (
+        receipt.get("schemaVersion") != FINALIZATION_SCHEMA_VERSION
+        or not verify_digest(receipt, "receiptSha256")
+        or receipt.get("eligibleForTraining") is not True
+        or receipt.get("productionEligible") is not False
+    ):
+        raise AnnotationWorkbenchError("finalization receipt is invalid")
+    return receipt
+
+
 def _capture_categories(session: dict[str, Any]) -> list[str]:
     frames = session.get("frames")
     if not isinstance(frames, list):
@@ -840,6 +939,11 @@ def save_frame_annotation(
     root, manifest_file = _resolve_dataset_paths(dataset_root, manifest_path)
     validate_private_workspace(root, Path(__file__).resolve().parents[4])
     editor = _validate_editor_id(editor_id)
+    finalization_path = root / "annotation-finalization-receipt.json"
+    if finalization_path.exists() or finalization_path.is_symlink():
+        raise AnnotationWorkbenchError(
+            "dataset is finalized and annotations are immutable"
+        )
     if not isinstance(negative, bool):
         raise AnnotationWorkbenchError("negative must be boolean")
     normalized_categories = _validate_categories(categories, negative=negative)
@@ -1082,11 +1186,37 @@ def finalize_annotations(
                 "bridgeHandoff": _bridge_handoff(manifest),
             }
         )
+    finalization_path = root / "annotation-finalization-receipt.json"
+    if finalization_path.exists() or finalization_path.is_symlink():
+        existing = _load_finalization_receipt(finalization_path, draft=draft)
+        existing_invariants = deepcopy(existing)
+        existing_invariants.pop("finalizedAt")
+        existing_invariants.pop("receiptSha256")
+        expected_invariants = deepcopy(final_value)
+        expected_invariants.pop("finalizedAt")
+        if existing_invariants != expected_invariants:
+            raise AnnotationConflict(
+                "immutable finalization receipt does not match current dataset state"
+            )
+        return existing
     final = attach_digest(final_value, "receiptSha256")
     if draft and not canonical_manifest_file.exists():
         _atomic_write_bytes(canonical_manifest_file, canonical_bytes)
-    write_canonical_json(root / "annotation-finalization-receipt.json", final)
-    return final
+    try:
+        _write_bytes_exclusive(finalization_path, canonical_json_bytes(final))
+        return final
+    except FileExistsError:
+        existing = _load_finalization_receipt(finalization_path, draft=draft)
+        existing_invariants = deepcopy(existing)
+        existing_invariants.pop("finalizedAt")
+        existing_invariants.pop("receiptSha256")
+        expected_invariants = deepcopy(final_value)
+        expected_invariants.pop("finalizedAt")
+        if existing_invariants != expected_invariants:
+            raise AnnotationConflict(
+                "concurrent immutable finalization does not match current dataset state"
+            )
+        return existing
 
 
 def render_workbench_html(csrf_token: str, editor_id: str = "owner-daniel") -> str:
@@ -1154,7 +1284,8 @@ def render_workbench_html(csrf_token: str, editor_id: str = "owner-daniel") -> s
   const bones = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
   const canvas = document.getElementById("canvas"), context = canvas.getContext("2d");
   const status = document.getElementById("status"), framesNode = document.getElementById("frames");
-  let listing = [], selectedIndex = 0, current = null, image = null, activeHand = 0, activePoint = 0, placing = false, drag = null;
+  let listing = [], selectedIndex = 0, current = null, currentFrame = null, image = null, activeHand = 0, activePoint = 0, placing = false, drag = null;
+  let loadGeneration = 0, loadAbortController = null;
   const request = async (path, options={{}}) => {{
     options.headers = {{...(options.headers || {{}}), "X-CommandCanvas-Workbench-Token": token}};
     if (options.body) options.headers["Content-Type"] = "application/json";
@@ -1172,15 +1303,42 @@ def render_workbench_html(csrf_token: str, editor_id: str = "owner-daniel") -> s
     framesNode.replaceChildren(...listing.map((item,index) => {{ const button=document.createElement("button"); button.textContent=`${{item.reviewed?"✓":"○"}} ${{item.split}} · ${{item.frameId}}`; button.className=index===selectedIndex?"active":""; button.onclick=()=>loadFrame(index); return button; }}));
   }}
   async function loadFrame(index) {{
-    if (!listing.length) return; selectedIndex=Math.max(0,Math.min(listing.length-1,index)); activeHand=0; activePoint=0; placing=false;
-    current=await request(framePath(listing[selectedIndex]));
-    const imageResponse=await fetch(imagePath(listing[selectedIndex]),{{headers:{{"X-CommandCanvas-Workbench-Token":token}}}});
-    if(!imageResponse.ok) throw new Error(`Image failed (${{imageResponse.status}})`);
-    const imageUrl=URL.createObjectURL(await imageResponse.blob()); image=new Image();
-    image.onload=()=>{{ canvas.width=image.naturalWidth; canvas.height=image.naturalHeight; draw(); URL.revokeObjectURL(imageUrl); }};
-    image.onerror=()=>{{URL.revokeObjectURL(imageUrl);setStatus("Frame image could not be decoded",true);}}; image.src=imageUrl;
-    document.getElementById("counter").textContent=`Frame ${{selectedIndex+1}} / ${{listing.length}}`;
-    document.getElementById("negative").checked=current.negative; renderCategories(); renderListing(); updateControls(); setStatus("Ready");
+    if (!listing.length) return;
+    const targetIndex=Math.max(0,Math.min(listing.length-1,index));
+    const targetFrame=Object.freeze({{...listing[targetIndex]}});
+    const generation=++loadGeneration;
+    if(loadAbortController) loadAbortController.abort();
+    const controller=new AbortController(); loadAbortController=controller;
+    setStatus("Loading frame…");
+    try {{
+      const nextCurrent=await request(framePath(targetFrame),{{signal:controller.signal}});
+      if(generation !== loadGeneration) return;
+      const imageResponse=await fetch(imagePath(targetFrame),{{signal:controller.signal,headers:{{"X-CommandCanvas-Workbench-Token":token}}}});
+      if(!imageResponse.ok) throw new Error(`Image failed (${{imageResponse.status}})`);
+      const blob=await imageResponse.blob();
+      if(generation !== loadGeneration) return;
+      const imageUrl=URL.createObjectURL(blob), nextImage=new Image();
+      try {{
+        await new Promise((resolve,reject)=>{{
+          const abort=()=>{{nextImage.src="";reject(new DOMException("Frame load aborted","AbortError"));}};
+          controller.signal.addEventListener("abort",abort,{{once:true}});
+          nextImage.onload=()=>{{controller.signal.removeEventListener("abort",abort);resolve();}};
+          nextImage.onerror=()=>{{controller.signal.removeEventListener("abort",abort);reject(new Error("Frame image could not be decoded"));}};
+          nextImage.src=imageUrl;
+        }});
+      }} finally {{ URL.revokeObjectURL(imageUrl); }}
+      if(generation !== loadGeneration) return;
+      selectedIndex=targetIndex; current=nextCurrent; image=nextImage;
+      currentFrame = Object.freeze({{sessionId:targetFrame.sessionId,frameId:targetFrame.frameId,index:targetIndex}});
+      activeHand=0; activePoint=0; placing=false; drag=null;
+      canvas.width=image.naturalWidth; canvas.height=image.naturalHeight; draw();
+      document.getElementById("counter").textContent=`Frame ${{selectedIndex+1}} / ${{listing.length}}`;
+      document.getElementById("negative").checked=current.negative; renderCategories(); renderListing(); updateControls(); setStatus("Ready");
+    }} catch(error) {{
+      if(error.name !== "AbortError" && generation === loadGeneration) setStatus(error.message,true);
+    }} finally {{
+      if(loadAbortController === controller) loadAbortController=null;
+    }}
   }}
   function renderCategories() {{
     const parent=document.getElementById("categories"), supported=["drawing","edge","pinch","two_hand"];
@@ -1213,7 +1371,7 @@ def render_workbench_html(csrf_token: str, editor_id: str = "owner-daniel") -> s
   document.getElementById("negative").onchange=event=>{{current.negative=event.target.checked;if(current.negative){{current.hands=[];placing=false;current.categories=["negative"];}}else{{current.categories=["drawing"];}}renderCategories();updateControls();draw();}};
   document.getElementById("visibility").onchange=event=>{{const point=current.hands[activeHand]?.keypoints[activePoint];if(point){{point.visibility=Number(event.target.value);draw();}}}};
   document.getElementById("previous").onclick=()=>loadFrame(selectedIndex-1); document.getElementById("next").onclick=()=>loadFrame(selectedIndex+1);
-  document.getElementById("save").onclick=async()=>{{try{{const categories=current.negative?["negative"]:[...document.querySelectorAll("#categories input:checked")].map(input=>input.value);const receipt=await request(framePath(listing[selectedIndex]),{{method:"POST",body:JSON.stringify({{expectedManifestSha256:current.manifestSha256,expectedLabelSha256:current.labelSha256,negative:current.negative,categories,hands:current.hands.map(hand=>({{keypoints:hand.keypoints}}))}})}});setStatus(`Saved as ${{editorId}} · ${{receipt.receiptSha256.slice(0,12)}}`);await loadListing(true);}}catch(error){{setStatus(error.message,true);}}}};
+  document.getElementById("save").onclick=async()=>{{try{{const saveFrame=currentFrame,saveCurrent=current;if(!saveFrame||!saveCurrent)throw new Error("Wait for the current frame to finish loading");const categories=saveCurrent.negative?["negative"]:[...document.querySelectorAll("#categories input:checked")].map(input=>input.value);const receipt=await request(framePath(saveFrame),{{method:"POST",body:JSON.stringify({{expectedManifestSha256:saveCurrent.manifestSha256,expectedLabelSha256:saveCurrent.labelSha256,negative:saveCurrent.negative,categories,hands:saveCurrent.hands.map(hand=>({{keypoints:hand.keypoints}}))}})}});setStatus(`Saved as ${{editorId}} · ${{receipt.receiptSha256.slice(0,12)}}`);await loadListing(true);}}catch(error){{setStatus(error.message,true);}}}};
   document.getElementById("finalize").onclick=async()=>{{try{{const receipt=await request("/api/finalize",{{method:"POST",body:JSON.stringify({{}})}});setStatus(`Dataset validated · ${{receipt.receiptSha256.slice(0,12)}}`);}}catch(error){{setStatus(error.message,true);}}}};
   loadListing().catch(error=>setStatus(error.message,true));
 }})();

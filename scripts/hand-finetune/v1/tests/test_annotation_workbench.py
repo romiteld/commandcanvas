@@ -227,6 +227,7 @@ class AnnotationWorkbenchTests(unittest.TestCase):
             handoff["sessions"][0]["datasetSessionId"],
             canonical["sessions"][0]["sessionId"],
         )
+        self.assertEqual(handoff["sessions"][0]["actorId"], "owner-daniel")
         self.assertTrue(handoff["sessions"][0]["annotation"]["reviewed"])
         self.assertEqual(len(handoff["sessions"][0]["labels"]), 2)
         self.assertEqual(
@@ -251,6 +252,45 @@ class AnnotationWorkbenchTests(unittest.TestCase):
         write_manifest(draft, manifest)
 
         with self.assertRaisesRegex(AnnotationWorkbenchError, "timestamp|path"):
+            validate_annotation_manifest(self.root, draft)
+
+    def test_draft_rejects_duplicate_capture_and_asset_identities(self) -> None:
+        duplicate_mutations = (
+            lambda manifest: manifest["sessions"][1].__setitem__(
+                "visionSessionId", manifest["sessions"][0]["visionSessionId"]
+            ),
+            lambda manifest: manifest["sessions"][1]["source"].update(
+                {
+                    "path": manifest["sessions"][0]["source"]["path"],
+                    "sha256": manifest["sessions"][0]["source"]["sha256"],
+                    "byteSize": manifest["sessions"][0]["source"]["byteSize"],
+                }
+            ),
+            lambda manifest: manifest["sessions"][1]["frames"][0]["label"].update(
+                manifest["sessions"][0]["frames"][0]["label"]
+            ),
+        )
+        for mutate in duplicate_mutations:
+            with self.subTest(mutate=mutate):
+                draft = write_annotation_draft(self.root)
+                manifest = read_manifest(draft)
+                mutate(manifest)
+                write_manifest(draft, manifest)
+                with self.assertRaisesRegex(
+                    AnnotationWorkbenchError, "unique|duplicate|path"
+                ):
+                    validate_annotation_manifest(self.root, draft)
+                self.root = Path(self.temporary_directory.name) / f"retry-{id(mutate)}"
+                self.root.mkdir()
+                self.manifest_path = write_valid_dataset(self.root)
+
+    def test_draft_preserves_the_source_actor_in_every_handoff_session(self) -> None:
+        draft = write_annotation_draft(self.root)
+        manifest = read_manifest(draft)
+        manifest["sessions"][0]["actorId"] = "different-actor"
+        write_manifest(draft, manifest)
+
+        with self.assertRaisesRegex(AnnotationWorkbenchError, "actor"):
             validate_annotation_manifest(self.root, draft)
 
     def test_draft_cannot_claim_manual_review_without_frame_edit_receipts(self) -> None:
@@ -456,6 +496,44 @@ class AnnotationWorkbenchTests(unittest.TestCase):
         output_path = self.root / "annotation-finalization-receipt.json"
         self.assertEqual(output_path.read_bytes(), canonical_json_bytes(final))
 
+    def test_finalization_is_idempotent_and_locks_later_edits(self) -> None:
+        self._save(hands=[{"keypoints": keypoints(0.03)}])
+        first = finalize_annotations(
+            dataset_root=self.root,
+            manifest_path=self.manifest_path,
+            editor_id="owner-daniel",
+        )
+        receipt_path = self.root / "annotation-finalization-receipt.json"
+        first_bytes = receipt_path.read_bytes()
+
+        second = finalize_annotations(
+            dataset_root=self.root,
+            manifest_path=self.manifest_path,
+            editor_id="owner-daniel",
+        )
+        state = load_frame_annotation(
+            self.root,
+            self.manifest_path,
+            self.session["sessionId"],
+            self.frame["frameId"],
+        )
+
+        self.assertEqual(second, first)
+        self.assertEqual(receipt_path.read_bytes(), first_bytes)
+        with self.assertRaisesRegex(AnnotationWorkbenchError, "finalized|immutable"):
+            save_frame_annotation(
+                dataset_root=self.root,
+                manifest_path=self.manifest_path,
+                session_id=self.session["sessionId"],
+                frame_id=self.frame["frameId"],
+                editor_id="owner-daniel",
+                expected_manifest_sha256=state["manifestSha256"],
+                expected_label_sha256=state["labelSha256"],
+                negative=False,
+                categories=["drawing"],
+                hands=[{"keypoints": keypoints(0.1)}],
+            )
+
     def test_finalize_refuses_a_branched_or_orphaned_edit_receipt(self) -> None:
         receipt = self._save(hands=[{"keypoints": keypoints(0.03)}])
         orphan = dict(receipt)
@@ -478,6 +556,8 @@ class AnnotationWorkbenchTests(unittest.TestCase):
             validate_private_workspace(
                 repository_root / "private-data", repository_root
             )
+        with self.assertRaisesRegex(AnnotationWorkbenchError, "outside the repository"):
+            validate_private_workspace(repository_root.parent, repository_root)
         validate_private_workspace(self.root, repository_root)
 
         for host in ("127.0.0.1", "::1", "localhost"):
@@ -507,6 +587,18 @@ class AnnotationWorkbenchTests(unittest.TestCase):
         self.assertIn("URL.createObjectURL", html)
         self.assertNotIn("https://", html)
         self.assertNotIn("http://", html)
+
+    def test_ui_aborts_stale_frame_loads_and_saves_the_loaded_frame_snapshot(
+        self,
+    ) -> None:
+        html = render_workbench_html("csrf-test-token")
+
+        self.assertIn("new AbortController()", html)
+        self.assertIn("loadGeneration", html)
+        self.assertIn("generation !== loadGeneration", html)
+        self.assertIn("currentFrame = Object.freeze", html)
+        self.assertIn("framePath(saveFrame)", html)
+        self.assertNotIn("framePath(listing[selectedIndex])", html)
 
     def test_cli_exposes_local_annotate_and_offline_finalize_commands(self) -> None:
         environment = dict(os.environ)
