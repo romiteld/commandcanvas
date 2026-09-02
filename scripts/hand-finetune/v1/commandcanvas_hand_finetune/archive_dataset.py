@@ -69,6 +69,16 @@ def _safe_relative(path: Path, root: Path, description: str) -> str:
 
 def _manifest_members(manifest: dict[str, Any]) -> set[str]:
     members: set[str] = set()
+    producer_chain = manifest.get("producerChain")
+    if producer_chain is not None:
+        if not isinstance(producer_chain, dict) or not isinstance(
+            producer_chain.get("sessionMap"), dict
+        ):
+            raise DatasetArchiveError("dataset manifest producer chain is invalid")
+        session_map_path = producer_chain["sessionMap"].get("path")
+        if not isinstance(session_map_path, str):
+            raise DatasetArchiveError("dataset manifest session-map path is invalid")
+        members.add(session_map_path)
     sessions = manifest.get("sessions")
     if not isinstance(sessions, list):
         raise DatasetArchiveError("dataset manifest sessions must be an array")
@@ -79,6 +89,18 @@ def _manifest_members(manifest: dict[str, Any]) -> set[str]:
         if not isinstance(source_path, str):
             raise DatasetArchiveError("dataset manifest source path is invalid")
         members.add(source_path)
+        producer = session.get("producer")
+        if producer is not None:
+            if not isinstance(producer, dict) or not isinstance(
+                producer.get("companionManifest"), dict
+            ):
+                raise DatasetArchiveError("dataset manifest producer is invalid")
+            companion_path = producer["companionManifest"].get("path")
+            if not isinstance(companion_path, str):
+                raise DatasetArchiveError(
+                    "dataset manifest companion-manifest path is invalid"
+                )
+            members.add(companion_path)
         frames = session.get("frames")
         if not isinstance(frames, list):
             raise DatasetArchiveError("dataset manifest frames must be an array")

@@ -104,6 +104,26 @@ def _require_exact_keys(
     return value
 
 
+def _require_allowed_keys(
+    value: Any,
+    required: set[str],
+    optional: set[str],
+    description: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise DatasetPreparationError(f"{description} must be an object")
+    missing = required - value.keys()
+    unknown = value.keys() - required - optional
+    if missing or unknown:
+        details: list[str] = []
+        if missing:
+            details.append(f"missing {', '.join(sorted(missing))}")
+        if unknown:
+            details.append(f"unsupported {', '.join(sorted(unknown))}")
+        raise DatasetPreparationError(f"{description} fields: {'; '.join(details)}")
+    return value
+
+
 def _canonical_uuid(value: Any, description: str) -> str:
     if not isinstance(value, str):
         raise DatasetPreparationError(f"{description} must be a canonical UUID")
@@ -149,6 +169,10 @@ def _root(path: Path, description: str) -> Path:
 def _safe_relative(value: Any, description: str) -> PurePosixPath:
     if not isinstance(value, str):
         raise DatasetPreparationError(f"{description} must be a safe relative path")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise DatasetPreparationError(
+            f"{description} may not contain control characters"
+        )
     relative = PurePosixPath(value)
     if (
         not value
@@ -365,8 +389,8 @@ def _validate_categories(capture_type: str, value: Any, description: str) -> lis
 
 def _validate_companion(
     value: dict[str, Any], expected_session_id: str, source: Path
-) -> tuple[str, int, int, float, datetime, datetime]:
-    _require_exact_keys(
+) -> tuple[str, int | None, int | None, float | None, datetime, datetime]:
+    _require_allowed_keys(
         value,
         {
             "schemaVersion",
@@ -378,8 +402,8 @@ def _validate_companion(
             "mirrorDisplay",
             "consentVersion",
             "protocol",
-            "videoSha256",
         },
+        {"videoSha256"},
         "Vision Lab companion manifest",
     )
     if isinstance(value["schemaVersion"], bool) or value["schemaVersion"] != 1:
@@ -395,33 +419,36 @@ def _validate_companion(
     stopped = _timestamp(value["stoppedAt"], "Vision Lab stoppedAt")
     if stopped <= started:
         raise DatasetPreparationError("Vision Lab stoppedAt must be after startedAt")
-    media = _require_exact_keys(
+    media = _require_allowed_keys(
         value["media"],
-        {"mimeType", "width", "height", "frameRate", "facingMode"},
+        {"mimeType"},
+        {"width", "height", "frameRate", "facingMode"},
         "Vision Lab media",
     )
     mime_type = media["mimeType"]
     if not isinstance(mime_type, str) or not mime_type.startswith("video/webm"):
         raise DatasetPreparationError("Vision Lab media must be WebM")
-    width = media["width"]
-    height = media["height"]
-    frame_rate = media["frameRate"]
-    if (
-        isinstance(width, bool)
-        or not isinstance(width, int)
-        or width <= 0
-        or isinstance(height, bool)
-        or not isinstance(height, int)
-        or height <= 0
-        or isinstance(frame_rate, bool)
+    width = media.get("width")
+    height = media.get("height")
+    frame_rate = media.get("frameRate")
+    if width is not None and (
+        isinstance(width, bool) or not isinstance(width, int) or width <= 0
+    ):
+        raise DatasetPreparationError("Vision Lab media width is invalid")
+    if height is not None and (
+        isinstance(height, bool) or not isinstance(height, int) or height <= 0
+    ):
+        raise DatasetPreparationError("Vision Lab media height is invalid")
+    if frame_rate is not None and (
+        isinstance(frame_rate, bool)
         or not isinstance(frame_rate, (int, float))
         or not math.isfinite(frame_rate)
         or frame_rate <= 0
     ):
-        raise DatasetPreparationError(
-            "Vision Lab media dimensions and frame rate are invalid"
-        )
-    if not isinstance(media["facingMode"], str) or not media["facingMode"]:
+        raise DatasetPreparationError("Vision Lab media frame rate is invalid")
+    if "facingMode" in media and (
+        not isinstance(media["facingMode"], str) or not media["facingMode"]
+    ):
         raise DatasetPreparationError("Vision Lab media facingMode must be nonempty")
     if not isinstance(value["mirrorDisplay"], bool):
         raise DatasetPreparationError("Vision Lab mirrorDisplay must be boolean")
@@ -436,14 +463,24 @@ def _validate_companion(
         or protocol["version"] != VISION_PROTOCOL["version"]
     ):
         raise DatasetPreparationError("Vision Lab protocol does not match")
-    declared_sha = value["videoSha256"]
-    if not isinstance(declared_sha, str) or not SHA256_PATTERN.fullmatch(declared_sha):
-        raise DatasetPreparationError("Vision Lab video SHA-256 is invalid")
-    if sha256_file(source) != declared_sha:
-        raise DatasetPreparationError(
-            "Vision Lab video SHA-256 does not match raw WebM"
-        )
-    return capture_type, width, height, float(frame_rate), started, stopped
+    declared_sha = value.get("videoSha256")
+    if declared_sha is not None:
+        if not isinstance(declared_sha, str) or not SHA256_PATTERN.fullmatch(
+            declared_sha
+        ):
+            raise DatasetPreparationError("Vision Lab video SHA-256 is invalid")
+        if sha256_file(source) != declared_sha:
+            raise DatasetPreparationError(
+                "Vision Lab video SHA-256 does not match raw WebM"
+            )
+    return (
+        capture_type,
+        width,
+        height,
+        float(frame_rate) if frame_rate is not None else None,
+        started,
+        stopped,
+    )
 
 
 def _validate_session_map(
@@ -623,12 +660,17 @@ def prepare_dataset(
         width, height, duration_seconds, actual_rate, codec = _probe_video(
             source, command_runner
         )
-        if (width, height) != (declared_width, declared_height):
+        if declared_width is not None and width != declared_width:
             raise DatasetPreparationError(
-                f"Vision Lab dimensions {(declared_width, declared_height)!r} do not "
-                f"match ffprobe dimensions {(width, height)!r}"
+                f"Vision Lab dimensions width {declared_width} does not match ffprobe width {width}"
             )
-        if abs(actual_rate - declared_rate) > max(1.0, declared_rate * 0.05):
+        if declared_height is not None and height != declared_height:
+            raise DatasetPreparationError(
+                f"Vision Lab dimensions height {declared_height} does not match ffprobe height {height}"
+            )
+        if declared_rate is not None and abs(actual_rate - declared_rate) > max(
+            1.0, declared_rate * 0.05
+        ):
             raise DatasetPreparationError(
                 "Vision Lab frame rate does not match ffprobe frame rate"
             )
@@ -680,6 +722,7 @@ def prepare_dataset(
                 "width": width,
                 "height": height,
                 "timestamps": timestamps,
+                "companion": companion,
             }
         )
 
@@ -687,6 +730,8 @@ def prepare_dataset(
         tempfile.mkdtemp(prefix=f".{destination.name}.", dir=destination.parent)
     )
     try:
+        session_map_copy = staging / "provenance" / "session-map.json"
+        write_canonical_json(session_map_copy, session_map)
         manifest_sessions: list[dict[str, Any]] = []
         split_groups: dict[str, set[str]] = {split: set() for split in SPLITS}
         for session in sorted(
@@ -697,6 +742,10 @@ def prepare_dataset(
             source_destination = staging / "videos" / f"{session_id}.webm"
             source_destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(session["source"], source_destination)
+            companion_destination = (
+                staging / "provenance" / "companions" / f"{session_id}.json"
+            )
+            write_canonical_json(companion_destination, session["companion"])
             if sha256_file(session["source"]) != session["sourceSha256"]:
                 raise DatasetPreparationError(
                     "raw WebM changed during frame extraction"
@@ -769,17 +818,28 @@ def prepare_dataset(
                         "mimeType": "video/webm",
                     },
                     "annotation": session["annotation"],
+                    "producer": {
+                        "visionLabSessionId": session["visionSessionId"],
+                        "captureType": session["companion"]["captureType"],
+                        "observedVideoSha256": session["sourceSha256"],
+                        "companionManifest": _asset(companion_destination, staging),
+                    },
                     "frames": frames,
                 }
             )
 
         manifest = {
-            "schemaVersion": "commandcanvas.hand-dataset/v1",
+            "schemaVersion": "commandcanvas.hand-dataset/v2",
             "datasetId": dataset_id,
             "createdAt": session_map["createdAt"],
             "consent": {"approved": True, "version": DATASET_CONSENT_VERSION},
             "keypointOrder": "mediapipe-hand-21",
             "classNames": ["hand"],
+            "producerChain": {
+                "consentVersion": VISION_CONSENT_VERSION,
+                "protocol": VISION_PROTOCOL,
+                "sessionMap": _asset(session_map_copy, staging),
+            },
             "splits": {
                 split: sorted(split_groups[split]) for split in sorted(split_groups)
             },

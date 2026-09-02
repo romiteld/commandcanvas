@@ -119,11 +119,21 @@ PYTHONPATH=scripts/hand-finetune/v1 python3 -m commandcanvas_hand_finetune \
   --output-dir /private/dataset-v1
 ```
 
-`prepare-dataset` verifies each raw WebM digest, Vision Lab consent and protocol,
-the ffprobe dimensions/duration, capture-group split isolation, and the exact
-corrected-label set before publishing a canonical Task 2 manifest and receipt.
+`prepare-dataset` derives each raw WebM digest locally, verifies any digest or
+camera metadata supplied by Vision Lab, verifies Vision Lab consent and
+protocol, and treats ffprobe dimensions/duration as media authority. Task 1's
+optional digest, width, height, frame-rate, and facing-mode fields may remain
+absent. Capture-group split isolation and the exact corrected-label set are
+verified before publishing a canonical Task 2 manifest and receipt.
 Frame extraction writes PNGs at the map's explicit cadence; the raw WebM is
 copied byte-for-byte and is never replaced or transcoded.
+
+The emitted `commandcanvas.hand-dataset/v2` manifest preserves the canonical
+session map at `provenance/session-map.json` and each canonical Vision Lab
+companion at `provenance/companions/<datasetSessionId>.json`. Their byte sizes
+and SHA-256 digests are part of the manifest, and every session binds those
+records to the copied WebM, Vision Lab session, consent, protocol, capture type,
+capture group, split, categories, annotation record, and actor.
 
 Create a portable, deterministic archive only after that dataset revalidates:
 

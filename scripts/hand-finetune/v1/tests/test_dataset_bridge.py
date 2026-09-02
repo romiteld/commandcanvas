@@ -270,6 +270,92 @@ class DatasetPreparationTests(unittest.TestCase):
             )
         )
 
+    def test_accepts_task1_optional_metadata_absence_and_uses_probe_authority(
+        self,
+    ) -> None:
+        for mapped in self.session_map["sessions"]:
+            companion_path = self.captures / mapped["manifestPath"]
+            companion = json.loads(companion_path.read_text())
+            companion.pop("videoSha256")
+            for optional in ("width", "height", "frameRate", "facingMode"):
+                companion["media"].pop(optional)
+            write_json(companion_path, companion)
+
+        output = self.root / "optional-metadata"
+        receipt = prepare_dataset(
+            capture_root=self.captures,
+            session_map_path=self.session_map_path,
+            labels_root=self.labels,
+            output_dir=output,
+            command_runner=FakeMediaRunner(),
+        )
+
+        manifest = json.loads((output / "dataset-manifest.json").read_text())
+        self.assertEqual(manifest["schemaVersion"], "commandcanvas.hand-dataset/v2")
+        self.assertTrue(
+            all(session["source"]["width"] == 1280 for session in manifest["sessions"])
+        )
+        self.assertEqual(len(receipt["sourceVideoDigests"]), 4)
+
+    def test_preserves_and_binds_canonical_vision_lab_producer_chain(self) -> None:
+        output = self.root / "provenance"
+        prepare_dataset(
+            capture_root=self.captures,
+            session_map_path=self.session_map_path,
+            labels_root=self.labels,
+            output_dir=output,
+            command_runner=FakeMediaRunner(),
+        )
+
+        manifest_path = output / "dataset-manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        session_map_asset = manifest["producerChain"]["sessionMap"]
+        self.assertEqual(
+            session_map_asset["sha256"], sha256(output / session_map_asset["path"])
+        )
+        first = manifest["sessions"][0]
+        producer = first["producer"]
+        companion_path = output / producer["companionManifest"]["path"]
+        self.assertEqual(producer["visionLabSessionId"], VISION_SESSION_IDS[0])
+        self.assertEqual(producer["captureType"], "drawing")
+        self.assertEqual(producer["observedVideoSha256"], first["source"]["sha256"])
+        self.assertEqual(
+            producer["companionManifest"]["sha256"], sha256(companion_path)
+        )
+        self.assertEqual(
+            companion_path.read_bytes(),
+            (
+                json.dumps(
+                    json.loads(companion_path.read_text()),
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                + "\n"
+            ).encode(),
+        )
+
+        companion = json.loads(companion_path.read_text())
+        companion["captureType"] = "pinch"
+        write_json(companion_path, companion)
+        producer["companionManifest"]["byteSize"] = companion_path.stat().st_size
+        producer["companionManifest"]["sha256"] = sha256(companion_path)
+        write_json(manifest_path, manifest)
+        with self.assertRaisesRegex(Exception, "producer|captureType|companion"):
+            validate_dataset(output, manifest_path)
+
+    def test_refuses_control_characters_in_declared_paths(self) -> None:
+        value = json.loads(self.session_map_path.read_text())
+        value["sessions"][0]["videoPath"] = "session-1\u007f.webm"
+        write_json(self.session_map_path, value)
+        with self.assertRaisesRegex(DatasetPreparationError, "control"):
+            prepare_dataset(
+                capture_root=self.captures,
+                session_map_path=self.session_map_path,
+                labels_root=self.labels,
+                output_dir=self.root / "control-path",
+                command_runner=FakeMediaRunner(),
+            )
+
     def test_refuses_duplicate_companion_keys_hash_and_probe_mismatch_without_output(
         self,
     ) -> None:
@@ -494,6 +580,13 @@ class DatasetArchiveTests(unittest.TestCase):
         )
         self.assertIn("dataset-manifest.json", receipt_one["members"])
         self.assertIn("dataset-receipt.json", receipt_one["members"])
+        self.assertIn("provenance/session-map.json", receipt_one["members"])
+        self.assertTrue(
+            any(
+                name.startswith("provenance/companions/")
+                for name in receipt_one["members"]
+            )
+        )
 
     def test_archive_refuses_unvalidated_extra_symlink_or_tampered_receipt(
         self,

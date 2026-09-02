@@ -12,15 +12,26 @@ from uuid import UUID
 
 from PIL import Image, UnidentifiedImageError
 
-from .canonical import attach_digest, sha256_file
+from .canonical import attach_digest, canonical_json_bytes, sha256_file
 
 
 SCHEMA_VERSION = "commandcanvas.hand-dataset/v1"
+PROVENANCE_SCHEMA_VERSION = "commandcanvas.hand-dataset/v2"
 HARD_SUBSETS = ("drawing", "edge", "negative", "pinch", "two_hand")
 SPLITS = ("train", "validation", "holdout")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MIN_SOURCE_DIMENSION = 64
 MAX_SOURCE_DIMENSION = 8192
+VISION_CAPTURE_TYPES = {
+    "acquisition",
+    "drawing",
+    "pinch",
+    "edges-corners",
+    "two-hand-transforms",
+    "throws",
+    "difficult-conditions",
+    "negative-no-hand",
+}
 
 
 class DatasetValidationError(ValueError):
@@ -71,6 +82,27 @@ def _exact_keys(
     return not missing and not unknown
 
 
+def _allowed_keys(
+    value: Any,
+    required: set[str],
+    optional: set[str],
+    location: str,
+    errors: list[str],
+) -> bool:
+    if not isinstance(value, dict):
+        errors.append(f"{location} must be an object")
+        return False
+    missing = required - value.keys()
+    unknown = value.keys() - required - optional
+    if missing:
+        errors.append(f"{location} missing fields: {', '.join(sorted(missing))}")
+    if unknown:
+        errors.append(
+            f"{location} has unsupported fields: {', '.join(sorted(unknown))}"
+        )
+    return not missing and not unknown
+
+
 def _canonical_uuid(value: Any, location: str, errors: list[str]) -> str | None:
     if not isinstance(value, str):
         errors.append(f"{location} must be a canonical UUID")
@@ -96,6 +128,7 @@ def _safe_file(
     if (
         not relative
         or "\\" in relative
+        or any(ord(character) < 32 or ord(character) == 127 for character in relative)
         or pure.is_absolute()
         or any(part in {"", ".", ".."} for part in pure.parts)
     ):
@@ -164,6 +197,25 @@ def _validate_asset(
                     f"{location} dimensions {declared_dimensions!r} do not match {actual_dimensions!r}"
                 )
     return path, actual_sha
+
+
+def _canonical_json_asset(
+    root: Path,
+    value: Any,
+    location: str,
+    errors: list[str],
+) -> tuple[dict[str, Any] | None, Path | None]:
+    path, _digest = _validate_asset(root, value, location, errors, image=False)
+    if path is None:
+        return None, None
+    try:
+        parsed = _load_manifest(path)
+    except DatasetValidationError as error:
+        errors.append(f"{location} is not strict JSON: {error}")
+        return None, path
+    if path.read_bytes() != canonical_json_bytes(parsed):
+        errors.append(f"{location} bytes must use canonical JSON")
+    return parsed, path
 
 
 def _validate_label_rows(
@@ -257,23 +309,30 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
             "manifest must be a regular file inside the dataset root"
         )
     manifest = _load_manifest(resolved_manifest)
+    schema_version = manifest.get("schemaVersion")
+    provenance_enabled = schema_version == PROVENANCE_SCHEMA_VERSION
+    manifest_keys = {
+        "schemaVersion",
+        "datasetId",
+        "createdAt",
+        "consent",
+        "keypointOrder",
+        "classNames",
+        "splits",
+        "sessions",
+    }
+    if provenance_enabled:
+        manifest_keys.add("producerChain")
     _exact_keys(
         manifest,
-        {
-            "schemaVersion",
-            "datasetId",
-            "createdAt",
-            "consent",
-            "keypointOrder",
-            "classNames",
-            "splits",
-            "sessions",
-        },
+        manifest_keys,
         "manifest",
         errors,
     )
-    if manifest.get("schemaVersion") != SCHEMA_VERSION:
-        errors.append(f"schemaVersion must be {SCHEMA_VERSION}")
+    if schema_version not in {SCHEMA_VERSION, PROVENANCE_SCHEMA_VERSION}:
+        errors.append(
+            f"schemaVersion must be {SCHEMA_VERSION} or {PROVENANCE_SCHEMA_VERSION}"
+        )
     dataset_id = _canonical_uuid(manifest.get("datasetId"), "datasetId", errors)
     if manifest.get("keypointOrder") != "mediapipe-hand-21":
         errors.append("keypointOrder must be mediapipe-hand-21")
@@ -286,6 +345,122 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
             errors.append("consent.approved must be true")
         if consent.get("version") != "commandcanvas-owner-training/v1":
             errors.append("consent.version must be commandcanvas-owner-training/v1")
+
+    producer_mappings: dict[str, dict[str, Any]] = {}
+    producer_session_map: dict[str, Any] | None = None
+    if provenance_enabled:
+        producer_chain = manifest.get("producerChain")
+        if _exact_keys(
+            producer_chain,
+            {"consentVersion", "protocol", "sessionMap"},
+            "producerChain",
+            errors,
+        ):
+            assert isinstance(producer_chain, dict)
+            if producer_chain.get("consentVersion") != "vision-lab-consent-v1":
+                errors.append(
+                    "producerChain.consentVersion must be vision-lab-consent-v1"
+                )
+            protocol = producer_chain.get("protocol")
+            if _exact_keys(
+                protocol, {"id", "version"}, "producerChain.protocol", errors
+            ):
+                assert isinstance(protocol, dict)
+                if protocol.get("id") != "commandcanvas-hand-finetune" or (
+                    isinstance(protocol.get("version"), bool)
+                    or protocol.get("version") != 1
+                ):
+                    errors.append("producerChain.protocol does not match Vision Lab")
+            producer_session_map, _ = _canonical_json_asset(
+                resolved_root,
+                producer_chain.get("sessionMap"),
+                "producerChain.sessionMap",
+                errors,
+            )
+        if producer_session_map is not None:
+            if _exact_keys(
+                producer_session_map,
+                {
+                    "schemaVersion",
+                    "datasetId",
+                    "createdAt",
+                    "actorId",
+                    "cadenceMs",
+                    "sessions",
+                },
+                "producer session map",
+                errors,
+            ):
+                if (
+                    producer_session_map.get("schemaVersion")
+                    != "commandcanvas.hand-session-map/v1"
+                ):
+                    errors.append("producer session map schemaVersion is invalid")
+                if producer_session_map.get("datasetId") != dataset_id:
+                    errors.append(
+                        "producer session map datasetId does not match manifest"
+                    )
+                if producer_session_map.get("createdAt") != manifest.get("createdAt"):
+                    errors.append(
+                        "producer session map createdAt does not match manifest"
+                    )
+                mapped_sessions = producer_session_map.get("sessions")
+                if not isinstance(mapped_sessions, list):
+                    errors.append("producer session map sessions must be an array")
+                else:
+                    for index, mapped in enumerate(mapped_sessions):
+                        location = f"producer session map sessions[{index}]"
+                        if not _exact_keys(
+                            mapped,
+                            {
+                                "visionSessionId",
+                                "datasetSessionId",
+                                "captureGroupId",
+                                "split",
+                                "categories",
+                                "videoPath",
+                                "manifestPath",
+                                "labelDir",
+                                "annotation",
+                            },
+                            location,
+                            errors,
+                        ):
+                            continue
+                        assert isinstance(mapped, dict)
+                        for path_field in ("videoPath", "manifestPath", "labelDir"):
+                            declared_path = mapped.get(path_field)
+                            pure = (
+                                PurePosixPath(declared_path)
+                                if isinstance(declared_path, str)
+                                else None
+                            )
+                            if (
+                                not isinstance(declared_path, str)
+                                or not declared_path
+                                or "\\" in declared_path
+                                or any(
+                                    ord(character) < 32 or ord(character) == 127
+                                    for character in declared_path
+                                )
+                                or pure is None
+                                or pure.is_absolute()
+                                or any(part in {"", ".", ".."} for part in pure.parts)
+                            ):
+                                errors.append(
+                                    f"{location}.{path_field} must be a safe relative path"
+                                )
+                        mapped_id = mapped.get("datasetSessionId")
+                        if not isinstance(mapped_id, str):
+                            errors.append(
+                                f"{location}.datasetSessionId must be a string"
+                            )
+                        elif mapped_id in producer_mappings:
+                            errors.append(
+                                f"duplicate producer datasetSessionId: {mapped_id}"
+                            )
+                        else:
+                            producer_mappings[mapped_id] = mapped
 
     splits = manifest.get("splits")
     if not _exact_keys(splits, set(SPLITS), "splits", errors):
@@ -328,17 +503,20 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
     total_frames = 0
     for session_index, session in enumerate(sessions):
         location = f"sessions[{session_index}]"
+        session_keys = {
+            "sessionId",
+            "captureGroupId",
+            "actorId",
+            "captureCategories",
+            "source",
+            "annotation",
+            "frames",
+        }
+        if provenance_enabled:
+            session_keys.add("producer")
         if not _exact_keys(
             session,
-            {
-                "sessionId",
-                "captureGroupId",
-                "actorId",
-                "captureCategories",
-                "source",
-                "annotation",
-                "frames",
-            },
+            session_keys,
             location,
             errors,
         ):
@@ -363,6 +541,7 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
             )
 
         source = session.get("source")
+        actual_source_sha: str | None = None
         if _exact_keys(
             source,
             {
@@ -554,6 +733,154 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
             errors.append(
                 f"{location}.captureCategories must equal the sorted frame category union"
             )
+        if provenance_enabled:
+            producer = session.get("producer")
+            if _exact_keys(
+                producer,
+                {
+                    "visionLabSessionId",
+                    "captureType",
+                    "observedVideoSha256",
+                    "companionManifest",
+                },
+                f"{location}.producer",
+                errors,
+            ):
+                assert isinstance(producer, dict)
+                vision_session_id = producer.get("visionLabSessionId")
+                capture_type = producer.get("captureType")
+                observed_sha = producer.get("observedVideoSha256")
+                if not isinstance(vision_session_id, str) or not vision_session_id:
+                    errors.append(
+                        f"{location}.producer.visionLabSessionId must be nonempty"
+                    )
+                if (
+                    not isinstance(capture_type, str)
+                    or capture_type not in VISION_CAPTURE_TYPES
+                ):
+                    errors.append(f"{location}.producer.captureType is unsupported")
+                if observed_sha != actual_source_sha:
+                    errors.append(
+                        f"{location}.producer observed video SHA-256 does not match source"
+                    )
+                companion, _ = _canonical_json_asset(
+                    resolved_root,
+                    producer.get("companionManifest"),
+                    f"{location}.producer.companionManifest",
+                    errors,
+                )
+                if companion is not None:
+                    required_companion = {
+                        "schemaVersion",
+                        "sessionId",
+                        "captureType",
+                        "startedAt",
+                        "stoppedAt",
+                        "media",
+                        "mirrorDisplay",
+                        "consentVersion",
+                        "protocol",
+                    }
+                    if _allowed_keys(
+                        companion,
+                        required_companion,
+                        {"videoSha256"},
+                        f"{location}.producer companion",
+                        errors,
+                    ):
+                        if (
+                            isinstance(companion.get("schemaVersion"), bool)
+                            or companion.get("schemaVersion") != 1
+                        ):
+                            errors.append(
+                                f"{location}.producer companion schemaVersion is invalid"
+                            )
+                        if companion.get("sessionId") != vision_session_id:
+                            errors.append(
+                                f"{location}.producer companion sessionId does not match"
+                            )
+                        if companion.get("captureType") != capture_type:
+                            errors.append(
+                                f"{location}.producer companion captureType does not match"
+                            )
+                        if companion.get("consentVersion") != "vision-lab-consent-v1":
+                            errors.append(
+                                f"{location}.producer companion consent does not match"
+                            )
+                        companion_protocol = companion.get("protocol")
+                        protocol_valid = _exact_keys(
+                            companion_protocol,
+                            {"id", "version"},
+                            f"{location}.producer companion protocol",
+                            errors,
+                        )
+                        if (
+                            not protocol_valid
+                            or not isinstance(companion_protocol, dict)
+                            or (
+                                companion_protocol.get("id")
+                                != "commandcanvas-hand-finetune"
+                                or isinstance(companion_protocol.get("version"), bool)
+                                or companion_protocol.get("version") != 1
+                            )
+                        ):
+                            errors.append(
+                                f"{location}.producer companion protocol does not match"
+                            )
+                        if companion.get("videoSha256", observed_sha) != observed_sha:
+                            errors.append(
+                                f"{location}.producer companion video SHA-256 does not match"
+                            )
+                        media = companion.get("media")
+                        if _allowed_keys(
+                            media,
+                            {"mimeType"},
+                            {"width", "height", "frameRate", "facingMode"},
+                            f"{location}.producer companion media",
+                            errors,
+                        ):
+                            assert isinstance(media, dict)
+                            if not str(media.get("mimeType", "")).startswith(
+                                "video/webm"
+                            ):
+                                errors.append(
+                                    f"{location}.producer companion media must be WebM"
+                                )
+                            if isinstance(source, dict):
+                                if "width" in media and media.get(
+                                    "width"
+                                ) != source.get("width"):
+                                    errors.append(
+                                        f"{location}.producer companion width does not match source"
+                                    )
+                                if "height" in media and media.get(
+                                    "height"
+                                ) != source.get("height"):
+                                    errors.append(
+                                        f"{location}.producer companion height does not match source"
+                                    )
+                mapping = producer_mappings.get(session_id or "")
+                if mapping is None:
+                    errors.append(f"{location}.producer has no session-map binding")
+                else:
+                    expected_binding = {
+                        "visionSessionId": vision_session_id,
+                        "captureGroupId": capture_group,
+                        "split": session_split,
+                        "categories": declared_capture_categories,
+                        "annotation": session.get("annotation"),
+                    }
+                    for key, expected_value in expected_binding.items():
+                        if mapping.get(key) != expected_value:
+                            errors.append(
+                                f"{location}.producer session-map {key} does not match"
+                            )
+                    if producer_session_map is not None and session.get(
+                        "actorId"
+                    ) != producer_session_map.get("actorId"):
+                        errors.append(
+                            f"{location}.producer session-map actorId does not match"
+                        )
         if session_split and capture_group:
             capture_group_counts[session_split] += 1
 
@@ -573,6 +900,10 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
     for subset in HARD_SUBSETS:
         if hard_subset_counts[subset] == 0:
             errors.append(f"hard subset {subset} must contain at least one frame")
+    if provenance_enabled and set(producer_mappings) != session_ids:
+        errors.append(
+            "producer session-map sessions do not exactly match dataset sessions"
+        )
 
     if errors:
         raise DatasetValidationError(
