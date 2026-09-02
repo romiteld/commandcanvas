@@ -1111,7 +1111,7 @@ export function CommandCanvasRoom({
       case "create_schedule":
         return submitVoiceObjectCreate(buildScheduleObject(), "Schedule");
       case "start_thought":
-        return startVoiceThoughtCapture();
+        return startVoiceThoughtCapture(intent.objectId);
       case "append_thought":
         return appendVoiceThoughtTranscript(intent.text);
       case "append_selected_note":
@@ -1205,7 +1205,22 @@ export function CommandCanvasRoom({
     return { ok: true, message: "Selected note updated." };
   }
 
-  async function startVoiceThoughtCapture(): Promise<HumanCommandResult> {
+  async function startVoiceThoughtCapture(
+    existingObjectId?: string,
+  ): Promise<HumanCommandResult> {
+    if (existingObjectId) {
+      const existing = store.getState().canvas.objects[existingObjectId];
+      if (!existing || existing.deletedAt || existing.type !== "note")
+        return realtimeConfirmationFailure(
+          "The shared canvas did not confirm the new thought card.",
+        );
+      activeVoiceThoughtIdRef.current = existingObjectId;
+      setVoiceThoughtDraft(null);
+      selectObject(existingObjectId);
+      revealObjectOnCompactCanvas(existingObjectId);
+      return { ok: true, message: "Thought capture started." };
+    }
+
     const objectId = createClientId("note");
     const anchor = creationAnchor(160, 130);
     activeVoiceThoughtIdRef.current = null;

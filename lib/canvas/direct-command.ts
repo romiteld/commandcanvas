@@ -9,7 +9,7 @@ export type DirectCanvasIntent =
       object: NewCanvasObject;
       placement?: "current_viewport";
     }
-  | { type: "start_thought" }
+  | { type: "start_thought"; objectId?: string }
   | { type: "append_thought"; text: string }
   | { type: "append_selected_note"; text: string }
   | { type: "finish_thought" }

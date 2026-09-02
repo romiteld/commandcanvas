@@ -15,6 +15,7 @@ import {
   webMcpPacketFailure,
 } from "@/components/command-canvas/meeting-packet-workflow";
 import { createCanvasStore, type CanvasStoreState } from "@/lib/canvas/canvas-store";
+import type { CanvasCapabilityRuntime } from "@/lib/canvas/capability-runtime";
 import type { CanvasPoint } from "@/lib/canvas/coordinates";
 import {
   createCanvasWorkspaceController,
@@ -52,6 +53,7 @@ import { createCanvasSketchTransformer } from "@/lib/vision/canvas-transform";
 import { createCanvasWebMcpAdapters } from "@/lib/webmcp/canvas-adapters";
 import type { WebMcpExecutionContext } from "@/lib/webmcp/phase-guards";
 import {
+  createWebMcpCapabilityRuntime,
   WebMcpRegistry,
   type WebMcpExecutionEvent,
   type WebMcpRegistrationTarget,
@@ -169,6 +171,7 @@ export function MeetingCommandCanvas({
   const authenticatedActorIdRef = useRef<string | null>(null);
   const disposedRuntimeSessionsRef = useRef(new WeakSet<DemoRoomSession>());
   const webMcpRegistryRef = useRef<WebMcpRegistry | null>(null);
+  const capabilityRuntimeRef = useRef<CanvasCapabilityRuntime | null>(null);
   const [workspaceController] = useState(createCanvasWorkspaceController);
   const webMcpTarget = useDocumentWebMcpTarget();
   const [webMcpStatus, setWebMcpStatus] = useState({
@@ -876,6 +879,20 @@ export function MeetingCommandCanvas({
 
   useEffect(() => {
     if (!runtimeStore || !runtimeSession || !sketchTransformer) return;
+    let active = true;
+    const capabilityRuntime = createStandardMeetingCapabilityRuntime({
+      store: runtimeStore,
+      session: runtimeSession,
+      getSnapshot: runtimeSession.getSnapshot,
+      transformSketch: sketchTransformer.transform,
+      packetWorkflow: {
+        getStatus: packetGetStatus,
+        preparePacket: prepareMeetingPacket,
+        stagePacketSend: stageMeetingPacketSend,
+      },
+      workspaceController,
+    });
+    capabilityRuntimeRef.current = capabilityRuntime;
     if (!webMcpTarget) {
       void Promise.resolve().then(() =>
         setWebMcpStatus({ value: "Site Tools unavailable", tone: "idle" }),
@@ -883,7 +900,11 @@ export function MeetingCommandCanvas({
       void Promise.resolve().then(() =>
         setWebMcpSurfaceState({ status: "unavailable" }),
       );
-      return;
+      return () => {
+        active = false;
+        if (capabilityRuntimeRef.current === capabilityRuntime)
+          capabilityRuntimeRef.current = null;
+      };
     }
     const registry = createStandardMeetingWebMcpRegistry({
       mode:
@@ -901,6 +922,7 @@ export function MeetingCommandCanvas({
         stagePacketSend: stageMeetingPacketSend,
       },
       workspaceController,
+      runtime: capabilityRuntime,
       onExecutionEvent(event) {
         if (!active) return;
         setWebMcpExecutionActivity((current) =>
@@ -914,7 +936,6 @@ export function MeetingCommandCanvas({
       },
     });
     webMcpRegistryRef.current = registry;
-    let active = true;
     const sync = async () => {
       try {
         await registry.sync();
@@ -950,6 +971,8 @@ export function MeetingCommandCanvas({
       registry.dispose();
       if (webMcpRegistryRef.current === registry)
         webMcpRegistryRef.current = null;
+      if (capabilityRuntimeRef.current === capabilityRuntime)
+        capabilityRuntimeRef.current = null;
     };
   }, [
     packetGetStatus,
@@ -1118,9 +1141,14 @@ export function MeetingCommandCanvas({
           roomId: snapshot.roomId!,
           getAccessToken: runtime.session.getAccessToken,
           invokeCapability: (capability, input, signal) => {
-            const registry = webMcpRegistryRef.current;
-            return registry
-              ? registry.invokeCapability(capability, input, signal, "voice")
+            const capabilityRuntime = capabilityRuntimeRef.current;
+            return capabilityRuntime
+              ? capabilityRuntime.invokeCapability(
+                  capability,
+                  input,
+                  signal,
+                  "voice",
+                )
               : Promise.resolve({
                   ok: false as const,
                   code: "not_available" as const,
@@ -1262,9 +1290,7 @@ export function createMeetingSessionCleanup(
   };
 }
 
-export function createStandardMeetingWebMcpRegistry(options: {
-  mode: "static" | "dynamic";
-  target: WebMcpRegistrationTarget;
+interface StandardMeetingCapabilityOptions {
   store: StoreApi<CanvasStoreState>;
   session: Pick<DemoRoomSession, "submitCommand">;
   getSnapshot: () => DemoRoomSnapshot;
@@ -1274,11 +1300,37 @@ export function createStandardMeetingWebMcpRegistry(options: {
     "getStatus" | "preparePacket" | "stagePacketSend"
   >;
   workspaceController?: CanvasWorkspaceController;
+}
+
+export function createStandardMeetingCapabilityRuntime(
+  options: StandardMeetingCapabilityOptions,
+): CanvasCapabilityRuntime {
+  return createWebMcpCapabilityRuntime(
+    standardMeetingCapabilityOptions(options),
+  );
+}
+
+export function createStandardMeetingWebMcpRegistry(options: StandardMeetingCapabilityOptions & {
+  mode: "static" | "dynamic";
+  target: WebMcpRegistrationTarget;
+  runtime?: CanvasCapabilityRuntime;
   onExecutionEvent?: (event: WebMcpExecutionEvent) => void;
 }) {
+  const capabilityOptions = standardMeetingCapabilityOptions(options);
   return new WebMcpRegistry({
     mode: options.mode,
     target: options.target,
+    getContext: capabilityOptions.getContext,
+    adapters: capabilityOptions.adapters,
+    runtime: options.runtime,
+    onExecutionEvent: options.onExecutionEvent,
+  });
+}
+
+function standardMeetingCapabilityOptions(
+  options: StandardMeetingCapabilityOptions,
+) {
+  return {
     getContext: () =>
       standardMeetingWebMcpContext(
         options.store,
@@ -1368,8 +1420,7 @@ export function createStandardMeetingWebMcpRegistry(options: {
         };
       },
     }),
-    onExecutionEvent: options.onExecutionEvent,
-  });
+  };
 }
 
 function standardMeetingWebMcpContext(

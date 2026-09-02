@@ -121,6 +121,110 @@ describe("Realtime voice tools", () => {
     );
   });
 
+  it("runs thought session boundaries through the canonical capability invoker before local capture", async () => {
+    const invokeCapability = vi.fn(async (capability: string) => {
+      if (capability === "create_object")
+        return {
+          ok: true as const,
+          status: "completed" as const,
+          message: "Thought card created.",
+          data: { affectedObjectIds: ["note-thought-1"] },
+        };
+      return {
+        ok: true as const,
+        status: "completed" as const,
+        message: "Thought capture may stop.",
+      };
+    });
+    const onIntent = vi.fn(async () => ({
+      ok: true as const,
+      message: "Local thought session updated.",
+    }));
+
+    await executeRealtimeVoiceTool(
+      { name: "start_thought", arguments: "{}" },
+      onIntent,
+      { invokeCapability },
+    );
+    await executeRealtimeVoiceTool(
+      { name: "finish_thought", arguments: "{}" },
+      onIntent,
+      { invokeCapability },
+    );
+
+    expect(invokeCapability).toHaveBeenNthCalledWith(
+      1,
+      "create_object",
+      { type: "note", title: "New thought", tone: "coral" },
+      expect.any(AbortSignal),
+    );
+    expect(invokeCapability).toHaveBeenNthCalledWith(
+      2,
+      "get_canvas_state",
+      { scope: "selected" },
+      expect.any(AbortSignal),
+    );
+    expect(onIntent).toHaveBeenNthCalledWith(
+      1,
+      { type: "start_thought", objectId: "note-thought-1" },
+      "voice",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(onIntent).toHaveBeenNthCalledWith(
+      2,
+      { type: "finish_thought" },
+      "voice",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it.each([
+    ["open_sketch", "control_workspace", { action: "start_drawing" }],
+    ["finish_sketch", "control_workspace", { action: "finish_drawing" }],
+    ["cancel_sketch", "control_workspace", { action: "cancel_drawing" }],
+  ] as const)(
+    "routes %s through its canonical workspace capability without direct intent fallback",
+    async (name, capability, input) => {
+      const invokeCapability = vi.fn(async () => ({
+        ok: true as const,
+        status: "completed" as const,
+        message: "Workspace updated.",
+      }));
+      const onIntent = vi.fn();
+
+      await executeRealtimeVoiceTool(
+        { name, arguments: "{}" },
+        onIntent,
+        { invokeCapability },
+      );
+
+      expect(invokeCapability).toHaveBeenCalledWith(
+        capability,
+        input,
+        expect.any(AbortSignal),
+      );
+      expect(onIntent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not start local thought capture when the shared capability guard refuses it", async () => {
+    const onIntent = vi.fn();
+    const result = await executeRealtimeVoiceTool(
+      { name: "start_thought", arguments: "{}" },
+      onIntent,
+      {
+        invokeCapability: async () => ({
+          ok: false as const,
+          code: "forbidden" as const,
+          message: "mutation not authorized: this participant can only view the room",
+        }),
+      },
+    );
+
+    expect(result).toMatchObject({ ok: false, outcome: "refused" });
+    expect(onIntent).not.toHaveBeenCalled();
+  });
+
   it("routes selected sketch transformation through the canonical capability invoker", async () => {
     const invokeCapability = vi.fn(async () => ({
       ok: true as const,

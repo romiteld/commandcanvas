@@ -19,6 +19,7 @@ import {
   type DemoRoomBootstrapResult,
 } from "@/lib/demo/bootstrap";
 import { clearStoredDemoRoom } from "@/lib/demo/room-link";
+import type { CanvasCapabilityRuntime } from "@/lib/canvas/capability-runtime";
 import { createCanvasWorkspaceController } from "@/lib/canvas/workspace-controller";
 import {
   createDemoRoomSession,
@@ -40,6 +41,7 @@ import {
 import { createCanvasWebMcpAdapters } from "@/lib/webmcp/canvas-adapters";
 import type { WebMcpExecutionContext } from "@/lib/webmcp/phase-guards";
 import {
+  createWebMcpCapabilityRuntime,
   WebMcpRegistry,
   type WebMcpExecutionEvent,
 } from "@/lib/webmcp/registry";
@@ -146,6 +148,7 @@ export function DemoCommandCanvas({
   const openAiCredentialApiRef = useRef<BrowserOpenAiCredentialApi | null>(null);
   const openAiCredentialAbortRef = useRef<AbortController | null>(null);
   const webMcpRegistryRef = useRef<WebMcpRegistry | null>(null);
+  const capabilityRuntimeRef = useRef<CanvasCapabilityRuntime | null>(null);
   const [workspaceController] = useState(createCanvasWorkspaceController);
   const webMcpTarget = useDocumentWebMcpTarget();
   const meetingMediaStreamRef = useRef<MediaStream | null>(null);
@@ -448,6 +451,96 @@ export function DemoCommandCanvas({
   useEffect(() => {
     if (!readyRoom || !sketchTransformer) return;
     let active = true;
+    const room = readyRoom;
+    const getContext = () =>
+      demoWebMcpContext(room.session, room.store, packetWorkflow.getStatus());
+    const adapters = createCanvasWebMcpAdapters({
+      store: room.store,
+      transformSketch: sketchTransformer.transform,
+      prepareMeetingPacket: async (request) => {
+        const result = await packetWorkflow.preparePacket(
+          {
+            title: request.input.title,
+            objectIds: request.input.objectIds,
+            actorType: "agent",
+          },
+          request.signal,
+        );
+        if (!result.ok) return webMcpPacketFailure(result.error);
+        return {
+          ok: true,
+          status: "completed",
+          message: "Meeting packet draft prepared for host review.",
+          data: {
+            packetId: result.value.packetId,
+            packetVersion: result.value.packetVersion,
+            sourceRevision: result.value.sourceRevision,
+            objectCount: result.value.objectCount,
+          },
+        };
+      },
+      stagePacketSendRequest: async (request) => {
+        const result = await packetWorkflow.stagePacketSend(
+          request.input.packetId,
+          "agent",
+          request.signal,
+        );
+        if (!result.ok) return webMcpPacketFailure(result.error);
+        return {
+          ok: true,
+          status: "awaiting_human_approval",
+          message:
+            "Packet send staged. The host must review the exact recipients and press SEND.",
+          data: {
+            packetId: result.value.packetId,
+            sendRequestId: result.value.sendRequestId,
+            recipientCount: result.value.recipientCount,
+          },
+        };
+      },
+      controlWorkspace: (request) =>
+        workspaceController.execute(
+          request.input,
+          request.signal,
+          request.source ?? "webmcp",
+        ),
+      dispatchMutation: async (command, signal, source) => {
+        const result = await room.session.submitCommand(command, source, signal);
+        if (!result.ok)
+          return {
+            ok: false,
+            code:
+              result.code === "invalid_command"
+                ? "invalid_input"
+                : result.code === "host_required"
+                  ? "forbidden"
+                  : "execution_failed",
+            message: result.message,
+          };
+        const receipt = result.state.receipts.at(-1);
+        if (!receipt || receipt.source !== source)
+          return {
+            ok: false,
+            code: "execution_failed",
+            message: "The agent mutation receipt could not be verified.",
+          };
+        return {
+          ok: true,
+          status: "completed",
+          message: receipt.description,
+          receiptId: receipt.id,
+          data: {
+            revision: receipt.revision,
+            affectedObjectIds: receipt.affectedObjectIds,
+          },
+        };
+      },
+    });
+    const capabilityRuntime = createWebMcpCapabilityRuntime({
+      getContext,
+      adapters,
+    });
+    capabilityRuntimeRef.current = capabilityRuntime;
     if (!webMcpTarget) {
       queueMicrotask(() => {
         if (active)
@@ -456,10 +549,11 @@ export function DemoCommandCanvas({
       });
       return () => {
         active = false;
+        if (capabilityRuntimeRef.current === capabilityRuntime)
+          capabilityRuntimeRef.current = null;
       };
     }
 
-    const room = readyRoom;
     const mode =
       process.env.NEXT_PUBLIC_WEBMCP_DYNAMIC_REGISTRATION === "true"
         ? "dynamic"
@@ -467,98 +561,9 @@ export function DemoCommandCanvas({
     const registry = new WebMcpRegistry({
       mode,
       target: webMcpTarget,
-      getContext: () =>
-        demoWebMcpContext(
-          room.session,
-          room.store,
-          packetWorkflow.getStatus(),
-        ),
-      adapters: createCanvasWebMcpAdapters({
-        store: room.store,
-        transformSketch: sketchTransformer.transform,
-        prepareMeetingPacket: async (request) => {
-          const result = await packetWorkflow.preparePacket(
-            {
-              title: request.input.title,
-              objectIds: request.input.objectIds,
-              actorType: "agent",
-            },
-            request.signal,
-          );
-          if (!result.ok) return webMcpPacketFailure(result.error);
-          return {
-            ok: true,
-            status: "completed",
-            message: "Meeting packet draft prepared for host review.",
-            data: {
-              packetId: result.value.packetId,
-              packetVersion: result.value.packetVersion,
-              sourceRevision: result.value.sourceRevision,
-              objectCount: result.value.objectCount,
-            },
-          };
-        },
-        stagePacketSendRequest: async (request) => {
-          const result = await packetWorkflow.stagePacketSend(
-            request.input.packetId,
-            "agent",
-            request.signal,
-          );
-          if (!result.ok) return webMcpPacketFailure(result.error);
-          return {
-            ok: true,
-            status: "awaiting_human_approval",
-            message:
-              "Packet send staged. The host must review the exact recipients and press SEND.",
-            data: {
-              packetId: result.value.packetId,
-              sendRequestId: result.value.sendRequestId,
-              recipientCount: result.value.recipientCount,
-            },
-          };
-        },
-        controlWorkspace: (request) =>
-          workspaceController.execute(
-            request.input,
-            request.signal,
-            request.source ?? "webmcp",
-          ),
-        dispatchMutation: async (command, signal, source) => {
-          const result = await room.session.submitCommand(
-            command,
-            source,
-            signal,
-          );
-          if (!result.ok)
-            return {
-              ok: false,
-              code:
-                result.code === "invalid_command"
-                  ? "invalid_input"
-                  : result.code === "host_required"
-                    ? "forbidden"
-                    : "execution_failed",
-              message: result.message,
-            };
-          const receipt = result.state.receipts.at(-1);
-          if (!receipt || receipt.source !== source)
-            return {
-              ok: false,
-              code: "execution_failed",
-              message: "The agent mutation receipt could not be verified.",
-            };
-          return {
-            ok: true,
-            status: "completed",
-            message: receipt.description,
-            receiptId: receipt.id,
-            data: {
-              revision: receipt.revision,
-              affectedObjectIds: receipt.affectedObjectIds,
-            },
-          };
-        },
-      }),
+      getContext,
+      adapters,
+      runtime: capabilityRuntime,
       onExecutionEvent(event) {
         if (!active) return;
         setWebMcpExecutionActivity((current) =>
@@ -615,6 +620,8 @@ export function DemoCommandCanvas({
       registry.dispose();
       if (webMcpRegistryRef.current === registry)
         webMcpRegistryRef.current = null;
+      if (capabilityRuntimeRef.current === capabilityRuntime)
+        capabilityRuntimeRef.current = null;
     };
   }, [readyRoom, sketchTransformer, webMcpTarget, workspaceController]);
   /* eslint-enable react-hooks/exhaustive-deps */
@@ -841,9 +848,14 @@ export function DemoCommandCanvas({
           roomId: snapshot.roomId!,
           getAccessToken: room.session.getAccessToken,
           invokeCapability: (capability, input, signal) => {
-            const registry = webMcpRegistryRef.current;
-            return registry
-              ? registry.invokeCapability(capability, input, signal, "voice")
+            const capabilityRuntime = capabilityRuntimeRef.current;
+            return capabilityRuntime
+              ? capabilityRuntime.invokeCapability(
+                  capability,
+                  input,
+                  signal,
+                  "voice",
+                )
               : Promise.resolve({
                   ok: false as const,
                   code: "not_available" as const,

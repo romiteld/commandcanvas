@@ -1,9 +1,12 @@
 import { z } from "zod";
 
 import {
-  executeCanvasCapability,
   type CanvasCapabilitySource,
 } from "@/lib/canvas/capability-executor";
+import {
+  createCanvasCapabilityRuntime,
+  type CanvasCapabilityRuntime,
+} from "@/lib/canvas/capability-runtime";
 import {
   evaluateToolGuard,
   getPhaseAvailableToolNames,
@@ -71,6 +74,7 @@ export interface WebMcpRegistryOptions {
   target: WebMcpRegistrationTarget;
   getContext: () => WebMcpExecutionContext;
   adapters: WebMcpToolAdapters;
+  runtime?: CanvasCapabilityRuntime;
   onExecutionEvent?: (event: WebMcpExecutionEvent) => void;
 }
 
@@ -100,6 +104,7 @@ export class WebMcpRegistry {
   readonly #target: WebMcpRegistrationTarget;
   readonly #getContext: () => WebMcpExecutionContext;
   readonly #adapters: WebMcpToolAdapters;
+  readonly #runtime: CanvasCapabilityRuntime;
   readonly #onExecutionEvent?: (event: WebMcpExecutionEvent) => void;
   readonly #descriptors: Record<WebMcpToolName, RegisteredWebMcpTool>;
   readonly #registrations = new Map<WebMcpToolName, ActiveRegistration>();
@@ -112,6 +117,12 @@ export class WebMcpRegistry {
     this.#target = options.target;
     this.#getContext = options.getContext;
     this.#adapters = options.adapters;
+    this.#runtime =
+      options.runtime ??
+      createWebMcpCapabilityRuntime({
+        getContext: this.#getContext,
+        adapters: this.#adapters,
+      });
     this.#onExecutionEvent = options.onExecutionEvent;
     this.#descriptors = Object.fromEntries(
       WEBMCP_TOOL_NAMES.map((toolName) => [
@@ -177,29 +188,7 @@ export class WebMcpRegistry {
     signal: AbortSignal,
     source: CanvasCapabilitySource = "voice",
   ): Promise<WebMcpToolResult> {
-    return executeCanvasCapability({
-      capability: toolName,
-      input,
-      source,
-      signal,
-      getContext: this.#getContext,
-      adapter: async (request) => {
-        if (request.capability === "request_packet_send")
-          return this.#adapters.stagePacketSendRequest({
-            input: request.input,
-            source: request.source,
-            signal: request.signal,
-            context: request.context,
-          });
-        return this.#adapters.executeTool({
-          toolName: request.capability,
-          input: request.input,
-          source: request.source,
-          signal: request.signal,
-          context: request.context,
-        } as WebMcpAdapterRequest);
-      },
-    });
+    return this.#runtime.invokeCapability(toolName, input, signal, source);
   }
 
   #createDescriptor(toolName: WebMcpToolName): RegisteredWebMcpTool {
@@ -287,6 +276,31 @@ export class WebMcpRegistry {
       // The page observer is diagnostics only and cannot alter tool execution.
     }
   }
+}
+
+export function createWebMcpCapabilityRuntime(options: {
+  getContext: () => WebMcpExecutionContext;
+  adapters: WebMcpToolAdapters;
+}): CanvasCapabilityRuntime {
+  return createCanvasCapabilityRuntime({
+    getContext: options.getContext,
+    adapter: async (request) => {
+      if (request.capability === "request_packet_send")
+        return options.adapters.stagePacketSendRequest({
+          input: request.input,
+          source: request.source,
+          signal: request.signal,
+          context: request.context,
+        });
+      return options.adapters.executeTool({
+        toolName: request.capability,
+        input: request.input,
+        source: request.source,
+        signal: request.signal,
+        context: request.context,
+      } as WebMcpAdapterRequest);
+    },
+  });
 }
 
 function isAbortError(error: unknown): boolean {

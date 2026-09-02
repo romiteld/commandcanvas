@@ -648,7 +648,7 @@ export interface RealtimeCapabilityAlias {
   description: string;
   inputSchema: z.ZodType;
   normalize: (input: unknown) => unknown;
-  localIntent?: string;
+  localSession?: "start_thought" | "finish_thought";
 }
 
 function alias(
@@ -657,9 +657,16 @@ function alias(
   description: string,
   inputSchema: z.ZodType,
   normalize: (input: unknown) => unknown = (input) => input,
-  localIntent?: string,
+  localSession?: RealtimeCapabilityAlias["localSession"],
 ): RealtimeCapabilityAlias {
-  return { name, capability, description, inputSchema, normalize, ...(localIntent ? { localIntent } : {}) };
+  return {
+    name,
+    capability,
+    description,
+    inputSchema,
+    normalize,
+    ...(localSession ? { localSession } : {}),
+  };
 }
 
 export const REALTIME_CAPABILITY_ALIASES = [
@@ -699,8 +706,22 @@ export const REALTIME_CAPABILITY_ALIASES = [
   alias("create_reference_card", "create_object", "Create an article, document, image, or link reference card from information already present in the conversation. This tool does not browse or retrieve a URL.", compactReferenceSchema, (input) => ({ type: "reference_card", ...(input as object) })),
   alias("create_meeting_card", "create_object", "Create a decision, action item, summary, risk, or open-question card from the user's spoken content.", compactMeetingCardSchema, (input) => ({ type: "meeting_card", ...(input as object) })),
   alias("append_selected_note", "update_object_content", "Append the user's dictated text to the currently selected note or thought card. Inspect the selected object first when the user says this or that.", appendSelectedSchema),
-  alias("start_thought", "create_object", "Create and select one thought card, then start automatic speech-to-text capture inside that card.", emptySchema, (input) => input, "start_thought"),
-  alias("finish_thought", "update_object_content", "Stop automatic speech-to-text capture for the active thought card.", emptySchema, (input) => input, "finish_thought"),
+  alias(
+    "start_thought",
+    "create_object",
+    "Create and select one thought card, then start automatic speech-to-text capture inside that card.",
+    emptySchema,
+    () => ({ type: "note", title: "New thought", tone: "coral" }),
+    "start_thought",
+  ),
+  alias(
+    "finish_thought",
+    "get_canvas_state",
+    "Stop automatic speech-to-text capture for the active thought card.",
+    emptySchema,
+    () => ({ scope: "selected" }),
+    "finish_thought",
+  ),
   alias("open_sketch", "control_workspace", "Start a tracked-hand drawing when hand input is ready, otherwise open the pointer, touch, and stylus drawing surface.", emptySchema, () => ({ action: "start_drawing" })),
   alias("finish_sketch", "control_workspace", "Finish the current tracked-hand sketch and preserve it as one selectable canvas object.", emptySchema, () => ({ action: "finish_drawing" })),
   alias("cancel_sketch", "control_workspace", "Cancel the current unfinished drawing without creating a canvas object.", emptySchema, () => ({ action: "cancel_drawing" })),

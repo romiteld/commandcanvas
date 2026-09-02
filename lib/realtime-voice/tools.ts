@@ -602,10 +602,11 @@ export async function executeRealtimeVoiceTool(
   const capabilityAlias = REALTIME_CAPABILITY_ALIASES.find(
     (candidate) => candidate.name === call.name,
   );
-  if (capabilityAlias && !capabilityAlias.localIntent && options.invokeCapability)
+  if (capabilityAlias && options.invokeCapability)
     return executeCanonicalRealtimeCapability(
       capabilityAlias,
       call,
+      onIntent,
       options,
       action,
     );
@@ -712,6 +713,7 @@ export async function executeRealtimeVoiceTool(
 async function executeCanonicalRealtimeCapability(
   alias: (typeof REALTIME_CAPABILITY_ALIASES)[number],
   call: RealtimeVoiceToolCall,
+  onIntent: RealtimeVoiceIntentHandler,
   options: RealtimeVoiceToolExecutionOptions,
   action: string,
 ): Promise<RealtimeVoiceToolResult> {
@@ -749,19 +751,43 @@ async function executeCanonicalRealtimeCapability(
         action,
         message: result.message,
       };
+    let localSessionMessage: string | undefined;
+    if (alias.localSession) {
+      signal.throwIfAborted();
+      const localIntent = localSessionIntent(alias.localSession, result);
+      if (!localIntent)
+        return {
+          ok: false,
+          outcome: "refused",
+          action,
+          message: "The shared canvas did not identify the new thought card.",
+        };
+      const localResult = await onIntent(localIntent, "voice", { signal });
+      if (!localResult.ok)
+        return {
+          ok: false,
+          outcome: "refused",
+          action,
+          message: localResult.message,
+        };
+      localSessionMessage = localResult.message;
+    }
     return {
       ok: true,
       outcome:
-        alias.capability === "get_canvas_state" ? "observed" : "submitted",
+        alias.localSession || alias.capability !== "get_canvas_state"
+          ? "submitted"
+          : "observed",
       action,
       message:
-        result.status === "awaiting_human_approval"
+        localSessionMessage ??
+        (result.status === "awaiting_human_approval"
           ? "Packet send request staged for explicit host SEND confirmation."
           : alias.capability === "control_workspace"
             ? result.message
             : alias.capability === "get_canvas_state"
               ? "Current semantic canvas context observed."
-              : "Canvas action submitted; check the canvas receipt for the result.",
+              : "Canvas action submitted; check the canvas receipt for the result."),
       ...(result.data ? { data: result.data } : {}),
     };
   } catch (error) {
@@ -781,6 +807,23 @@ async function executeCanonicalRealtimeCapability(
           message: "The canvas action could not be submitted.",
         };
   }
+}
+
+function localSessionIntent(
+  session: "start_thought" | "finish_thought",
+  result: Extract<WebMcpToolResult, { ok: true }>,
+): DirectCanvasIntent | null {
+  if (session === "finish_thought") return { type: "finish_thought" };
+  const affectedObjectIds = result.data
+    && typeof result.data === "object"
+    && !Array.isArray(result.data)
+    && Array.isArray(result.data.affectedObjectIds)
+    ? result.data.affectedObjectIds
+    : [];
+  const objectId = affectedObjectIds.find(
+    (candidate): candidate is string => typeof candidate === "string",
+  );
+  return objectId ? { type: "start_thought", objectId } : null;
 }
 
 async function resolveSelectedCapabilityInput(

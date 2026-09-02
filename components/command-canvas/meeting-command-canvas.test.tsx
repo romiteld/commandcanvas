@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createStandardMeetingCapabilityRuntime,
   createStandardMeetingWebMcpRegistry,
   MeetingLobby,
   meetingHandControllerOptions,
@@ -220,6 +221,62 @@ describe("normal meeting private hand relay binding", () => {
         cameraUploadConsent,
       },
     });
+  });
+});
+
+describe("normal meeting capability runtime", () => {
+  it("executes Live Voice mutations without requiring a Site Tools registration target", async () => {
+    const store = createCanvasStore("room-live-voice", {
+      actor: { id: "host-1", displayName: "Daniel", type: "human" },
+      createId: (prefix) => `${prefix}-fixture`,
+      now: () => "2026-09-01T12:00:00.000Z",
+    });
+    const state = store.getState().canvas;
+    const session = {
+      submitCommand: vi.fn(async (command) => {
+        const result = store.getState().dispatch(command, "voice");
+        return result.ok
+          ? { ok: true as const, state: store.getState().canvas }
+          : {
+              ok: false as const,
+              code: "invalid_command",
+              message: result.error.message,
+            };
+      }),
+    };
+    const runtime = createStandardMeetingCapabilityRuntime({
+      store,
+      session,
+      getSnapshot: () => ({
+        status: "ready",
+        roomId: "room-live-voice",
+        membership: {
+          roomId: "room-live-voice",
+          userId: "host-1",
+          role: "host",
+          displayName: "Daniel",
+          color: "#38bdf8",
+          joinedAt: "2026-09-01T12:00:00.000Z",
+        },
+        presence: [],
+        state,
+      }) as never,
+      transformSketch: vi.fn(),
+    });
+
+    await expect(
+      runtime.invokeCapability(
+        "create_object",
+        { type: "note", title: "Voice note" },
+        new AbortController().signal,
+        "voice",
+      ),
+    ).resolves.toMatchObject({ ok: true, status: "completed" });
+    expect(session.submitCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "object.create" }),
+      "voice",
+      expect.any(AbortSignal),
+    );
   });
 });
 
