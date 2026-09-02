@@ -272,10 +272,23 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     const subscription = client?.auth.onAuthStateChange?.((event, session) => {
       if (lifecycle.signal.aborted) return;
       const nextActor = readActorState(session);
-      if (sameActorState(nextActor, currentActorStateRef.current)) return;
+      const supersedesPendingAuthWork =
+        event === "SIGNED_OUT" || event === "INITIAL_SESSION";
+      if (supersedesPendingAuthWork) authGenerationRef.current += 1;
+      if (sameActorState(nextActor, currentActorStateRef.current)) {
+        if (event === "INITIAL_SESSION") {
+          setPhase({
+            kind: "choice",
+            permanentEmail: nextActor.identity?.email ?? null,
+            error: null,
+          });
+          return;
+        }
+        if (event !== "SIGNED_OUT") return;
+      }
       const previousActor = currentActorStateRef.current;
       currentActorStateRef.current = nextActor;
-      authGenerationRef.current += 1;
+      if (!supersedesPendingAuthWork) authGenerationRef.current += 1;
       if (
         previousActor.kind === "none" &&
         acceptedRef.current &&
