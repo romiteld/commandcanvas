@@ -39,6 +39,16 @@ function fakeStream() {
   };
 }
 
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  let reject: (reason?: unknown) => void = () => undefined;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
+
 function createEnvironment(options: {
   user?: ReturnType<typeof permanentUser> | null;
   stream?: ReturnType<typeof fakeStream>;
@@ -134,7 +144,7 @@ describe("VisionLabCapture", () => {
     });
   });
 
-  it("records the unmodified camera stream and downloads only video plus its manifest", async () => {
+  it("records the unmodified camera stream and exposes user-activated video and manifest downloads", async () => {
     const user = userEvent.setup();
     const setup = createEnvironment();
     const fetcher = vi.fn();
@@ -149,6 +159,12 @@ describe("VisionLabCapture", () => {
     expect(setup.recorder.start).toHaveBeenCalledOnce();
 
     await user.click(screen.getByRole("button", { name: "Stop and download" }));
+
+    expect(await screen.findByRole("button", { name: "Download video" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Download manifest" })).toBeEnabled();
+    expect(setup.downloads).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "Download video" }));
+    await user.click(screen.getByRole("button", { name: "Download manifest" }));
 
     expect(setup.downloads.map(({ name }) => name)).toEqual([
       "vision-lab-owner-1-0001.webm",
@@ -173,7 +189,7 @@ describe("VisionLabCapture", () => {
     expect(setup.stream.track.stop).toHaveBeenCalledOnce();
   });
 
-  it("refuses before camera access when WebM recording is unsupported", async () => {
+  it("refuses before camera access when WebM recording is unsupported without offering retry", async () => {
     const setup = createEnvironment();
     setup.environment.selectWebmMime = vi.fn(() => null);
     const user = userEvent.setup();
@@ -186,6 +202,7 @@ describe("VisionLabCapture", () => {
     );
     expect(setup.environment.getUserMedia).not.toHaveBeenCalled();
     expect(setup.environment.createRecorder).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Start capture" })).toBeNull();
   });
 
   it("detaches and stops tracks immediately when teardown precedes a delayed recorder stop", async () => {
@@ -238,9 +255,9 @@ describe("VisionLabCapture", () => {
     expect(releaseHash).toHaveBeenCalledOnce();
     expect(setup.environment.now).toHaveBeenCalledTimes(2);
     act(() => continueHash?.());
-    await screen.findByRole("button", { name: "Start capture" });
+    await user.click(await screen.findByRole("button", { name: "Download manifest" }));
 
-    expect(JSON.parse(await setup.downloads[1]!.blob.text())).toMatchObject({
+    expect(JSON.parse(await setup.downloads[0]!.blob.text())).toMatchObject({
       stoppedAt: "2026-09-02T14:00:10.000Z",
     });
   });
@@ -258,7 +275,7 @@ describe("VisionLabCapture", () => {
     expect(screen.getByText(/60 seconds or 250 MB maximum/i)).toBeVisible();
   });
 
-  it("downloads without a hash when hashing fails instead of losing the completed video", async () => {
+  it("prepares downloads without a hash when hashing fails instead of losing the completed video", async () => {
     const user = userEvent.setup();
     const setup = createEnvironment();
     setup.environment.sha256 = vi.fn(async (): Promise<string | null> => {
@@ -268,6 +285,8 @@ describe("VisionLabCapture", () => {
 
     await user.click(await screen.findByRole("button", { name: "Start capture" }));
     await user.click(screen.getByRole("button", { name: "Stop and download" }));
+    await user.click(await screen.findByRole("button", { name: "Download video" }));
+    await user.click(screen.getByRole("button", { name: "Download manifest" }));
 
     expect(setup.downloads.map(({ name }) => name)).toEqual([
       "vision-lab-owner-1-0001.webm",
@@ -291,13 +310,11 @@ describe("VisionLabCapture", () => {
 
     await user.click(await screen.findByRole("button", { name: "Start capture" }));
     await user.click(screen.getByRole("button", { name: "Stop and download" }));
+    await user.click(await screen.findByRole("button", { name: "Download video" }));
     expect(await screen.findByRole("button", { name: "Retry download" })).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: "Retry download" }));
-    expect(setup.downloads.map(({ name }) => name)).toEqual([
-      "vision-lab-owner-1-0001.webm",
-      "vision-lab-owner-1-0001.json",
-    ]);
+    expect(setup.downloads.map(({ name }) => name)).toEqual(["vision-lab-owner-1-0001.webm"]);
   });
 
   it("refuses immediately when auth signs out while ready or recording", async () => {
@@ -336,5 +353,113 @@ describe("VisionLabCapture", () => {
       "Vision Lab is available only to a verified CommandCanvas account.",
     );
     expect(setup.environment.getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it("cancels an in-flight owner revalidation before camera access when auth signs out", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    const pendingUser = deferred<ReturnType<typeof permanentUser> | null>();
+    setup.environment.loadUser = vi
+      .fn()
+      .mockResolvedValueOnce(permanentUser())
+      .mockReturnValueOnce(pendingUser.promise);
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(await screen.findByRole("button", { name: "Start capture" }));
+    act(() => setup.emitUser(null));
+    act(() => pendingUser.resolve(permanentUser()));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Vision Lab is available only to a verified CommandCanvas account.",
+    );
+    expect(setup.environment.getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it("stops a late camera stream without creating or starting a recorder after sign-out", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    const pendingStream = deferred<MediaStream>();
+    setup.environment.getUserMedia = vi.fn(() => pendingStream.promise);
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(await screen.findByRole("button", { name: "Start capture" }));
+    act(() => setup.emitUser(null));
+    act(() => pendingStream.resolve(setup.stream as unknown as MediaStream));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Vision Lab is available only to a verified CommandCanvas account.",
+    );
+    expect(setup.environment.createRecorder).not.toHaveBeenCalled();
+    expect(setup.recorder.start).not.toHaveBeenCalled();
+    expect(setup.stream.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("forbids download and ready revival when sign-out races a delayed hash", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    const pendingHash = deferred<string | null>();
+    setup.environment.sha256 = vi.fn(() => pendingHash.promise);
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(await screen.findByRole("button", { name: "Start capture" }));
+    await user.click(screen.getByRole("button", { name: "Stop and download" }));
+    act(() => setup.emitUser(null));
+    act(() => pendingHash.resolve("abc123"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Vision Lab is available only to a verified CommandCanvas account.",
+    );
+    expect(setup.downloads).toEqual([]);
+    expect(screen.queryByRole("button", { name: "Download video" })).toBeNull();
+  });
+
+  it("clears a cancelled recording before delayed stop and allows a later signed-in ready state", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment({ stopMode: "delayed" });
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(await screen.findByRole("button", { name: "Start capture" }));
+    act(() => setup.emitUser(null));
+    act(() => setup.emitStop());
+    act(() => setup.emitUser(permanentUser()));
+
+    expect(await screen.findByRole("button", { name: "Start capture" })).toBeEnabled();
+    expect(setup.stream.track.stop).toHaveBeenCalledOnce();
+    expect(setup.downloads).toEqual([]);
+    expect(screen.queryByRole("button", { name: "Download video" })).toBeNull();
+  });
+
+  it("revalidates and retries a recoverable camera denial", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    setup.environment.getUserMedia = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("denied"))
+      .mockResolvedValueOnce(setup.stream as unknown as MediaStream);
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(await screen.findByRole("button", { name: "Start capture" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Camera access was not available");
+    await user.click(screen.getByRole("button", { name: "Start capture" }));
+
+    expect(setup.environment.getUserMedia).toHaveBeenCalledTimes(2);
+    expect(setup.recorder.start).toHaveBeenCalledOnce();
+  });
+
+  it("keeps completed capture controls until the user explicitly discards them", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(await screen.findByRole("button", { name: "Start capture" }));
+    await user.click(screen.getByRole("button", { name: "Stop and download" }));
+    await user.click(await screen.findByRole("button", { name: "Download video" }));
+    await user.click(screen.getByRole("button", { name: "Download manifest" }));
+    expect(screen.getByRole("button", { name: "Download video" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Download manifest" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Discard completed recording" }));
+    expect(screen.queryByRole("button", { name: "Download video" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Start capture" })).toBeEnabled();
   });
 });

@@ -18,7 +18,6 @@ import { createBrowserSupabaseClient } from "@/lib/supabase/browser-client";
 
 interface VisionLabRecorder {
   state: "inactive" | "recording" | "paused";
-  mimeType: string;
   start: (timeslice?: number) => void;
   stop: () => void;
   ondataavailable: ((event: { data: Blob }) => void) | null;
@@ -39,6 +38,7 @@ export interface VisionLabEnvironment {
 }
 
 interface ActiveCapture {
+  generation: number;
   sessionId: string;
   captureType: VisionLabCaptureType;
   startedAt: string;
@@ -49,8 +49,7 @@ interface ActiveCapture {
   exportRequested: boolean;
   video?: Blob;
   manifest?: VisionLabManifest;
-  videoDownloaded: boolean;
-  manifestDownloaded: boolean;
+  recorder?: VisionLabRecorder;
 }
 
 type CaptureState =
@@ -60,16 +59,13 @@ type CaptureState =
   | "acquiring"
   | "recording"
   | "exporting"
-  | "download-error"
+  | "completed"
+  | "unsupported"
   | "error";
 
 const CAMERA_CONSTRAINTS: MediaStreamConstraints = {
   audio: false,
-  video: {
-    facingMode: "user",
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
-  },
+  video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
 };
 
 export function VisionLabCapture({
@@ -80,11 +76,24 @@ export function VisionLabCapture({
   const [captureType, setCaptureType] = useState<VisionLabCaptureType>("acquisition");
   const [state, setState] = useState<CaptureState>("checking");
   const [error, setError] = useState<string | null>(null);
+  const [failedDownload, setFailedDownload] = useState<"video" | "manifest" | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<VisionLabRecorder | null>(null);
   const activeCaptureRef = useRef<ActiveCapture | null>(null);
+  const operationGenerationRef = useRef(0);
   const mountedRef = useRef(false);
+  const eligibleRef = useRef(false);
+
+  const isCurrent = useCallback(
+    (generation: number, capture?: ActiveCapture) =>
+      mountedRef.current &&
+      eligibleRef.current &&
+      operationGenerationRef.current === generation &&
+      (!capture || activeCaptureRef.current === capture) &&
+      !capture?.cancelled,
+    [],
+  );
 
   const releasePhysicalCapture = useCallback(() => {
     const stream = streamRef.current;
@@ -94,74 +103,96 @@ export function VisionLabCapture({
     if (stream) stopVisionLabTracks(stream);
   }, []);
 
-  const downloadCapture = useCallback(
+  const eraseCapture = useCallback((capture: ActiveCapture | null) => {
+    if (!capture) return;
+    capture.cancelled = true;
+    capture.exportRequested = false;
+    capture.chunks.length = 0;
+    capture.video = undefined;
+    capture.manifest = undefined;
+    if (capture.recorder) {
+      capture.recorder.ondataavailable = null;
+      capture.recorder.onstop = null;
+      capture.recorder.onerror = null;
+      capture.recorder = undefined;
+    }
+  }, []);
+
+  const cancelCapture = useCallback(() => {
+    operationGenerationRef.current += 1;
+    const recorder = recorderRef.current;
+    const capture = activeCaptureRef.current;
+    activeCaptureRef.current = null;
+    setFailedDownload(null);
+    eraseCapture(capture);
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      recorder.onerror = null;
+    }
+    releasePhysicalCapture();
+    try {
+      if (recorder && recorder.state !== "inactive") recorder.stop();
+    } catch {
+      // Physical tracks were already released; no cancelled capture may resume.
+    }
+  }, [eraseCapture, releasePhysicalCapture]);
+
+  const prepareCompletedCapture = useCallback(
     async (capture: ActiveCapture) => {
-      if (!capture.video)
-        capture.video = new Blob(capture.chunks, { type: capture.media.mimeType });
-      if (!capture.manifest) {
-        let videoSha256: string | null = null;
-        try {
-          videoSha256 = await environment.sha256(capture.video);
-        } catch {
-          // Hashing is optional; a completed local WebM must still be downloadable.
-        }
-        capture.manifest = createVisionLabManifest({
-          sessionId: capture.sessionId,
-          captureType: capture.captureType,
-          startedAt: capture.startedAt,
-          stoppedAt: capture.stoppedAt ?? capture.startedAt,
-          media: capture.media,
-          mirrorDisplay: true,
-          ...(videoSha256 ? { videoSha256 } : {}),
-        });
-      }
+      const generation = capture.generation;
+      if (!isCurrent(generation, capture)) return;
+      const video = new Blob(capture.chunks, { type: capture.media.mimeType });
+      capture.chunks.length = 0;
+      capture.video = video;
+      let videoSha256: string | null = null;
       try {
-        if (!capture.videoDownloaded) {
-          environment.download(`${capture.sessionId}.webm`, capture.video);
-          capture.videoDownloaded = true;
-        }
-        if (!capture.manifestDownloaded) {
-          environment.download(
-            `${capture.sessionId}.json`,
-            new Blob([`${JSON.stringify(capture.manifest, null, 2)}\n`], {
-              type: "application/json",
-            }),
-          );
-          capture.manifestDownloaded = true;
-        }
-        if (activeCaptureRef.current === capture) activeCaptureRef.current = null;
-        if (mountedRef.current) setState("ready");
+        videoSha256 = await environment.sha256(video);
       } catch {
-        if (mountedRef.current) {
-          setError("The completed local recording is ready to retry downloading.");
-          setState("download-error");
-        }
+        // Hashing is optional; retain the completed local video without a hash.
       }
+      if (!isCurrent(generation, capture)) return;
+      capture.manifest = createVisionLabManifest({
+        sessionId: capture.sessionId,
+        captureType: capture.captureType,
+        startedAt: capture.startedAt,
+        stoppedAt: capture.stoppedAt ?? capture.startedAt,
+        media: capture.media,
+        mirrorDisplay: true,
+        ...(videoSha256 ? { videoSha256 } : {}),
+      });
+      if (!isCurrent(generation, capture)) return;
+      setState("completed");
     },
-    [environment],
+    [environment, isCurrent],
   );
 
   const stopCapture = useCallback(
     (download: boolean) => {
       const capture = activeCaptureRef.current;
       const recorder = recorderRef.current;
-      if (capture) {
-        capture.cancelled = !download;
-        capture.exportRequested = download;
-        if (download) capture.stoppedAt = environment.now().toISOString();
+      if (!download) {
+        cancelCapture();
+        return;
       }
+      if (!capture || capture.cancelled) return;
+      capture.exportRequested = true;
+      capture.stoppedAt = environment.now().toISOString();
       releasePhysicalCapture();
-      if (download && mountedRef.current) setState("exporting");
+      if (mountedRef.current) setState("exporting");
       try {
         if (recorder && recorder.state !== "inactive") recorder.stop();
       } catch {
+        eraseCapture(capture);
+        if (activeCaptureRef.current === capture) activeCaptureRef.current = null;
+        operationGenerationRef.current += 1;
         if (mountedRef.current) {
           setError("The camera recording could not be stopped safely.");
           setState("error");
         }
       }
     },
-    [environment, releasePhysicalCapture],
+    [cancelCapture, environment, eraseCapture, releasePhysicalCapture],
   );
 
   useEffect(() => {
@@ -169,50 +200,76 @@ export function VisionLabCapture({
     let active = true;
     const applyUser = (user: VisionLabUser | null) => {
       if (!active) return;
-      if (!isPermanentVisionLabUser(user)) {
-        stopCapture(false);
+      const eligible = isPermanentVisionLabUser(user);
+      eligibleRef.current = eligible;
+      if (!eligible) {
+        cancelCapture();
         setState("refused");
         return;
       }
       if (!activeCaptureRef.current) setState("ready");
     };
-    void environment.loadUser().then(applyUser, () => applyUser(null));
+    const initialGeneration = operationGenerationRef.current;
+    void environment.loadUser().then(
+      (user) => {
+        if (operationGenerationRef.current === initialGeneration) applyUser(user);
+      },
+      () => {
+        if (operationGenerationRef.current === initialGeneration) applyUser(null);
+      },
+    );
     const unsubscribe = environment.subscribeUser(applyUser);
-    const handlePageHide = () => stopCapture(false);
+    const handlePageHide = () => cancelCapture();
     window.addEventListener("pagehide", handlePageHide);
     return () => {
       active = false;
       mountedRef.current = false;
+      eligibleRef.current = false;
       unsubscribe();
       window.removeEventListener("pagehide", handlePageHide);
-      stopCapture(false);
+      cancelCapture();
     };
-  }, [environment, stopCapture]);
+  }, [cancelCapture, environment]);
 
   const startCapture = useCallback(async () => {
-    if (state !== "ready") return;
+    if (state !== "ready" && state !== "error") return;
+    const generation = operationGenerationRef.current;
     setError(null);
     setState("acquiring");
     const user = await environment.loadUser().catch(() => null);
-    if (!mountedRef.current || !isPermanentVisionLabUser(user)) {
-      if (mountedRef.current) setState("refused");
+    if (!isCurrent(generation) || !isPermanentVisionLabUser(user)) {
+      if (mountedRef.current && operationGenerationRef.current === generation) {
+        eligibleRef.current = false;
+        setState("refused");
+      }
       return;
     }
     const mimeType = environment.selectWebmMime();
     if (!mimeType) {
-      setError("This browser cannot create a WebM recording for Vision Lab.");
-      setState("error");
+      if (isCurrent(generation)) {
+        setError("This browser cannot create a WebM recording for Vision Lab.");
+        setState("unsupported");
+      }
       return;
     }
     let stream: MediaStream | null = null;
     try {
       stream = await environment.getUserMedia(CAMERA_CONSTRAINTS);
-      if (!mountedRef.current) {
+      if (!isCurrent(generation)) {
         stopVisionLabTracks(stream);
         return;
       }
+      if (!isCurrent(generation)) return;
       const recorder = environment.createRecorder(stream, mimeType);
+      if (!isCurrent(generation)) {
+        recorder.ondataavailable = null;
+        recorder.onstop = null;
+        recorder.onerror = null;
+        stopVisionLabTracks(stream);
+        return;
+      }
       const capture: ActiveCapture = {
+        generation,
         sessionId: environment.createSessionId(),
         captureType,
         startedAt: environment.now().toISOString(),
@@ -220,123 +277,114 @@ export function VisionLabCapture({
         chunks: [],
         cancelled: false,
         exportRequested: false,
-        videoDownloaded: false,
-        manifestDownloaded: false,
+        recorder,
       };
       streamRef.current = stream;
       recorderRef.current = recorder;
       activeCaptureRef.current = capture;
       if (videoRef.current) videoRef.current.srcObject = stream;
       recorder.ondataavailable = ({ data }) => {
-        if (!capture.cancelled && data.size > 0) capture.chunks.push(data);
+        if (isCurrent(generation, capture) && data.size > 0) capture.chunks.push(data);
       };
       recorder.onstop = () => {
-        if (!capture.exportRequested || capture.cancelled || !mountedRef.current) return;
-        void downloadCapture(capture);
+        if (!isCurrent(generation, capture) || !capture.exportRequested) return;
+        void prepareCompletedCapture(capture);
       };
       recorder.onerror = () => {
-        capture.cancelled = true;
-        releasePhysicalCapture();
+        if (!isCurrent(generation, capture)) return;
+        cancelCapture();
         if (mountedRef.current) {
           setError("The local camera recorder failed and was stopped.");
           setState("error");
         }
       };
+      if (!isCurrent(generation, capture)) {
+        cancelCapture();
+        return;
+      }
       recorder.start(1_000);
-      setState("recording");
+      if (isCurrent(generation, capture)) setState("recording");
     } catch {
-      if (streamRef.current === stream) releasePhysicalCapture();
+      if (streamRef.current) cancelCapture();
       else if (stream) stopVisionLabTracks(stream);
-      if (mountedRef.current) {
+      if (isCurrent(generation)) {
         setError("Camera access was not available. Nothing was recorded or uploaded.");
         setState("error");
       }
     }
-  }, [captureType, downloadCapture, environment, releasePhysicalCapture, state]);
+  }, [cancelCapture, captureType, environment, isCurrent, prepareCompletedCapture, state]);
 
-  const retryDownload = useCallback(() => {
+  const downloadCompleted = useCallback(
+    (kind: "video" | "manifest") => {
+      const capture = activeCaptureRef.current;
+      if (!capture || !capture.video || !capture.manifest || !isCurrent(capture.generation, capture)) return;
+      try {
+        if (kind === "video") environment.download(`${capture.sessionId}.webm`, capture.video);
+        else environment.download(
+          `${capture.sessionId}.json`,
+          new Blob([`${JSON.stringify(capture.manifest, null, 2)}\n`], { type: "application/json" }),
+        );
+        setFailedDownload(null);
+        setError(null);
+      } catch {
+        setFailedDownload(kind);
+        setError("The completed local recording is still available. Retry this download.");
+      }
+    },
+    [environment, isCurrent],
+  );
+
+  const discardCompleted = useCallback(() => {
     const capture = activeCaptureRef.current;
-    if (!capture?.video || !capture.manifest) return;
+    operationGenerationRef.current += 1;
+    activeCaptureRef.current = null;
+    setFailedDownload(null);
+    eraseCapture(capture);
     setError(null);
-    setState("exporting");
-    void downloadCapture(capture);
-  }, [downloadCapture]);
+    setState(eligibleRef.current ? "ready" : "refused");
+  }, [eraseCapture]);
 
   if (state === "checking") return <p>Checking verified account access…</p>;
   if (state === "refused")
-    return (
-      <section className="vision-lab-card" aria-labelledby="vision-lab-title">
-        <h1 id="vision-lab-title">Vision Lab</h1>
-        <p role="alert">Vision Lab is available only to a verified CommandCanvas account.</p>
-      </section>
-    );
+    return <section className="vision-lab-card" aria-labelledby="vision-lab-title"><h1 id="vision-lab-title">Vision Lab</h1><p role="alert">Vision Lab is available only to a verified CommandCanvas account.</p></section>;
 
+  const completed = state === "completed";
   return (
     <section className="vision-lab-card" aria-labelledby="vision-lab-title">
       <p className="eyebrow">Private local capture</p>
       <h1 id="vision-lab-title">Vision Lab</h1>
-      <p>Record clean camera footage locally for hand-pose evaluation. The camera feed is never uploaded; stopping creates only a WebM and matching JSON manifest download on this device.</p>
+      <p>Record clean camera footage locally for hand-pose evaluation. The camera feed is never uploaded; stopping prepares a WebM and matching JSON manifest for your explicit download.</p>
       <p><strong>Bound:</strong> keep each session to 60 seconds or 250 MB maximum.</p>
       <label htmlFor="vision-lab-capture-type">Session guide</label>
-      <select
-        id="vision-lab-capture-type"
-        value={captureType}
-        disabled={state !== "ready"}
-        onChange={(event) => setCaptureType(event.target.value as VisionLabCaptureType)}
-      >
+      <select id="vision-lab-capture-type" value={captureType} disabled={state !== "ready"} onChange={(event) => setCaptureType(event.target.value as VisionLabCaptureType)}>
         {VISION_LAB_CAPTURE_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
       </select>
-      <ul aria-label="Capture protocol guidance">
-        {VISION_LAB_CAPTURE_TYPES.map((type) => <li key={type.value}><strong>{type.label}:</strong> {type.guidance}</li>)}
-      </ul>
+      <ul aria-label="Capture protocol guidance">{VISION_LAB_CAPTURE_TYPES.map((type) => <li key={type.value}><strong>{type.label}:</strong> {type.guidance}</li>)}</ul>
       <p>Keep the same framing and complete the selected actions. Avoid overlays, filters, other people, and identifiable documents.</p>
-      <div className="vision-lab-preview" aria-label="Camera preview with separate feedback">
-        <video ref={videoRef} autoPlay muted playsInline aria-label="Local raw camera preview" />
-        <p aria-live="polite">
-          {state === "recording"
-            ? `Recording ${VISION_LAB_CAPTURE_TYPES.find((type) => type.value === captureType)?.label} locally`
-            : "Choose a named session, then deliberately start the camera."}
-        </p>
-      </div>
+      <div className="vision-lab-preview" aria-label="Camera preview with separate feedback"><video ref={videoRef} autoPlay muted playsInline aria-label="Local raw camera preview" /><p aria-live="polite">{state === "recording" ? `Recording ${VISION_LAB_CAPTURE_TYPES.find((type) => type.value === captureType)?.label} locally` : completed ? "Completed local recording. Download both files or discard them." : "Choose a named session, then deliberately start the camera."}</p></div>
       {state === "ready" || state === "error" ? <button type="button" onClick={() => void startCapture()}>Start capture</button> : null}
       {state === "recording" ? <button type="button" onClick={() => stopCapture(true)}>Stop and download</button> : null}
-      {state === "download-error" ? <button type="button" onClick={retryDownload}>Retry download</button> : null}
+      {completed ? <><button type="button" onClick={() => downloadCompleted("video")}>Download video</button><button type="button" onClick={() => downloadCompleted("manifest")}>Download manifest</button><button type="button" onClick={discardCompleted}>Discard completed recording</button><button type="button" onClick={discardCompleted}>Finished downloading — clear recording</button>{failedDownload ? <button type="button" onClick={() => downloadCompleted(failedDownload)}>Retry download</button> : null}</> : null}
       {state === "acquiring" || state === "exporting" ? <p>Working locally…</p> : null}
       {error ? <p role="alert">{error}</p> : null}
     </section>
   );
 }
 
-function toVisionLabUser(user: {
-  id: string;
-  email?: string;
-  email_confirmed_at?: string;
-  is_anonymous?: boolean;
-} | null | undefined): VisionLabUser | null {
-  return user
-    ? { id: user.id, email: user.email, emailConfirmedAt: user.email_confirmed_at, isAnonymous: user.is_anonymous }
-    : null;
+function toVisionLabUser(user: { id: string; email?: string; email_confirmed_at?: string; is_anonymous?: boolean } | null | undefined): VisionLabUser | null {
+  return user ? { id: user.id, email: user.email, emailConfirmedAt: user.email_confirmed_at, isAnonymous: user.is_anonymous } : null;
 }
 
 const browserEnvironment: VisionLabEnvironment = {
   async loadUser() {
-    const clientResult = createBrowserSupabaseClient({
-      NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
-      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
-    });
+    const clientResult = createBrowserSupabaseClient({ NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY });
     if (!clientResult.ok) return null;
     const { data, error } = await clientResult.client.auth.getSession();
     return error ? null : toVisionLabUser(data.session?.user);
   },
   subscribeUser(listener) {
-    const clientResult = createBrowserSupabaseClient({
-      NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
-      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
-    });
-    if (!clientResult.ok) {
-      listener(null);
-      return () => undefined;
-    }
+    const clientResult = createBrowserSupabaseClient({ NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY });
+    if (!clientResult.ok) { listener(null); return () => undefined; }
     const { data } = clientResult.client.auth.onAuthStateChange((_event, session) => listener(toVisionLabUser(session?.user)));
     return () => data.subscription.unsubscribe();
   },
