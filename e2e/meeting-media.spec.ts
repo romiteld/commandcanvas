@@ -103,7 +103,7 @@ test("two no-signup browsers exchange real WebRTC media after both opt in", asyn
     });
     roomId = await roomCapture.resolveRoomId();
 
-    await pageA.getByRole("button", { name: "Copy participant invite" }).click();
+    await pageA.getByRole("button", { name: "Invite people" }).click();
     const inviteUrl = await pageA.evaluate(() => navigator.clipboard.readText());
     await pageB.goto(inviteUrl);
     await enterLimitedJudgePreview(pageB);

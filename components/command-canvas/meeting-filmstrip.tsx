@@ -66,6 +66,10 @@ export function MeetingFilmstrip({
   const videoPanelId = useId();
   const controllerRef = useRef<MeetingMediaController | null>(null);
   const rosterIdentity = `${roomId}:${localParticipantId}`;
+  const presenceRosterIdentity = useMemo(
+    () => [...new Set(participants.map((participant) => participant.id))].sort().join(","),
+    [participants],
+  );
   const [rosterSnapshot, setRosterSnapshot] =
     useState<AuthoritativeRosterSnapshot | null>(null);
   const rosterState =
@@ -176,6 +180,7 @@ export function MeetingFilmstrip({
     getAccessToken,
     loadAuthoritativeParticipantIds,
     localParticipantId,
+    presenceRosterIdentity,
     rosterIdentity,
     roomId,
   ]);

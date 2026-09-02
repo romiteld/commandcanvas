@@ -56,7 +56,7 @@ function harness(
     }>;
   } = {},
 ) {
-  const sent: unknown[] = [];
+  const sent: Array<Parameters<MeetingMediaChannel["send"]>[0]> = [];
   const channels = new Map<
     string,
     {
@@ -617,24 +617,24 @@ describe("meeting media controller", () => {
   it("acknowledges a late joiner so the deterministic offerer cannot miss readiness", async () => {
     const setup = harness();
     await setup.controller.start();
+    setup.sent.length = 0;
 
-    setup.emitSignal(lowerId, {
-      version: 1,
-      kind: "ready",
-      senderId: lowerId,
-    });
-    await setup.controller.whenIdle();
-
-    expect(setup.sent).toContainEqual({
-      type: "broadcast",
-      event: "meeting-media",
-      payload: {
+    for (let attempt = 0; attempt < 2; attempt += 1)
+      setup.emitSignal(lowerId, {
         version: 1,
         kind: "ready",
-        senderId: localId,
-        targetId: lowerId,
-      },
-    });
+        senderId: lowerId,
+      });
+    await setup.controller.whenIdle();
+
+    expect(
+      setup.sent.filter(
+        (message) =>
+          message.payload.kind === "ready" &&
+          "targetId" in message.payload &&
+          message.payload.targetId === lowerId,
+      ),
+    ).toHaveLength(2);
     expect(setup.peers[0]?.localDescription).toBeNull();
   });
 

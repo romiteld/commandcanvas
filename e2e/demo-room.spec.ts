@@ -66,8 +66,8 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
     roomId = await roomCapture.resolveRoomId();
     expect(roomId).toMatch(/^[0-9a-f-]{36}$/);
 
-    await pageA.getByRole("button", { name: "Copy participant invite" }).click();
-    await expect(pageA.getByText("Invite copied")).toBeVisible();
+    await pageA.getByRole("button", { name: "Invite people" }).click();
+    await expect(pageA.getByText("Invite link copied")).toBeVisible();
     const inviteUrl = await pageA.evaluate(() => navigator.clipboard.readText());
     expect(inviteUrl).toContain("/demo?room=room-");
     expect(inviteUrl).toContain("&join=");

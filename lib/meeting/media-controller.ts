@@ -182,7 +182,6 @@ export function createMeetingMediaController(
   let starting: Promise<boolean> | null = null;
   let signalWork: Promise<void> = Promise.resolve();
   const peers = new Map<string, PeerRecord>();
-  const readyAcknowledged = new Set<string>();
   let allowedParticipantIds = new Set(rawOptions.allowedParticipantIds);
 
   function emit(patch?: Partial<MeetingMediaSnapshot>) {
@@ -417,8 +416,7 @@ export function createMeetingMediaController(
       const record = await ensurePeer(signal.senderId);
       if (record && localParticipantId.localeCompare(signal.senderId) < 0)
         await sendOffer(signal.senderId, record);
-      else if (record && !readyAcknowledged.has(signal.senderId)) {
-        readyAcknowledged.add(signal.senderId);
+      else if (record) {
         await send({
           version: 1,
           kind: "ready",
@@ -585,7 +583,6 @@ export function createMeetingMediaController(
       record.peer.onconnectionstatechange = null;
       record.peer.close();
       peers.delete(participantId);
-      readyAcknowledged.delete(participantId);
     }
     const remoteStreams = { ...snapshot.remoteStreams };
     stopTracks(remoteStreams[participantId]);

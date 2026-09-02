@@ -225,7 +225,7 @@ describe("MeetingFilmstrip", () => {
     ).toBeEnabled();
   });
 
-  it("does not amplify authoritative roster requests when Presence identities churn", async () => {
+  it("refreshes the authoritative roster immediately when the Presence membership set changes", async () => {
     const setup = harness();
     const loadRoster = vi.fn(loadVerifiedParticipants);
     const getAccessToken = () => "token";
@@ -260,11 +260,10 @@ describe("MeetingFilmstrip", () => {
         createController={setup.createController}
       />,
     );
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(loadRoster).toHaveBeenCalledOnce();
+    await waitFor(() => expect(loadRoster).toHaveBeenCalledTimes(2));
+    expect(setup.controller.setAllowedParticipantIds).toHaveBeenLastCalledWith(
+      new Set([localId, remoteId]),
+    );
   });
 
   it("periodically refreshes authoritative membership independently of Presence", async () => {
