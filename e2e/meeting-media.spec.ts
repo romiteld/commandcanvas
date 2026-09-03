@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import {
   captureCreatedRoom,
@@ -17,6 +17,96 @@ test.use({
       "--use-fake-ui-for-media-stream",
     ],
   },
+});
+
+const meetingControlViewports = [
+  { width: 320, height: 568, label: "320x568" },
+  { width: 390, height: 844, label: "390x844" },
+  { width: 430, height: 932, label: "430x932" },
+  { width: 768, height: 1024, label: "768x1024" },
+  { width: 1024, height: 768, label: "1024x768" },
+  { width: 1280, height: 720, label: "1280x720" },
+  { width: 1440, height: 900, label: "1440x900" },
+] as const;
+
+test("meeting controls contain their labels and remain clickable at every supported viewport", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    process.env.RUN_SUPABASE_E2E !== "true" ||
+      !["chromium-desktop", "chromium-mobile"].includes(testInfo.project.name),
+  );
+  test.setTimeout(180_000);
+
+  const apiProxyOrigin = process.env.COMMANDCANVAS_API_PROXY_ORIGIN;
+  if (apiProxyOrigin) await installApiProxy(page, apiProxyOrigin);
+  const roomCapture = captureCreatedRoom(page);
+  let roomId: string | null = null;
+
+  try {
+    await page.goto("/demo");
+    await enterLimitedJudgePreview(page);
+    await expect(page.getByText("Live demo room")).toBeVisible({
+      timeout: 20_000,
+    });
+    roomId = await roomCapture.resolveRoomId();
+
+    for (const viewport of meetingControlViewports) {
+      await page.setViewportSize(viewport);
+      const filmstrip = page.getByRole("region", { name: "Meeting presence" });
+      await expect(filmstrip).toBeVisible();
+      await expectMeetingControlsContained(page, filmstrip, viewport.label);
+      await expectVisibleButtonLabelsContained(page, viewport.label);
+
+      const videoToggle = page.getByRole("button", {
+        name: "Show participant videos",
+      });
+      await videoToggle.click();
+      await expect(
+        page.getByRole("group", { name: "Participant videos" }),
+      ).toBeVisible();
+      await expectMeetingControlsContained(page, filmstrip, viewport.label);
+      await expectVisibleButtonLabelsContained(page, viewport.label);
+      await page
+        .getByRole("button", { name: "Hide participant videos" })
+        .click();
+    }
+
+    await page.setViewportSize({ width: 320, height: 568 });
+    const startMedia = page.getByRole("button", {
+      name: "Start camera and microphone",
+    });
+    await expect(startMedia).toBeEnabled({ timeout: 10_000 });
+    await startMedia.click();
+    await expect(
+      page.getByRole("button", { name: "Stop sharing video" }),
+    ).toBeVisible({ timeout: 15_000 });
+
+    for (const viewport of meetingControlViewports) {
+      await page.setViewportSize(viewport);
+      const filmstrip = page.getByRole("region", { name: "Meeting presence" });
+      await expectMeetingControlsContained(page, filmstrip, viewport.label);
+      await expectVisibleButtonLabelsContained(page, viewport.label);
+
+      await page
+        .getByRole("button", { name: "Hide participant videos" })
+        .click();
+      await expectMeetingControlsContained(page, filmstrip, viewport.label);
+      await expectVisibleButtonLabelsContained(page, viewport.label);
+      await page
+        .getByRole("button", { name: "Show participant videos" })
+        .click();
+    }
+
+    await page.getByRole("button", { name: "Leave meeting video" }).click();
+  } finally {
+    try {
+      roomId ??= await roomCapture.resolveRoomId();
+    } finally {
+      roomCapture.stop();
+    }
+    if (roomId) await deleteHostedRoom(page, roomId);
+  }
 });
 
 test("keeps collapsed meeting controls at least 44px at a 390px viewport", async ({
@@ -197,6 +287,81 @@ async function inspectMedia(page: Page) {
   });
 }
 
+async function expectVisibleButtonLabelsContained(page: Page, label: string) {
+  const buttons = page.locator(".command-canvas-shell button:visible");
+  for (const [index, button] of (await buttons.all()).entries()) {
+    const content = (await button.textContent())?.trim();
+    if (!content) continue;
+    const overflow = await button.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      clientHeight: element.clientHeight,
+      scrollWidth: element.scrollWidth,
+      scrollHeight: element.scrollHeight,
+    }));
+    expect(
+      overflow.scrollWidth,
+      `${label} visible button ${index} width: ${content}`,
+    ).toBeLessThanOrEqual(overflow.clientWidth + 1);
+    expect(
+      overflow.scrollHeight,
+      `${label} visible button ${index} height: ${content}`,
+    ).toBeLessThanOrEqual(overflow.clientHeight + 1);
+  }
+}
+
+async function expectMeetingControlsContained(
+  page: Page,
+  filmstrip: Locator,
+  label: string,
+) {
+  const filmstripBox = await filmstrip.boundingBox();
+  if (!filmstripBox) throw new Error(`${label} meeting filmstrip has no geometry.`);
+
+  const controls = filmstrip.locator(".meeting-filmstrip-actions button:visible");
+  expect(await controls.count(), `${label} visible meeting controls`).toBeGreaterThan(0);
+
+  for (const [index, control] of (await controls.all()).entries()) {
+    const box = await control.boundingBox();
+    if (!box) throw new Error(`${label} meeting control ${index} has no geometry.`);
+    expect(box.width, `${label} control ${index} touch width`).toBeGreaterThanOrEqual(44);
+    expect(box.height, `${label} control ${index} touch height`).toBeGreaterThanOrEqual(44);
+    expect(box.x, `${label} control ${index} left bound`).toBeGreaterThanOrEqual(
+      filmstripBox.x - 1,
+    );
+    expect(
+      box.x + box.width,
+      `${label} control ${index} right bound`,
+    ).toBeLessThanOrEqual(filmstripBox.x + filmstripBox.width + 1);
+
+    const receivesPointer = await control.evaluate((button) => {
+      const bounds = button.getBoundingClientRect();
+      const target = document.elementFromPoint(
+        bounds.left + bounds.width / 2,
+        bounds.top + bounds.height / 2,
+      );
+      return target === button || (target !== null && button.contains(target));
+    });
+    expect(receivesPointer, `${label} control ${index} center hit target`).toBe(
+      true,
+    );
+
+    const overflow = await control.evaluate((button) => ({
+      clientWidth: button.clientWidth,
+      clientHeight: button.clientHeight,
+      scrollWidth: button.scrollWidth,
+      scrollHeight: button.scrollHeight,
+    }));
+    expect(
+      overflow.scrollWidth,
+      `${label} control ${index} label width`,
+    ).toBeLessThanOrEqual(overflow.clientWidth + 1);
+    expect(
+      overflow.scrollHeight,
+      `${label} control ${index} label height`,
+    ).toBeLessThanOrEqual(overflow.clientHeight + 1);
+  }
+}
+
 async function installApiProxy(page: Page, proxyOrigin: string) {
   const targetOrigin = requireProductionApiProxyOrigin(proxyOrigin);
   await page.route("**/api/**", async (route) => {
@@ -216,6 +381,8 @@ function isDemoProbeApiPath(pathname: string) {
   return (
     pathname === "/api/rooms" ||
     pathname === "/api/rooms/join" ||
-    /^\/api\/rooms\/[0-9a-f-]{36}(?:\/commands)?$/.test(pathname)
+    /^\/api\/rooms\/[0-9a-f-]{36}(?:\/commands|\/media\/(?:roster|turn))?$/.test(
+      pathname,
+    )
   );
 }

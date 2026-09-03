@@ -397,7 +397,7 @@
 }
 
 .command-canvas-shell .meeting-filmstrip-actions button {
-  min-height: 34px;
+  min-height: 44px;
   border-color: var(--space-line);
   background: rgb(237 247 255 / 7%);
   color: var(--space-text);
@@ -1307,8 +1307,8 @@
   .command-canvas-shell > .meeting-media-slot {
     top: calc(66px + env(safe-area-inset-top, 0px));
     left: 8px;
-    width: min(222px, calc(100% - 176px));
-    min-width: 190px;
+    width: min(222px, calc(100% - 16px));
+    min-width: 0;
   }
 
   .command-canvas-shell > .meeting-media-slot:has(
@@ -1318,6 +1318,13 @@
     left: 8px;
     width: auto;
     min-width: 0;
+  }
+
+  .command-canvas-shell > .meeting-media-slot:has(
+      .meeting-filmstrip.is-collapsed .meeting-leave-action
+    ) {
+    right: 8px;
+    width: auto;
   }
 
   .command-canvas-shell .meeting-filmstrip {
@@ -1364,6 +1371,34 @@
     min-height: 44px;
     padding-inline: 7px;
     font-size: 8px;
+  }
+
+  .command-canvas-shell .meeting-filmstrip-actions .meeting-collapse-action {
+    width: 44px;
+    padding-inline: 0;
+  }
+
+  .command-canvas-shell
+    .meeting-filmstrip-actions
+    .meeting-collapse-action
+    .meeting-control-label {
+    display: none;
+  }
+
+  .command-canvas-shell
+    .meeting-filmstrip.is-collapsed
+    .meeting-filmstrip-bar:has(.meeting-leave-action)
+    .meeting-filmstrip-actions
+    button {
+    width: 44px;
+    padding-inline: 0;
+  }
+
+  .command-canvas-shell
+    .meeting-filmstrip.is-collapsed
+    .meeting-filmstrip-bar:has(.meeting-leave-action)
+    .meeting-control-label {
+    display: none;
   }
 
   .command-canvas-shell .meeting-filmstrip-actions button:first-child:not(.meeting-collapse-action) {
