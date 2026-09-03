@@ -33,6 +33,7 @@ from commandcanvas_hand_finetune.dataset import (  # noqa: E402
 )
 from commandcanvas_hand_finetune.prepare_dataset import (  # noqa: E402
     DatasetPreparationError,
+    _probe_video,
     prepare_dataset,
 )
 
@@ -79,12 +80,24 @@ class FakeMediaRunner:
         *,
         width: int = 1280,
         height: int = 720,
-        duration: float = 0.24,
+        duration: float | None = 0.24,
+        average_frame_rate: str = "30/1",
+        packet_timestamps: tuple[float, ...] = (
+            0.0,
+            0.033333,
+            0.066667,
+            0.1,
+            0.133333,
+            0.166667,
+            0.2,
+        ),
         frame_width: int | None = None,
     ):
         self.width = width
         self.height = height
         self.duration = duration
+        self.average_frame_rate = average_frame_rate
+        self.packet_timestamps = packet_timestamps
         self.frame_width = frame_width or width
         self.calls: list[list[str]] = []
 
@@ -92,16 +105,34 @@ class FakeMediaRunner:
         arguments = [str(item) for item in command]
         self.calls.append(arguments)
         if Path(arguments[0]).name == "ffprobe":
+            if "packet=pts_time,duration_time" in arguments:
+                return subprocess.CompletedProcess(
+                    arguments,
+                    0,
+                    json.dumps(
+                        {
+                            "packets": [
+                                {"pts_time": f"{timestamp:.6f}"}
+                                for timestamp in self.packet_timestamps
+                            ]
+                        }
+                    ),
+                    "",
+                )
             payload = {
                 "streams": [
                     {
                         "codec_name": "vp9",
                         "width": self.width,
                         "height": self.height,
-                        "avg_frame_rate": "30/1",
+                        "avg_frame_rate": self.average_frame_rate,
                     }
                 ],
-                "format": {"duration": f"{self.duration:.6f}"},
+                "format": (
+                    {"duration": f"{self.duration:.6f}"}
+                    if self.duration is not None
+                    else {}
+                ),
             }
             return subprocess.CompletedProcess(arguments, 0, json.dumps(payload), "")
         if Path(arguments[0]).name == "ffmpeg":
@@ -305,6 +336,98 @@ class DatasetPreparationTests(unittest.TestCase):
             all(session["source"]["width"] == 1280 for session in manifest["sessions"])
         )
         self.assertEqual(len(receipt["sourceVideoDigests"]), 4)
+
+    def test_mediarecorder_webm_uses_packet_timing_when_container_timing_is_absent(
+        self,
+    ) -> None:
+        source_hashes = {
+            path.name: sha256(path) for path in sorted(self.captures.glob("*.webm"))
+        }
+        runner = FakeMediaRunner(duration=None, average_frame_rate="0/0")
+        output = self.root / "mediarecorder-webm"
+
+        receipt = prepare_dataset(
+            capture_root=self.captures,
+            session_map_path=self.session_map_path,
+            labels_root=self.labels,
+            output_dir=output,
+            command_runner=runner,
+        )
+
+        self.assertEqual(receipt["frameCount"], 8)
+        self.assertEqual(
+            sum(Path(call[0]).name == "ffprobe" for call in runner.calls), 8
+        )
+        packet_probe_calls = [
+            call
+            for call in runner.calls
+            if Path(call[0]).name == "ffprobe"
+            and "packet=pts_time,duration_time" in call
+        ]
+        self.assertEqual(len(packet_probe_calls), 4)
+        self.assertTrue(
+            all(
+                call[call.index("-read_intervals") + 1] == "%+#100001"
+                for call in packet_probe_calls
+            )
+        )
+        self.assertEqual(
+            source_hashes,
+            {path.name: sha256(path) for path in sorted(self.captures.glob("*.webm"))},
+        )
+        self.assertEqual(
+            source_hashes,
+            {
+                f"session-{index}.webm": sha256(path)
+                for index, path in enumerate(
+                    sorted((output / "videos").glob("*.webm")), start=1
+                )
+            },
+        )
+
+    def test_mediarecorder_packet_fallback_refuses_nonmonotonic_timing(self) -> None:
+        output = self.root / "bad-mediarecorder-timing"
+
+        with self.assertRaisesRegex(
+            DatasetPreparationError, "invalid packet timing"
+        ):
+            prepare_dataset(
+                capture_root=self.captures,
+                session_map_path=self.session_map_path,
+                labels_root=self.labels,
+                output_dir=output,
+                command_runner=FakeMediaRunner(
+                    duration=None,
+                    average_frame_rate="0/0",
+                    packet_timestamps=(0.0, 0.04, 0.03),
+                ),
+            )
+
+        self.assertFalse(output.exists())
+
+    def test_mediarecorder_packet_fallback_uses_nominal_cadence_despite_drops(
+        self,
+    ) -> None:
+        runner = FakeMediaRunner(
+            duration=None,
+            average_frame_rate="0/0",
+            packet_timestamps=(
+                0.0,
+                0.033333,
+                0.066667,
+                0.1,
+                0.3,
+                0.333333,
+                0.366667,
+            ),
+        )
+
+        _width, _height, duration, frame_rate, _codec = _probe_video(
+            self.captures / "session-1.webm", runner
+        )
+
+        self.assertAlmostEqual(duration, 0.4, places=5)
+        self.assertAlmostEqual(frame_rate, 30.0, places=3)
 
     def test_preserves_and_binds_canonical_vision_lab_producer_chain(self) -> None:
         output = self.root / "provenance"

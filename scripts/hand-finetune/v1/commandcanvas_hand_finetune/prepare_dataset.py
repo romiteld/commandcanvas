@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+from statistics import median
 from typing import Any, Protocol, Sequence
 from uuid import UUID
 
@@ -42,6 +43,7 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MIN_CADENCE_MS = 20
 MAX_CADENCE_MS = 5_000
 MAX_FRAMES_PER_SESSION = 100_000
+MAX_PROBE_PACKETS = MAX_FRAMES_PER_SESSION + 1
 
 
 class DatasetPreparationError(ValueError):
@@ -209,6 +211,96 @@ def _regular_directory(root: Path, value: Any, description: str) -> Path:
     return resolved
 
 
+def _positive_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) and parsed > 0 else None
+
+
+def _nonnegative_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) and parsed >= 0 else None
+
+
+def _container_frame_rate(value: Any) -> float | None:
+    try:
+        numerator, denominator = str(value).split("/", 1)
+        return _positive_float(float(numerator) / float(denominator))
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _probe_packet_timing(
+    source: Path, command_runner: CommandRunner
+) -> tuple[float, float]:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-read_intervals",
+        f"%+#{MAX_PROBE_PACKETS}",
+        "-show_entries",
+        "packet=pts_time,duration_time",
+        "-of",
+        "json",
+        str(source),
+    ]
+    completed = command_runner(command)
+    if completed.returncode != 0:
+        raise DatasetPreparationError(
+            f"ffprobe packet timing failed for {source.name}: "
+            f"{completed.stderr.strip()}"
+        )
+    try:
+        payload = json.loads(completed.stdout, object_pairs_hook=_strict_object)
+        packets = payload["packets"]
+    except (DatasetPreparationError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise DatasetPreparationError(
+            f"ffprobe returned invalid packet timing for {source.name}"
+        ) from error
+    if (
+        not isinstance(packets, list)
+        or len(packets) < 2
+        or len(packets) > MAX_FRAMES_PER_SESSION
+    ):
+        raise DatasetPreparationError(
+            f"ffprobe returned unsupported packet timing for {source.name}"
+        )
+
+    timestamps: list[float] = []
+    for packet in packets:
+        if not isinstance(packet, dict):
+            raise DatasetPreparationError(
+                f"ffprobe returned invalid packet timing for {source.name}"
+            )
+        timestamp = _nonnegative_float(packet.get("pts_time"))
+        if timestamp is None or (timestamps and timestamp <= timestamps[-1]):
+            raise DatasetPreparationError(
+                f"ffprobe returned invalid packet timing for {source.name}"
+            )
+        timestamps.append(timestamp)
+
+    deltas = [
+        current - previous for previous, current in zip(timestamps, timestamps[1:])
+    ]
+    typical_interval = median(deltas)
+    frame_rate = _positive_float(1 / typical_interval)
+    tail_duration = _positive_float(packets[-1].get("duration_time"))
+    duration = _positive_float(timestamps[-1] + (tail_duration or typical_interval))
+    if frame_rate is None or duration is None:
+        raise DatasetPreparationError(
+            f"ffprobe returned unsupported packet timing for {source.name}"
+        )
+    return duration, frame_rate
+
+
 def _probe_video(
     source: Path, command_runner: CommandRunner
 ) -> tuple[int, int, float, float, str]:
@@ -235,9 +327,6 @@ def _probe_video(
         stream = streams[0]
         width = int(stream["width"])
         height = int(stream["height"])
-        duration = float(payload["format"]["duration"])
-        numerator, denominator = str(stream["avg_frame_rate"]).split("/", 1)
-        frame_rate = float(numerator) / float(denominator)
         codec = str(stream["codec_name"])
     except (
         DatasetPreparationError,
@@ -245,7 +334,6 @@ def _probe_video(
         IndexError,
         TypeError,
         ValueError,
-        ZeroDivisionError,
     ) as error:
         raise DatasetPreparationError(
             f"ffprobe returned an invalid video contract for {source.name}"
@@ -255,15 +343,20 @@ def _probe_video(
         or len(streams) != 1
         or width <= 0
         or height <= 0
-        or not math.isfinite(duration)
-        or duration <= 0
-        or not math.isfinite(frame_rate)
-        or frame_rate <= 0
         or codec not in {"vp8", "vp9"}
     ):
         raise DatasetPreparationError(
             f"ffprobe returned an unsupported video contract for {source.name}"
         )
+    format_metadata = payload.get("format")
+    duration = (
+        _positive_float(format_metadata.get("duration"))
+        if isinstance(format_metadata, dict)
+        else None
+    )
+    frame_rate = _container_frame_rate(stream.get("avg_frame_rate"))
+    if duration is None or frame_rate is None:
+        duration, frame_rate = _probe_packet_timing(source, command_runner)
     return width, height, duration, frame_rate, codec
 
 
