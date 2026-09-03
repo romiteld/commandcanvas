@@ -388,9 +388,7 @@ class DatasetPreparationTests(unittest.TestCase):
     def test_mediarecorder_packet_fallback_refuses_nonmonotonic_timing(self) -> None:
         output = self.root / "bad-mediarecorder-timing"
 
-        with self.assertRaisesRegex(
-            DatasetPreparationError, "invalid packet timing"
-        ):
+        with self.assertRaisesRegex(DatasetPreparationError, "invalid packet timing"):
             prepare_dataset(
                 capture_root=self.captures,
                 session_map_path=self.session_map_path,

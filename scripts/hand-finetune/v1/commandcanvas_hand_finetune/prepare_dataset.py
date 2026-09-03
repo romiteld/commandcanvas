@@ -261,7 +261,12 @@ def _probe_packet_timing(
     try:
         payload = json.loads(completed.stdout, object_pairs_hook=_strict_object)
         packets = payload["packets"]
-    except (DatasetPreparationError, KeyError, TypeError, json.JSONDecodeError) as error:
+    except (
+        DatasetPreparationError,
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+    ) as error:
         raise DatasetPreparationError(
             f"ffprobe returned invalid packet timing for {source.name}"
         ) from error
