@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -84,6 +84,8 @@ describe("RealtimeVoiceControl", () => {
     expect(setup.controller.start).toHaveBeenCalledWith({
       openAiApiKey: `  ${apiKey}  `,
     });
+    await waitFor(() => expect(input).toHaveValue(""));
+    expect(screen.queryByDisplayValue(apiKey)).not.toBeInTheDocument();
   });
 
   it("starts from an account-saved credential without returning the raw key to the UI", async () => {
