@@ -2671,3 +2671,151 @@ a later documentation commit and does not change runtime behavior.
 - Submission remains blocked until Danny accepts the physical-hand flow and a
   real ChatGPT-host Site Tool mutation is recorded against the frozen
   Production release.
+
+## Checkpoint 43: immediate voice creation and final Production acceptance
+
+Runtime application commit:
+`212b6aa85b2f8d49d6d720e45746e28549912cb4`. Vercel Production deployment:
+`dpl_6NeXL8Ddp7VooDFKjV9BXSLzqwue`, aliased to
+`https://commandcanvas.vercel.app`. GitHub deployment `6236503605` and GitHub
+Actions run `33712329575` both reported success for the exact runtime commit.
+This append-only checkpoint is recorded by a later documentation commit and
+does not change the runtime behavior described below.
+
+### WORKING
+
+- Realtime Voice no longer asks the user to supply a board title and columns
+  after a command such as “Bring in our project board.” The canonical
+  `create_board` capability accepts an empty input object and deterministically
+  creates a `Project board` with `Next`, `In progress`, and `Done` columns.
+  Explicit titles and columns remain supported and are preserved.
+- The Realtime capability projection now emits `required: []` when its source
+  JSON schema has no required properties. The Realtime instruction explicitly
+  directs the provider to call `create_board` with `{}` when the speaker does
+  not specify structure, while keeping object creation inside the same
+  canonical capability, policy, mutation, and receipt path used by WebMCP.
+- Test-first coverage exercises the empty-board defaults, explicit-board
+  preservation, and a real Realtime function-call-shaped `create_board {}`
+  event through the canonical invoker, function-call output, follow-up
+  response, canvas mutation, and receipt path.
+- The public landing page now sends its primary header, hero, and final calls
+  to action directly to the no-signup `/demo` path. Durable signed-in `/meet`
+  remains an explicit secondary path. Judge-facing labels say `Spatial hand
+  control` and `ChatGPT Site Tools` rather than exposing internal engineering
+  terminology.
+- Temporary user-supplied Realtime credentials are cleared from page state and
+  the DOM after an active connection is established. Signed-in saved
+  credentials continue to expose only configuration state and a fingerprint
+  to the browser. No provider key, function arguments, or transcript is stored
+  in the sanitized provider-event evidence.
+- At immutable runtime commit `212b6aa...`, the complete local release gate
+  passed ESLint, raw TypeScript `tsc --noEmit`, 164 Vitest files and 1,723
+  tests, 12 Python and drawing-training checks, hand-worker bundling, and an
+  optimized Next.js 16 build. GitHub Actions run `33712329575` independently
+  passed on the same commit.
+
+### VERIFIED IN BROWSER
+
+- Vercel reported deployment `dpl_6NeXL8Ddp7VooDFKjV9BXSLzqwue` as `READY`
+  with target `Production`; GitHub deployment `6236503605` reported success
+  for exact source revision
+  `212b6aa85b2f8d49d6d720e45746e28549912cb4`. The canonical public URL is
+  `https://commandcanvas.vercel.app`.
+- A controlled Production Chromium session connected to the real OpenAI
+  Realtime provider, supplied the recorded spoken command “Bring in our
+  project board,” received a completed transcription and an actual
+  `create_board` function call, invoked the canonical action, displayed a
+  Project board, and displayed receipt `R4 · voice`. The provider acceptance
+  scenario passed one of one in 16.0 seconds. Its saved evidence contains only
+  event types, item types, and the tool name; it excludes audio, transcript,
+  arguments, and credentials. This proves the OpenAI provider-to-canvas tool
+  chain under controlled browser audio, not a physical microphone or the
+  owner's saved-key session.
+- A separate controlled Production Chromium session rasterized a pointer-drawn
+  sketch, sent the PNG through the real OpenAI vision path, received a
+  schema-valid structured diagram, created that diagram beside the source,
+  preserved the original sketch, and displayed the revision and receipt. The
+  provider scenario passed one of one in 11.6 seconds. This is a real current-
+  release provider transformation, not the deterministic `/demo` fallback.
+- The Production landing acceptance passed five of five scenarios. The
+  Production responsive acceptance passed nine of nine scenarios at 320x568,
+  390x844, 430x932, 768x1024, 844x390 landscape, 1024x768, 1280x720,
+  1440x900, and breakpoint edges. The only initial failure was a stale test
+  selector for the renamed primary call to action; correcting the selector did
+  not change the already-deployed runtime.
+- Two independent no-signup Production browser contexts exercised real
+  Supabase room creation and join, Presence, participant cursors, a durable
+  object mutation, attributable receipt, and recent-room recovery. The
+  collaboration and meeting-media run passed four applicable scenarios with
+  one intentional project-gated skip.
+- Two Production browser contexts negotiated peer WebRTC through authenticated
+  Supabase signaling and rendered browser-supplied fake camera and microphone
+  media. This proves the current browser signaling and media-rendering path,
+  not physical media, cellular-to-Wi-Fi connectivity, or TURN traversal.
+- Production mobile calibration acceptance passed two applicable scenarios
+  with one intentional project-gated skip. It exercised the enlarged
+  calibration surface, suspended competing overlays, and restored the
+  hideable hand PiP. A separate applicable desktop calibration scenario also
+  passed. These are browser-controlled layout and lifecycle checks, not live
+  hand-usability acceptance.
+- Current system Chrome registered and exercised the stable Production WebMCP
+  catalog. Chrome 153.0.8010.12 separately passed the Production lifecycle and
+  client-cancellation scenario one of one in 7.0 seconds. These checks prove
+  the native browser API and page execution, not invocation by the surrounding
+  ChatGPT built-in browser.
+- The owner-supplied recorded camera stream remains a deterministic regression
+  fixture from ancestor runtime commit `5398ced9...`. Production MediaPipe
+  loaded its worker, WASM runtime, and model; found one recorded human hand;
+  emitted 21 landmarks and a tracked pointer; began calibration; and shut down
+  cleanly with the classic-WASM fallback available. The hand implementation is
+  unchanged in `212b6aa...`, but this historical replay is not promoted to a
+  current physical-camera or smoothness claim.
+
+### UNVERIFIED
+
+- A real ChatGPT built-in-browser Site Tool invocation remains required on the
+  frozen Production release. Native Chrome and Chrome 153 prove registration,
+  lifecycle, cancellation, and page-side execution, but not the user's
+  ChatGPT rollout, Available Site Tools surface, or a ChatGPT-originated
+  mutation and `webmcp` receipt.
+- Danny's final live physical-hand acceptance remains required for index-
+  fingertip multi-stroke drawing, center-to-edge reach, calibration comfort,
+  one-hand target and pinch acquisition, grab/move/release, two-hand object
+  resize and rotation, canvas zoom in and out, open-palm pan, maximize,
+  minimize, side throw, recoverable trash, and exact Undo. Recorded media and
+  synthetic landmarks cannot establish latency, jitter, lighting, occlusion,
+  ergonomics, or three-consecutive-trial usability.
+- Physical microphone Realtime Voice using Danny's signed-in, server-resolved
+  saved credential without another key paste remains a separate manual check.
+  The controlled current-release provider test used temporary test admission
+  and fake browser audio and therefore does not prove that owner-session path.
+- A current real second participant joining from another physical device,
+  changing the canvas, and appearing in participant video remains manual
+  acceptance. Automated independent browsers prove current Presence,
+  collaboration, signaling, and fake-media rendering only.
+- Production OTP through Resend SMTP, email-bound invitation delivery and
+  acceptance, delivery-webhook reconciliation, immutable-recipient packet
+  approval, and a host-confirmed packet send remain external checks. `/demo`
+  must continue to report preview-only honestly when delivery is unavailable.
+- TURN is not configured in Production, so Wi-Fi-to-cellular or restrictive-
+  NAT media reliability is unverified. The authenticated private owner GPU
+  relay, pfSense connector, remote YOLO/pose inference, measured live latency,
+  and automatic local fallback also remain unverified on this release.
+- No Devpost submission has been made. Devpost project `1401254` remains an
+  incomplete pre-submission draft. No submission claim is authorized until
+  Danny accepts the physical flow and the required ChatGPT-host evidence.
+
+### CUT
+
+- No approved spatial manipulation, hand control, drawing, object creation,
+  history, grouping, frame, collaboration, participant-media, Site Tools, Live
+  Voice, authentication, invitation, packet, vision, image, or Resend
+  capability was silently removed.
+- A general-purpose SFU, recording, screen sharing, billing, enterprise
+  identity, native mobile or headset application, plugin marketplace, desktop
+  automation, and direct conferencing-suite integrations remain outside this
+  browser challenge product.
+- Submission remains blocked until Danny personally accepts finger drawing,
+  grab/move, two-hand manipulation, a real ChatGPT-host WebMCP mutation,
+  saved-key Live Voice, second-participant collaboration, and honest invitation
+  and packet behavior on the frozen Production release.
