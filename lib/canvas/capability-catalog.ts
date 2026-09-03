@@ -457,7 +457,7 @@ const compactBoardTaskSchema = z
   .strict();
 const compactBoardSchema = z
   .object({
-    title: titleSchema,
+    title: titleSchema.optional(),
     columns: z
       .array(
         z
@@ -468,7 +468,8 @@ const compactBoardSchema = z
           .strict(),
       )
       .min(1)
-      .max(5),
+      .max(5)
+      .optional(),
   })
   .strict();
 const compactScheduleSchema = z
@@ -707,7 +708,24 @@ export const REALTIME_CAPABILITY_ALIASES = [
       return { type: "note", ...(note.text ? { text: note.text } : {}) };
     },
   ),
-  alias("create_board", "create_object", "Create a project or task board in the current canvas viewport. Preserve the user's title, columns, tasks, owners, dates, and priorities instead of inventing canned launch content.", compactBoardSchema, (input) => ({ type: "task_board", ...(input as object) })),
+  alias(
+    "create_board",
+    "create_object",
+    "Create a project or task board in the current canvas viewport. If the user does not specify a title or columns, call this tool with an empty object; CommandCanvas creates an empty Project board with Next, In progress, and Done columns. Preserve every title, column, task, owner, date, and priority the user does provide.",
+    compactBoardSchema,
+    (input) => {
+      const board = input as z.infer<typeof compactBoardSchema>;
+      return {
+        type: "task_board",
+        title: board.title ?? "Project board",
+        columns: board.columns ?? [
+          { title: "Next", tasks: [] },
+          { title: "In progress", tasks: [] },
+          { title: "Done", tasks: [] },
+        ],
+      };
+    },
+  ),
   alias("create_schedule", "create_object", "Create a schedule or calendar in the current canvas viewport. Preserve the requested title, timezone, dates, commitments, times, and owners.", compactScheduleSchema, (input) => ({ type: "schedule", ...(input as object) })),
   alias("create_diagram", "create_object", "Create a structured architecture diagram, flowchart, or general node diagram. Supply semantic nodes and edges; CommandCanvas assigns spatial geometry.", compactDiagramSchema, (input) => ({ type: "diagram", ...(input as object) })),
   alias("create_chart", "create_object", "Create a pie, bar, or line chart from labeled numeric values. CommandCanvas assigns spatial geometry and internal IDs.", compactChartSchema, (input) => ({ type: "chart", ...(input as object) })),
@@ -778,15 +796,21 @@ export const REALTIME_CAPABILITY_ALIASES = [
 ] as const satisfies readonly RealtimeCapabilityAlias[];
 
 export function projectRealtimeCapabilityTools() {
-  return REALTIME_CAPABILITY_ALIASES.map((definition) => ({
-    type: "function" as const,
-    name: definition.name,
-    description: definition.description,
-    parameters: z.toJSONSchema(definition.inputSchema) as {
+  return REALTIME_CAPABILITY_ALIASES.map((definition) => {
+    const generated = z.toJSONSchema(definition.inputSchema) as {
       type: "object";
       properties: Record<string, unknown>;
-      required: readonly string[];
+      required?: readonly string[];
       additionalProperties: false;
-    },
-  }));
+    };
+    return {
+      type: "function" as const,
+      name: definition.name,
+      description: definition.description,
+      parameters: {
+        ...generated,
+        required: generated.required ?? [],
+      },
+    };
+  });
 }

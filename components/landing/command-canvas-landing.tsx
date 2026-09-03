@@ -247,10 +247,10 @@ function HeroWorkspace() {
 
 const capabilityCards: Array<{ icon: IconName; tone: string; title: string; text: string }> = [
   { icon: "mic", tone: "violetTone", title: "Realtime voice", text: "With your OpenAI key, optional Live Voice turns spoken intent into bounded canvas actions." },
-  { icon: "hand", tone: "tealTone", title: "Experimental hand input", text: "After camera calibration, local or private-relay landmarks can drive index drawing, grab, two-hand resize, minimize, and recoverable discard." },
+  { icon: "hand", tone: "tealTone", title: "Spatial hand control", text: "After camera calibration, local or private-relay landmarks can drive index drawing, grab, two-hand resize, minimize, and recoverable discard." },
   { icon: "receipt", tone: "orangeTone", title: "Shared receipts", text: "Supported canvas changes are attributed, visible, and reversible when technically reasonable." },
   { icon: "people", tone: "blueTone", title: "Live collaboration", text: "People join one room and edit the same spatial workspace in real time." },
-  { icon: "spark", tone: "purpleTone", title: "WebMCP Site Tools exposed", text: "Available where supported, agents use structured page tools to create, organize, and summarize." },
+  { icon: "spark", tone: "purpleTone", title: "ChatGPT Site Tools", text: "Available where supported, agents use structured page tools to create, organize, and summarize." },
 ];
 
 const workflowCards: Array<{ title: string; text: string; visual: ReactNode }> = [
@@ -358,7 +358,7 @@ function TransformationStory() {
   return (
     <section className={styles.proofSection} aria-label="Structured transformation and receipts">
       <div className={styles.transformStory}>
-        <h2>From rough sketch<br />to structured output</h2>
+        <h2 aria-label="From rough sketch to structured output">From rough sketch<br />to structured output</h2>
         <div className={styles.transformBoard} aria-label="A rough sketch becomes a structured visual">
           <div><span className={styles.proofLabel}>Rough sketch</span><FlowDiagram rough /></div>
           <span className={styles.proofArrow} aria-hidden="true"><Icon name="arrow" size={25} /></span>
@@ -418,12 +418,12 @@ export function CommandCanvasLanding() {
             <a href={`${repositoryUrl}#readme`} target="_blank" rel="noreferrer noopener">Docs</a>
           </div>
           <Link
-            aria-label="Open CommandCanvas"
+            aria-label="Try the no-signup demo"
             className={styles.navCta}
-            href="/meet"
+            href="/demo"
           >
-            <span className={styles.navCtaFull}>Open CommandCanvas</span>
-            <span className={styles.navCtaCompact} aria-hidden="true">Open</span>
+            <span className={styles.navCtaFull}>Try the demo</span>
+            <span className={styles.navCtaCompact} aria-hidden="true">Try</span>
             <Icon name="arrow" size={15} />
           </Link>
         </nav>
@@ -440,8 +440,8 @@ export function CommandCanvasLanding() {
               together, live and on one infinite canvas.
             </p>
             <div className={styles.heroActions}>
-              <Link className={styles.primaryCta} href="/meet">Open CommandCanvas <Icon name="arrow" size={17} /></Link>
-              <Link className={styles.secondaryCta} href="/demo"><Icon name="play" size={18} /> View judge preview</Link>
+              <Link aria-label="Try the no-signup demo" className={styles.primaryCta} href="/demo">Try the demo <Icon name="arrow" size={17} /></Link>
+              <Link className={styles.secondaryCta} href="/meet"><Icon name="people" size={18} /> Start a signed-in room</Link>
             </div>
             <div className={styles.heroAudience}>
               <div className={styles.avatarStack} aria-hidden="true">
@@ -482,7 +482,7 @@ export function CommandCanvasLanding() {
             <p>See how your team can think, plan, and build together with voice, hands, people, and agents.</p>
           </div>
           <div className={styles.finalActions}>
-            <Link className={styles.finalPrimary} href="/meet"><Icon name="spark" size={18} /> Start a meeting</Link>
+            <Link className={styles.finalPrimary} href="/demo"><Icon name="spark" size={18} /> Launch demo</Link>
             <a className={styles.finalSecondary} href={repositoryUrl} target="_blank" rel="noreferrer noopener">View repository <Icon name="arrow" size={16} /></a>
           </div>
         </section>

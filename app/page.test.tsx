@@ -23,7 +23,7 @@ describe("CommandCanvas landing page", () => {
     ).toBeInTheDocument();
   });
 
-  it("routes the primary actions to the signed workspace and keeps the judge preview secondary", () => {
+  it("routes primary actions to the no-signup demo and keeps durable rooms available", () => {
     render(<Home />);
 
     const navigation = screen.getByRole("navigation", {
@@ -37,24 +37,17 @@ describe("CommandCanvas landing page", () => {
       "/demo",
     );
 
-    const workspaceLinks = screen.getAllByRole("link", {
-      name: /open commandcanvas|start a meeting/i,
+    const demoLinks = screen.getAllByRole("link", {
+      name: /try the no-signup demo|launch demo/i,
     });
-    expect(workspaceLinks).not.toHaveLength(0);
-    for (const link of workspaceLinks) {
-      expect(link).toHaveAttribute("href", "/meet");
-    }
-
-    const previewLinks = screen.getAllByRole("link", {
-      name: /judge preview/i,
-    });
-    expect(previewLinks).not.toHaveLength(0);
-    for (const link of previewLinks) {
+    expect(demoLinks).not.toHaveLength(0);
+    for (const link of demoLinks) {
       expect(link).toHaveAttribute("href", "/demo");
     }
+
     expect(
-      screen.queryByRole("link", { name: /try the demo|launch demo/i }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("link", { name: /start a signed-in room/i }),
+    ).toHaveAttribute("href", "/meet");
     expect(screen.getByRole("link", { name: /view repository/i })).toHaveAttribute(
       "href",
       "https://github.com/romiteld/commandcanvas",
@@ -94,7 +87,7 @@ describe("CommandCanvas landing page", () => {
     expect(
       screen.getByText("Product illustration using real hand-capture frames"),
     ).toBeVisible();
-    expect(screen.getByText("WebMCP Site Tools exposed")).toBeVisible();
+    expect(screen.getByText("ChatGPT Site Tools")).toBeVisible();
     expect(screen.getByText(/available where supported/i)).toBeVisible();
     expect(screen.getByText("Recorded")).toBeVisible();
     expect(screen.queryByText(/^verified$/i)).not.toBeInTheDocument();

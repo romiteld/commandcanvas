@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+
 import { expect, test } from "@playwright/test";
 
 import {
@@ -71,6 +73,21 @@ test("regular GPT Realtime hears speech and submits a canonical canvas mutation"
                       : null,
                   )
                 : undefined,
+              outputItems: Array.isArray(response?.output)
+                ? response.output.map((entry) => {
+                    const output =
+                      entry && typeof entry === "object"
+                        ? (entry as Record<string, unknown>)
+                        : null;
+                    return output
+                      ? {
+                          type: output.type,
+                          name: output.name,
+                          callId: output.call_id,
+                        }
+                      : null;
+                  })
+                : undefined,
             });
             if (summaries.length > 200) summaries.shift();
           } catch {
@@ -106,6 +123,50 @@ test("regular GPT Realtime hears speech and submits a canonical canvas mutation"
       page.getByRole("list", { name: "Live voice transcript" }),
     ).toContainText(/project board/i, { timeout: 30_000 });
     try {
+      await expect
+        .poll(
+          () =>
+            page.evaluate(() => {
+              const summaries =
+                (
+                  window as typeof window & {
+                    __commandCanvasRealtimeEventSummaries?: Array<
+                      Record<string, unknown>
+                    >;
+                  }
+                ).__commandCanvasRealtimeEventSummaries ?? [];
+              return summaries.some((summary) => {
+                if (
+                  summary.type === "response.output_item.done" &&
+                  summary.itemType === "function_call" &&
+                  summary.name === "create_board"
+                )
+                  return true;
+                if (
+                  summary.type === "response.function_call_arguments.done" &&
+                  summary.name === "create_board"
+                )
+                  return true;
+                if (summary.type !== "response.done") return false;
+                return Array.isArray(summary.outputItems)
+                  ? summary.outputItems.some(
+                      (entry) =>
+                        entry &&
+                        typeof entry === "object" &&
+                        (entry as Record<string, unknown>).type ===
+                          "function_call" &&
+                        (entry as Record<string, unknown>).name ===
+                          "create_board",
+                    )
+                  : false;
+              });
+            }),
+          { timeout: 30_000 },
+        )
+        .toBe(true);
+      await expect(
+        page.getByRole("list", { name: "Live voice transcript" }),
+      ).toContainText(/Running create board/i, { timeout: 30_000 });
       await expect(
         page.getByRole("button", { name: "Select Project Board" }),
       ).toBeVisible({ timeout: 30_000 });
@@ -130,8 +191,16 @@ test("regular GPT Realtime hears speech and submits a canonical canvas mutation"
             }
           ).__commandCanvasRealtimeEventSummaries ?? [],
       );
+      const providerEventsPath = testInfo.outputPath(
+        "realtime-provider-event-types.json",
+      );
+      await writeFile(
+        providerEventsPath,
+        JSON.stringify(providerEvents, null, 2),
+        "utf8",
+      );
       await testInfo.attach("realtime-provider-event-types.json", {
-        body: Buffer.from(JSON.stringify(providerEvents, null, 2)),
+        path: providerEventsPath,
         contentType: "application/json",
       });
     }
