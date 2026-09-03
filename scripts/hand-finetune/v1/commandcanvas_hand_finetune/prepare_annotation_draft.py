@@ -21,7 +21,6 @@ from .canonical import (
     write_canonical_json,
 )
 from .prepare_dataset import (
-    MAX_FRAMES_PER_SESSION,
     CommandRunner,
     DatasetPreparationError,
     _asset,
@@ -38,7 +37,9 @@ from .prepare_dataset import (
     _safe_relative,
     _validate_categories,
     _validate_companion,
+    _validate_mapped_session,
     _validate_session_map,
+    _resolve_sample_timestamps,
 )
 
 
@@ -73,21 +74,7 @@ def _prepare_sessions(
     capture_group_splits: dict[str, str] = {}
     for index, raw_session in enumerate(mapped_sessions):
         description = f"session map sessions[{index}]"
-        session = _require_exact_keys(
-            raw_session,
-            {
-                "visionSessionId",
-                "datasetSessionId",
-                "captureGroupId",
-                "split",
-                "categories",
-                "videoPath",
-                "manifestPath",
-                "labelDir",
-                "annotation",
-            },
-            description,
-        )
+        session = _validate_mapped_session(raw_session, description)
         vision_session_id = _nonempty_string(
             session["visionSessionId"], f"{description}.visionSessionId"
         )
@@ -193,11 +180,12 @@ def _prepare_sessions(
                 raise DatasetPreparationError(f"duplicate {field}: {value}")
             identities[field].add(value)
         duration_ms = int(round(duration_seconds * 1000))
-        timestamps = list(range(0, max(1, duration_ms), cadence_ms))
-        if not timestamps or len(timestamps) > MAX_FRAMES_PER_SESSION:
-            raise DatasetPreparationError(
-                "frame extraction count is outside safe bounds"
-            )
+        timestamps = _resolve_sample_timestamps(
+            session,
+            description=description,
+            duration_ms=duration_ms,
+            cadence_ms=cadence_ms,
+        )
         parsed.append(
             {
                 "visionSessionId": vision_session_id,

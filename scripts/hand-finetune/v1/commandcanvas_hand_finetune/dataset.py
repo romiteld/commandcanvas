@@ -894,7 +894,7 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                 else:
                     for index, mapped in enumerate(mapped_sessions):
                         location = f"producer session map sessions[{index}]"
-                        if not _exact_keys(
+                        if not _allowed_keys(
                             mapped,
                             {
                                 "visionSessionId",
@@ -907,6 +907,7 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                                 "labelDir",
                                 "annotation",
                             },
+                            {"sampleTimestampsMs"},
                             location,
                             errors,
                         ):
@@ -945,6 +946,28 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                             )
                         else:
                             producer_mappings[mapped_id] = mapped
+                        selected_timestamps = mapped.get("sampleTimestampsMs")
+                        if selected_timestamps is not None and (
+                            not isinstance(selected_timestamps, list)
+                            or not selected_timestamps
+                            or len(selected_timestamps) > 100_000
+                            or any(
+                                isinstance(timestamp, bool)
+                                or not isinstance(timestamp, int)
+                                or timestamp < 0
+                                for timestamp in selected_timestamps
+                            )
+                            or any(
+                                current <= prior
+                                for prior, current in zip(
+                                    selected_timestamps, selected_timestamps[1:]
+                                )
+                            )
+                        ):
+                            errors.append(
+                                f"{location}.sampleTimestampsMs must be a nonempty, "
+                                "strictly increasing array of nonnegative integers"
+                            )
         if producer_chain is not None and "annotationReview" in producer_chain:
             session_map_asset = producer_chain.get("sessionMap")
             session_map_sha = (
@@ -1388,6 +1411,15 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                     ) != producer_session_map.get("actorId"):
                         errors.append(
                             f"{location}.producer session-map actorId does not match"
+                        )
+                    selected_timestamps = mapping.get("sampleTimestampsMs")
+                    if selected_timestamps is not None and selected_timestamps != [
+                        frame.get("timestampMs")
+                        for frame in session.get("frames", [])
+                        if isinstance(frame, dict)
+                    ]:
+                        errors.append(
+                            f"{location}.producer sample timestamps do not match frames"
                         )
                 if review_session is not None:
                     review_binding = {

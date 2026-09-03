@@ -24,6 +24,8 @@ from commandcanvas_hand_finetune.archive_dataset import (  # noqa: E402
 )
 from commandcanvas_hand_finetune.canonical import (  # noqa: E402
     attach_digest,
+    canonical_json_bytes,
+    sha256_bytes,
     sha256_file,
     write_canonical_json,
 )
@@ -308,6 +310,39 @@ class DatasetPreparationTests(unittest.TestCase):
                 for call in runner.calls
                 if Path(call[0]).name == "ffmpeg"
             )
+        )
+
+    def test_dataset_uses_provenance_bound_per_session_sample_timestamps(self) -> None:
+        selected_session = self.session_map["sessions"][0]
+        selected_session["sampleTimestampsMs"] = [0, 60, 120]
+        selected_labels = self.labels / selected_session["labelDir"]
+        (selected_labels / "frame-0000000060.txt").write_text(
+            hand_label(), encoding="utf-8"
+        )
+        write_json(self.session_map_path, self.session_map)
+
+        output = self.root / "timestamp-selected-dataset"
+        receipt = prepare_dataset(
+            capture_root=self.captures,
+            session_map_path=self.session_map_path,
+            labels_root=self.labels,
+            output_dir=output,
+            command_runner=FakeMediaRunner(),
+        )
+
+        manifest = json.loads((output / "dataset-manifest.json").read_text())
+        selected = next(
+            session
+            for session in manifest["sessions"]
+            if session["sessionId"] == selected_session["datasetSessionId"]
+        )
+        self.assertEqual(
+            [frame["timestampMs"] for frame in selected["frames"]], [0, 60, 120]
+        )
+        self.assertEqual(receipt["frameCount"], 9)
+        self.assertEqual(
+            manifest["producerChain"]["sessionMap"]["sha256"],
+            sha256_bytes(canonical_json_bytes(self.session_map)),
         )
 
     def test_accepts_task1_optional_metadata_absence_and_uses_probe_authority(

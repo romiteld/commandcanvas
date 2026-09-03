@@ -78,7 +78,11 @@ PYTHONPATH=scripts/hand-finetune/v1 \
 This adapter is offline and local-only. It refuses any checkpoint whose bytes
 do not match the pinned YOLO26 pose SHA-256 in `training_spec.py`, and it loads
 Ultralytics only at execution time from the separately licensed runtime. The
-Vision Lab cadence remains the sole frame sampler. Positive train and
+The top-level Vision Lab cadence remains the compatible default frame sampler.
+A session may instead declare `sampleTimestampsMs`, a nonempty, strictly
+increasing list of unique millisecond offsets within the probed video duration.
+Those exact timestamps are bound by the canonical session-map digest and must
+match the annotation draft and final dataset frames. Positive train and
 validation frames receive at most two 21-point suggestions; declared
 negative/no-hand frames remain canonical empty manual labels, and every holdout
 frame remains manual. No suggestion is marked reviewed.
@@ -186,8 +190,9 @@ protocol, and treats ffprobe dimensions/duration as media authority. Task 1's
 optional digest, width, height, frame-rate, and facing-mode fields may remain
 absent. Capture-group split isolation and the exact corrected-label set are
 verified before publishing a canonical Task 2 manifest and receipt.
-Frame extraction writes PNGs at the map's explicit cadence; the raw WebM is
-copied byte-for-byte and is never replaced or transcoded.
+Frame extraction writes PNGs at each session's exact timestamp selection, or
+at the map's global cadence when no selection is present; the raw WebM is copied
+byte-for-byte and is never replaced or transcoded.
 
 The emitted `commandcanvas.hand-dataset/v2` manifest preserves the canonical
 session map at `provenance/session-map.json` and each canonical Vision Lab

@@ -44,6 +44,17 @@ MIN_CADENCE_MS = 20
 MAX_CADENCE_MS = 5_000
 MAX_FRAMES_PER_SESSION = 100_000
 MAX_PROBE_PACKETS = MAX_FRAMES_PER_SESSION + 1
+SESSION_MAP_SESSION_KEYS = {
+    "visionSessionId",
+    "datasetSessionId",
+    "captureGroupId",
+    "split",
+    "categories",
+    "videoPath",
+    "manifestPath",
+    "labelDir",
+    "annotation",
+}
 
 
 class DatasetPreparationError(ValueError):
@@ -109,6 +120,55 @@ def _require_exact_keys(
             details.append(f"unsupported {', '.join(sorted(unknown))}")
         raise DatasetPreparationError(f"{description} fields: {'; '.join(details)}")
     return value
+
+
+def _validate_mapped_session(value: Any, description: str) -> dict[str, Any]:
+    optional = (
+        {"sampleTimestampsMs"}
+        if isinstance(value, dict) and "sampleTimestampsMs" in value
+        else set()
+    )
+    return _require_exact_keys(value, SESSION_MAP_SESSION_KEYS | optional, description)
+
+
+def _resolve_sample_timestamps(
+    session: dict[str, Any],
+    *,
+    description: str,
+    duration_ms: int,
+    cadence_ms: int,
+) -> list[int]:
+    selected = session.get("sampleTimestampsMs")
+    if selected is None:
+        timestamps = list(range(0, max(1, duration_ms), cadence_ms))
+    else:
+        if not isinstance(selected, list) or not selected:
+            raise DatasetPreparationError(
+                f"{description}.sampleTimestampsMs must be a nonempty array"
+            )
+        timestamps = []
+        prior = -1
+        for index, timestamp in enumerate(selected):
+            if (
+                isinstance(timestamp, bool)
+                or not isinstance(timestamp, int)
+                or timestamp < 0
+                or timestamp >= duration_ms
+            ):
+                raise DatasetPreparationError(
+                    f"{description}.sampleTimestampsMs[{index}] must be an integer "
+                    "within the probed video duration"
+                )
+            if timestamp <= prior:
+                raise DatasetPreparationError(
+                    f"{description}.sampleTimestampsMs must be unique and strictly "
+                    "increasing"
+                )
+            timestamps.append(timestamp)
+            prior = timestamp
+    if not timestamps or len(timestamps) > MAX_FRAMES_PER_SESSION:
+        raise DatasetPreparationError("frame extraction count is outside safe bounds")
+    return timestamps
 
 
 def _canonical_uuid(value: Any, description: str) -> str:
@@ -706,21 +766,7 @@ def prepare_dataset(
     capture_group_splits: dict[str, str] = {}
     for index, raw_session in enumerate(mapped_sessions):
         description = f"session map sessions[{index}]"
-        session = _require_exact_keys(
-            raw_session,
-            {
-                "visionSessionId",
-                "datasetSessionId",
-                "captureGroupId",
-                "split",
-                "categories",
-                "videoPath",
-                "manifestPath",
-                "labelDir",
-                "annotation",
-            },
-            description,
-        )
+        session = _validate_mapped_session(raw_session, description)
         vision_session_id = _nonempty_string(
             session["visionSessionId"], f"{description}.visionSessionId"
         )
@@ -878,11 +924,12 @@ def prepare_dataset(
             identifiers[field].add(value)
 
         duration_ms = int(round(duration_seconds * 1000))
-        timestamps = list(range(0, max(1, duration_ms), cadence_ms))
-        if not timestamps or len(timestamps) > MAX_FRAMES_PER_SESSION:
-            raise DatasetPreparationError(
-                "frame extraction count is outside safe bounds"
-            )
+        timestamps = _resolve_sample_timestamps(
+            session,
+            description=description,
+            duration_ms=duration_ms,
+            cadence_ms=cadence_ms,
+        )
         parsed_sessions.append(
             {
                 "visionSessionId": vision_session_id,

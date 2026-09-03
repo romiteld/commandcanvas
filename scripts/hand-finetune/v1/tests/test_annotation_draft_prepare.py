@@ -108,6 +108,65 @@ class AnnotationDraftPreparationTests(unittest.TestCase):
             sum(Path(call[0]).name == "ffmpeg" for call in runner.calls), 8
         )
 
+    def test_per_session_sample_timestamps_override_global_cadence(self) -> None:
+        session_map = json.loads(self.session_map_path.read_text())
+        selected_session = session_map["sessions"][0]
+        selected_session["sampleTimestampsMs"] = [40, 160, 220]
+        self.session_map_path.write_text(
+            json.dumps(session_map, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+        output = self.root / "timestamp-selected-draft"
+        result = prepare_annotation_draft(
+            capture_root=self.captures,
+            session_map_path=self.session_map_path,
+            output_dir=output,
+            command_runner=FakeMediaRunner(),
+        )
+
+        draft = json.loads((output / "annotation-draft.json").read_text())
+        selected = next(
+            session
+            for session in draft["sessions"]
+            if session["sessionId"] == selected_session["datasetSessionId"]
+        )
+        self.assertEqual(
+            [frame["timestampMs"] for frame in selected["frames"]], [40, 160, 220]
+        )
+        self.assertEqual(result["frameCount"], 9)
+        self.assertEqual(
+            draft["sourceAdapter"]["sourceManifestSha256"],
+            sha256_bytes(canonical_json_bytes(session_map)),
+        )
+
+    def test_refuses_invalid_per_session_sample_timestamps(self) -> None:
+        invalid_values = (
+            [],
+            [0, 0],
+            [120, 20],
+            [-1],
+            [240],
+            [True],
+        )
+        for index, timestamps in enumerate(invalid_values):
+            with self.subTest(timestamps=timestamps):
+                session_map = json.loads(self.session_map_path.read_text())
+                session_map["sessions"][0]["sampleTimestampsMs"] = timestamps
+                path = self.root / f"invalid-session-map-{index}.json"
+                path.write_text(
+                    json.dumps(session_map, sort_keys=True) + "\n", encoding="utf-8"
+                )
+                with self.assertRaisesRegex(
+                    AnnotationDraftPreparationError,
+                    "sampleTimestampsMs",
+                ):
+                    prepare_annotation_draft(
+                        capture_root=self.captures,
+                        session_map_path=path,
+                        output_dir=self.root / f"invalid-draft-{index}",
+                        command_runner=FakeMediaRunner(),
+                    )
+
     def test_refuses_a_draft_root_inside_or_containing_the_repository(self) -> None:
         repository = PACKAGE_ROOT.parents[2]
         for output in (repository / ".private-annotation-output-never",):
