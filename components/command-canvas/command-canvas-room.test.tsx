@@ -202,14 +202,13 @@ function inverseFallbackAxis(
   cameraStart: number,
   cameraSpan: number,
 ) {
-  const gain =
-    gainState === "hover"
-      ? 1.5
-      : gainState === "target"
-        ? 1.25
-        : gainState === "two_hand"
-          ? 1
-          : 1.1;
+  const gain = {
+    hover: 1.1,
+    target: 1.1,
+    held: 1.1,
+    draw: 1.1,
+    two_hand: 1.1,
+  }[gainState];
   const safeRatio = Math.min(24, canvasSize / 2) / canvasSize;
   const edgeExtrapolation = 0.1;
   const comfortable =

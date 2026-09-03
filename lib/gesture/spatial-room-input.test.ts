@@ -236,6 +236,31 @@ describe("spatial room input adapter", () => {
     expect(wide.input.pointer).not.toEqual({ x: 0.4, y: 0.4 });
   });
 
+  it("does not move a stationary hand when interaction state changes", () => {
+    const canvas = { left: 0, top: 0, width: 1_000, height: 500 };
+    const profile = calibration({});
+    const mapped = (["hover", "target", "held", "draw"] as const).map(
+      (gainState) =>
+        reduceSpatialRoomObservation(
+          createInitialSpatialRoomInputState(),
+          measuredObservation(1_000),
+          {
+            calibration: profile,
+            canvas,
+            gainState,
+            edgePreviewVisible: false,
+          },
+        ).input,
+    );
+    const points = mapped.map((input) => {
+      if (input.mode === "idle" || input.mode === "bimanual_pinch")
+        throw new Error("Expected a mapped single-hand observation.");
+      return input.pointer;
+    });
+
+    expect(points.slice(1)).toEqual([points[0], points[0], points[0]]);
+  });
+
   it("uses Task 2 calibrated thresholds and two-of-three voting for semantic pinch", () => {
     const canvas = { left: 0, top: 0, width: 1_000, height: 500 };
     const strictProfile = calibration({

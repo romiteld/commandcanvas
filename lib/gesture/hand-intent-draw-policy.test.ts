@@ -56,6 +56,31 @@ describe("draw-index-led hand point policy", () => {
     ).toMatchObject({ accepted: false, reason: "no_deliberate_gesture" });
   });
 
+  it("accepts a foreshortened index as ink only in explicit Draw mode", () => {
+    const landmarks = [...rawHandLandmarks({ pose: "relaxed_index" })];
+    landmarks[6] = { x: 0.43, y: 0.6, z: 0, visibility: 0.99 };
+    landmarks[7] = { x: 0.5, y: 0.55, z: 0, visibility: 0.99 };
+    landmarks[8] = { x: 0.46, y: 0.48, z: 0, visibility: 0.99 };
+    const observation = {
+      landmarks: landmarks as unknown as ReturnType<typeof rawHandLandmarks>,
+      confidence: 0.98,
+      timestamp: 1_000,
+    };
+
+    expect(
+      interpretHandFrame(
+        createInitialHandIntentState(),
+        observation,
+        1_010,
+        { pointPolicy: "draw-index-led" },
+      ).output,
+    ).toMatchObject({ accepted: true, mode: "point" });
+    expect(
+      interpretHandFrame(createInitialHandIntentState(), observation, 1_010)
+        .output,
+    ).toMatchObject({ accepted: false, reason: "no_deliberate_gesture" });
+  });
+
   it("still refuses predicted, stale, and unreliable index observations", () => {
     const predicted = { ...frame("relaxed_index"), predicted: true };
     expect(

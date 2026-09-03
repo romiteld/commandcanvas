@@ -340,15 +340,15 @@ describe("hand calibration", () => {
   });
 
   it.each([
-    ["top-left", { x: 0.17, y: 0.17 }, { x: 24, y: 24 }],
-    ["top", { x: 0.5, y: 0.17 }, { x: 500, y: 24 }],
-    ["top-right", { x: 0.83, y: 0.17 }, { x: 976, y: 24 }],
-    ["left", { x: 0.17, y: 0.5 }, { x: 24, y: 250 }],
+    ["top-left", { x: 0.17, y: 0.17 }, { x: 12, y: 12 }],
+    ["top", { x: 0.5, y: 0.17 }, { x: 500, y: 12 }],
+    ["top-right", { x: 0.83, y: 0.17 }, { x: 988, y: 12 }],
+    ["left", { x: 0.17, y: 0.5 }, { x: 12, y: 250 }],
     ["center", { x: 0.5, y: 0.5 }, { x: 500, y: 250 }],
-    ["right", { x: 0.83, y: 0.5 }, { x: 976, y: 250 }],
-    ["bottom-left", { x: 0.17, y: 0.83 }, { x: 24, y: 476 }],
-    ["bottom", { x: 0.5, y: 0.83 }, { x: 500, y: 476 }],
-    ["bottom-right", { x: 0.83, y: 0.83 }, { x: 976, y: 476 }],
+    ["right", { x: 0.83, y: 0.5 }, { x: 988, y: 250 }],
+    ["bottom-left", { x: 0.17, y: 0.83 }, { x: 12, y: 488 }],
+    ["bottom", { x: 0.5, y: 0.83 }, { x: 500, y: 488 }],
+    ["bottom-right", { x: 0.83, y: 0.83 }, { x: 988, y: 488 }],
   ])("maps the %s of comfortable reach over the safe canvas", (_region, point, expected) => {
     const calibration = buildHandCalibration({
       deviceKey: "camera-a",
@@ -373,7 +373,7 @@ describe("hand calibration", () => {
         { left: 0, top: 0, width: 1_000, height: 500 },
         "two_hand",
       ),
-    ).toMatchObject({ point: expected, gain: 1 });
+    ).toMatchObject({ point: expected, gain: 1.1 });
   });
 
   it("keeps the calibrated interior linear and extrapolates beyond it to the true viewport edge", () => {
@@ -402,8 +402,8 @@ describe("hand calibration", () => {
     );
 
     expect(quarter).toMatchObject({
-      point: { x: 302, y: 157 },
-      normalized: { x: 0.262, y: 0.274 },
+      point: { x: 278.2, y: 145.7 },
+      normalized: { x: 0.2382, y: 0.2514 },
     });
     expect(outsideComfortableReach).toMatchObject({
       point: { x: 40, y: 20 },
@@ -411,7 +411,7 @@ describe("hand calibration", () => {
     });
   });
 
-  it("uses coarse gain while hovering and lowers it for precise interaction states", () => {
+  it("keeps the same calibrated point through every interaction state", () => {
     const calibration = buildHandCalibration({
       deviceKey: "camera-a",
       mirrorX: false,
@@ -435,12 +435,14 @@ describe("hand calibration", () => {
     const twoHand = mapCalibratedPointer(calibration, { x: 0.65, y: 0.5 }, canvas, "two_hand");
 
     expect([hover.gain, target.gain, held.gain, draw.gain, twoHand.gain]).toEqual([
-      1.5, 1.25, 1.1, 1.1, 1,
+      1.1, 1.1, 1.1, 1.1, 1.1,
     ]);
-    expect(hover.point.x).toBeGreaterThan(target.point.x);
-    expect(target.point.x).toBeGreaterThan(held.point.x);
-    expect(held.point.x).toBeGreaterThan(twoHand.point.x);
-    expect(draw.point.x).toBe(held.point.x);
+    expect([target.point, held.point, draw.point, twoHand.point]).toEqual([
+      hover.point,
+      hover.point,
+      hover.point,
+      hover.point,
+    ]);
   });
 });
 

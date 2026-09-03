@@ -75,11 +75,16 @@ function rawBimanualInput(
   timestamp: number,
   leftOffset: number,
   rightOffset: number,
+  confidence = 0.98,
 ): Extract<SpatialGestureInput, { mode: "bimanual_pinch" }> {
-  const hands = [
+  const rawHands = [
     rawPinchedHand("left-track", timestamp, { offsetX: leftOffset }),
     rawPinchedHand("right-track", timestamp, { offsetX: rightOffset }),
   ] as const;
+  const hands = rawHands.map((hand) => ({ ...hand, confidence })) as [
+    SpatialBimanualHand,
+    SpatialBimanualHand,
+  ];
   return {
     mode: "bimanual_pinch",
     pointers: [hands[0].pointer, hands[1].pointer],
@@ -102,6 +107,7 @@ function rawSingleInput(
   timestamp: number,
   pointer: { readonly x: number; readonly y: number },
   edgePreviewVisible = false,
+  confidence = 0.98,
 ): Extract<SpatialGestureInput, { mode: "pinch" | "point" }> {
   const transition = interpretHandFrame(
     createInitialHandIntentState(),
@@ -127,7 +133,7 @@ function rawSingleInput(
     timestamp,
     reliability: {
       trackId,
-      confidence: transition.output.confidence,
+      confidence,
       real: true,
       predicted: false,
       trackingState: "tracked",
@@ -137,6 +143,112 @@ function rawSingleInput(
 }
 
 describe("raw-landmark spatial recovery", () => {
+  it("accepts valid 0.60-confidence index ink but rejects 0.49", () => {
+    const scene: SpatialGestureScene = {
+      bounds: { left: 0, top: 0, width: 1_000, height: 600 },
+      viewport: { x: 0, y: 0, scale: 1 },
+      selectedObjectId: null,
+      objects: [],
+    };
+    const drawing = { drawingEnabled: true, manipulationEnabled: false };
+    const accepted = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      rawSingleInput("point", "draw-track", 500, { x: 0.4, y: 0.4 }, false, 0.6),
+      scene,
+      drawing,
+    );
+    const rejected = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      rawSingleInput("point", "draw-track", 500, { x: 0.4, y: 0.4 }, false, 0.49),
+      scene,
+      drawing,
+    );
+
+    expect(accepted.state.phase).toBe("drawing");
+    expect(accepted.effects).toContainEqual(
+      expect.objectContaining({ type: "stroke.preview" }),
+    );
+    expect(rejected.state.phase).toBe("idle");
+    expect(rejected.effects).toEqual([]);
+  });
+
+  it("lets a valid 0.60-confidence pinch acquire and move an object", () => {
+    const scene: SpatialGestureScene = {
+      bounds: { left: 0, top: 0, width: 1_000, height: 600 },
+      viewport: { x: 0, y: 0, scale: 1 },
+      selectedObjectId: null,
+      objects: [
+        {
+          id: "confidence-card",
+          x: 300,
+          y: 180,
+          width: 260,
+          height: 180,
+          zIndex: 1,
+          pinned: false,
+          minimized: false,
+        },
+      ],
+    };
+    const pending = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      rawSingleInput("pinch", "move-track", 600, { x: 0.4, y: 0.4 }, false, 0.6),
+      scene,
+      manipulation,
+    );
+    const held = reduceSpatialGesture(
+      pending.state,
+      rawSingleInput("pinch", "move-track", 648, { x: 0.4, y: 0.4 }, false, 0.6),
+      scene,
+      manipulation,
+    );
+    const moved = reduceSpatialGesture(
+      held.state,
+      rawSingleInput("pinch", "move-track", 664, { x: 0.46, y: 0.4 }, false, 0.6),
+      scene,
+      manipulation,
+    );
+
+    expect(held.state).toMatchObject({
+      phase: "held_one",
+      held: { objectId: "confidence-card" },
+    });
+    expect(moved.state.held?.currentTransform.x).toBeGreaterThan(300);
+  });
+
+  it("allows two valid 0.60-confidence hands to transform objects and blank canvas", () => {
+    const selectedObject = {
+      id: "two-hand-confidence-card",
+      x: 300,
+      y: 260,
+      width: 400,
+      height: 220,
+      zIndex: 1,
+      pinned: false,
+      minimized: false,
+    };
+    const objectScene: SpatialGestureScene = {
+      bounds: { left: 0, top: 0, width: 1_000, height: 600 },
+      viewport: { x: 0, y: 0, scale: 1 },
+      selectedObjectId: selectedObject.id,
+      objects: [selectedObject],
+    };
+    const objectTransform = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      rawBimanualInput(700, -0.2, 0.2, 0.6),
+      objectScene,
+      manipulation,
+    );
+    const canvasZoom = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      rawBimanualInput(700, -0.2, 0.2, 0.6),
+      { ...objectScene, selectedObjectId: null, objects: [] },
+      manipulation,
+    );
+
+    expect(objectTransform.state.phase).toBe("transforming_two");
+    expect(canvasZoom.state.phase).toBe("panning");
+  });
   it.each([0.35, 2.5])(
     "keeps direct two-hand acquisition in CSS pixels at viewport scale %s",
     (scale) => {
