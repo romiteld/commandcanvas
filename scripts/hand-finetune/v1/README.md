@@ -60,6 +60,37 @@ bridge. It copies the raw videos, extracts deterministic frames, creates empty
 labels, and emits `annotation-draft.json`. It makes no model or provider call.
 The destination must neither be inside this repository nor contain it.
 
+For the bounded owner-only review run, the same source map can instead receive
+local YOLO26 pose suggestions before the workbench opens:
+
+```sh
+PYTHONPATH=scripts/hand-finetune/v1 \
+  python3 -m commandcanvas_hand_finetune \
+  prepare-prelabeled-annotation-draft \
+  --capture-root /absolute/private/path/captures \
+  --session-map /absolute/private/path/session-map.json \
+  --checkpoint /absolute/private/path/yolo26_hand_pose.pt \
+  --output-dir /absolute/private/path/hand-review \
+  --device 0 \
+  --acknowledge-owner-only-license-boundary
+```
+
+This adapter is offline and local-only. It refuses any checkpoint whose bytes
+do not match the pinned YOLO26 pose SHA-256 in `training_spec.py`, and it loads
+Ultralytics only at execution time from the separately licensed runtime. The
+Vision Lab cadence remains the sole frame sampler. Positive train and
+validation frames receive at most two 21-point suggestions; declared
+negative/no-hand frames remain canonical empty manual labels, and every holdout
+frame remains manual. No suggestion is marked reviewed.
+
+The draft canonically binds the dataset ID, Vision Lab and dataset session IDs,
+frame ID and timestamp, exact extracted-image digest, exact suggested-label
+digest, and pinned model digest. The normal workbench must still review and save
+every frame. Finalization and the v2 bridge then archive the original draft and
+the complete human edit chain without relaxing the strict validator. Raw
+captures, checkpoint bytes, generated drafts, and corrected labels must all
+remain outside this repository.
+
 The annotation workbench opens a self-contained page on the local loopback
 interface. It accepts either a strict dataset or an incomplete annotation draft
 located **outside this repository**. It never uploads images or loads remote

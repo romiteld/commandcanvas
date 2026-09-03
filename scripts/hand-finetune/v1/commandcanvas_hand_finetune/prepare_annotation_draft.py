@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID
 
 from .annotation_workbench import (
@@ -45,6 +45,8 @@ from .prepare_dataset import (
 DRAFT_PREPARATION_SCHEMA = "commandcanvas.hand-annotation-draft-preparation/v1"
 DRAFT_ADAPTER = "commandcanvas-vision-lab-annotation-draft"
 DRAFT_ADAPTER_VERSION = "1.0.0"
+
+FrameLabeler = Callable[[Path, dict[str, str]], bytes]
 
 
 class AnnotationDraftPreparationError(ValueError):
@@ -213,12 +215,16 @@ def _prepare_sessions(
     return dataset_id, actor_id, cadence_ms, parsed
 
 
-def prepare_annotation_draft(
+def _materialize_annotation_draft(
     *,
     capture_root: Path,
     session_map_path: Path,
     output_dir: Path,
     command_runner: CommandRunner = _default_command_runner,
+    frame_labeler: FrameLabeler | None = None,
+    prelabel_model_sha256: str | None = None,
+    prelabel_tool: str | None = None,
+    prelabel_tool_version: str | None = None,
 ) -> dict[str, Any]:
     """Extract immutable Vision Lab frames and publish one local review draft."""
 
@@ -246,9 +252,16 @@ def prepare_annotation_draft(
                 "validation": set(),
                 "holdout": set(),
             }
+            prelabeled_frame_count = 0
+            manual_frame_count = 0
             for session in sorted(sessions, key=lambda item: item["datasetSessionId"]):
                 session_id = session["datasetSessionId"]
                 split_groups[session["split"]].add(session["captureGroupId"])
+                model_assisted = (
+                    frame_labeler is not None
+                    and session["split"] in {"train", "validation"}
+                    and session["categories"] != ["negative"]
+                )
                 source_destination = staging / "videos" / f"{session_id}.webm"
                 source_destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(session["source"], source_destination)
@@ -272,8 +285,31 @@ def prepare_annotation_draft(
                         raise DatasetPreparationError(
                             "extracted frame dimensions do not match the video"
                         )
+                    if model_assisted:
+                        assert frame_labeler is not None
+                        label_bytes = frame_labeler(
+                            image_path,
+                            {
+                                "datasetId": dataset_id,
+                                "sessionId": session_id,
+                                "frameId": frame_id,
+                                "imageSha256": image_asset["sha256"],
+                            },
+                        )
+                        if not isinstance(label_bytes, bytes):
+                            raise DatasetPreparationError(
+                                "prelabel adapter must return canonical label bytes"
+                            )
+                        if sha256_file(image_path) != image_asset["sha256"]:
+                            raise DatasetPreparationError(
+                                "extracted frame changed during model prelabeling"
+                            )
+                        prelabeled_frame_count += 1
+                    else:
+                        label_bytes = b""
+                        manual_frame_count += 1
                     label_path.parent.mkdir(parents=True, exist_ok=True)
-                    label_path.write_bytes(b"")
+                    label_path.write_bytes(label_bytes)
                     frames.append(
                         {
                             "frameId": frame_id,
@@ -304,11 +340,21 @@ def prepare_annotation_draft(
                             "mimeType": "video/webm",
                         },
                         "annotation": {
-                            "method": "manual",
+                            "method": (
+                                "model_assisted" if model_assisted else "manual"
+                            ),
                             "reviewed": False,
-                            "tool": DRAFT_ADAPTER,
-                            "toolVersion": DRAFT_ADAPTER_VERSION,
-                            "modelSha256": None,
+                            "tool": (
+                                prelabel_tool if model_assisted else DRAFT_ADAPTER
+                            ),
+                            "toolVersion": (
+                                prelabel_tool_version
+                                if model_assisted
+                                else DRAFT_ADAPTER_VERSION
+                            ),
+                            "modelSha256": (
+                                prelabel_model_sha256 if model_assisted else None
+                            ),
                         },
                         "frames": frames,
                     }
@@ -346,6 +392,8 @@ def prepare_annotation_draft(
                 "sourceManifestSha256": source_manifest_sha,
                 "frameCount": validation["frameCount"],
                 "reviewedFrameCount": validation["reviewedFrameCount"],
+                "prelabeledFrameCount": prelabeled_frame_count,
+                "manualFrameCount": manual_frame_count,
                 "productionEligible": False,
             }
         except Exception:
@@ -355,3 +403,20 @@ def prepare_annotation_draft(
         if isinstance(error, AnnotationDraftPreparationError):
             raise
         raise AnnotationDraftPreparationError(str(error)) from error
+
+
+def prepare_annotation_draft(
+    *,
+    capture_root: Path,
+    session_map_path: Path,
+    output_dir: Path,
+    command_runner: CommandRunner = _default_command_runner,
+) -> dict[str, Any]:
+    """Extract immutable Vision Lab frames into an empty manual-review draft."""
+
+    return _materialize_annotation_draft(
+        capture_root=capture_root,
+        session_map_path=session_map_path,
+        output_dir=output_dir,
+        command_runner=command_runner,
+    )

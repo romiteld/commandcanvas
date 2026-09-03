@@ -22,6 +22,10 @@ from .prepare_annotation_draft import (
     AnnotationDraftPreparationError,
     prepare_annotation_draft,
 )
+from .prelabel_annotation_draft import (
+    PrelabelPreparationError,
+    prepare_prelabel_annotation_draft,
+)
 from .prepare_dataset import DatasetPreparationError, prepare_dataset
 from .runpod import (
     LaunchInputs,
@@ -79,6 +83,25 @@ def _parser() -> argparse.ArgumentParser:
     prepare_draft.add_argument("--capture-root", required=True, type=Path)
     prepare_draft.add_argument("--session-map", required=True, type=Path)
     prepare_draft.add_argument("--output-dir", required=True, type=Path)
+
+    prepare_prelabel = subcommands.add_parser(
+        "prepare-prelabeled-annotation-draft",
+        help="apply the pinned local YOLO26 pose checkpoint before manual review",
+    )
+    prepare_prelabel.add_argument("--capture-root", required=True, type=Path)
+    prepare_prelabel.add_argument("--session-map", required=True, type=Path)
+    prepare_prelabel.add_argument("--output-dir", required=True, type=Path)
+    prepare_prelabel.add_argument("--checkpoint", required=True, type=Path)
+    prepare_prelabel.add_argument(
+        "--device",
+        default="0",
+        help="local Ultralytics inference device (default: first CUDA GPU)",
+    )
+    prepare_prelabel.add_argument(
+        "--acknowledge-owner-only-license-boundary",
+        action="store_true",
+        required=True,
+    )
 
     archive = subcommands.add_parser("archive-dataset")
     archive.add_argument("--dataset-root", required=True, type=Path)
@@ -162,6 +185,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 session_map_path=arguments.session_map,
                 output_dir=arguments.output_dir,
             )
+        elif arguments.command == "prepare-prelabeled-annotation-draft":
+            result = prepare_prelabel_annotation_draft(
+                capture_root=arguments.capture_root,
+                session_map_path=arguments.session_map,
+                output_dir=arguments.output_dir,
+                checkpoint_path=arguments.checkpoint,
+                acknowledge_owner_only_license_boundary=(
+                    arguments.acknowledge_owner_only_license_boundary
+                ),
+                device=arguments.device,
+            )
         elif arguments.command == "prepare-dataset":
             result = prepare_dataset(
                 capture_root=arguments.capture_root,
@@ -236,6 +270,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (
         DatasetArchiveError,
         AnnotationDraftPreparationError,
+        PrelabelPreparationError,
         DatasetPreparationError,
         DatasetValidationError,
         AnnotationWorkbenchError,

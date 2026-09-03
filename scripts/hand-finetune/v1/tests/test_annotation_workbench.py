@@ -636,6 +636,7 @@ class AnnotationWorkbenchTests(unittest.TestCase):
         environment["PYTHONPATH"] = str(PACKAGE_ROOT)
         for command in (
             "prepare-annotation-draft",
+            "prepare-prelabeled-annotation-draft",
             "annotate",
             "finalize-annotations",
         ):
@@ -653,10 +654,19 @@ class AnnotationWorkbenchTests(unittest.TestCase):
                 env=environment,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            if command == "prepare-annotation-draft":
+            if command in {
+                "prepare-annotation-draft",
+                "prepare-prelabeled-annotation-draft",
+            }:
                 self.assertIn("--capture-root", result.stdout)
                 self.assertIn("--session-map", result.stdout)
                 self.assertIn("--output-dir", result.stdout)
+                if command == "prepare-prelabeled-annotation-draft":
+                    self.assertIn("--checkpoint", result.stdout)
+                    self.assertIn("--device", result.stdout)
+                    self.assertIn(
+                        "--acknowledge-owner-only-license-boundary", result.stdout
+                    )
             else:
                 self.assertIn("--dataset-root", result.stdout)
                 self.assertIn("--manifest", result.stdout)
