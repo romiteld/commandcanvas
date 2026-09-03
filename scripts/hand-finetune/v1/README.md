@@ -33,6 +33,25 @@ PYTHONPATH=scripts/hand-finetune/v1 \
 
 ## Manual keypoint correction
 
+Create the draft directly from the downloaded Vision Lab session map, companion
+manifests, and raw WebM files. The source session map must describe unreviewed
+manual annotation and use each final draft label directory, for example
+`labels/<datasetSessionId>`:
+
+```sh
+PYTHONPATH=scripts/hand-finetune/v1 \
+  python3 -m commandcanvas_hand_finetune prepare-annotation-draft \
+  --capture-root /absolute/private/path/captures \
+  --session-map /absolute/private/path/session-map.json \
+  --output-dir /absolute/private/path/hand-review
+```
+
+This command performs the same Vision Lab consent, companion, WebM digest,
+ffprobe, duration, dimension, split, and identifier checks used by the final
+bridge. It copies the raw videos, extracts deterministic frames, creates empty
+labels, and emits `annotation-draft.json`. It makes no model or provider call.
+The destination must neither be inside this repository nor contain it.
+
 The annotation workbench opens a self-contained page on the local loopback
 interface. It accepts either a strict dataset or an incomplete annotation draft
 located **outside this repository**. It never uploads images or loads remote
@@ -58,14 +77,14 @@ Review status is recorded per frame. A model-assisted training or validation
 session preserves the prelabel model digest. A holdout draft must be manual and
 cannot use model prelabels.
 
-The adapter that extracts Vision Lab frames emits
+The `prepare-annotation-draft` adapter emits
 `commandcanvas.hand-annotation-draft/v1`. The draft is the final dataset shape
 plus these review-only fields:
 
 - top-level `canonicalSchemaVersion`, declaring the strict manifest schema to
   emit;
-- top-level `sourceAdapter` with stable adapter name/version and the SHA-256 of
-  its source manifest;
+- top-level `sourceAdapter` with stable adapter name/version, the source actor,
+  and the SHA-256 of the canonical source session map;
 - per-session `visionSessionId`, paired with the immutable `captureGroupId`;
 - per-frame `reviewed`, while each `image` remains keyed by its safe relative
   path and SHA-256.
@@ -81,9 +100,9 @@ dataset session, capture group, split, annotation record, source-video digest,
 and source-adapter digest. The provenance-aware Vision Lab bridge consumes that
 review evidence and the corrected labels, then produces the final
 `commandcanvas.hand-dataset/v2` manifest from its canonical session map and
-companion manifests. The workbench deliberately does not pass through or
-invent v2 `producerChain` metadata: v2 binds `session.annotation` to the source
-session map, so review must happen before that bridge is finalized.
+companion manifests. The workbench does not invent v2 `producerChain`
+metadata; the downstream bridge validates and archives that source provenance
+along with the review provenance.
 
 After review, use the page's **Finalize dataset** action or the offline command:
 
@@ -95,14 +114,15 @@ PYTHONPATH=scripts/hand-finetune/v1 \
   --editor-id owner-daniel
 ```
 
-Finalization refuses unreviewed frames and missing, tampered, branched, or
+Finalization refuses unreviewed frames, a changed actor, and missing, tampered, branched, or
 orphaned edit receipts. It strips only the review fields, writes the canonical
 `dataset-manifest.json`, invokes the unchanged strict dataset validator, and
 emits `annotation-finalization-receipt.json`. The receipt binds the draft,
 canonical manifest, Vision Lab session identities, source-adapter digest, and
 every edit receipt. The receipt's bridge handoff is an adapter seam, not a claim
 that the v2 bridge has run. It proves intermediate dataset validation only and
-deliberately remains `productionEligible: false`.
+deliberately remains `productionEligible: false`. A successful finalization is
+immutable and idempotent; later annotation edits are refused.
 
 ## Vision Lab dataset bridge
 
@@ -115,7 +135,9 @@ PYTHONPATH=scripts/hand-finetune/v1 python3 -m commandcanvas_hand_finetune \
   prepare-dataset \
   --capture-root /private/captures \
   --session-map /private/session-map.json \
-  --labels-root /private/corrected-labels \
+  --labels-root /absolute/private/path/hand-review \
+  --annotation-finalization-receipt \
+    /absolute/private/path/hand-review/annotation-finalization-receipt.json \
   --output-dir /private/dataset-v1
 ```
 
@@ -135,6 +157,14 @@ and SHA-256 digests are part of the manifest, and every session binds those
 records to the copied WebM, Vision Lab session, consent, protocol, capture type,
 capture group, split, categories, annotation record, and actor.
 
+When the finalization receipt is supplied, `producerChain.annotationReview`
+also archives the exact reviewed draft, immutable finalization receipt, and
+every ordered edit receipt. Validation proves the actor and source-adapter
+binding, edit-manifest chain, Vision Lab and dataset session identities, exact
+frame coverage, and final label hashes. A labels directory without that
+receipt remains supported only for the older direct bridge workflow; it does
+not claim manual-workbench provenance.
+
 Create a portable, deterministic archive only after that dataset revalidates:
 
 ```sh
@@ -148,6 +178,6 @@ PYTHONPATH=scripts/hand-finetune/v1 python3 -m commandcanvas_hand_finetune \
 ```
 
 The archive contains only the validated sources, extracted images, corrected
-labels, manifest, and dataset receipt. It uses sorted POSIX member names and
-fixed metadata, then re-extracts and revalidates itself before publishing its
-archive receipt.
+labels, source and annotation provenance, manifest, and dataset receipt. It
+uses sorted POSIX member names and fixed metadata, then re-extracts and
+revalidates itself before publishing its archive receipt.

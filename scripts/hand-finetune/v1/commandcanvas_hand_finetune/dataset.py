@@ -14,7 +14,7 @@ from uuid import UUID
 
 from PIL import Image, UnidentifiedImageError
 
-from .canonical import attach_digest, canonical_json_bytes, sha256_file
+from .canonical import attach_digest, canonical_json_bytes, sha256_file, verify_digest
 
 
 SCHEMA_VERSION = "commandcanvas.hand-dataset/v1"
@@ -400,6 +400,297 @@ def _canonical_json_asset(
     return parsed, path
 
 
+def _validate_annotation_review(
+    root: Path,
+    value: Any,
+    *,
+    session_map: dict[str, Any] | None,
+    session_map_sha256: str | None,
+    errors: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Validate the complete manual-edit chain archived with a v2 dataset."""
+
+    if not _exact_keys(
+        value,
+        {"draftManifest", "finalizationReceipt", "editReceipts"},
+        "producerChain.annotationReview",
+        errors,
+    ):
+        return {}
+    assert isinstance(value, dict)
+    draft, _ = _canonical_json_asset(
+        root,
+        value.get("draftManifest"),
+        "producerChain.annotationReview.draftManifest",
+        errors,
+    )
+    finalization, _ = _canonical_json_asset(
+        root,
+        value.get("finalizationReceipt"),
+        "producerChain.annotationReview.finalizationReceipt",
+        errors,
+    )
+    draft_asset = value.get("draftManifest")
+    draft_sha = draft_asset.get("sha256") if isinstance(draft_asset, dict) else None
+    edit_assets = value.get("editReceipts")
+    edits: list[dict[str, Any]] = []
+    edit_asset_digests: list[str | None] = []
+    if not isinstance(edit_assets, list) or not edit_assets:
+        errors.append(
+            "producerChain.annotationReview.editReceipts must be a nonempty array"
+        )
+    else:
+        for index, asset in enumerate(edit_assets):
+            edit, _ = _canonical_json_asset(
+                root,
+                asset,
+                f"producerChain.annotationReview.editReceipts[{index}]",
+                errors,
+            )
+            if edit is not None:
+                edits.append(edit)
+            edit_asset_digests.append(
+                edit.get("receiptSha256") if isinstance(edit, dict) else None
+            )
+    if draft is None or finalization is None:
+        return {}
+    expected_finalization = {
+        "schemaVersion",
+        "finalizedAt",
+        "editorId",
+        "datasetId",
+        "manifestSha256",
+        "editIds",
+        "editReceiptSha256s",
+        "datasetValidation",
+        "eligibleForTraining",
+        "productionEligible",
+        "eligibilityScope",
+        "draftManifestSha256",
+        "sourceAdapter",
+        "visionSessionIds",
+        "bridgeHandoff",
+        "receiptSha256",
+    }
+    if not _exact_keys(
+        finalization,
+        expected_finalization,
+        "annotation finalization receipt",
+        errors,
+    ):
+        return {}
+    if (
+        finalization.get("schemaVersion")
+        != "commandcanvas.hand-annotation-finalization/v1"
+        or not verify_digest(finalization, "receiptSha256")
+        or finalization.get("eligibleForTraining") is not True
+        or finalization.get("productionEligible") is not False
+    ):
+        errors.append("annotation finalization receipt is invalid")
+    if draft.get("schemaVersion") != "commandcanvas.hand-annotation-draft/v1":
+        errors.append("annotation draft schemaVersion is invalid")
+    if session_map is not None and (
+        finalization.get("datasetId") != session_map.get("datasetId")
+        or draft.get("datasetId") != session_map.get("datasetId")
+    ):
+        errors.append("annotation review dataset identity does not match session map")
+    if finalization.get("draftManifestSha256") != draft_sha:
+        errors.append("annotation finalization does not bind the archived draft")
+    source_adapter = finalization.get("sourceAdapter")
+    if not _exact_keys(
+        source_adapter,
+        {"name", "version", "sourceManifestSha256", "actorId"},
+        "annotation source adapter",
+        errors,
+    ):
+        source_adapter = {}
+    assert isinstance(source_adapter, dict)
+    if source_adapter.get("sourceManifestSha256") != session_map_sha256:
+        errors.append("annotation source adapter does not bind the session map")
+    if session_map is not None and source_adapter.get("actorId") != session_map.get(
+        "actorId"
+    ):
+        errors.append("annotation source actor does not match the session-map actor")
+    if finalization.get("editorId") != source_adapter.get("actorId"):
+        errors.append("annotation finalization editor does not match source actor")
+    if draft.get("sourceAdapter") != source_adapter:
+        errors.append("annotation draft source adapter does not match finalization")
+
+    expected_edit_digests = finalization.get("editReceiptSha256s")
+    expected_edit_ids = finalization.get("editIds")
+    if (
+        not isinstance(expected_edit_digests, list)
+        or len(expected_edit_digests) != len(edits)
+        or expected_edit_digests != edit_asset_digests
+    ):
+        errors.append("archived annotation edit assets do not match the edit chain")
+    if not isinstance(expected_edit_ids, list) or len(expected_edit_ids) != len(edits):
+        errors.append("annotation edit IDs do not match the edit chain")
+    prior_result: str | None = None
+    reviewed_frames: set[tuple[str, str]] = set()
+    last_label_digests: dict[tuple[str, str], str] = {}
+    expected_edit_fields = {
+        "schemaVersion",
+        "editId",
+        "editedAt",
+        "editorId",
+        "sessionId",
+        "frameId",
+        "negative",
+        "handCount",
+        "previousCategories",
+        "resultCategories",
+        "previousFrameReviewed",
+        "resultFrameReviewed",
+        "previousAnnotation",
+        "resultAnnotation",
+        "sourceManifestSha256",
+        "resultManifestSha256",
+        "sourceLabelSha256",
+        "resultLabelSha256",
+        "receiptPath",
+        "productionEligible",
+        "receiptSha256",
+    }
+    for index, edit in enumerate(edits):
+        _exact_keys(
+            edit, expected_edit_fields, f"annotation edit receipt {index}", errors
+        )
+        if (
+            edit.get("schemaVersion") != "commandcanvas.hand-annotation-edit/v1"
+            or not verify_digest(edit, "receiptSha256")
+            or edit.get("productionEligible") is not False
+        ):
+            errors.append(f"annotation edit receipt {index} is invalid")
+            continue
+        if edit.get("editorId") != source_adapter.get("actorId"):
+            errors.append(f"annotation edit receipt {index} actor does not match")
+        if isinstance(expected_edit_ids, list) and index < len(expected_edit_ids):
+            if edit.get("editId") != expected_edit_ids[index]:
+                errors.append(f"annotation edit receipt {index} ID does not match")
+        if (
+            prior_result is not None
+            and edit.get("sourceManifestSha256") != prior_result
+        ):
+            errors.append("annotation edit receipts do not form one manifest chain")
+        result_digest = edit.get("resultManifestSha256")
+        prior_result = result_digest if isinstance(result_digest, str) else None
+        session_id = edit.get("sessionId")
+        frame_id = edit.get("frameId")
+        if not isinstance(session_id, str) or not isinstance(frame_id, str):
+            errors.append(f"annotation edit receipt {index} frame identity is invalid")
+        else:
+            reviewed_frames.add((session_id, frame_id))
+            result_label_sha = edit.get("resultLabelSha256")
+            if not isinstance(result_label_sha, str) or not SHA256_PATTERN.fullmatch(
+                result_label_sha
+            ):
+                errors.append(
+                    f"annotation edit receipt {index} label digest is invalid"
+                )
+            else:
+                last_label_digests[(session_id, frame_id)] = result_label_sha
+    if edits and prior_result != draft_sha:
+        errors.append("annotation edit chain does not terminate at the archived draft")
+
+    handoff = finalization.get("bridgeHandoff")
+    if not _exact_keys(
+        handoff,
+        {
+            "schemaVersion",
+            "datasetId",
+            "sourceAdapter",
+            "sessions",
+            "productionEligible",
+        },
+        "annotation bridge handoff",
+        errors,
+    ):
+        return {}
+    assert isinstance(handoff, dict)
+    if (
+        handoff.get("schemaVersion") != "commandcanvas.hand-annotation-handoff/v1"
+        or handoff.get("sourceAdapter") != source_adapter
+        or handoff.get("productionEligible") is not False
+    ):
+        errors.append("annotation bridge handoff is invalid")
+    if handoff.get("datasetId") != finalization.get("datasetId"):
+        errors.append("annotation bridge handoff dataset identity does not match")
+    handoff_sessions = handoff.get("sessions")
+    if not isinstance(handoff_sessions, list):
+        errors.append("annotation bridge handoff sessions must be an array")
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    expected_reviewed_frames: set[tuple[str, str]] = set()
+    handoff_vision_ids: list[str] = []
+    for index, session in enumerate(handoff_sessions):
+        if not _exact_keys(
+            session,
+            {
+                "visionSessionId",
+                "datasetSessionId",
+                "actorId",
+                "captureGroupId",
+                "split",
+                "captureCategories",
+                "sourceVideo",
+                "labelDirectory",
+                "labels",
+                "annotation",
+            },
+            f"annotation bridge handoff sessions[{index}]",
+            errors,
+        ):
+            continue
+        assert isinstance(session, dict)
+        session_id = session.get("datasetSessionId")
+        if not isinstance(session_id, str) or session_id in result:
+            errors.append(
+                "annotation handoff dataset session identities must be unique"
+            )
+            continue
+        if session.get("actorId") != source_adapter.get("actorId"):
+            errors.append("annotation handoff actor does not match source actor")
+        vision_session_id = session.get("visionSessionId")
+        if not isinstance(vision_session_id, str):
+            errors.append("annotation handoff vision session identity is invalid")
+        else:
+            handoff_vision_ids.append(vision_session_id)
+        labels = session.get("labels")
+        if not isinstance(labels, list):
+            errors.append("annotation handoff labels must be an array")
+        else:
+            frame_ids: set[str] = set()
+            for label in labels:
+                frame_id = label.get("frameId") if isinstance(label, dict) else None
+                _exact_keys(
+                    label,
+                    {"frameId", "timestampMs", "path", "byteSize", "sha256"},
+                    "annotation handoff label",
+                    errors,
+                )
+                if not isinstance(frame_id, str) or frame_id in frame_ids:
+                    errors.append("annotation handoff label identities must be unique")
+                else:
+                    frame_ids.add(frame_id)
+                    expected_reviewed_frames.add((session_id, frame_id))
+                    if label.get("sha256") != last_label_digests.get(
+                        (session_id, frame_id)
+                    ):
+                        errors.append(
+                            "annotation handoff label digest does not match final edit"
+                        )
+        result[session_id] = session
+    if (
+        len(handoff_vision_ids) != len(set(handoff_vision_ids))
+        or finalization.get("visionSessionIds") != handoff_vision_ids
+    ):
+        errors.append("annotation finalization vision session identities do not match")
+    if reviewed_frames != expected_reviewed_frames:
+        errors.append("annotation edit receipts do not exactly cover handoff labels")
+    return result
+
+
 def _validate_label_rows(
     path: Path | None,
     *,
@@ -530,14 +821,19 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
 
     producer_mappings: dict[str, dict[str, Any]] = {}
     producer_session_map: dict[str, Any] | None = None
+    annotation_review_mappings: dict[str, dict[str, Any]] = {}
+    producer_chain: dict[str, Any] | None = None
     if provenance_enabled:
-        producer_chain = manifest.get("producerChain")
-        if _exact_keys(
-            producer_chain,
+        producer_chain_value = manifest.get("producerChain")
+        if _allowed_keys(
+            producer_chain_value,
             {"consentVersion", "protocol", "sessionMap"},
+            {"annotationReview"},
             "producerChain",
             errors,
         ):
+            producer_chain = producer_chain_value
+        if producer_chain is not None:
             assert isinstance(producer_chain, dict)
             if producer_chain.get("consentVersion") != "vision-lab-consent-v1":
                 errors.append(
@@ -643,6 +939,20 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                             )
                         else:
                             producer_mappings[mapped_id] = mapped
+        if producer_chain is not None and "annotationReview" in producer_chain:
+            session_map_asset = producer_chain.get("sessionMap")
+            session_map_sha = (
+                session_map_asset.get("sha256")
+                if isinstance(session_map_asset, dict)
+                else None
+            )
+            annotation_review_mappings = _validate_annotation_review(
+                resolved_root,
+                producer_chain.get("annotationReview"),
+                session_map=producer_session_map,
+                session_map_sha256=session_map_sha,
+                errors=errors,
+            )
 
     splits = manifest.get("splits")
     if not _exact_keys(splits, set(SPLITS), "splits", errors):
@@ -678,6 +988,9 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
     source_digest_splits: dict[str, set[str]] = defaultdict(set)
     image_digest_splits: dict[str, set[str]] = defaultdict(set)
     source_digests: list[str] = []
+    source_paths: set[str] = set()
+    label_paths: set[str] = set()
+    producer_vision_session_ids: set[str] = set()
     split_counts: Counter[str] = Counter()
     capture_groups_by_split: dict[str, set[str]] = {split: set() for split in SPLITS}
     hard_subset_counts: Counter[str] = Counter()
@@ -721,6 +1034,12 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
             errors.append(
                 f"{location}.captureGroupId is not assigned to exactly one split"
             )
+        review_enabled = (
+            producer_chain is not None and "annotationReview" in producer_chain
+        )
+        review_session = annotation_review_mappings.get(session_id or "")
+        if review_enabled and review_session is None:
+            errors.append(f"{location} has no annotation-review binding")
 
         source = session.get("source")
         actual_source_sha: str | None = None
@@ -760,6 +1079,11 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                     f"between {MIN_SOURCE_DIMENSION} and {MAX_SOURCE_DIMENSION} pixels"
                 )
             source_asset = {key: source[key] for key in ("path", "byteSize", "sha256")}
+            source_path_value = source.get("path")
+            if isinstance(source_path_value, str):
+                if source_path_value in source_paths:
+                    errors.append(f"duplicate source path: {source_path_value}")
+                source_paths.add(source_path_value)
             _, actual_source_sha = _validate_asset(
                 resolved_root,
                 source_asset,
@@ -804,12 +1128,28 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
             annotation_counts[
                 f"{method}:{'reviewed' if annotation.get('reviewed') else 'unreviewed'}"
             ] += 1
+            if review_session is not None and annotation != review_session.get(
+                "annotation"
+            ):
+                errors.append(
+                    f"{location}.annotation does not match the finalized review"
+                )
 
         frames = session.get("frames")
         if not isinstance(frames, list) or not frames:
             errors.append(f"{location}.frames must be a non-empty array")
             continue
         frame_ids: set[str] = set()
+        review_labels = (
+            {
+                label.get("frameId"): label
+                for label in review_session.get("labels", [])
+                if isinstance(label, dict) and isinstance(label.get("frameId"), str)
+            }
+            if review_session is not None
+            and isinstance(review_session.get("labels"), list)
+            else {}
+        )
         timestamps: list[int] = []
         derived_categories: set[str] = set()
         for frame_index, frame in enumerate(frames):
@@ -879,6 +1219,10 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                             f"{frame_location}.label.path must be the exact path "
                             "consumed by Ultralytics for the declared image"
                         )
+                if isinstance(label_relative, str):
+                    if label_relative in label_paths:
+                        errors.append(f"duplicate label path: {label_relative}")
+                    label_paths.add(label_relative)
             image_path, image_sha = _validate_asset(
                 resolved_root,
                 image_value,
@@ -899,6 +1243,23 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                 location=frame_location,
                 errors=errors,
             )
+            if review_session is not None:
+                reviewed_label = review_labels.get(frame_id)
+                expected_review_label = (
+                    {
+                        "frameId": frame_id,
+                        "timestampMs": timestamp,
+                        "path": label_value.get("path"),
+                        "byteSize": label_value.get("byteSize"),
+                        "sha256": label_value.get("sha256"),
+                    }
+                    if isinstance(label_value, dict)
+                    else None
+                )
+                if reviewed_label != expected_review_label:
+                    errors.append(
+                        f"{frame_location}.label does not match finalized review bytes"
+                    )
             if session_split:
                 split_counts[session_split] += 1
                 total_frames += 1
@@ -936,6 +1297,12 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                     errors.append(
                         f"{location}.producer.visionLabSessionId must be nonempty"
                     )
+                elif vision_session_id in producer_vision_session_ids:
+                    errors.append(
+                        f"duplicate producer visionSessionId: {vision_session_id}"
+                    )
+                else:
+                    producer_vision_session_ids.add(vision_session_id)
                 if (
                     not isinstance(capture_type, str)
                     or capture_type not in VISION_CAPTURE_TYPES
@@ -992,8 +1359,19 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                         "captureGroupId": capture_group,
                         "split": session_split,
                         "categories": declared_capture_categories,
-                        "annotation": session.get("annotation"),
                     }
+                    if review_session is None:
+                        expected_binding["annotation"] = session.get("annotation")
+                    else:
+                        mapped_annotation = mapping.get("annotation")
+                        if not isinstance(mapped_annotation, dict) or (
+                            mapped_annotation.get("method") != "manual"
+                            or mapped_annotation.get("reviewed") is not False
+                            or mapped_annotation.get("modelSha256") is not None
+                        ):
+                            errors.append(
+                                f"{location}.producer source annotation must be unreviewed manual work"
+                            )
                     for key, expected_value in expected_binding.items():
                         if mapping.get(key) != expected_value:
                             errors.append(
@@ -1005,6 +1383,33 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
                         errors.append(
                             f"{location}.producer session-map actorId does not match"
                         )
+                if review_session is not None:
+                    review_binding = {
+                        "visionSessionId": vision_session_id,
+                        "datasetSessionId": session_id,
+                        "actorId": session.get("actorId"),
+                        "captureGroupId": capture_group,
+                        "split": session_split,
+                        "captureCategories": declared_capture_categories,
+                        "annotation": session.get("annotation"),
+                    }
+                    for key, expected_value in review_binding.items():
+                        if review_session.get(key) != expected_value:
+                            errors.append(
+                                f"{location}.annotation review {key} does not match"
+                            )
+                    review_source = review_session.get("sourceVideo")
+                    if (
+                        not isinstance(review_source, dict)
+                        or review_source.get("sha256") != actual_source_sha
+                    ):
+                        errors.append(
+                            f"{location}.annotation review source video does not match"
+                        )
+        if review_session is not None and set(review_labels) != frame_ids:
+            errors.append(
+                f"{location}.annotation review labels do not exactly match frames"
+            )
         if session_split and capture_group:
             capture_groups_by_split[session_split].add(capture_group)
 
@@ -1027,6 +1432,14 @@ def validate_dataset(dataset_root: Path, manifest_path: Path) -> dict[str, Any]:
     if provenance_enabled and set(producer_mappings) != session_ids:
         errors.append(
             "producer session-map sessions do not exactly match dataset sessions"
+        )
+    if (
+        producer_chain is not None
+        and "annotationReview" in producer_chain
+        and set(annotation_review_mappings) != session_ids
+    ):
+        errors.append(
+            "annotation-review sessions do not exactly match dataset sessions"
         )
 
     if errors:

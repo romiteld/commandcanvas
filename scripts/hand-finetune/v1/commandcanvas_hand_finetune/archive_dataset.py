@@ -79,6 +79,32 @@ def _manifest_members(manifest: dict[str, Any]) -> set[str]:
         if not isinstance(session_map_path, str):
             raise DatasetArchiveError("dataset manifest session-map path is invalid")
         members.add(session_map_path)
+        annotation_review = producer_chain.get("annotationReview")
+        if annotation_review is not None:
+            if not isinstance(annotation_review, dict):
+                raise DatasetArchiveError(
+                    "dataset manifest annotation review is invalid"
+                )
+            for name in ("draftManifest", "finalizationReceipt"):
+                asset = annotation_review.get(name)
+                path = asset.get("path") if isinstance(asset, dict) else None
+                if not isinstance(path, str):
+                    raise DatasetArchiveError(
+                        f"dataset manifest annotation-review {name} path is invalid"
+                    )
+                members.add(path)
+            edit_receipts = annotation_review.get("editReceipts")
+            if not isinstance(edit_receipts, list):
+                raise DatasetArchiveError(
+                    "dataset manifest annotation-review edit receipts are invalid"
+                )
+            for asset in edit_receipts:
+                path = asset.get("path") if isinstance(asset, dict) else None
+                if not isinstance(path, str):
+                    raise DatasetArchiveError(
+                        "dataset manifest annotation-review edit path is invalid"
+                    )
+                members.add(path)
     sessions = manifest.get("sessions")
     if not isinstance(sessions, list):
         raise DatasetArchiveError("dataset manifest sessions must be an array")

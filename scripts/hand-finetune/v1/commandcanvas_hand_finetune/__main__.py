@@ -18,6 +18,10 @@ from .annotation_workbench import (
 )
 from .dataset import DatasetValidationError, validate_dataset
 from .onnx_contract import OnnxContractError, validate_onnx_contract
+from .prepare_annotation_draft import (
+    AnnotationDraftPreparationError,
+    prepare_annotation_draft,
+)
 from .prepare_dataset import DatasetPreparationError, prepare_dataset
 from .runpod import (
     LaunchInputs,
@@ -66,6 +70,15 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--session-map", required=True, type=Path)
     prepare.add_argument("--labels-root", required=True, type=Path)
     prepare.add_argument("--output-dir", required=True, type=Path)
+    prepare.add_argument("--annotation-finalization-receipt", type=Path)
+
+    prepare_draft = subcommands.add_parser(
+        "prepare-annotation-draft",
+        help="extract Vision Lab frames into a local manual-review draft",
+    )
+    prepare_draft.add_argument("--capture-root", required=True, type=Path)
+    prepare_draft.add_argument("--session-map", required=True, type=Path)
+    prepare_draft.add_argument("--output-dir", required=True, type=Path)
 
     archive = subcommands.add_parser("archive-dataset")
     archive.add_argument("--dataset-root", required=True, type=Path)
@@ -143,12 +156,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "validate-dataset":
             result = validate_dataset(arguments.dataset_root, arguments.manifest)
             write_canonical_json(arguments.output, result)
+        elif arguments.command == "prepare-annotation-draft":
+            result = prepare_annotation_draft(
+                capture_root=arguments.capture_root,
+                session_map_path=arguments.session_map,
+                output_dir=arguments.output_dir,
+            )
         elif arguments.command == "prepare-dataset":
             result = prepare_dataset(
                 capture_root=arguments.capture_root,
                 session_map_path=arguments.session_map,
                 labels_root=arguments.labels_root,
                 output_dir=arguments.output_dir,
+                annotation_finalization_receipt_path=(
+                    arguments.annotation_finalization_receipt
+                ),
             )
         elif arguments.command == "archive-dataset":
             result = archive_dataset(
@@ -213,6 +235,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise AssertionError(arguments.command)
     except (
         DatasetArchiveError,
+        AnnotationDraftPreparationError,
         DatasetPreparationError,
         DatasetValidationError,
         AnnotationWorkbenchError,

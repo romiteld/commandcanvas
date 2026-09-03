@@ -1145,6 +1145,13 @@ def finalize_annotations(
         )
     edit_receipts = list(reversed(reverse_chain))
     if draft:
+        source_actor = manifest["sourceAdapter"]["actorId"]
+        if editor != source_actor or any(
+            receipt.get("editorId") != source_actor for receipt in edit_receipts
+        ):
+            raise AnnotationWorkbenchError(
+                "draft editor and every edit receipt must preserve the source actor"
+            )
         expected_reviews = {
             (session["sessionId"], frame["frameId"])
             for session in manifest["sessions"]
@@ -1217,6 +1224,37 @@ def finalize_annotations(
                 "concurrent immutable finalization does not match current dataset state"
             )
         return existing
+
+
+def validate_annotation_finalization(
+    *, dataset_root: Path, receipt_path: Path
+) -> dict[str, Any]:
+    """Revalidate an immutable finalization receipt against all current draft bytes."""
+
+    root = Path(dataset_root).resolve(strict=True)
+    supplied = Path(receipt_path).resolve(strict=True)
+    expected = (root / "annotation-finalization-receipt.json").resolve(strict=True)
+    if supplied != expected or Path(receipt_path).is_symlink():
+        raise AnnotationWorkbenchError(
+            "finalization receipt must be the canonical file in the draft root"
+        )
+    draft_path = root / "annotation-draft.json"
+    if draft_path.is_symlink() or not draft_path.is_file():
+        raise AnnotationWorkbenchError(
+            "annotation draft is missing beside the finalization receipt"
+        )
+    initial = _load_finalization_receipt(supplied, draft=True)
+    editor = _validate_editor_id(initial.get("editorId"))
+    current = finalize_annotations(
+        dataset_root=root,
+        manifest_path=draft_path,
+        editor_id=editor,
+    )
+    if current != initial or canonical_json_bytes(current) != supplied.read_bytes():
+        raise AnnotationWorkbenchError(
+            "finalization receipt is not canonical or no longer matches the draft"
+        )
+    return current
 
 
 def render_workbench_html(csrf_token: str, editor_id: str = "owner-daniel") -> str:

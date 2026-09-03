@@ -15,7 +15,16 @@ from uuid import UUID
 
 from PIL import Image, UnidentifiedImageError
 
-from .canonical import sha256_file, write_canonical_json
+from .annotation_workbench import (
+    AnnotationWorkbenchError,
+    validate_annotation_finalization,
+)
+from .canonical import (
+    canonical_json_bytes,
+    sha256_bytes,
+    sha256_file,
+    write_canonical_json,
+)
 from .dataset import (
     HARD_SUBSETS,
     SPLITS,
@@ -363,6 +372,45 @@ def _validate_categories(capture_type: str, value: Any, description: str) -> lis
     return categories
 
 
+def _validate_annotation(
+    value: Any, description: str, *, split: str, allow_unreviewed_holdout: bool
+) -> dict[str, Any]:
+    annotation = _require_exact_keys(
+        value,
+        {"method", "reviewed", "tool", "toolVersion", "modelSha256"},
+        description,
+    )
+    if not isinstance(annotation["method"], str) or annotation["method"] not in {
+        "manual",
+        "model_assisted",
+    }:
+        raise DatasetPreparationError(
+            f"{description}.method must be manual or model_assisted"
+        )
+    if not isinstance(annotation["reviewed"], bool):
+        raise DatasetPreparationError(f"{description}.reviewed must be boolean")
+    _nonempty_string(annotation["tool"], f"{description}.tool")
+    _nonempty_string(annotation["toolVersion"], f"{description}.toolVersion")
+    model_sha = annotation["modelSha256"]
+    if annotation["method"] == "model_assisted":
+        if not isinstance(model_sha, str) or not SHA256_PATTERN.fullmatch(model_sha):
+            raise DatasetPreparationError(
+                f"{description}.modelSha256 must be a SHA-256 digest"
+            )
+    elif model_sha is not None:
+        raise DatasetPreparationError(
+            f"{description}.modelSha256 must be null for manual labels"
+        )
+    if split == "holdout" and (
+        annotation["method"] != "manual"
+        or (annotation["reviewed"] is not True and not allow_unreviewed_holdout)
+    ):
+        raise DatasetPreparationError(
+            "holdout annotation must remain manual and reviewed"
+        )
+    return dict(annotation)
+
+
 def _validate_companion(
     value: dict[str, Any], expected_session_id: str, source: Path
 ) -> tuple[str, int | None, int | None, float | None, datetime, datetime]:
@@ -434,12 +482,94 @@ def _check_destination(output_dir: Path, roots: Sequence[Path]) -> Path:
     return resolved
 
 
+def _validated_annotation_review(
+    *,
+    labels_root: Path,
+    session_map_path: Path,
+    receipt_path: Path,
+) -> dict[str, Any]:
+    receipt = Path(receipt_path)
+    try:
+        receipt_root = receipt.parent.resolve(strict=True)
+    except OSError as error:
+        raise DatasetPreparationError(
+            "annotation finalization receipt root does not exist"
+        ) from error
+    if labels_root != receipt_root:
+        raise DatasetPreparationError(
+            "labels root must be the finalized annotation draft root"
+        )
+    try:
+        finalization = validate_annotation_finalization(
+            dataset_root=receipt_root, receipt_path=receipt
+        )
+    except (AnnotationWorkbenchError, OSError, ValueError) as error:
+        raise DatasetPreparationError(
+            f"annotation finalization receipt is invalid: {error}"
+        ) from error
+    source_adapter = finalization.get("sourceAdapter")
+    canonical_session_map_sha = sha256_bytes(
+        canonical_json_bytes(_load_strict_json(Path(session_map_path), "session map"))
+    )
+    if (
+        not isinstance(source_adapter, dict)
+        or source_adapter.get("sourceManifestSha256") != canonical_session_map_sha
+    ):
+        raise DatasetPreparationError(
+            "annotation source adapter does not bind the supplied session map"
+        )
+    handoff = finalization.get("bridgeHandoff")
+    sessions = handoff.get("sessions") if isinstance(handoff, dict) else None
+    if not isinstance(sessions, list) or not sessions:
+        raise DatasetPreparationError(
+            "annotation finalization receipt has no bridge handoff sessions"
+        )
+    sessions_by_id: dict[str, dict[str, Any]] = {}
+    for session in sessions:
+        session_id = (
+            session.get("datasetSessionId") if isinstance(session, dict) else None
+        )
+        if not isinstance(session_id, str) or session_id in sessions_by_id:
+            raise DatasetPreparationError(
+                "annotation handoff dataset session identities must be unique"
+            )
+        sessions_by_id[session_id] = session
+    edit_directory = receipt_root / "annotation-receipts"
+    edits_by_digest: dict[str, Path] = {}
+    if edit_directory.is_symlink() or not edit_directory.is_dir():
+        raise DatasetPreparationError("annotation edit receipt directory is missing")
+    for path in sorted(edit_directory.glob("*.json")):
+        value = _load_strict_json(path, "annotation edit receipt")
+        digest = value.get("receiptSha256")
+        if not isinstance(digest, str) or digest in edits_by_digest:
+            raise DatasetPreparationError(
+                "annotation edit receipt identities must be unique"
+            )
+        edits_by_digest[digest] = path
+    ordered_digests = finalization.get("editReceiptSha256s")
+    if not isinstance(ordered_digests, list) or set(ordered_digests) != set(
+        edits_by_digest
+    ):
+        raise DatasetPreparationError(
+            "annotation edit receipt files do not match the finalized edit chain"
+        )
+    return {
+        "root": receipt_root,
+        "receiptPath": receipt.resolve(strict=True),
+        "draftPath": (receipt_root / "annotation-draft.json").resolve(strict=True),
+        "finalization": finalization,
+        "sessions": sessions_by_id,
+        "editPaths": [edits_by_digest[digest] for digest in ordered_digests],
+    }
+
+
 def prepare_dataset(
     *,
     capture_root: Path,
     session_map_path: Path,
     labels_root: Path,
     output_dir: Path,
+    annotation_finalization_receipt_path: Path | None = None,
     command_runner: CommandRunner = _default_command_runner,
 ) -> dict[str, Any]:
     """Validate evidence, extract deterministic PNGs, and publish one dataset."""
@@ -451,6 +581,21 @@ def prepare_dataset(
     dataset_id, actor_id, cadence_ms, mapped_sessions = _validate_session_map(
         session_map
     )
+    annotation_review = (
+        _validated_annotation_review(
+            labels_root=labels_root,
+            session_map_path=Path(session_map_path),
+            receipt_path=annotation_finalization_receipt_path,
+        )
+        if annotation_finalization_receipt_path is not None
+        else None
+    )
+    if annotation_review is not None:
+        source_actor = annotation_review["finalization"]["sourceAdapter"]["actorId"]
+        if source_actor != actor_id:
+            raise DatasetPreparationError(
+                "annotation source actor does not match the session-map actor"
+            )
 
     parsed_sessions: list[dict[str, Any]] = []
     identifiers: dict[str, set[str]] = {
@@ -503,49 +648,60 @@ def prepare_dataset(
         companion_path, manifest_relative = _regular_file(
             capture_root, session["manifestPath"], f"{description}.manifestPath"
         )
-        label_directory = _regular_directory(
-            labels_root, session["labelDir"], f"{description}.labelDir"
-        )
         label_relative = _safe_relative(
             session["labelDir"], f"{description}.labelDir"
         ).as_posix()
-        annotation = _require_exact_keys(
+        source_annotation = _validate_annotation(
             session["annotation"],
-            {"method", "reviewed", "tool", "toolVersion", "modelSha256"},
             f"{description}.annotation",
+            split=split,
+            allow_unreviewed_holdout=annotation_review is not None,
         )
-        if not isinstance(annotation["method"], str) or annotation["method"] not in {
-            "manual",
-            "model_assisted",
-        }:
-            raise DatasetPreparationError(
-                f"{description}.annotation.method must be manual or model_assisted"
-            )
-        if not isinstance(annotation["reviewed"], bool):
-            raise DatasetPreparationError(
-                f"{description}.annotation.reviewed must be boolean"
-            )
-        _nonempty_string(annotation["tool"], f"{description}.annotation.tool")
-        _nonempty_string(
-            annotation["toolVersion"], f"{description}.annotation.toolVersion"
+        review_session = (
+            annotation_review["sessions"].get(dataset_session_id)
+            if annotation_review is not None
+            else None
         )
-        model_sha = annotation["modelSha256"]
-        if annotation["method"] == "model_assisted":
-            if not isinstance(model_sha, str) or not SHA256_PATTERN.fullmatch(
-                model_sha
+        if annotation_review is not None and review_session is None:
+            raise DatasetPreparationError(
+                f"{description} has no finalized annotation handoff"
+            )
+        if review_session is not None:
+            expected_binding = {
+                "visionSessionId": vision_session_id,
+                "datasetSessionId": dataset_session_id,
+                "captureGroupId": capture_group_id,
+                "split": split,
+                "labelDirectory": label_relative,
+                "actorId": actor_id,
+            }
+            for field, expected_value in expected_binding.items():
+                if review_session.get(field) != expected_value:
+                    raise DatasetPreparationError(
+                        f"annotation handoff {field} does not match {description}"
+                    )
+            if (
+                source_annotation["method"] != "manual"
+                or source_annotation["reviewed"] is not False
             ):
                 raise DatasetPreparationError(
-                    f"{description}.annotation.modelSha256 must be a SHA-256 digest"
+                    "review-bound source annotation must be unreviewed manual work"
                 )
-        elif model_sha is not None:
-            raise DatasetPreparationError(
-                f"{description}.annotation.modelSha256 must be null for manual labels"
+            annotation = _validate_annotation(
+                review_session.get("annotation"),
+                "annotation handoff annotation",
+                split=split,
+                allow_unreviewed_holdout=False,
             )
-        if split == "holdout" and (
-            annotation["method"] != "manual" or annotation["reviewed"] is not True
-        ):
-            raise DatasetPreparationError(
-                "holdout annotation must remain manual and reviewed"
+            label_directory = _regular_directory(
+                labels_root,
+                review_session["labelDirectory"],
+                "annotation label directory",
+            )
+        else:
+            annotation = source_annotation
+            label_directory = _regular_directory(
+                labels_root, session["labelDir"], f"{description}.labelDir"
             )
 
         companion = _load_strict_json(companion_path, "Vision Lab companion manifest")
@@ -560,9 +716,27 @@ def prepare_dataset(
         categories = _validate_categories(
             capture_type, session["categories"], f"{description}.categories"
         )
+        if (
+            review_session is not None
+            and review_session.get("captureCategories") != categories
+        ):
+            raise DatasetPreparationError(
+                "annotation handoff capture categories do not match the session map"
+            )
         width, height, duration_seconds, actual_rate, codec = _probe_video(
             source, command_runner
         )
+        if review_session is not None:
+            handoff_source = review_session.get("sourceVideo")
+            if (
+                not isinstance(handoff_source, dict)
+                or handoff_source.get("sha256") != sha256_file(source)
+                or handoff_source.get("width") != width
+                or handoff_source.get("height") != height
+            ):
+                raise DatasetPreparationError(
+                    "annotation handoff source video does not match Vision Lab evidence"
+                )
         if declared_width is not None and width != declared_width:
             raise DatasetPreparationError(
                 f"Vision Lab dimensions width {declared_width} does not match ffprobe width {width}"
@@ -626,6 +800,7 @@ def prepare_dataset(
                 "height": height,
                 "timestamps": timestamps,
                 "companion": companion,
+                "reviewSession": review_session,
             }
         )
 
@@ -635,6 +810,30 @@ def prepare_dataset(
     try:
         session_map_copy = staging / "provenance" / "session-map.json"
         write_canonical_json(session_map_copy, session_map)
+        annotation_review_assets: dict[str, Any] | None = None
+        if annotation_review is not None:
+            review_root = staging / "provenance" / "annotation"
+            draft_copy = review_root / "annotation-draft.json"
+            finalization_copy = review_root / "annotation-finalization-receipt.json"
+            draft_copy.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(annotation_review["draftPath"], draft_copy)
+            shutil.copyfile(annotation_review["receiptPath"], finalization_copy)
+            edit_assets: list[dict[str, Any]] = []
+            for index, (digest, edit_path) in enumerate(
+                zip(
+                    annotation_review["finalization"]["editReceiptSha256s"],
+                    annotation_review["editPaths"],
+                )
+            ):
+                edit_copy = review_root / "edits" / f"{index:06d}-{digest}.json"
+                edit_copy.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(edit_path, edit_copy)
+                edit_assets.append(_asset(edit_copy, staging))
+            annotation_review_assets = {
+                "draftManifest": _asset(draft_copy, staging),
+                "finalizationReceipt": _asset(finalization_copy, staging),
+                "editReceipts": edit_assets,
+            }
         manifest_sessions: list[dict[str, Any]] = []
         split_groups: dict[str, set[str]] = {split: set() for split in SPLITS}
         for session in sorted(
@@ -672,6 +871,21 @@ def prepare_dataset(
                 raise DatasetPreparationError(
                     "corrected label files must exactly match extracted frame timestamps"
                 )
+            reviewed_labels = (
+                {
+                    item.get("frameId"): item
+                    for item in session["reviewSession"].get("labels", [])
+                    if isinstance(item, dict)
+                }
+                if isinstance(session["reviewSession"], dict)
+                else None
+            )
+            if reviewed_labels is not None and set(reviewed_labels) != {
+                f"frame-{timestamp:010d}" for timestamp in session["timestamps"]
+            }:
+                raise DatasetPreparationError(
+                    "annotation handoff labels do not exactly match extracted frames"
+                )
 
             frames: list[dict[str, Any]] = []
             for timestamp_ms in session["timestamps"]:
@@ -685,6 +899,18 @@ def prepare_dataset(
                 shutil.copyfile(
                     session["labelDirectory"] / f"{frame_id}.txt", label_path
                 )
+                if reviewed_labels is not None:
+                    reviewed_label = reviewed_labels[frame_id]
+                    if (
+                        reviewed_label.get("timestampMs") != timestamp_ms
+                        or reviewed_label.get("path")
+                        != f"labels/{session_id}/{frame_id}.txt"
+                        or reviewed_label.get("byteSize") != label_path.stat().st_size
+                        or reviewed_label.get("sha256") != sha256_file(label_path)
+                    ):
+                        raise DatasetPreparationError(
+                            "annotation handoff label bytes do not match the finalized review"
+                        )
                 image_asset = _image_asset(image_path, staging)
                 if (image_asset["width"], image_asset["height"]) != (
                     session["width"],
@@ -731,6 +957,13 @@ def prepare_dataset(
                 }
             )
 
+        producer_chain: dict[str, Any] = {
+            "consentVersion": VISION_CONSENT_VERSION,
+            "protocol": VISION_PROTOCOL,
+            "sessionMap": _asset(session_map_copy, staging),
+        }
+        if annotation_review_assets is not None:
+            producer_chain["annotationReview"] = annotation_review_assets
         manifest = {
             "schemaVersion": "commandcanvas.hand-dataset/v2",
             "datasetId": dataset_id,
@@ -738,11 +971,7 @@ def prepare_dataset(
             "consent": {"approved": True, "version": DATASET_CONSENT_VERSION},
             "keypointOrder": "mediapipe-hand-21",
             "classNames": ["hand"],
-            "producerChain": {
-                "consentVersion": VISION_CONSENT_VERSION,
-                "protocol": VISION_PROTOCOL,
-                "sessionMap": _asset(session_map_copy, staging),
-            },
+            "producerChain": producer_chain,
             "splits": {
                 split: sorted(split_groups[split]) for split in sorted(split_groups)
             },

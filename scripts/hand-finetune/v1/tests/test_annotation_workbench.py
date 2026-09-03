@@ -314,6 +314,37 @@ class AnnotationWorkbenchTests(unittest.TestCase):
                 editor_id="owner-daniel",
             )
 
+    def test_draft_finalization_preserves_one_source_actor_through_every_edit(
+        self,
+    ) -> None:
+        draft = write_annotation_draft(self.root)
+        manifest = read_manifest(draft)
+        for session in manifest["sessions"]:
+            for frame in session["frames"]:
+                state = load_frame_annotation(
+                    self.root, draft, session["sessionId"], frame["frameId"]
+                )
+                negative = frame["categories"] == ["negative"]
+                save_frame_annotation(
+                    dataset_root=self.root,
+                    manifest_path=draft,
+                    session_id=session["sessionId"],
+                    frame_id=frame["frameId"],
+                    editor_id="different-reviewer",
+                    expected_manifest_sha256=state["manifestSha256"],
+                    expected_label_sha256=state["labelSha256"],
+                    negative=negative,
+                    categories=frame["categories"],
+                    hands=[] if negative else [{"keypoints": keypoints()}],
+                )
+
+        with self.assertRaisesRegex(AnnotationWorkbenchError, "actor|editor"):
+            finalize_annotations(
+                dataset_root=self.root,
+                manifest_path=draft,
+                editor_id="different-reviewer",
+            )
+
     def test_saves_two_hands_as_canonical_yolo_pose_and_valid_manifest(self) -> None:
         original_manifest_sha = sha256_file(self.manifest_path)
         original_label_sha = self.frame["label"]["sha256"]
@@ -603,7 +634,11 @@ class AnnotationWorkbenchTests(unittest.TestCase):
     def test_cli_exposes_local_annotate_and_offline_finalize_commands(self) -> None:
         environment = dict(os.environ)
         environment["PYTHONPATH"] = str(PACKAGE_ROOT)
-        for command in ("annotate", "finalize-annotations"):
+        for command in (
+            "prepare-annotation-draft",
+            "annotate",
+            "finalize-annotations",
+        ):
             result = subprocess.run(
                 [
                     sys.executable,
@@ -618,8 +653,13 @@ class AnnotationWorkbenchTests(unittest.TestCase):
                 env=environment,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("--dataset-root", result.stdout)
-            self.assertIn("--manifest", result.stdout)
+            if command == "prepare-annotation-draft":
+                self.assertIn("--capture-root", result.stdout)
+                self.assertIn("--session-map", result.stdout)
+                self.assertIn("--output-dir", result.stdout)
+            else:
+                self.assertIn("--dataset-root", result.stdout)
+                self.assertIn("--manifest", result.stdout)
 
 
 if __name__ == "__main__":
