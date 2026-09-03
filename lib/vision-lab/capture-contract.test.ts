@@ -33,6 +33,13 @@ describe("Vision Lab capture contract", () => {
       isPermanentVisionLabUser({
         id: "owner-1",
         email: "owner@example.com",
+        emailConfirmedAt: "2026-09-02T14:00:00.000Z",
+      }),
+    ).toBe(false);
+    expect(
+      isPermanentVisionLabUser({
+        id: "owner-1",
+        email: "owner@example.com",
         isAnonymous: false,
       }),
     ).toBe(false);

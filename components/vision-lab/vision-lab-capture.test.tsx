@@ -7,6 +7,10 @@ import {
   VisionLabCapture,
   type VisionLabEnvironment,
 } from "@/components/vision-lab/vision-lab-capture";
+import {
+  PrivateCaptureUploadError,
+  type PrivateCaptureSubmissionRow,
+} from "@/lib/vision-lab/private-capture-upload";
 
 type VisionLabTestEnvironment = VisionLabEnvironment & {
   selectWebmMime: () => string | null;
@@ -86,6 +90,9 @@ function createEnvironment(options: {
     recorderHandlers.stop?.();
   };
   const downloads: Array<{ name: string; blob: Blob }> = [];
+  const privateUploads: unknown[] = [];
+  const safetyStops = new Map<number, () => void>();
+  let nextSafetyStopId = 1;
   let userListener: ((user: ReturnType<typeof permanentUser> | null) => void) | null = null;
   const environment: VisionLabTestEnvironment = {
     loadUser: vi.fn(async () => options.user ?? permanentUser()),
@@ -104,12 +111,55 @@ function createEnvironment(options: {
     download: vi.fn((name, blob) => {
       downloads.push({ name, blob });
     }),
+    scheduleSafetyStop: vi.fn((callback) => {
+      const id = nextSafetyStopId++;
+      safetyStops.set(id, callback);
+      return id;
+    }),
+    clearSafetyStop: vi.fn((id) => {
+      safetyStops.delete(id);
+    }),
+    uploadPrivateCapture: vi.fn(async (input, uploadOptions) => {
+      privateUploads.push(input);
+      uploadOptions.onProgress?.({
+        file: "video",
+        bytesUploaded: input.video.size,
+        bytesTotal: input.video.size,
+        overallBytesUploaded: input.video.size,
+        overallBytesTotal: input.video.size + 500,
+        percentage: 92,
+      });
+      uploadOptions.onProgress?.({
+        file: "manifest",
+        bytesUploaded: 500,
+        bytesTotal: 500,
+        overallBytesUploaded: input.video.size + 500,
+        overallBytesTotal: input.video.size + 500,
+        percentage: 100,
+      });
+      return {
+        submissionId: "33333333-3333-4333-8333-333333333333",
+        status: "uploaded_unverified" as const,
+        videoObjectPath: `owner-1/${input.sessionId}/capture.webm`,
+        manifestObjectPath: `owner-1/${input.sessionId}/manifest.json`,
+      };
+    }),
+    finalizePrivateSubmission: vi.fn(async () => ({
+      submissionId: "33333333-3333-4333-8333-333333333333",
+      status: "uploaded_unverified" as const,
+    })),
   };
   return {
     environment,
     stream,
     recorder,
     downloads,
+    privateUploads,
+    fireSafetyStop() {
+      const pending = [...safetyStops.values()];
+      safetyStops.clear();
+      pending.forEach((callback) => callback());
+    },
     emitStop,
     emitUser(user: ReturnType<typeof permanentUser> | null) {
       userListener?.(user);
@@ -185,6 +235,242 @@ describe("VisionLabCapture", () => {
     );
     expect(screen.queryByRole("button", { name: "Start capture" })).toBeNull();
     expect(setup.environment.getUserMedia).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: "Sign in with email code" })).toHaveAttribute(
+      "href",
+      "/demo?signin=1",
+    );
+  });
+
+  it("does not transfer a completed capture until the owner explicitly opts in", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    expect(
+      await screen.findByRole("checkbox", {
+        name: /Send each finished capture directly to private CommandCanvas storage/i,
+      }),
+    ).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Start capture" }));
+    await user.click(screen.getByRole("button", { name: "Stop capture" }));
+
+    expect(await screen.findByRole("button", { name: "Save video" })).toBeEnabled();
+    expect(setup.environment.uploadPrivateCapture).not.toHaveBeenCalled();
+  });
+
+  it("automatically transfers both artifacts after Stop when the owner opted in", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    setup.environment.sha256 = vi.fn(async () => "a".repeat(64));
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(
+      await screen.findByRole("checkbox", {
+        name: /Send each finished capture directly to private CommandCanvas storage/i,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Start capture" }));
+    await user.click(screen.getByRole("button", { name: "Stop capture" }));
+
+    expect(
+      await screen.findByText(/Received for private review/i),
+    ).toBeVisible();
+    expect(setup.environment.uploadPrivateCapture).toHaveBeenCalledOnce();
+    expect(setup.privateUploads).toEqual([
+      expect.objectContaining({
+        expectedActorId: "owner-1",
+        sessionId: "vision-lab-owner-1-0001",
+        captureType: "acquisition",
+        video: expect.any(Blob),
+        manifest: expect.objectContaining({ videoSha256: "a".repeat(64) }),
+      }),
+    ]);
+    expect(screen.getByText(/not yet annotated, trained, or promoted/i)).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent(/Local Save is optional/i);
+    expect(screen.getByRole("button", { name: "Record another" })).toBeEnabled();
+    expect(screen.queryByText(/Save both files before clearing/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Save video" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save manifest" })).toBeEnabled();
+    expect(setup.downloads).toEqual([]);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("keeps local Save controls when the private transfer fails", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    setup.environment.sha256 = vi.fn(async () => "a".repeat(64));
+    setup.environment.uploadPrivateCapture = vi.fn(async () => {
+      throw new Error("storage unavailable");
+    });
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(
+      await screen.findByRole("checkbox", {
+        name: /Send each finished capture directly to private CommandCanvas storage/i,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Start capture" }));
+    await user.click(screen.getByRole("button", { name: "Stop capture" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Private transfer failed. The completed files remain available below.",
+    );
+    expect(screen.getByRole("button", { name: "Save video" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save manifest" })).toBeEnabled();
+  });
+
+  it("cancels an in-flight transfer without clearing the local recording", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    setup.environment.sha256 = vi.fn(async () => "a".repeat(64));
+    setup.environment.uploadPrivateCapture = vi.fn(
+      (_input, uploadOptions) =>
+        new Promise<never>((_resolve, reject) => {
+          uploadOptions.signal?.addEventListener(
+            "abort",
+            () => {
+              const error = new Error("cancelled");
+              error.name = "AbortError";
+              reject(error);
+            },
+            { once: true },
+          );
+        }),
+    );
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(
+      await screen.findByRole("checkbox", {
+        name: /Send each finished capture directly to private CommandCanvas storage/i,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Start capture" }));
+    await user.click(screen.getByRole("button", { name: "Stop capture" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Cancel private transfer" }),
+    );
+
+    expect(await screen.findByText(/Private transfer cancelled/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save video" })).toBeEnabled();
+  });
+
+  it("retries only receipt finalization after both private objects arrived", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    setup.environment.sha256 = vi.fn(async () => "a".repeat(64));
+    const pendingSubmission: PrivateCaptureSubmissionRow = {
+      actor_user_id: "owner-1",
+      vision_lab_session_id: "vision-lab-owner-1-0001",
+      capture_type: "acquisition",
+      video_object_path: "owner-1/vision-lab-owner-1-0001/capture.webm",
+      manifest_object_path: "owner-1/vision-lab-owner-1-0001/manifest.json",
+      video_sha256: "a".repeat(64),
+      manifest_sha256: "b".repeat(64),
+      video_bytes: 16,
+      manifest_bytes: 500,
+      consent_version: "vision-lab-consent-v1",
+      protocol_id: "commandcanvas-hand-finetune",
+      protocol_version: 1,
+      status: "uploaded_unverified",
+    };
+    setup.environment.uploadPrivateCapture = vi.fn(async () => {
+      throw new PrivateCaptureUploadError(
+        "receipt_failed",
+        "receipt response lost",
+        pendingSubmission,
+      );
+    });
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(
+      await screen.findByRole("checkbox", {
+        name: /Send each finished capture directly to private CommandCanvas storage/i,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Start capture" }));
+    await user.click(screen.getByRole("button", { name: "Stop capture" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Retry private receipt" }),
+    );
+
+    expect(await screen.findByText(/Received for private review/i)).toBeVisible();
+    expect(setup.environment.uploadPrivateCapture).toHaveBeenCalledOnce();
+    expect(setup.environment.finalizePrivateSubmission).toHaveBeenCalledWith(
+      pendingSubmission,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("keeps receipt-only retry available after the owner cancels one retry", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    setup.environment.sha256 = vi.fn(async () => "a".repeat(64));
+    const pendingSubmission: PrivateCaptureSubmissionRow = {
+      actor_user_id: "owner-1",
+      vision_lab_session_id: "vision-lab-owner-1-0001",
+      capture_type: "acquisition",
+      video_object_path: "owner-1/vision-lab-owner-1-0001/capture.webm",
+      manifest_object_path: "owner-1/vision-lab-owner-1-0001/manifest.json",
+      video_sha256: "a".repeat(64),
+      manifest_sha256: "b".repeat(64),
+      video_bytes: 16,
+      manifest_bytes: 500,
+      consent_version: "vision-lab-consent-v1",
+      protocol_id: "commandcanvas-hand-finetune",
+      protocol_version: 1,
+      status: "uploaded_unverified",
+    };
+    setup.environment.uploadPrivateCapture = vi.fn(async () => {
+      throw new PrivateCaptureUploadError(
+        "receipt_failed",
+        "receipt response lost",
+        pendingSubmission,
+      );
+    });
+    setup.environment.finalizePrivateSubmission = vi
+      .fn()
+      .mockImplementationOnce(
+        (_submission, signal?: AbortSignal) =>
+          new Promise<never>((_resolve, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                const error = new Error("cancelled");
+                error.name = "AbortError";
+                reject(error);
+              },
+              { once: true },
+            );
+          }),
+      )
+      .mockResolvedValueOnce({
+        submissionId: "33333333-3333-4333-8333-333333333333",
+        status: "uploaded_unverified" as const,
+      });
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(
+      await screen.findByRole("checkbox", {
+        name: /Send each finished capture directly to private CommandCanvas storage/i,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Start capture" }));
+    await user.click(screen.getByRole("button", { name: "Stop capture" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Retry private receipt" }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Cancel private transfer" }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Retry private receipt" }),
+    );
+
+    expect(await screen.findByText(/Received for private review/i)).toBeVisible();
+    expect(setup.environment.uploadPrivateCapture).toHaveBeenCalledOnce();
+    expect(setup.environment.finalizePrivateSubmission).toHaveBeenCalledTimes(2);
   });
 
   it("does not request camera access until an eligible owner deliberately starts", async () => {
@@ -326,12 +612,31 @@ describe("VisionLabCapture", () => {
     const setup = createEnvironment();
     render(<VisionLabCapture environment={setup.environment} />);
 
-    expect(await screen.findByText(/Frame one or two hands from wrist through fingertips/i)).toBeVisible();
-    expect(screen.getByText(/Draw continuous lines, circles, and short strokes/i)).toBeVisible();
+    expect(await screen.findByText(/Sit at your desk in the same position/i)).toBeVisible();
+    expect(screen.getByText(/Use normal room light/i)).toBeVisible();
+    expect(screen.getByText(/Most sessions are 30 seconds/i)).toBeVisible();
+    expect(screen.getByText(/Drawing and two-hand sessions may run up to 45 seconds/i)).toBeVisible();
     expect(screen.getByText(/Avoid overlays, filters, other people, and identifiable documents/i)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Start capture" }));
     expect(screen.getByText(/Keep the same framing and complete the selected actions/i)).toBeVisible();
-    expect(screen.getByText(/60 seconds or 250 MB maximum/i)).toBeVisible();
+    expect(screen.getByText(/hard stop is 60 seconds or 250 MB/i)).toBeVisible();
+    expect(screen.queryByText(/backlight/i)).toBeNull();
+  });
+
+  it("stops recording at the 60-second hard safety bound", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(await screen.findByRole("button", { name: "Start capture" }));
+    act(() => setup.fireSafetyStop());
+
+    expect(setup.environment.scheduleSafetyStop).toHaveBeenCalledWith(
+      expect.any(Function),
+      60_000,
+    );
+    expect(setup.recorder.stop).toHaveBeenCalledOnce();
+    expect(await screen.findByRole("button", { name: "Save video" })).toBeEnabled();
   });
 
   it("prepares downloads without a hash when hashing fails instead of losing the completed video", async () => {
@@ -395,6 +700,80 @@ describe("VisionLabCapture", () => {
       "Vision Lab is available only to a verified CommandCanvas account.",
     );
     expect(recording.stream.track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("requires fresh private-transfer consent after the signed-in owner changes", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    const consent = await screen.findByRole("checkbox", {
+      name: /Send each finished capture directly to private CommandCanvas storage/i,
+    });
+    await user.click(consent);
+    expect(consent).toBeChecked();
+
+    act(() =>
+      setup.emitUser({
+        ...permanentUser(),
+        id: "owner-2",
+        email: "owner-2@example.com",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("checkbox", {
+        name: /Send each finished capture directly to private CommandCanvas storage/i,
+      }),
+    ).not.toBeChecked();
+  });
+
+  it("cancels an in-flight private transfer when permanent owner A changes directly to owner B", async () => {
+    const user = userEvent.setup();
+    const setup = createEnvironment();
+    setup.environment.sha256 = vi.fn(async () => "a".repeat(64));
+    const transferAborted = vi.fn();
+    setup.environment.uploadPrivateCapture = vi.fn(
+      (_input, uploadOptions) =>
+        new Promise<never>((_resolve, reject) => {
+          uploadOptions.signal?.addEventListener(
+            "abort",
+            () => {
+              transferAborted();
+              const error = new Error("cancelled");
+              error.name = "AbortError";
+              reject(error);
+            },
+            { once: true },
+          );
+        }),
+    );
+    render(<VisionLabCapture environment={setup.environment} />);
+
+    await user.click(
+      await screen.findByRole("checkbox", {
+        name: /Send each finished capture directly to private CommandCanvas storage/i,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Start capture" }));
+    await user.click(screen.getByRole("button", { name: "Stop capture" }));
+    await screen.findByRole("button", { name: "Cancel private transfer" });
+
+    act(() =>
+      setup.emitUser({
+        ...permanentUser(),
+        id: "owner-2",
+        email: "owner-2@example.com",
+      }),
+    );
+
+    expect(transferAborted).toHaveBeenCalledOnce();
+    expect(await screen.findByRole("button", { name: "Start capture" })).toBeEnabled();
+    expect(
+      screen.getByRole("checkbox", {
+        name: /Send each finished capture directly to private CommandCanvas storage/i,
+      }),
+    ).not.toBeChecked();
   });
 
   it("revalidates the owner account at Start before requesting camera access", async () => {
