@@ -360,8 +360,12 @@ export function interpretHandFrame(
     pinchLatched,
     lastAcceptedTimestamp: frame.timestamp,
   };
+  const indexGeometryAccepted =
+    config.pointPolicy === "draw-index-led"
+      ? isPlausiblyIndexExtended(frame.landmarks)
+      : isIndexExtended(frame.landmarks);
   const canonicalDeliberatePoint =
-    isIndexExtended(frame.landmarks) &&
+    indexGeometryAccepted &&
     (config.pointPolicy === "draw-index-led"
       ? hasReliableIndexPointLandmarks(
           frame.landmarks,

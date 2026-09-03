@@ -300,6 +300,7 @@ const THROW_MIN_WINDOW_MS = 60;
 const THROW_MAX_WINDOW_MS = 180;
 const THROW_MIN_DIRECTION_COSINE = 0.85;
 const EDGE_RELEASE_WINDOW_MS = 120;
+const INTERACTION_CONFIDENCE = 0.5;
 const EDGE_CONFIDENCE = 0.8;
 const MIN_BIMANUAL_SPAN_PX = 8;
 
@@ -554,6 +555,8 @@ function reduceOwnedObject(
     return reduceOwnedBimanual(state, input, scene);
   const inputTrackId = input.reliability?.trackId ?? "legacy-primary";
   if (inputTrackId !== state.held.ownerTrackId) return { state, effects: [] };
+  if (state.edgeAction && !isEdgeTrusted(input.reliability))
+    return enterLostGrace(state, timestampOf(input), true);
   if (inputIsUnsafe(input))
     return enterLostGrace(state, timestampOf(input), true);
   if (state.phase === "transforming_two" && input.mode === "pinch")
@@ -814,13 +817,13 @@ function releaseOwnedObject(
 ): SpatialGestureTransition {
   if (!state.held) return empty();
   const timestamp = timestampOf(input);
-  const trustedRelease =
+  const edgeTrustedRelease =
     input.mode !== "idle" &&
     input.mode !== "bimanual_pinch" &&
-    isTrusted(input.reliability);
+    isEdgeTrusted(input.reliability);
   const edge = state.edgeAction;
   const edgeEligible = Boolean(
-    trustedRelease &&
+    edgeTrustedRelease &&
       edge &&
       edge.qualifiedAt !== null &&
       edge.lastQualifiedAt !== null &&
@@ -1132,7 +1135,8 @@ function updateEdgeAction(
   input: Extract<SpatialGestureInput, { mode: "pinch" }>,
   scene: SpatialGestureScene,
 ): { action: SpatialArmedEdgeAction | null; effects: readonly SpatialGestureEffect[] } {
-  if (!isTrusted(input.reliability)) return { action: null, effects: [] };
+  if (!isEdgeTrusted(input.reliability))
+    return clearEdgeAction(previous, held.objectId);
   const timestamp = requiredTimestamp(input.timestamp);
   const zone = edgeZone(normalizedToScreen(input.pointer, scene), scene);
   if (!zone) return clearEdgeAction(previous, held.objectId);
@@ -1688,9 +1692,13 @@ function isTrusted(evidence: SpatialReliabilityEvidence | undefined) {
     evidence &&
       evidence.real &&
       !evidence.predicted &&
-      evidence.confidence >= EDGE_CONFIDENCE &&
+      evidence.confidence >= INTERACTION_CONFIDENCE &&
       evidence.trackingState === "tracked",
   );
+}
+
+function isEdgeTrusted(evidence: SpatialReliabilityEvidence | undefined) {
+  return Boolean(isTrusted(evidence) && evidence!.confidence >= EDGE_CONFIDENCE);
 }
 
 function transformChanged(before: SpatialTransform, after: SpatialTransform) {

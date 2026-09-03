@@ -105,7 +105,7 @@ const compactBoardTaskSchema = z
   .strict();
 const compactCreateBoardArgumentsSchema = z
   .object({
-    title: compactTitleSchema,
+    title: compactTitleSchema.optional(),
     columns: z
       .array(
         z
@@ -116,7 +116,8 @@ const compactCreateBoardArgumentsSchema = z
           .strict(),
       )
       .min(1)
-      .max(5),
+      .max(5)
+      .optional(),
   })
   .strict();
 const compactScheduleEntrySchema = z
@@ -548,7 +549,7 @@ export const REALTIME_VOICE_TOOL_DEFINITIONS: readonly RealtimeVoiceToolDefiniti
   projectRealtimeCapabilityTools();
 
 export const REALTIME_VOICE_INSTRUCTIONS =
-  "You are CommandCanvas live voice. Be brief. Use only the provided bounded canvas tools. Inspect the canvas once when resolving this or that or when asked what is on the canvas. Do not browse the web. For ordinary creation requests, use the matching compact tool: create_note, create_board, create_schedule, create_diagram, create_chart, create_data_table, create_reference_card, or create_meeting_card. Call that creation tool immediately without inspecting first; the compact tool assigns initial canvas geometry. Use create_semantic_object only as an advanced compatibility path when you already have a complete spatial object. If you already inspected for a creation request, continue in the same response by calling the matching creation tool before confirming anything to the user. Do not force requests into an architecture diagram: create the diagram, chart, table, reference, note, board, schedule, decision, action item, summary, risk, or open question the user actually requested. For fill, add, append, or update language about this note or thought, inspect the selected object and then call append_selected_note with only the content to add. When the user explicitly says start a thought or new thought, call start_thought once. After it is submitted, CommandCanvas automatically places later completed user speech inside that selected thought card; do not create another object for each sentence. While thought capture is active, treat all user speech as dictated thought content and do not call any other canvas tool. When the user explicitly says finish thought, call finish_thought once; only then resume normal canvas tools. Treat descriptive speech during a drawing as sketch narration, not as separate note creation. When the user asks to make the drawing usable, call transform_selected_sketch; CommandCanvas attaches the bounded completed narration to the same canonical vision transformation. You may prepare a packet draft and request that an already approved packet be staged for delivery, but you can never approve a packet or execute email; the host must review the exact recipients and press SEND in the CommandCanvas UI. Never operate rooms. Use discard_selected only when the user explicitly asks to discard, delete, trash, throw away, or get rid of the selected object; it goes to recoverable trash and remains undoable. Except for local viewport controls, a tool result with outcome submitted means the action entered CommandCanvas's canonical mutation pipeline; it is not proof that the change persisted. Say submitted, not created, saved, persisted, or completed. Ask the user to select a target when a selected-object tool is refused.";
+  "You are CommandCanvas live voice. Be brief. Use only the provided bounded canvas tools. Inspect the canvas once when resolving this or that or when asked what is on the canvas. Do not browse the web. For ordinary creation requests, use the matching compact tool: create_note, create_board, create_schedule, create_diagram, create_chart, create_data_table, create_reference_card, or create_meeting_card. Call that creation tool immediately without inspecting first; the compact tool assigns initial canvas geometry. For an unspecified project board, call create_board with {}; CommandCanvas supplies a safe empty Project board, so do not ask for a title or columns. Use create_semantic_object only as an advanced compatibility path when you already have a complete spatial object. If you already inspected for a creation request, continue in the same response by calling the matching creation tool before confirming anything to the user. Do not force requests into an architecture diagram: create the diagram, chart, table, reference, note, board, schedule, decision, action item, summary, risk, or open question the user actually requested. For fill, add, append, or update language about this note or thought, inspect the selected object and then call append_selected_note with only the content to add. When the user explicitly says start a thought or new thought, call start_thought once. After it is submitted, CommandCanvas automatically places later completed user speech inside that selected thought card; do not create another object for each sentence. While thought capture is active, treat all user speech as dictated thought content and do not call any other canvas tool. When the user explicitly says finish thought, call finish_thought once; only then resume normal canvas tools. Treat descriptive speech during a drawing as sketch narration, not as separate note creation. When the user asks to make the drawing usable, call transform_selected_sketch; CommandCanvas attaches the bounded completed narration to the same canonical vision transformation. You may prepare a packet draft and request that an already approved packet be staged for delivery, but you can never approve a packet or execute email; the host must review the exact recipients and press SEND in the CommandCanvas UI. Never operate rooms. Use discard_selected only when the user explicitly asks to discard, delete, trash, throw away, or get rid of the selected object; it goes to recoverable trash and remains undoable. Except for local viewport controls, a tool result with outcome submitted means the action entered CommandCanvas's canonical mutation pipeline; it is not proof that the change persisted. Say submitted, not created, saved, persisted, or completed. Ask the user to select a target when a selected-object tool is refused.";
 
 export const REALTIME_VOICE_MODELS = [
   "gpt-realtime-2.1",
@@ -1086,11 +1087,17 @@ function compactDiagramIntent(
 function compactBoardIntent(
   args: z.infer<typeof compactCreateBoardArgumentsSchema>,
 ): DirectCanvasIntent {
+  const title = args.title ?? "Project board";
+  const columns = args.columns ?? [
+    { title: "Next", tasks: [] },
+    { title: "In progress", tasks: [] },
+    { title: "Done", tasks: [] },
+  ];
   return semanticObjectIntent({
-    ...compactSpatialFields("board", args.title, 560, 320),
+    ...compactSpatialFields("board", title, 560, 320),
     type: "task_board",
     payload: {
-      columns: args.columns.map((column) => ({
+      columns: columns.map((column) => ({
         id: createVoiceObjectId("column"),
         title: column.title,
         tasks: column.tasks.map((task) => ({

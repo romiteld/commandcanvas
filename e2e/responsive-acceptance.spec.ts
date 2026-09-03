@@ -21,7 +21,7 @@ for (const viewport of supportedViewports) {
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     const workspaceCta = page
-      .getByRole("link", { name: "Open CommandCanvas" })
+      .getByRole("link", { name: "Try the no-signup demo" })
       .first();
     await expect(workspaceCta).toBeVisible();
     await expectInViewport(workspaceCta, viewport);
@@ -93,7 +93,7 @@ test("covers the compact-control breakpoint edges", async ({ page }, testInfo) =
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await expectNoHorizontalOverflow(page, `${width}px landing probe`);
     await expectInViewport(
-      page.getByRole("link", { name: "Open CommandCanvas" }).first(),
+      page.getByRole("link", { name: "Try the no-signup demo" }).first(),
       viewport,
     );
 

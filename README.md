@@ -9,17 +9,13 @@ CommandCanvas is a shared spatial workspace where people, hands, voice, collabor
 
 ## Choose the right entry
 
-**Email-OTP workspace:** `/meet` is the durable room path. A person verifies a
-six-digit email code, chooses a display name, creates or joins a room, and can
-send an exact-email invitation. There are no passwords.
+**Email-OTP workspace:** `/meet` is the durable room path. A person verifies a six-digit email code, chooses a display name, creates or joins a room, and can send an exact-email invitation. There are no passwords.
 
-**No-signup judge preview:** `/demo` presents no signup form, login form,
-password, third-party account, or configuration. Supabase may create a bounded
-temporary identity and room only after the visitor explicitly enters.
+**No-signup judge preview:** `/demo` presents no signup form, login form, password, third-party account, or configuration. Supabase may create a bounded temporary identity and room only after the visitor explicitly enters.
 
 The preview cannot send production email. Provider-backed voice and direct image interpretation use the visitor's temporary key; verified users may choose a previously saved, encrypted account-owned key. There is no deployment-owner key fallback.
 
-## Five-step workflow
+## The product loop
 
 1. Enter a durable room or the temporary judge preview.
 2. Create semantic objects by pointer, touch, typed command, optional voice, optional local hand tracking, collaborator action, or supported Site Tools.
@@ -30,22 +26,11 @@ The preview cannot send production email. Provider-backed voice and direct image
 
 ## Why WebMCP matters
 
-CommandCanvas registers a bounded Site Tools catalog against the live page,
-current room revision, selected objects, member role, and packet state.
-Where a compatible ChatGPT Site Tools host is available, ChatGPT can inspect
-and operate on the same object identities that participants currently see.
+CommandCanvas registers a bounded Site Tools catalog against the live page, current room revision, selected objects, member role, and packet state. Where a compatible ChatGPT Site Tools host is available, ChatGPT can inspect and operate on the same object identities that participants currently see.
 
-The host does not receive camera frames, database credentials, or permission to
-bypass application controls. Tools use explicit schemas, cancellation signals,
-lifecycle cleanup, role and phase checks, expected revisions, and human approval
-for consequential actions. Static registration is the production default;
-dynamic phase registration is behind one feature flag. Execute-time guards are
-identical in both modes.
+The host does not receive camera frames, database credentials, or permission to bypass application controls. Tools use explicit schemas, cancellation signals, lifecycle cleanup, role and phase checks, expected revisions, and human approval for consequential actions. Static registration is the production default; dynamic phase registration is behind one feature flag. Execute-time guards are identical in both modes.
 
-The embedded Live voice surface is separate. It offers a narrower command
-catalog for hands-free canvas control through a user-owned API key. It does not
-prove Site Tools discovery and cannot manage rooms, approve packets, or send
-email.
+The embedded Live voice surface is separate. It offers a narrower command catalog for hands-free canvas control through a user-owned API key. It does not prove Site Tools discovery and cannot manage rooms, approve packets, or send email.
 
 ## What ships
 
@@ -64,25 +49,31 @@ email.
   explicit host authorization before eligible Resend submission.
 - A resettable temporary judge preview with honest service-state fallbacks.
 
-## Experimental and external boundaries
+## Current evidence boundary
 
-Browser hand input uses MediaPipe Hand Landmarker locally after explicit camera
-permission. It supports index-finger drawing, one-hand pinch movement, two-hand
-resize and canvas zoom, open-palm pan, and recoverable edge discard. Camera
-frames stay out of ChatGPT, OpenAI, Supabase, and WebMCP on the local path.
+The production release has exercised these paths independently:
+
+- Native Chrome 153 Site Tools discovery, registration lifecycle, and client cancellation against the deployed application.
+- A real OpenAI Realtime session under controlled browser audio: the model transcribed a spoken request, called `create_board`, and the canvas committed one board and one voice receipt.
+- A real OpenAI vision request: a browser sketch was rasterized to PNG, returned as schema-validated structured output, and created beside the preserved source with a receipt.
+- Two independent browser clients sharing Supabase Presence, cursors, a durable object mutation, and the resulting receipt.
+- The responsive workspace at nine viewport sizes from 320 x 568 through 1440 x 900.
+
+Those checks do not prove a ChatGPT-built-in-browser Site Tool invocation, live physical-microphone ergonomics, final physical-hand usability, arbitrary cross-network TURN traversal, or real OTP/invitation/packet delivery. Those external and physical-device checks remain explicitly unclaimed until they are rehearsed on the submitted production release. The exact receipts and release identities are maintained in [the verification ledger](docs/verification-ledger.md).
+
+## Experimental input and service boundaries
+
+Browser hand input uses MediaPipe Hand Landmarker locally after explicit camera permission. It supports index-finger drawing, one-hand pinch movement, two-hand resize and canvas zoom, open-palm pan, and recoverable edge discard. Camera frames stay out of ChatGPT, OpenAI, Supabase, and WebMCP on the local path.
 
 A compact HaGRIDv2-derived classifier adds refusal-gated static-pose evidence after landmarks exist. It cannot acquire an object, perform bimanual or edge actions, or replace canonical geometry and temporal state. Its custom same-license boundary is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-After separate consent, an optional private CUDA relay can receive bounded newest-only frames and return semantic landmarks. It is not part of this MIT application; see [SOURCE.md](SOURCE.md) and [private relay documentation](docs/private-hand-relay.md).
+After separate consent, an optional private CUDA relay can receive bounded newest-only frames and return semantic landmarks. It is not part of this MIT application; see [SOURCE.md](SOURCE.md) and the [private relay documentation](docs/private-hand-relay.md).
 
 Physical-hand accuracy, lighting tolerance, occlusion behavior, and ergonomics
 remain experimental until named device rehearsals pass. Pointer, touch, typed,
 and button controls remain available without camera access.
 
-Live voice uses `gpt-realtime-2.1` only after the person presses Start and
-provides or selects their own project API key. A ChatGPT subscription does not
-fund OpenAI API use inside the page. The current verification boundary is
-recorded in [the verification ledger](docs/verification-ledger.md).
+Live voice uses `gpt-realtime-2.1` only after the person presses Start and provides or selects their own project API key. A ChatGPT subscription does not fund OpenAI API use inside the page. The provider-backed tool-call chain has passed with controlled browser audio; a live physical microphone still requires the named-device rehearsal described above.
 
 Meeting media is a small opt-in peer-to-peer layer that attempts direct STUN.
 An optional TURN relay uses short-lived, server-authorized credentials when
@@ -91,7 +82,8 @@ configured. Cross-network TURN remains unverified; there is no SFU, recording, s
 ## One command architecture
 
 ```text
-Hands / Voice / Pointer / ChatGPT -> semantic intent -> guarded command -> mutation + receipt -> Supabase room
+Hands / voice / pointer / touch / collaborators / ChatGPT Site Tools
+  -> semantic canvas intent -> guarded command -> mutation + receipt -> Supabase room -> every participant
 ```
 
 Collaborator events, touch and stylus input, typed commands, and accessibility
@@ -129,7 +121,7 @@ Open `/demo`, choose **Enter no-signup preview**, and follow the visible tour.
 The fixture includes believable semantic objects and activity history so the
 workspace is understandable before any optional service is enabled.
 
-Try these reliable controls first:
+The fastest reliable path needs no OpenAI key:
 
 - Create a note from the object dock.
 - Drag and resize an object.
@@ -138,6 +130,12 @@ Try these reliable controls first:
 - Use the command drawer to create or organize objects.
 - Open the activity drawer and inspect actor and revision receipts.
 - Reset the preview to its deterministic starting state.
+
+For the challenge path, open the same URL inside a ChatGPT host that exposes
+Site Tools and ask: **Read this canvas, then create a note titled Site Tool proof
+saying ChatGPT changed the live canvas.** Count the result only if the note and
+its `webmcp` receipt appear in the page. Native Chrome 153 registration is
+verified separately; ChatGPT-host invocation is not inferred from that result.
 
 Optional Site Tools, camera, voice, collaboration, vision, meeting media, and
 email surfaces report their actual availability. A failed or unconfigured

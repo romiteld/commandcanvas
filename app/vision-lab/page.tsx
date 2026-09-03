@@ -4,7 +4,7 @@ import { VisionLabCapture } from "@/components/vision-lab/vision-lab-capture";
 
 export const metadata: Metadata = {
   title: "CommandCanvas Vision Lab",
-  description: "Local-only hand capture for verified CommandCanvas owners.",
+  description: "Private hand capture for verified CommandCanvas owners.",
   referrer: "no-referrer",
   robots: { index: false, follow: false },
 };

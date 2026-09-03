@@ -26,6 +26,7 @@ import * as browserClientModule from "@/lib/supabase/browser-client";
 import * as browserTransformModule from "@/lib/vision/browser-api";
 import * as browserPacketModule from "@/lib/packets/browser-api";
 import * as browserCredentialModule from "@/lib/openai-credentials/browser-api";
+import * as sharedCameraControllerModule from "@/lib/gesture/shared-camera-controller";
 import { createTestOpenAiApiKey } from "@/lib/testing/openai-key-fixture";
 
 const ROOM_ID = "d32af6a9-31dd-4dfc-98d5-fcf439b9b106";
@@ -1307,6 +1308,82 @@ describe("DemoCommandCanvas", () => {
         name: "Use private GPU hand tracking",
       }),
     ).toBeNull();
+  });
+
+  it("keeps a globally configured private GPU relay absent from an anonymous no-signup demo", async () => {
+    const user = userEvent.setup();
+    const createSharedController = vi.spyOn(
+      sharedCameraControllerModule,
+      "createSharedCameraHandController",
+    );
+    const harness = readyEnvironment({ isAnonymous: true });
+
+    try {
+      render(
+        <DemoAuthenticatedIdentityProvider identity={null}>
+          <DemoCommandCanvas
+            environment={harness.environment}
+            privateGpuRelayEnabled
+          />
+        </DemoAuthenticatedIdentityProvider>,
+      );
+
+      expect(await screen.findByText("Live demo room")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Open system status" }));
+      expect(
+        screen.queryByRole("checkbox", {
+          name: "Use private GPU hand tracking",
+        }),
+      ).toBeNull();
+      expect(createSharedController).toHaveBeenCalled();
+      expect(
+        createSharedController.mock.calls.every(
+          ([options]) => options.privateHandRelay === undefined,
+        ),
+      ).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("offers and wires the configured private GPU relay for the matching confirmed permanent demo identity", async () => {
+    const user = userEvent.setup();
+    const createSharedController = vi.spyOn(
+      sharedCameraControllerModule,
+      "createSharedCameraHandController",
+    );
+    const harness = readyEnvironment({ isAnonymous: false });
+
+    try {
+      render(
+        <DemoAuthenticatedIdentityProvider
+          identity={{ actorId: HOST_ID, email: "daniel@example.com" }}
+        >
+          <DemoCommandCanvas
+            environment={harness.environment}
+            privateGpuRelayEnabled
+          />
+        </DemoAuthenticatedIdentityProvider>,
+      );
+
+      expect(await screen.findByText("Live demo room")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Open system status" }));
+      expect(
+        screen.getByRole("checkbox", {
+          name: "Use private GPU hand tracking",
+        }),
+      ).toBeVisible();
+      expect(createSharedController).toHaveBeenCalledWith(
+        expect.objectContaining({
+          privateHandRelay: expect.objectContaining({
+            roomId: ROOM_ID,
+            getAccessToken: harness.session.getAccessToken,
+          }),
+        }),
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("renders only actual Presence participants and one remote cursor", async () => {

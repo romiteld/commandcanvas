@@ -11,7 +11,7 @@ export const VISION_LAB_CAPTURE_TYPES = [
   { value: "edges-corners", label: "Edges and corners", guidance: "Frame the full hand while reaching each edge and corner. Hold each target for two seconds across 12 reaches. Avoid leaving the wrist outside frame." },
   { value: "two-hand-transforms", label: "Two-hand transforms", guidance: "Frame both wrists and all fingertips. Perform spread, rotate, and scale motions for 10 repetitions. Avoid hands occluding each other for the full take." },
   { value: "throws", label: "Throws", guidance: "Frame the throwing hand with room for travel. Perform 10 controlled release motions at slow and normal speed. Avoid real objects and unsafe fast throws." },
-  { value: "difficult-conditions", label: "Difficult conditions", guidance: "Frame the hand under backlight, side light, motion, and partial occlusion. Repeat each condition for 10 seconds. Avoid filters or synthetic effects." },
+  { value: "difficult-conditions", label: "Natural variation", guidance: "Stay in normal room light and vary your hand angle, distance, and speed. Include brief natural overlap or partial occlusion only when comfortable. Avoid filters, synthetic effects, or staged difficult lighting." },
   { value: "negative-no-hand", label: "Negative / no-hand", guidance: "Frame the ordinary workspace with no hands visible. Record 30 seconds with natural background movement. Avoid people, screens, documents, and overlays." },
 ] as const;
 
@@ -46,11 +46,17 @@ export interface VisionLabManifest {
   videoSha256?: string;
 }
 
-export function isPermanentVisionLabUser(user: VisionLabUser | null): boolean {
+export function isPermanentVisionLabUser(
+  user: VisionLabUser | null,
+): user is VisionLabUser & {
+  email: string;
+  emailConfirmedAt: string;
+  isAnonymous: false;
+} {
   return Boolean(
     user &&
       user.id.trim() &&
-      user.isAnonymous !== true &&
+      user.isAnonymous === false &&
       user.email?.trim().includes("@") &&
       user.emailConfirmedAt?.trim(),
   );

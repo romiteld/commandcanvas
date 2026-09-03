@@ -158,6 +158,12 @@ export function DemoCommandCanvas({
   const bootstrapOperationRef = useRef<DemoRoomBootstrapOperation | null>(null);
   const readyRoom = view.status === "ready" ? view.room : null;
   const activeRoomId = view.status === "ready" ? view.snapshot.roomId : null;
+  const privateGpuRelayAuthorized = Boolean(
+    privateGpuRelayEnabled &&
+      view.status === "ready" &&
+      view.snapshot.identity?.isAnonymous === false &&
+      authenticatedIdentity?.actorId === view.snapshot.identity.userId,
+  );
   const packetWorkflow = useMeetingPacketWorkflow({
     session: readyRoom?.session ?? null,
     store: readyRoom?.store ?? null,
@@ -187,7 +193,7 @@ export function DemoCommandCanvas({
       createSharedCameraHandController({
         getMeetingStream: () => meetingMediaStreamRef.current,
         acquireHandMedia: localMediaBroker.acquireHandVideo,
-        ...(privateGpuRelayEnabled && readyRoom && activeRoomId
+        ...(privateGpuRelayAuthorized && readyRoom && activeRoomId
           ? {
               privateHandRelay: {
                 roomId: activeRoomId,
@@ -197,7 +203,7 @@ export function DemoCommandCanvas({
             }
           : {}),
       }),
-    [activeRoomId, localMediaBroker, privateGpuRelayEnabled, readyRoom],
+    [activeRoomId, localMediaBroker, privateGpuRelayAuthorized, readyRoom],
   );
   const updateOpenAiApiKey = useCallback((value: string) => {
     openAiApiKeyRef.current = value;
@@ -856,7 +862,7 @@ export function DemoCommandCanvas({
         }}
         createHandTrackingController={createMeetingAwareHandController}
         privateGpuRelayAvailable={Boolean(
-          privateGpuRelayEnabled && activeRoomId && readyRoom,
+          privateGpuRelayAuthorized && activeRoomId && readyRoom,
         )}
         realtimeVoice={{
           roomId: snapshot.roomId!,

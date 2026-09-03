@@ -27,6 +27,89 @@ describe("Realtime voice tools", () => {
     expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
       "If you already inspected for a creation request, continue in the same response by calling the matching creation tool before confirming anything to the user.",
     );
+    expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
+      "For an unspecified project board, call create_board with {}",
+    );
+  });
+
+  it("creates a safe empty project board when the spoken request omits structure", async () => {
+    const definition = REALTIME_VOICE_TOOL_DEFINITIONS.find(
+      (tool) => tool.name === "create_board",
+    );
+    expect(definition?.parameters.required).toEqual([]);
+
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Created.",
+    }));
+
+    const result = await executeRealtimeVoiceTool(
+      { name: "create_board", arguments: "{}" },
+      vi.fn(),
+      { invokeCapability },
+    );
+
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "create_object",
+      {
+        type: "task_board",
+        title: "Project board",
+        columns: [
+          { title: "Next", tasks: [] },
+          { title: "In progress", tasks: [] },
+          { title: "Done", tasks: [] },
+        ],
+      },
+      expect.any(AbortSignal),
+    );
+    expect(result).toMatchObject({ ok: true, outcome: "submitted" });
+
+    await executeRealtimeVoiceTool(
+      {
+        name: "create_board",
+        arguments: JSON.stringify({
+          title: "Release readiness",
+          columns: [
+            {
+              title: "Today",
+              tasks: [
+                {
+                  title: "Record the demo",
+                  owner: "Danny",
+                  dueDate: "2026-09-03",
+                  priority: "high",
+                },
+              ],
+            },
+          ],
+        }),
+      },
+      vi.fn(),
+      { invokeCapability },
+    );
+    expect(invokeCapability).toHaveBeenNthCalledWith(
+      2,
+      "create_object",
+      {
+        type: "task_board",
+        title: "Release readiness",
+        columns: [
+          {
+            title: "Today",
+            tasks: [
+              {
+                title: "Record the demo",
+                owner: "Danny",
+                dueDate: "2026-09-03",
+                priority: "high",
+              },
+            ],
+          },
+        ],
+      },
+      expect.any(AbortSignal),
+    );
   });
 
   it("tells the voice model that spoken drawing explanation belongs to the sketch transform", () => {

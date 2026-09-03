@@ -294,8 +294,10 @@ export function MeetingFilmstrip({
                 });
               }}
               aria-label="Start camera and microphone"
+              title="Start camera and microphone"
             >
-              Start & show camera
+              <MeetingControlIcon kind="camera" />
+              <span className="meeting-control-label">Start camera</span>
             </button>
           ) : null}
           {media.localStream ? (
@@ -306,16 +308,27 @@ export function MeetingFilmstrip({
                 aria-label={
                   media.cameraEnabled ? "Stop sharing video" : "Share video"
                 }
+                title={
+                  media.cameraEnabled ? "Stop sharing video" : "Share video"
+                }
                 onClick={() =>
                   controllerRef.current?.setCameraEnabled(!media.cameraEnabled)
                 }
               >
-                {media.cameraEnabled ? "Video shared" : "Video not shared"}
+                <MeetingControlIcon kind="camera" />
+                <span className="meeting-control-label">
+                  {media.cameraEnabled ? "Video shared" : "Video not shared"}
+                </span>
               </button>
               <button
                 type="button"
                 aria-pressed={!media.microphoneEnabled}
                 aria-label={
+                  media.microphoneEnabled
+                    ? "Mute microphone"
+                    : "Unmute microphone"
+                }
+                title={
                   media.microphoneEnabled
                     ? "Mute microphone"
                     : "Unmute microphone"
@@ -326,15 +339,20 @@ export function MeetingFilmstrip({
                   )
                 }
               >
-                {media.microphoneEnabled ? "Mic on" : "Muted"}
+                <MeetingControlIcon kind="microphone" />
+                <span className="meeting-control-label">
+                  {media.microphoneEnabled ? "Mic on" : "Muted"}
+                </span>
               </button>
               <button
                 type="button"
                 className="meeting-leave-action"
                 aria-label="Leave meeting video"
+                title="Leave meeting video"
                 onClick={() => void controllerRef.current?.stop()}
               >
-                Leave
+                <MeetingControlIcon kind="leave" />
+                <span className="meeting-control-label">Leave</span>
               </button>
             </>
           ) : null}
@@ -346,10 +364,15 @@ export function MeetingFilmstrip({
             aria-label={
               expanded ? "Hide participant videos" : "Show participant videos"
             }
+            title={
+              expanded ? "Hide participant videos" : "Show participant videos"
+            }
             onClick={() => setExpanded((current) => !current)}
           >
-            <span aria-hidden="true">{expanded ? "▴" : "▣"}</span>
-            <span>{expanded ? "Hide" : "Videos"}</span>
+            <MeetingControlIcon kind={expanded ? "hide" : "videos"} />
+            <span className="meeting-control-label">
+              {expanded ? "Hide" : "Videos"}
+            </span>
           </button>
         </div>
       </div>
@@ -471,6 +494,48 @@ export function MeetingFilmstrip({
         </p>
       ) : null}
     </section>
+  );
+}
+
+function MeetingControlIcon({
+  kind,
+}: {
+  kind: "camera" | "microphone" | "leave" | "videos" | "hide";
+}) {
+  return (
+    <svg
+      className="meeting-control-icon"
+      viewBox="0 0 18 18"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {kind === "camera" ? (
+        <>
+          <rect x="1.75" y="4.25" width="10.5" height="9.5" rx="2" />
+          <path d="m12.25 7 4-2v8l-4-2" />
+        </>
+      ) : null}
+      {kind === "microphone" ? (
+        <>
+          <rect x="6" y="2" width="6" height="9" rx="3" />
+          <path d="M3.75 8.5a5.25 5.25 0 0 0 10.5 0M9 13.75V16M6.5 16h5" />
+        </>
+      ) : null}
+      {kind === "leave" ? (
+        <>
+          <path d="M7.5 3H3v12h4.5M10.5 5.5 14 9l-3.5 3.5M6.5 9H14" />
+        </>
+      ) : null}
+      {kind === "videos" ? (
+        <>
+          <rect x="2" y="3" width="6" height="5" rx="1" />
+          <rect x="10" y="3" width="6" height="5" rx="1" />
+          <rect x="2" y="10" width="6" height="5" rx="1" />
+          <rect x="10" y="10" width="6" height="5" rx="1" />
+        </>
+      ) : null}
+      {kind === "hide" ? <path d="m4 11 5-5 5 5" /> : null}
+    </svg>
   );
 }
 

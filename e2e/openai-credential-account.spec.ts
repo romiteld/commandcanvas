@@ -98,7 +98,7 @@ test.describe("verified account OpenAI credential", () => {
       await expect(
         page.getByText("Saved to your CommandCanvas account"),
       ).toBeVisible({ timeout: 15_000 });
-      await expect(keyInput).toHaveValue("");
+      await expect(keyInput).toHaveCount(0);
       expect(saveResponse.ok()).toBe(true);
       expect(saveResponseText).not.toContain(apiKey);
       await expect(page.locator("body")).not.toContainText(apiKey);

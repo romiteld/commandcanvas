@@ -36,14 +36,19 @@ test("renders a fluid, scrollable landing page with real destinations", async ({
       name: "Where meetings become the deliverable",
     }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: "Open CommandCanvas" }).first()).toHaveAttribute(
-    "href",
-    "/meet",
-  );
-  await expect(page.getByRole("link", { name: "View judge preview" })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: "Try the no-signup demo" }).first()).toHaveAttribute(
     "href",
     "/demo",
   );
+  await expect(page.getByRole("link", { name: "Start a signed-in room" })).toHaveAttribute(
+    "href",
+    "/meet",
+  );
+  await expect(
+    page.getByRole("heading", {
+      name: "From rough sketch to structured output",
+    }),
+  ).toBeVisible();
   await expect(page.locator("h1")).toHaveCount(1);
 
   const geometry = await page.evaluate(() => ({
@@ -69,16 +74,7 @@ test("renders a fluid, scrollable landing page with real destinations", async ({
   }
 
   await page.goto("/");
-  await page.getByRole("link", { name: "Open CommandCanvas" }).first().click();
-  await expect(
-    page.getByRole("heading", {
-      name: "Sign in to your CommandCanvas workspace",
-    }),
-  ).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "Email" })).toBeVisible();
-
-  await page.goto("/");
-  await page.getByRole("link", { name: "View judge preview" }).click();
+  await page.getByRole("link", { name: "Try the no-signup demo" }).first().click();
   await expect(
     page.getByRole("heading", { name: "Choose how to enter CommandCanvas" }),
   ).toBeVisible();
@@ -134,8 +130,8 @@ test("stays fluid, branded, readable, and touchable across narrow widths", async
         return Number.parseFloat(getComputedStyle(element).fontSize);
       };
       const workspace = Array.from(
-        document.querySelectorAll<HTMLElement>('nav a[href="/meet"]'),
-      ).find((element) => element.textContent?.includes("Open CommandCanvas"));
+        document.querySelectorAll<HTMLElement>('nav a[href="/demo"]'),
+      ).find((element) => element.textContent?.includes("Try the demo"));
       const wordmark = Array.from(document.querySelectorAll<HTMLElement>("nav span"))
         .find((element) => element.textContent === "CommandCanvas");
       if (!workspace || !wordmark) throw new Error("Landing navigation is incomplete.");

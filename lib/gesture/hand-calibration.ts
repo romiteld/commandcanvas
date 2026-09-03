@@ -1135,17 +1135,13 @@ function percentile(values: readonly number[], percentileRank: number) {
 }
 
 function gainFor(state: HandControlGainState) {
-  switch (state) {
-    case "hover":
-      return 1.5;
-    case "target":
-      return 1.25;
-    case "held":
-    case "draw":
-      return 1.1;
-    case "two_hand":
-      return 1;
-  }
+  return {
+    hover: 1.1,
+    target: 1.1,
+    held: 1.1,
+    draw: 1.1,
+    two_hand: 1.1,
+  }[state];
 }
 
 function assertFiniteCanvas(canvas: CanvasBounds) {

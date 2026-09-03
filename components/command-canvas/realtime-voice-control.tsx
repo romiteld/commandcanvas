@@ -716,6 +716,11 @@ export const RealtimeVoiceControl = forwardRef<
     onActiveChange?.(active);
   }, [active, onActiveChange]);
 
+  useEffect(() => {
+    if (!active || useSavedOpenAiCredential || !openAiApiKey) return;
+    updateOpenAiApiKey("");
+  }, [active, openAiApiKey, updateOpenAiApiKey, useSavedOpenAiCredential]);
+
   const startVoice = useCallback(() => {
     if (disabled || active) return;
     latestHandlers.resetSessionContext();

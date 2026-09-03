@@ -593,6 +593,67 @@ describe("Realtime voice WebRTC controller", () => {
     ]);
   });
 
+  it("executes an underspecified create_board call through the canonical capability", async () => {
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Board created.",
+    }));
+    const setup = harness({ invokeCapability });
+    await setup.controller.start();
+    setup.channel.open();
+    setup.channel.message({ type: "session.created", session: { type: "realtime" } });
+    setup.channel.sent.length = 0;
+
+    setup.channel.message({
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        call_id: "call-board-default-1",
+        name: "create_board",
+        arguments: "{}",
+      },
+    });
+
+    await vi.waitFor(() => expect(setup.channel.sent).toHaveLength(2));
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "create_object",
+      {
+        type: "task_board",
+        title: "Project board",
+        columns: [
+          { title: "Next", tasks: [] },
+          { title: "In progress", tasks: [] },
+          { title: "Done", tasks: [] },
+        ],
+      },
+      expect.any(AbortSignal),
+    );
+    expect(JSON.parse(setup.channel.sent[0]!)).toMatchObject({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: "call-board-default-1",
+      },
+    });
+    expect(JSON.parse(setup.channel.sent[1]!)).toEqual({
+      type: "response.create",
+    });
+    expect(setup.toolActions).toEqual([
+      {
+        callId: "call-board-default-1",
+        name: "create_board",
+        status: "running",
+      },
+      {
+        callId: "call-board-default-1",
+        name: "create_board",
+        status: "submitted",
+        message: "Canvas action submitted; check the canvas receipt for the result.",
+      },
+    ]);
+  });
+
   it("forwards buffered drawing narration into a canonical sketch transformation", async () => {
     const invokeCapability = vi.fn(async () => ({
       ok: true as const,

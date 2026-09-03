@@ -1,117 +1,124 @@
-# CommandCanvas 90-second video shot list
+# CommandCanvas final demo video: 2:40 target
 
-Record this sequence only after the exact public commit passes its release checks. Rehearse with a real second browser. Use a simple three-bar sketch with large Q1, Q2, and Q3 labels so the visual transition reads immediately. The same validated surface supports generic diagrams, architecture diagrams, flowcharts, pie charts, bar charts, and line charts; the video uses one bar chart as a concise example.
+The final recording starts inside a reset, working production canvas created through the temporary no-signup judge preview. Do not show sign-in, calibration, environment setup, loading screens, or debugging. Keep the presenter’s camera visible only where it strengthens the spatial interaction. The first working result must appear within 15 seconds.
 
-The 90-second core uses the temporary, bounded judge preview at `/demo`. Show
-the entry boundary, then choose **Enter no-signup preview** before the
-canvas appears. Record a
-separate short supporting shot for the Devpost page, if useful: open `/meet`,
-enter an email, submit a six-digit Supabase OTP, create a standard room, and
-show its exact-email invitation. Do not imply that Supabase OTP mail, the
-Resend invitation API, and the Resend packet API are one mechanism.
+## Recording gates
 
-The 90-second core introduces ChatGPT/WebMCP in the first 20 seconds. Optional embedded voice and direct PNG interpretation belong in separate supporting footage and never substitute for Site Tools proof. Physical hand control and embedded Live voice are implemented experimental surfaces: include either only after the exact deployed camera or BYOK microphone path passes a real-device rehearsal, and otherwise use pointer, touch, or typed input without implying that physical verification occurred.
+Record the final take only when all of these are true:
 
-## 0:00–0:06: camera and opening
+- The canonical URL resolves to the frozen release SHA recorded in the verification ledger.
+- The ChatGPT built-in browser has completed one real Site Tool mutation against that exact production release. Native Chrome discovery alone does not satisfy this gate.
+- Index drawing, pinch/grab, two-hand resize, side throw, and Undo each pass three consecutive physical attempts. Use pointer controls rather than implying hand success if this gate fails.
+- Browser B is a real independent participant and its Presence, cursor, mutation, and receipt are visible in browser A.
+- The current environment’s packet result is known. `/demo` must show **Preview only: not sent**.
+- No API key, email secret, token, developer console, diagnostics panel, or private recipient is visible in the recording.
 
-**Picture:** Presenter on camera, no product UI yet.
+Keep a reset second take ready. If any external capability fails, show its honest product fallback; never edit together a fake success.
 
-**Line:** “Meetings do not have an idea problem. They have a handoff problem. CommandCanvas lets people and agents turn rough thinking into structured output on the same live canvas.”
+## 0:00–0:05 | Open on the living canvas
 
-## 0:06–0:19: ChatGPT and WebMCP on the live page
+**Picture:** CommandCanvas already fills the screen. The project board, schedule, rough-work area, compact participant strip, and receipt rail are visible. Danny is on mic; no landing page or setup sequence.
 
-**Picture:** Cut to <https://commandcanvas.vercel.app/demo> in ChatGPT desktop app’s built-in browser, choose **Enter no-signup preview**, and show the full-viewport canvas. Keep the Site Tools status visible long enough to read.
+**Say:** “Meetings don’t have an idea problem. They have a handoff problem.”
 
-**Recording gate:** Use a ChatGPT invocation in this shot only after the exact deployed build has registered its tools and completed a real tool call in that host. Native Chrome discovery and a paid Realtime session do not satisfy this gate. If the host rollout is unavailable at recording time, show the verified Chrome 153 WebMCP discovery surface and `document.modelContext.registerTool(...)` implementation instead. Do not imitate a ChatGPT tool call or present tool registration as host invocation.
+## 0:05–0:15 | State the product in one breath
 
-**Ask ChatGPT after the gate passes:** “What is on this canvas? Create a note titled Launch risk saying Supplier lead time.”
+**Picture:** Briefly move across the existing semantic objects. Keep the canvas full-screen.
 
-**Visible reaction:** ChatGPT invokes WebMCP against the current room. The note appears on the shared canvas. Its receipt is attributed to the authenticated room member and identifies WebMCP as the mutation source.
+**Say:** “This is CommandCanvas. People, their hands, collaborators, and ChatGPT share one live semantic workspace.”
 
-**Line:** “ChatGPT is not working from a copied meeting transcript. WebMCP gives it bounded tools over the same selected objects and live room state we see.”
+## 0:15–0:35 | Prove ChatGPT through WebMCP
 
-## 0:19–0:39: rough input on the live canvas
+**In the surrounding ChatGPT conversation, ask:** “Read this canvas, then create a note titled Launch risk saying Supplier lead time.”
 
-**Do:** If the physical-hand rehearsal passed, show the MediaPipe sensor preview briefly, close the system drawer, and let the **HAND CONTROL · FULL CANVAS** indicator establish that the workspace, not the preview, is the interaction plane. Switch the on-canvas hand mode to **Draw** and trace three rough bars labeled Q1, Q2, and Q3 directly on the main canvas with the tracked index fingertip. Otherwise use pointer or touch. Narrate to the viewer: **These are quarterly signups: Q1 is 12, Q2 is 19, and Q3 is 31.** Finish and select the single multi-stroke sketch.
+**Visible result:** ChatGPT invokes the CommandCanvas Site Tool. The uniquely named note appears without copying data into another app. Open the receipt just long enough to show the WebMCP source and revision.
 
-**Line:** “Every input becomes the same semantic intent. The rough source remains a durable object, not disposable pixels.”
+**Say:** “ChatGPT is acting on the same selected objects and live room state we see, through bounded WebMCP tools.”
 
-## 0:39–0:54: primary WebMCP wow moment
+**Gate:** Use this shot only when the host’s used-tool surface, the new object, and the WebMCP receipt all prove the invocation. Do not substitute embedded Live Voice, a typed in-page command, or Chrome registration.
 
-Keep the private CUDA relay out of the 90-second core unless its separate AGPL
-repository and exact source commit are public and the exact deployed
-browser-to-relay-to-visible-canvas path has just passed. If that gate passes,
-use it only as supporting footage: show the explicit **Use private GPU hand
-tracking** consent and visible CUDA provider label, state that bounded frames
-go only to the named relay while the option is active, and show automatic local
-MediaPipe fallback. Do not present the static-image CUDA benchmark as a
-physical-hand latency measurement.
+## 0:35–1:00 | Draw and explain with an index finger
 
-**Tell the surrounding ChatGPT conversation after the host gate passes:** “Make that usable as a bar chart: Q1 is 12, Q2 is 19, and Q3 is 31.” Use ChatGPT Voice instead of a typed request only if this exact host session has already completed a real voice-triggered Site Tool call; current OpenAI guidance does not promise that combination.
+**Do:** Start Draw. With the index fingertip, draw three deliberately rough bars and label them Q1, Q2, and Q3. Make the tracked fingertip and hand state visible, but keep the camera preview collapsed.
 
-**Visible reaction:** ChatGPT uses `get_canvas_state`, then creates a semantic bar chart through WebMCP using the explanation already in the conversation. The clean chart appears beside the preserved sketch with `sourceSketchId` provenance and a receipt attributed to the authenticated room member with WebMCP source provenance. This shot does not send sketch pixels through WebMCP, does not use the embedded `gpt-realtime-2.1` surface, and does not require a CommandCanvas API key. Do not say that ChatGPT visually interpreted the sketch unless that separate capability has been directly verified in the host.
+**Say while drawing:** “These are quarterly signups. Q1 is 12, Q2 is 19, and Q3 is 31.”
 
-**Line:** “The rough source stays visible. The result is a separate semantic object with its own revision and receipt.”
+Finish the drawing. Show that all strokes became one selected SketchObject and that the rough source remains on the canvas.
 
-## 0:54–1:06: shared spatial state
+**Say:** “The drawing and explanation stay together as one durable object.”
 
-**Do:** Pinch-grab and move the structured chart, then use two hands to resize it if the physical-camera rehearsal passed. Otherwise use the exact pointer controls. In browser B, add a note. Keep grouping, ungrouping, and history controls for supporting footage so the real collaborator and shared receipt remain readable in this short segment.
+**Gate:** The brush must visibly follow landmark 8, the index fingertip. Open palm must lift the pen. No drawer, card, or button may open during drawing. If the physical run is not stable, use pointer input and say “I’m sketching,” not “my hand is tracking.”
 
-**Visible reaction:** Both browsers converge. The receipt rail identifies Daniel and Sarah as authenticated actors and distinguishes WebMCP-sourced mutations by revision and source.
+## 1:00–1:25 | Deliver the wow moment
 
-**Line:** “Hands, pointer, collaborators, and WebMCP all enter the same validated mutation and receipt pipeline.”
+**Ask:** “Make that usable as a bar chart: Q1 is 12, Q2 is 19, and Q3 is 31.”
 
-## 1:06–1:20: WebMCP packet request and human control
+**Visible result:** A clean semantic bar chart appears beside the original sketch. Show its source provenance and agent receipt. Keep both artifacts in frame.
 
-**Account boundary:** Site Tools use the account already signed into the surrounding ChatGPT host. CommandCanvas never receives that ChatGPT credential. Do not imply that the ChatGPT subscription supplies or pays for embedded Live voice or direct sketch interpretation.
+**Say:** “CommandCanvas preserves the rough thought and creates a separate structured result with provenance. It could be a chart, diagram, table, board, or report.”
+
+**Gate:** If this uses the direct PNG vision path, it must be a current real provider result. If ChatGPT creates the chart from the spoken semantic explanation through WebMCP, describe it that way and do not claim it interpreted pixels.
+
+## 1:25–1:48 | Make the canvas feel physical
+
+**Do:** Pinch-grab the chart and move it. Use two hands to enlarge it. Grab the Launch risk note, throw it through the side edge into recoverable trash, then immediately Undo.
+
+**Visible result:** `TARGET`, `HELD`, `RESIZE`, and the recoverable trash state read clearly; Undo restores the exact note.
+
+**Say:** “The gestures are spatial input, not separate application logic. Every committed change uses the same reversible mutation system.”
+
+**Gate:** Keep this as one continuous physical shot. Do not speed-ramp around failed acquisition. If two-hand resize is not repeatable, use the pointer resize handles and keep the claim input-neutral.
+
+## 1:48–2:05 | Prove another person is in the room
+
+**Do in browser B:** Move the collaborator cursor and update one board item.
+
+**Visible result in browser A:** The remote cursor moves, the object changes, and a participant receipt appears. Briefly show both participant tiles or the presence strip.
+
+**Say:** “Another participant is changing the same durable canvas. Presence is live; stable object state is persisted.”
+
+**Gate:** This must be a real second browser connection, not seeded or animated presence.
+
+## 2:05–2:28 | Turn the meeting into the handoff
 
 **Ask ChatGPT:** “Prepare the meeting packet.”
 
-**Visible reaction:** ChatGPT invokes `prepare_meeting_packet` through WebMCP. Exact canvas content and the editable recipient snapshot appear.
-
-**Do:** Click **Approve packet**.
+Review the packet preview and click **Approve**.
 
 **Ask ChatGPT:** “Email this to everyone.”
 
-**Visible reaction:** ChatGPT invokes `request_packet_send`. CommandCanvas shows the approved packet version and explicit **SEND** confirmation.
+**Visible result:** ChatGPT stages the request. CommandCanvas displays the approved packet version and exact recipients. Danny clicks the final **SEND** confirmation. In `/demo`, show **Preview only: not sent**.
 
-**Line:** “ChatGPT can stage the external action. Only the host can authorize it.”
+**Say:** “The agent can prepare and request the external action. Only the host can authorize it, and the receipt records what really happened.”
 
-## 1:20–1:25: truthful send result
+**Gate:** Do not say delivered unless the exact recorded run has a provider-confirmed result. OTP, invitations, packet submission, and delivery are separate claims.
 
-**Do:** Click **SEND**. Show **Preview only: not sent**.
+## 2:28–2:36 | Flash the WebMCP engineering proof
 
-**Line:** “This judge environment is intentionally preview-only. It never claims an email was delivered.”
+**Picture:** Fast, legible split shot of the concise Site Tool catalog and `document.modelContext.registerTool(...)`. Highlight schema validation, cancellation, lifecycle cleanup, phase guards, and human approval. Do not linger on a wall of code.
 
-## 1:25–1:28: WebMCP proof
+**Say:** “The agent’s capabilities are explicit, guarded, cancellable, and auditable.”
 
-**Picture:** Fast split shot of the capability-focused tool catalog and `document.modelContext.registerTool(...)` implementation.
+## 2:36–2:40 | Close on the product
 
-**Line:** “CommandCanvas exposes bounded Site Tools against this same live page, with schemas, cancellation, phase guards, and site-controlled approval wherever the agent host supports them.”
+**Picture:** Return to the preserved sketch, structured chart, collaborator cursor, participant strip, and shared receipt rail.
 
-## 1:28–1:30: close
+**Say:** “CommandCanvas turns the meeting into the handoff: shared, structured, physical, visible, and reversible.”
 
-**Picture:** Return to the polished chart, preserved sketch, second cursor, filmstrip, and receipt rail.
+## Optional supporting footage, not part of the 2:40 cut
 
-**Line:** “CommandCanvas turns the meeting into the handoff: shared, structured, visible, and reversible.”
+- **Live Voice:** Say “Bring in our project board.” Show transcription, the real `create_board` function action, the visible board, and a voice receipt. Describe it as the optional in-page `gpt-realtime-2.1` control path, not the ChatGPT Site Tools proof.
+- **Direct vision:** Rasterize a selected sketch to PNG and show the real provider-created structured object beside the preserved source.
+- **Durable room:** Show six-digit Supabase email OTP, an exact-email invitation, and the second participant joining. Do not conflate OTP delivery with invitation or packet delivery.
+- **Responsive product:** Use short mobile and tablet shots only after the desktop story is complete.
 
-## Optional supporting shots: in-page Live voice and PNG vision
+## Final recording checklist
 
-Record these outside the 90-second core only after a current BYOK provider rehearsal passes. Enter the presenter’s project-scoped API key outside the captured frame, verify that the password field masks it, and never show it in narration, developer tools, logs, receipts, or the canvas. For voice, press **Start** under **Live voice**, then say **Start a new thought. Launch risk is supplier lead time. Finish thought.** Show the selected note and its receipt. State that the regular `gpt-realtime-2.1` session is an optional, narrower hands-free interface inside CommandCanvas. For the separate vision route, render a selected sketch to PNG and show a schema-validated structured visual appearing beside the preserved source. Both supporting paths use the presenter’s user-owned credential. `/demo` keeps that credential in memory for the current tab; a verified `/meet` user may explicitly save an account-owned key encrypted through Supabase Vault, whose raw value is never returned to the browser. CommandCanvas has no deployment-owner OpenAI key fallback. Neither supporting path can substitute for or prove ChatGPT WebMCP invocation.
-
-## Recording safety checklist
-
-- Verify that the exact source commit is on the canonical Vercel alias before recording the public URL.
-- Use a real browser B for Presence, cursor, collaborator mutation, and the filmstrip.
-- Do not describe a demo collaborator as seeded Presence.
-- Start meeting media only after both browser contexts are present. Do not claim arbitrary cross-network or configured-TURN reliability until the exact Production path passes that acceptance run.
-- Use a real paid `gpt-realtime-2.1` session with a deliberately supplied project-scoped per-tab key for the Live voice shot. The tool receipt, not the spoken response, proves the shared mutation. Do not show the key.
-- Confirm that reloading the tab clears the user-entered key and that missing-key Live voice and sketch interpretation fail honestly. Do not claim the no-owner-key boundary from source tests alone; verify it on the exact deployed release without printing either the user key or deployment environment values.
-- If the authenticated `/meet` credential path is shown, verify explicit save, replacement, deletion, encrypted Vault storage, and server-side provider resolution without displaying the raw value. Do not claim that a saved key is returned to the browser.
-- Do not show ChatGPT Site Tools invocation until the exact deployed build passes that host. Native Chrome 153 and ChatGPT are separate verification boundaries.
-- The controlled backend path has a delivered Resend record, but the public no-signup judge preview remains preview-only. Show and describe the result visible in the exact environment being recorded.
-- Do not claim post-fix physical-hand or physical-iPhone accuracy unless the exact hardware rehearsal passes immediately before recording. The prior real recording recognized open palm and pinch ratios between 0.22 and 0.28, but it also exposed the old preview-boundary usability failure and does not verify the revised full-canvas plane.
-- If the physical-hand rehearsal passes, keep the MediaPipe skeleton, tracked fingertip, and semantic state overlay in frame so TARGET, OPEN, PINCH, HELD, RESIZING, PAN, and CANVAS ZOOM are legible. Keep the camera preview collapsed after the sensor check. Show blank-canvas pan or zoom only if it passed that exact rehearsal. Throw through either red side edge for recoverable trash and into the blue bottom dock for minimize. Show Undo immediately after the trash gesture. Do not describe recoverable trash as permanent deletion.
-- Show the actual send result from the environment being recorded. Supabase OTP delivery, invitation submission, packet submission, preview-only fallback, and provider delivery are distinct claims.
-- Keep pointer and typed fallbacks ready for every gesture and voice action.
-- Reset the demo before the final take and verify the expected fixtures and starting revision.
+- Reset the room and rehearse the exact object names, positions, and spoken commands.
+- Use a clean browser profile, hide bookmarks and notifications, and close unrelated apps.
+- Record 1440p or 4K at 30 fps with cursor visibility and readable receipts.
+- Capture clean microphone audio; remove dead air, but do not cut around capability failures.
+- Keep every scene on the frozen production release.
+- Verify the finished public YouTube upload has audio, stays under three minutes, and shows a working result within the first 15 seconds.
+- Review the final export once from beginning to end before adding its URL to Devpost.
+- Do not submit to Devpost until Danny explicitly approves the final video, copy, production behavior, and evidence boundaries.

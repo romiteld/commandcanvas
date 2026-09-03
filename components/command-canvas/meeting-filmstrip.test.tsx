@@ -143,8 +143,10 @@ describe("MeetingFilmstrip", () => {
         screen.getByRole("button", { name: "Start camera and microphone" }),
       ).toBeDisabled(),
     );
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "This room has more than four verified members. Meeting media supports up to four.",
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "This room has more than four verified members. Meeting media supports up to four.",
+      ),
     );
     await waitFor(() =>
       expect(setup.controller.setAllowedParticipantIds).toHaveBeenLastCalledWith(
