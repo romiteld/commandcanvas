@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { metadata as demoMetadata } from "@/app/demo/page";
 import Home from "@/app/page";
 
 describe("CommandCanvas landing page", () => {
@@ -81,15 +82,19 @@ describe("CommandCanvas landing page", () => {
     ).toHaveLength(2);
   });
 
-  it("labels illustrative evidence and supported-host Site Tools without a verification claim", () => {
+  it("labels illustrative evidence and supported WebMCP agent tools without a verification claim", () => {
     render(<Home />);
 
     expect(
       screen.getByText("Product illustration using real hand-capture frames"),
     ).toBeVisible();
-    expect(screen.getByText("ChatGPT Site Tools")).toBeVisible();
+    expect(screen.getByText("WebMCP agent tools")).toBeVisible();
     expect(screen.getByText(/available where supported/i)).toBeVisible();
     expect(screen.getByText("Recorded")).toBeVisible();
     expect(screen.queryByText(/^verified$/i)).not.toBeInTheDocument();
+  });
+
+  it("describes the judge preview with WebMCP agent tools metadata", () => {
+    expect(demoMetadata.description).toContain("WebMCP agent tools");
   });
 });

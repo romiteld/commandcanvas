@@ -77,18 +77,24 @@ export interface NormalizedHandPoint {
 export interface HandPhysicalMeasurements {
   readonly indexTip: NormalizedHandPoint;
   readonly thumbTip: NormalizedHandPoint;
+  /** Landmark 12; used only as drawing-clutch geometry, never brush position. */
+  readonly middleTip?: NormalizedHandPoint;
   readonly pinchMidpoint: NormalizedHandPoint;
   readonly palmMcpCentroid: NormalizedHandPoint;
   readonly pinchDistance: number;
   readonly palmScale: number;
   readonly pinchRatio: number;
+  /** distance(thumb tip 4, middle tip 12) / palmScale */
+  readonly drawingClutchRatio?: number;
   readonly confidence: number;
   readonly indexTipConfidence: number;
   readonly thumbTipConfidence: number;
+  readonly middleTipConfidence?: number;
 }
 
 const THUMB_TIP_INDEX = 4;
 const INDEX_TIP_INDEX = 8;
+const MIDDLE_TIP_INDEX = 12;
 const PALM_MCP_INDICES = [0, 5, 9, 13, 17] as const;
 
 /**
@@ -102,6 +108,7 @@ export function measureHandLandmarks(
 ): HandPhysicalMeasurements {
   const indexTip = transformPoint(landmarks[INDEX_TIP_INDEX], mirrorX);
   const thumbTip = transformPoint(landmarks[THUMB_TIP_INDEX], mirrorX);
+  const middleTip = transformPoint(landmarks[MIDDLE_TIP_INDEX], mirrorX);
   const palmMcpCentroid = centroid(landmarks, mirrorX);
   const pinchDistance = Math.hypot(
     indexTip.x - thumbTip.x,
@@ -111,6 +118,7 @@ export function measureHandLandmarks(
   return {
     indexTip,
     thumbTip,
+    middleTip,
     pinchMidpoint: {
       x: (indexTip.x + thumbTip.x) / 2,
       y: (indexTip.y + thumbTip.y) / 2,
@@ -119,9 +127,13 @@ export function measureHandLandmarks(
     pinchDistance,
     palmScale,
     pinchRatio: pinchDistance / palmScale,
+    drawingClutchRatio:
+      Math.hypot(middleTip.x - thumbTip.x, middleTip.y - thumbTip.y) /
+      palmScale,
     confidence: handConfidence,
     indexTipConfidence: landmarkConfidence(landmarks[INDEX_TIP_INDEX]),
     thumbTipConfidence: landmarkConfidence(landmarks[THUMB_TIP_INDEX]),
+    middleTipConfidence: landmarkConfidence(landmarks[MIDDLE_TIP_INDEX]),
   };
 }
 

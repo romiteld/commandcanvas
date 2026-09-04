@@ -47,7 +47,8 @@ export interface HandFrame {
 export type NormalizedHandPointer = NormalizedHandPoint;
 
 export type HandIntentMode = "idle" | "point" | "pinch" | "open_palm";
-export type HandPointPolicy = "deliberate" | "draw-index-led";
+export type HandPointPolicy =
+  "deliberate" | "draw-index-led" | "spatial-index-led";
 
 export type HandFrameRefusal =
   | "malformed_frame"
@@ -128,7 +129,7 @@ export interface HandIntentConfig {
   readonly maxFrameAgeMs: number;
   readonly maxFutureSkewMs: number;
   readonly mirrorX: boolean;
-  /** Draw mode accepts a reliable extended index without policing support fingers. */
+  /** Index-led modes accept a reliable extended index without policing support fingers. */
   readonly pointPolicy: HandPointPolicy;
 }
 
@@ -228,12 +229,7 @@ export function interpretHandFrame(
 
   const frame = parsed.frame;
   if (frame.confidence < config.minConfidence)
-    return refuse(
-      "low_confidence",
-      now,
-      frame.timestamp,
-      frame.confidence,
-    );
+    return refuse("low_confidence", now, frame.timestamp, frame.confidence);
   if (now - frame.timestamp > config.maxFrameAgeMs)
     return refuse("stale_frame", now, frame.timestamp, frame.confidence);
   if (frame.timestamp - now > config.maxFutureSkewMs)
@@ -242,12 +238,7 @@ export function interpretHandFrame(
     state.lastAcceptedTimestamp !== null &&
     frame.timestamp <= state.lastAcceptedTimestamp
   )
-    return refuse(
-      "out_of_order_frame",
-      now,
-      frame.timestamp,
-      frame.confidence,
-    );
+    return refuse("out_of_order_frame", now, frame.timestamp, frame.confidence);
 
   const physical = measureHandLandmarks(
     frame.landmarks,
@@ -303,22 +294,18 @@ export function interpretHandFrame(
     config.minKeypointVisibility;
   const pinchKeypointsReliable = thumbReliable && indexReliable;
   const learnedPose = acceptedLearnedPoseEvidence(learnedPoseEvidence);
-  const canonicalPinchLatched =
-    pinchKeypointsReliable
-      ? state.pinchLatched
-        ? pinchRatio < config.pinchReleaseRatio
-        : pinchRatio <= config.pinchEngageRatio
-      : state.pinchLatched;
+  const canonicalPinchLatched = pinchKeypointsReliable
+    ? state.pinchLatched
+      ? pinchRatio < config.pinchReleaseRatio
+      : pinchRatio <= config.pinchEngageRatio
+    : state.pinchLatched;
   const learnedPinchSupport =
     pinchKeypointsReliable &&
     (learnedPose?.label === "pinch" || learnedPose?.label === "held") &&
     pinchRatio <= learnedPinchEngageCeiling(config);
   const learnedPinchEngaged =
-    !state.pinchLatched &&
-    !canonicalPinchLatched &&
-    learnedPinchSupport;
-  const pinchLatched =
-    canonicalPinchLatched || learnedPinchEngaged;
+    !state.pinchLatched && !canonicalPinchLatched && learnedPinchSupport;
+  const pinchLatched = canonicalPinchLatched || learnedPinchEngaged;
   const canonicalOpenPalm =
     indexReliable &&
     hasReliableOpenPalmLandmarks(
@@ -360,13 +347,13 @@ export function interpretHandFrame(
     pinchLatched,
     lastAcceptedTimestamp: frame.timestamp,
   };
-  const indexGeometryAccepted =
-    config.pointPolicy === "draw-index-led"
-      ? isPlausiblyIndexExtended(frame.landmarks)
-      : isIndexExtended(frame.landmarks);
+  const indexLed = config.pointPolicy !== "deliberate";
+  const indexGeometryAccepted = indexLed
+    ? isPlausiblyIndexExtended(frame.landmarks)
+    : isIndexExtended(frame.landmarks);
   const canonicalDeliberatePoint =
     indexGeometryAccepted &&
-    (config.pointPolicy === "draw-index-led"
+    (indexLed
       ? hasReliableIndexPointLandmarks(
           frame.landmarks,
           config.minKeypointVisibility,
@@ -496,12 +483,10 @@ function isOpenPalm(landmarks: HandLandmarks) {
   return [
     { pip: INDEX_PIP_INDEX, tip: INDEX_TIP_INDEX },
     ...OTHER_FINGER_JOINTS,
-  ].every(
-    ({ pip, tip }) => {
-      const pipDistance = distance(wrist, landmarks[pip]);
-      return distance(wrist, landmarks[tip]) >= pipDistance * 1.15;
-    },
-  );
+  ].every(({ pip, tip }) => {
+    const pipDistance = distance(wrist, landmarks[pip]);
+    return distance(wrist, landmarks[tip]) >= pipDistance * 1.15;
+  });
 }
 
 function isPlausiblyOpenPalm(landmarks: HandLandmarks) {
@@ -513,8 +498,7 @@ function isPlausiblyOpenPalm(landmarks: HandLandmarks) {
     ...OTHER_FINGER_JOINTS,
   ].filter(
     ({ pip, tip }) =>
-      distance(wrist, landmarks[tip]) >=
-      distance(wrist, landmarks[pip]) * 1.1,
+      distance(wrist, landmarks[tip]) >= distance(wrist, landmarks[pip]) * 1.1,
   ).length;
   return extendedCount >= 3;
 }
@@ -525,13 +509,7 @@ function acceptedLearnedPoseEvidence(
   if (
     !evidence ||
     evidence.source !== "hagrid-v2-static-pose-v1" ||
-    ![
-      "idle",
-      "point",
-      "open_palm",
-      "pinch",
-      "held",
-    ].includes(evidence.label) ||
+    !["idle", "point", "open_palm", "pinch", "held"].includes(evidence.label) ||
     !Number.isFinite(evidence.confidence) ||
     evidence.confidence < 0.9 ||
     evidence.confidence > 1
@@ -602,7 +580,8 @@ function resolveConfig(overrides: Partial<HandIntentConfig>): HandIntentConfig {
     config.maxFutureSkewMs < 0 ||
     typeof config.mirrorX !== "boolean" ||
     (config.pointPolicy !== "deliberate" &&
-      config.pointPolicy !== "draw-index-led")
+      config.pointPolicy !== "draw-index-led" &&
+      config.pointPolicy !== "spatial-index-led")
   )
     throw new RangeError("Hand intent configuration is invalid.");
   return config;
@@ -662,13 +641,17 @@ function parseFrame(rawFrame: unknown): ParsedFrame {
       ...(finiteNonnegative(rawFrame.receivedAt)
         ? { receivedAt: rawFrame.receivedAt }
         : {}),
-      ...(typeof rawFrame.trackId === "string" ? { trackId: rawFrame.trackId } : {}),
+      ...(typeof rawFrame.trackId === "string"
+        ? { trackId: rawFrame.trackId }
+        : {}),
       ...(rawFrame.handedness === "left" ||
       rawFrame.handedness === "right" ||
       rawFrame.handedness === "unknown"
         ? { handedness: rawFrame.handedness }
         : {}),
-      ...(isRoi(rawFrame.roi) || rawFrame.roi === null ? { roi: rawFrame.roi } : {}),
+      ...(isRoi(rawFrame.roi) || rawFrame.roi === null
+        ? { roi: rawFrame.roi }
+        : {}),
       ...(rawFrame.predicted === true ? { predicted: true } : {}),
     },
   };
@@ -758,7 +741,9 @@ function roundedMeasurements(
     palmMcpCentroid: roundedPoint(measurements.palmMcpCentroid),
     pinchDistance: rounded(measurements.pinchDistance),
     palmScale: rounded(measurements.palmScale),
-    pinchRatio: rounded(rounded(measurements.pinchDistance) / measurements.palmScale),
+    pinchRatio: rounded(
+      rounded(measurements.pinchDistance) / measurements.palmScale,
+    ),
     confidence: rounded(measurements.confidence),
     indexTipConfidence: rounded(measurements.indexTipConfidence),
     thumbTipConfidence: rounded(measurements.thumbTipConfidence),

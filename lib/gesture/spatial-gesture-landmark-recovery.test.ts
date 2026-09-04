@@ -23,6 +23,9 @@ function rawPinchedHand(
 ): SpatialBimanualHand {
   const landmarks = rawHandLandmarks({
     pose: "pinch",
+    // Keep the visible index tips on the selected object. The palm centroid is
+    // intentionally elsewhere so this fixture catches palm-based hit testing.
+    indexTip: { x: 0.5, y: 0.45 },
     offsetX: options.offsetX,
     offsetY: options.offsetY,
   });
@@ -143,6 +146,85 @@ function rawSingleInput(
 }
 
 describe("raw-landmark spatial recovery", () => {
+  it("targets from landmark 8 while the palm and other fingertips are elsewhere", () => {
+    const landmarks = [
+      ...rawHandLandmarks({
+        pose: "relaxed_index",
+        indexTip: { x: 0.32, y: 0.3 },
+        supportVisibility: 0.2,
+      }),
+    ];
+    landmarks[12] = { x: 0.78, y: 0.7, z: 0, visibility: 0.2 };
+    landmarks[16] = { x: 0.82, y: 0.72, z: 0, visibility: 0.2 };
+    landmarks[20] = { x: 0.86, y: 0.74, z: 0, visibility: 0.2 };
+    const interpreted = interpretHandFrame(
+      createInitialHandIntentState(),
+      rawFrame(landmarks as unknown as HandLandmarks, 400),
+      400,
+      { pointPolicy: "spatial-index-led" },
+    );
+    if (!interpreted.output.accepted || interpreted.output.mode !== "point")
+      throw new Error("The spatial index fixture must qualify as point.");
+    const scene: SpatialGestureScene = {
+      bounds: { left: 0, top: 0, width: 1_000, height: 600 },
+      viewport: { x: 0, y: 0, scale: 1 },
+      selectedObjectId: null,
+      objects: [
+        {
+          id: "index-card",
+          x: 290,
+          y: 150,
+          width: 100,
+          height: 80,
+          zIndex: 1,
+          pinned: false,
+          minimized: false,
+        },
+        {
+          id: "palm-card",
+          x: 500,
+          y: 380,
+          width: 130,
+          height: 100,
+          zIndex: 20,
+          pinned: false,
+          minimized: false,
+        },
+      ],
+    };
+    const targeted = reduceSpatialGesture(
+      createInitialSpatialGestureState(),
+      {
+        mode: "point",
+        pointer: interpreted.output.pointer,
+        motionPointer: interpreted.output.motionPointer,
+        timestamp: 400,
+        reliability: {
+          trackId: "index-hand",
+          confidence: interpreted.output.confidence,
+          real: true,
+          predicted: false,
+          trackingState: "tracked",
+        },
+      },
+      scene,
+      manipulation,
+    );
+
+    expect(interpreted.output.pointer).toEqual({ x: 0.32, y: 0.3 });
+    expect(interpreted.output.pointer).not.toEqual(
+      interpreted.measurements?.middleTip,
+    );
+    expect(interpreted.output.pointer).not.toEqual(
+      interpreted.output.motionPointer,
+    );
+    expect(targeted.state.candidate).toMatchObject({ objectId: "index-card" });
+    expect(targeted.effects).toContainEqual({
+      type: "object.target",
+      objectId: "index-card",
+    });
+  });
+
   it("accepts valid 0.60-confidence index ink but rejects 0.49", () => {
     const scene: SpatialGestureScene = {
       bounds: { left: 0, top: 0, width: 1_000, height: 600 },
@@ -151,24 +233,49 @@ describe("raw-landmark spatial recovery", () => {
       objects: [],
     };
     const drawing = { drawingEnabled: true, manipulationEnabled: false };
+    const acceptedInput = rawSingleInput(
+      "point",
+      "draw-track",
+      500,
+      { x: 0.4, y: 0.4 },
+      false,
+      0.6,
+    );
+    const rejectedInput = rawSingleInput(
+      "point",
+      "draw-track",
+      500,
+      { x: 0.4, y: 0.4 },
+      false,
+      0.49,
+    );
+    const clutch = {
+      trackId: "draw-track",
+      penDown: true,
+      transition: "engaged" as const,
+      normalizedDistance: 0.2,
+      confidence: 0.9,
+      predicted: false,
+      sampleKind: "measured" as const,
+    };
     const accepted = reduceSpatialGesture(
       createInitialSpatialGestureState(),
-      rawSingleInput("point", "draw-track", 500, { x: 0.4, y: 0.4 }, false, 0.6),
+      { ...acceptedInput, drawing: clutch },
       scene,
       drawing,
     );
     const rejected = reduceSpatialGesture(
       createInitialSpatialGestureState(),
-      rawSingleInput("point", "draw-track", 500, { x: 0.4, y: 0.4 }, false, 0.49),
+      { ...rejectedInput, drawing: clutch },
       scene,
       drawing,
     );
 
-    expect(accepted.state.phase).toBe("drawing");
+    expect(accepted.state.phase).toBe("pen_down");
     expect(accepted.effects).toContainEqual(
       expect.objectContaining({ type: "stroke.preview" }),
     );
-    expect(rejected.state.phase).toBe("idle");
+    expect(rejected.state.phase).toBe("hover");
     expect(rejected.effects).toEqual([]);
   });
 
@@ -192,19 +299,40 @@ describe("raw-landmark spatial recovery", () => {
     };
     const pending = reduceSpatialGesture(
       createInitialSpatialGestureState(),
-      rawSingleInput("pinch", "move-track", 600, { x: 0.4, y: 0.4 }, false, 0.6),
+      rawSingleInput(
+        "pinch",
+        "move-track",
+        600,
+        { x: 0.4, y: 0.4 },
+        false,
+        0.6,
+      ),
       scene,
       manipulation,
     );
     const held = reduceSpatialGesture(
       pending.state,
-      rawSingleInput("pinch", "move-track", 648, { x: 0.4, y: 0.4 }, false, 0.6),
+      rawSingleInput(
+        "pinch",
+        "move-track",
+        648,
+        { x: 0.4, y: 0.4 },
+        false,
+        0.6,
+      ),
       scene,
       manipulation,
     );
     const moved = reduceSpatialGesture(
       held.state,
-      rawSingleInput("pinch", "move-track", 664, { x: 0.46, y: 0.4 }, false, 0.6),
+      rawSingleInput(
+        "pinch",
+        "move-track",
+        664,
+        { x: 0.46, y: 0.4 },
+        false,
+        0.6,
+      ),
       scene,
       manipulation,
     );
@@ -266,8 +394,10 @@ describe("raw-landmark spatial recovery", () => {
       const scene: SpatialGestureScene = {
         bounds: { left: 0, top: 0, width: 1_000, height: 600 },
         viewport: {
-          x: 532 - (object.x + object.width / 2) * scale,
-          y: 440.4 - (object.y + object.height / 2) * scale,
+          // Direct acquisition is hit-tested at the visible index tips, whose
+          // fixture midpoint is (500, 270) CSS pixels.
+          x: 500 - (object.x + object.width / 2) * scale,
+          y: 270 - (object.y + object.height / 2) * scale,
           scale,
         },
         selectedObjectId: object.id,
@@ -436,7 +566,9 @@ describe("raw-landmark spatial recovery", () => {
     );
     expect(resized.state.held?.currentTransform.width).toBeGreaterThan(400);
     expect(
-      resized.effects.filter((effect) => effect.type === "object.preview_transform"),
+      resized.effects.filter(
+        (effect) => effect.type === "object.preview_transform",
+      ),
     ).toHaveLength(1);
 
     const released = reduceSpatialGesture(
@@ -446,7 +578,9 @@ describe("raw-landmark spatial recovery", () => {
       manipulation,
     );
     expect(
-      released.effects.filter((effect) => effect.type === "object.complete_transform"),
+      released.effects.filter(
+        (effect) => effect.type === "object.complete_transform",
+      ),
     ).toHaveLength(1);
   });
 
@@ -469,7 +603,12 @@ describe("raw-landmark spatial recovery", () => {
     ]);
 
     const movedInput = rawBimanualInput(2_016, -0.15, 0.25);
-    const moved = reduceSpatialGesture(started.state, movedInput, scene, manipulation);
+    const moved = reduceSpatialGesture(
+      started.state,
+      movedInput,
+      scene,
+      manipulation,
+    );
     const initialCenter = midpointScreen(initialInput, scene);
     const currentCenter = midpointScreen(movedInput, scene);
     const worldAnchor = {
@@ -494,7 +633,8 @@ describe("raw-landmark spatial recovery", () => {
     const movedViewport = moved.effects.find(
       (effect) => effect.type === "viewport.set",
     )?.viewport;
-    if (!movedViewport) throw new Error("Expected the spread to preview a viewport.");
+    if (!movedViewport)
+      throw new Error("Expected the spread to preview a viewport.");
     const stationary = reduceSpatialGesture(
       moved.state,
       movedInput,
@@ -505,7 +645,9 @@ describe("raw-landmark spatial recovery", () => {
       { type: "viewport.set", viewport: movedViewport },
     ]);
     expect(
-      stationary.effects.some((effect) => effect.type.startsWith("object.complete")),
+      stationary.effects.some((effect) =>
+        effect.type.startsWith("object.complete"),
+      ),
     ).toBe(false);
   });
 
@@ -561,13 +703,7 @@ describe("raw-landmark spatial recovery", () => {
     );
     const visible = reduceSpatialGesture(
       staged.state,
-      rawSingleInput(
-        "pinch",
-        "throw-track",
-        3_310,
-        { x: 0.04, y: 0.4 },
-        true,
-      ),
+      rawSingleInput("pinch", "throw-track", 3_310, { x: 0.04, y: 0.4 }, true),
       scene,
       manipulation,
     );

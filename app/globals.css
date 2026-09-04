@@ -67,6 +67,34 @@ body {
   cursor: pointer;
 }
 
+.vision-lab-protocol {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper);
+}
+
+.vision-lab-protocol h2,
+.vision-lab-protocol ol,
+.vision-lab-protocol p {
+  margin: 0;
+}
+
+.vision-lab-protocol ol {
+  display: grid;
+  gap: 4px;
+  padding-left: 24px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.vision-lab-protocol li[aria-current="step"] {
+  color: var(--ink);
+  font-weight: 700;
+}
+
 .vision-lab-preview {
   position: relative;
   overflow: hidden;
@@ -82,6 +110,23 @@ body {
   min-height: 240px;
   object-fit: cover;
   transform: scaleX(-1);
+}
+
+.vision-lab-drawing-target {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.vision-lab-drawing-target path {
+  fill: none;
+  stroke: #ffcc66;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
 }
 
 .vision-lab-preview p {
@@ -126,7 +171,10 @@ body {
     linear-gradient(rgb(83 97 121 / 8%) 1px, transparent 1px),
     linear-gradient(90deg, rgb(83 97 121 / 8%) 1px, transparent 1px),
     radial-gradient(circle, rgb(83 97 121 / 24%) 1px, transparent 1.5px);
-  background-size: 96px 96px, 96px 96px, 24px 24px;
+  background-size:
+    96px 96px,
+    96px 96px,
+    24px 24px;
   transform: perspective(900px) rotateX(54deg) translateY(-15%);
   transform-origin: 50% 40%;
 }
@@ -945,6 +993,11 @@ button:focus-visible {
 }
 
 @media (max-width: 520px) {
+  .demo-gate {
+    gap: 9px;
+    padding: 24px 20px;
+  }
+
   .demo-entry-actions {
     width: 100%;
   }
@@ -1025,8 +1078,7 @@ button:focus-visible {
   border-radius: 11px !important;
   background:
     linear-gradient(rgb(117 88 207 / 6%) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(117 88 207 / 6%) 1px, transparent 1px),
-    #fcfbff !important;
+    linear-gradient(90deg, rgb(117 88 207 / 6%) 1px, transparent 1px), #fcfbff !important;
   background-size: 24px 24px !important;
 }
 
@@ -1130,7 +1182,10 @@ button:focus-visible {
     linear-gradient(rgb(111 133 163 / 9%) 1px, transparent 1px),
     linear-gradient(90deg, rgb(111 133 163 / 9%) 1px, transparent 1px),
     radial-gradient(circle, rgb(59 91 133 / 20%) 1px, transparent 1.5px);
-  background-size: 80px 80px, 80px 80px, 16px 16px;
+  background-size:
+    80px 80px,
+    80px 80px,
+    16px 16px;
   touch-action: none;
   cursor: grab;
 }
@@ -2214,7 +2269,6 @@ button:focus-visible {
   .command-rail {
     padding-inline: 15px;
   }
-
 }
 
 @media (max-width: 820px) {
@@ -2270,7 +2324,6 @@ button:focus-visible {
     grid-row: 2;
     padding-bottom: 92px;
   }
-
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2389,7 +2442,9 @@ button:focus-visible {
   width: 12px;
   height: 12px;
   background: #ffbd4a;
-  box-shadow: 0 0 0 6px rgb(255 189 74 / 20%), 0 0 22px #ffbd4a;
+  box-shadow:
+    0 0 0 6px rgb(255 189 74 / 20%),
+    0 0 22px #ffbd4a;
 }
 
 .camera-tracked-pointer {
@@ -2398,7 +2453,9 @@ button:focus-visible {
   height: 32px;
   border: 2px solid white;
   border-radius: 50%;
-  box-shadow: 0 0 0 8px rgb(53 99 255 / 22%), 0 0 34px rgb(53 99 255 / 70%);
+  box-shadow:
+    0 0 0 8px rgb(53 99 255 / 22%),
+    0 0 34px rgb(53 99 255 / 70%);
   transform: translate(-50%, -50%);
 }
 
@@ -2495,8 +2552,10 @@ button:focus-visible {
   transform: none;
 }
 
-.persistent-system-drawer:has(.spatial-camera-control.is-expanded) > .rail-heading,
-.persistent-system-drawer:has(.spatial-camera-control.is-expanded) > .service-stack {
+.persistent-system-drawer:has(.spatial-camera-control.is-expanded)
+  > .rail-heading,
+.persistent-system-drawer:has(.spatial-camera-control.is-expanded)
+  > .service-stack {
   display: none;
 }
 
@@ -2584,7 +2643,10 @@ button:focus-visible {
   font-size: 10px;
   font-weight: 760;
   opacity: 0.7;
-  transition: opacity 120ms ease, background 120ms ease, transform 120ms ease;
+  transition:
+    opacity 120ms ease,
+    background 120ms ease,
+    transform 120ms ease;
   writing-mode: vertical-rl;
   text-orientation: mixed;
 }
@@ -2657,13 +2719,24 @@ button:focus-visible {
     right: 8px;
     bottom: calc(76px + env(safe-area-inset-bottom, 0px));
     left: 8px;
+    flex-wrap: wrap;
+    gap: 6px;
     justify-content: center;
+    min-height: 0;
+    padding: 8px;
     border-radius: 16px;
     transform: none;
   }
 
   .hand-mode-toolbar > span {
     display: none;
+  }
+
+  .hand-mode-toolbar.hand-mode-draw > .hand-draw-clutch-instruction {
+    display: block;
+    flex-basis: 100%;
+    line-height: 1.35;
+    text-align: center;
   }
 
   .gesture-edge-target {
@@ -2929,7 +3002,10 @@ body {
     linear-gradient(rgb(74 99 126 / 8%) 1px, transparent 1px),
     linear-gradient(90deg, rgb(74 99 126 / 8%) 1px, transparent 1px),
     radial-gradient(circle, rgb(53 99 255 / 16%) 1px, transparent 1.4px);
-  background-size: 96px 96px, 96px 96px, 16px 16px;
+  background-size:
+    96px 96px,
+    96px 96px,
+    16px 16px;
 }
 
 .canvas-viewport::before {
@@ -3164,8 +3240,14 @@ body {
 }
 
 @keyframes drawer-enter {
-  from { opacity: 0; transform: translateX(6px); }
-  to { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .rail-heading {
@@ -3566,8 +3648,12 @@ body {
 }
 
 @keyframes voice-pulse {
-  70% { box-shadow: 0 0 0 8px rgb(0 168 143 / 0%); }
-  100% { box-shadow: 0 0 0 0 rgb(0 168 143 / 0%); }
+  70% {
+    box-shadow: 0 0 0 8px rgb(0 168 143 / 0%);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgb(0 168 143 / 0%);
+  }
 }
 
 .realtime-voice-resume-audio {
@@ -3989,9 +4075,18 @@ body {
   pointer-events: auto;
 }
 
-.resize-corner-nw { top: -7px; left: -7px; }
-.resize-corner-ne { top: -7px; right: -7px; }
-.resize-corner-sw { bottom: -7px; left: -7px; }
+.resize-corner-nw {
+  top: -7px;
+  left: -7px;
+}
+.resize-corner-ne {
+  top: -7px;
+  right: -7px;
+}
+.resize-corner-sw {
+  bottom: -7px;
+  left: -7px;
+}
 
 .pin-state {
   top: auto;
@@ -4023,8 +4118,12 @@ body {
   box-shadow: 0 0 0 1px rgb(0 168 143 / 45%);
 }
 
-.transformation-bridge::before { left: -4px; }
-.transformation-bridge::after { right: -4px; }
+.transformation-bridge::before {
+  left: -4px;
+}
+.transformation-bridge::after {
+  right: -4px;
+}
 
 .transformation-bridge > span {
   position: absolute;
@@ -4234,8 +4333,17 @@ body {
   border: 1px solid rgb(117 105 255 / 32%);
   border-radius: 24px;
   background:
-    radial-gradient(circle at 50% 50%, rgb(255 255 255 / 84%), rgb(244 247 250 / 64%) 68%, rgb(117 105 255 / 8%)),
-    repeating-linear-gradient(0deg, transparent 0 31px, rgb(117 105 255 / 7%) 31px 32px);
+    radial-gradient(
+      circle at 50% 50%,
+      rgb(255 255 255 / 84%),
+      rgb(244 247 250 / 64%) 68%,
+      rgb(117 105 255 / 8%)
+    ),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0 31px,
+      rgb(117 105 255 / 7%) 31px 32px
+    );
   box-shadow: 0 24px 90px rgb(23 33 43 / 16%);
 }
 
@@ -4307,7 +4415,10 @@ body {
 
 @media (max-width: 820px) {
   .command-canvas-shell {
-    grid-template-rows: calc(56px + env(safe-area-inset-top, 0px)) minmax(0, 1fr);
+    grid-template-rows: calc(56px + env(safe-area-inset-top, 0px)) minmax(
+        0,
+        1fr
+      );
   }
 
   .room-header {
@@ -4467,7 +4578,6 @@ body {
   .object-spatial-chrome .object-transform-action {
     max-width: 106px;
   }
-
 }
 
 @media (max-width: 480px) {

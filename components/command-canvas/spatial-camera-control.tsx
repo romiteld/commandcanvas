@@ -50,7 +50,8 @@ const OPEN_PALM_SCAN_FRAMES = 6;
 const MIN_CALIBRATION_REACH_SAMPLES = 12;
 const MIN_CALIBRATION_PINCH_SAMPLES = 6;
 
-type CalibrationStage = "baseline" | "reach" | "open" | "closed" | "review";
+type CalibrationStage =
+  "baseline" | "reach" | "open" | "closed" | "drawing_clutch" | "review";
 
 interface ClosedPinchEvidence {
   readonly ratio: number;
@@ -66,6 +67,12 @@ interface ClosedPinchCaptureState {
   readonly candidate: readonly ClosedPinchEvidence[];
   readonly stable: boolean;
   readonly replacementPending: boolean;
+}
+
+interface CalibratedHandIdentity {
+  readonly trackId: string;
+  readonly handedness: "left" | "right";
+  readonly handednessConfidence: number;
 }
 
 export type SpatialCalibrationResult =
@@ -124,9 +131,10 @@ export function SpatialCameraControl({
   const [status, setStatus] = useState<HandTrackingStatus>(() =>
     controller.getStatus(),
   );
-  const [engineStatus, setEngineStatus] = useState<HandTrackingEngineStatus | null>(
-    () => controller.getEngineStatus?.() ?? null,
-  );
+  const [engineStatus, setEngineStatus] =
+    useState<HandTrackingEngineStatus | null>(
+      () => controller.getEngineStatus?.() ?? null,
+    );
   const [detectedMode, setDetectedMode] = useState<
     "point" | "pinch" | "open_palm" | "bimanual_pinch" | null
   >(null);
@@ -155,10 +163,20 @@ export function SpatialCameraControl({
     open: 0,
     closed: 0,
     closedReady: false,
+    drawingOpen: 0,
+    drawingClosed: 0,
+    drawingClosedReady: false,
   });
   const [calibrationStage, setCalibrationStage] =
     useState<CalibrationStage>("baseline");
   const [calibrationError, setCalibrationError] = useState<string | null>(null);
+  const [otherHandTarget, setOtherHandTarget] = useState<
+    "left" | "right" | null
+  >(null);
+  const [calibrationReliableIdentity, setCalibrationReliableIdentity] =
+    useState<CalibratedHandIdentity | null>(null);
+  const [completedFirstHandProfile, setCompletedFirstHandProfile] =
+    useState<HandCalibrationProfile | null>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const sensorPipDragRef = useRef<{
@@ -181,8 +199,15 @@ export function SpatialCameraControl({
   const calibrationHandednessConfidenceRef = useRef<number | undefined>(
     undefined,
   );
+  const completedFirstHandProfileRef = useRef<HandCalibrationProfile | null>(
+    null,
+  );
+  const otherHandRequirementRef = useRef<CalibratedHandIdentity | null>(null);
   const calibrationSourceRef = useRef<string | null>(null);
   const closedPinchCaptureRef = useRef<ClosedPinchCaptureState>(
+    emptyClosedPinchCaptureState(),
+  );
+  const closedDrawingClutchCaptureRef = useRef<ClosedPinchCaptureState>(
     emptyClosedPinchCaptureState(),
   );
   const previousCalibrationOpenRef = useRef(false);
@@ -194,6 +219,11 @@ export function SpatialCameraControl({
   const spatialModeRequestedRef = useRef(false);
   const calibrationOpenRef = useRef(false);
   const lifecycleStopIssuedRef = useRef(false);
+  const lifecycleResumeRef = useRef<{
+    spatialModeStarted: boolean;
+    spatialModeRequested: boolean;
+    target: "private-relay" | "local";
+  } | null>(null);
   const lastAcknowledgedCaptureRef = useRef<number | null>(null);
   const runtimeDetailsId = useId();
   const observationHandlerRef = useRef(onObservation);
@@ -205,7 +235,7 @@ export function SpatialCameraControl({
   const previewExpanded = calibrationOpen ?? internalCalibrationOpen;
   const retainedCalibration = calibrationProfile ?? capturedCalibration;
   const retainedCalibrationKind = calibrationProfile
-    ? calibrationKind ?? "calibrated"
+    ? (calibrationKind ?? "calibrated")
     : capturedCalibration
       ? capturedCalibrationKind
       : null;
@@ -237,11 +267,11 @@ export function SpatialCameraControl({
     spatialModeRequestedRef.current = false;
     setLastSensorFrame(null);
     setPreviewExpanded(false);
-    setSensorPreviewVisible(!prefersCollapsedSensorPreview());
+    setSensorPreviewVisible(true);
     spatialModeStartedHandlerRef.current?.();
   }, [setPreviewExpanded]);
 
-  const resetCalibrationCapture = useCallback(() => {
+  const resetCalibrationPass = useCallback(() => {
     calibrationSamplesRef.current = emptyCalibrationSamples(
       calibrationDeviceKeyRef.current,
     );
@@ -249,8 +279,10 @@ export function SpatialCameraControl({
     calibrationTrackIdRef.current = null;
     calibrationHandednessRef.current = "unknown";
     calibrationHandednessConfidenceRef.current = undefined;
+    setCalibrationReliableIdentity(null);
     calibrationSourceRef.current = null;
     closedPinchCaptureRef.current = emptyClosedPinchCaptureState();
+    closedDrawingClutchCaptureRef.current = emptyClosedPinchCaptureState();
     setLastSensorFrame(null);
     setCalibrationStage("baseline");
     setCalibrationError(null);
@@ -261,8 +293,19 @@ export function SpatialCameraControl({
       open: 0,
       closed: 0,
       closedReady: false,
+      drawingOpen: 0,
+      drawingClosed: 0,
+      drawingClosedReady: false,
     });
   }, []);
+
+  const resetCalibrationCapture = useCallback(() => {
+    completedFirstHandProfileRef.current = null;
+    otherHandRequirementRef.current = null;
+    setCompletedFirstHandProfile(null);
+    setOtherHandTarget(null);
+    resetCalibrationPass();
+  }, [resetCalibrationPass]);
 
   const beginCalibrationCapture = useCallback(() => {
     resetCalibrationCapture();
@@ -279,9 +322,7 @@ export function SpatialCameraControl({
     (samples: HandCalibrationSamples) => {
       setCalibrationCounts((counts) => {
         const next = {
-          baseline: stableOpenPalmFrameCount(
-            samples.openPalmSamples ?? [],
-          ),
+          baseline: stableOpenPalmFrameCount(samples.openPalmSamples ?? []),
           reach: samples.reachSamples.length,
           reachReady:
             samples.reachSamples.length >= MIN_CALIBRATION_REACH_SAMPLES &&
@@ -291,13 +332,26 @@ export function SpatialCameraControl({
           closedReady:
             samples.closedPinchRatios.length >= MIN_CALIBRATION_PINCH_SAMPLES &&
             !closedPinchCaptureRef.current.replacementPending,
+          drawingOpen: samples.openDrawingClutchRatios?.length ?? 0,
+          drawingClosed: samples.closedDrawingClutchRatios?.length ?? 0,
+          drawingClosedReady:
+            (samples.closedDrawingClutchRatios?.length ?? 0) >=
+              MIN_CALIBRATION_PINCH_SAMPLES &&
+            !closedDrawingClutchCaptureRef.current.replacementPending &&
+            assessPinchCalibrationEnvelope(
+              samples.closedDrawingClutchRatios ?? [],
+              samples.openDrawingClutchRatios ?? [],
+            ).accepted,
         };
         return counts.baseline === next.baseline &&
           counts.reach === next.reach &&
           counts.reachReady === next.reachReady &&
           counts.open === next.open &&
           counts.closed === next.closed &&
-          counts.closedReady === next.closedReady
+          counts.closedReady === next.closedReady &&
+          counts.drawingOpen === next.drawingOpen &&
+          counts.drawingClosed === next.drawingClosed &&
+          counts.drawingClosedReady === next.drawingClosedReady
           ? counts
           : next;
       });
@@ -329,11 +383,49 @@ export function SpatialCameraControl({
       if (!acceptCalibrationSource(frame.source)) return;
       const current = calibrationSamplesRef.current;
       const activeTrackId = calibrationTrackIdRef.current;
+      const otherHandRequirement = otherHandRequirementRef.current;
+      const startingHands = otherHandRequirement
+        ? frame.hands.filter(
+            (candidate) =>
+              candidate.trackId !== otherHandRequirement.trackId &&
+              candidate.handedness !== otherHandRequirement.handedness &&
+              isReliableTrackedHandedness(
+                candidate.handedness,
+                candidate.handednessConfidence,
+              ),
+          )
+        : frame.hands;
       const matchingHand = frame.hands.find(
         (candidate) => candidate.trackId === activeTrackId,
       );
+      const reliableHandednessReplacement =
+        activeTrackId !== null && frame.hands.length === 1
+          ? frame.hands.find(
+              (candidate) =>
+                candidate.handedness === calibrationHandednessRef.current &&
+                isReliableTrackedHandedness(
+                  candidate.handedness,
+                  candidate.handednessConfidence,
+                ) &&
+                isReliableTrackedHandedness(
+                  calibrationHandednessRef.current,
+                  calibrationHandednessConfidenceRef.current,
+                ),
+            )
+          : undefined;
       const hand =
-        matchingHand ?? (frame.hands.length === 1 ? frame.hands[0] : undefined);
+        activeTrackId === null
+          ? startingHands.length === 1
+            ? startingHands[0]
+            : undefined
+          : (matchingHand ?? reliableHandednessReplacement);
+      if (otherHandRequirement && activeTrackId === null && !hand) {
+        setCalibrationError(
+          `Show your other hand (${oppositeHand(otherHandRequirement.handedness)}). CommandCanvas requires a new track and reliable opposite handedness before recording a second calibration.`,
+        );
+      } else if (otherHandRequirement && hand) {
+        setCalibrationError(null);
+      }
       if (
         !hand ||
         hand.prediction.predicted ||
@@ -346,19 +438,66 @@ export function SpatialCameraControl({
             closedPinchCaptureRef.current,
           );
           updateCalibrationCounts(current);
+        } else if (calibrationStageRef.current === "drawing_clutch") {
+          closedDrawingClutchCaptureRef.current = interruptClosedPinchCapture(
+            closedDrawingClutchCaptureRef.current,
+          );
+          updateCalibrationCounts(current);
         }
         return;
       }
-      if (activeTrackId !== hand.trackId)
+      const currentHandednessReliable = isReliableTrackedHandedness(
+        calibrationHandednessRef.current,
+        calibrationHandednessConfidenceRef.current,
+      );
+      const observedHandednessReliable = isReliableTrackedHandedness(
+        hand.handedness,
+        hand.handednessConfidence,
+      );
+      if (
+        activeTrackId === hand.trackId &&
+        currentHandednessReliable &&
+        observedHandednessReliable &&
+        calibrationHandednessRef.current !== hand.handedness
+      ) {
+        setCalibrationError(
+          "Handedness changed for the active track. This frame was not added to calibration.",
+        );
+        return;
+      }
+      if (activeTrackId !== hand.trackId) {
         calibrationTrackIdRef.current = hand.trackId;
-      calibrationHandednessRef.current = hand.handedness;
-      calibrationHandednessConfidenceRef.current = hand.handednessConfidence;
+        calibrationHandednessRef.current = hand.handedness;
+        calibrationHandednessConfidenceRef.current = hand.handednessConfidence;
+        setCalibrationReliableIdentity(
+          observedHandednessReliable && hand.handedness !== "unknown"
+            ? {
+                trackId: hand.trackId,
+                handedness: hand.handedness,
+                handednessConfidence: hand.handednessConfidence!,
+              }
+            : null,
+        );
+      } else if (!currentHandednessReliable || observedHandednessReliable) {
+        calibrationHandednessRef.current = hand.handedness;
+        calibrationHandednessConfidenceRef.current = hand.handednessConfidence;
+        if (observedHandednessReliable && hand.handedness !== "unknown")
+          setCalibrationReliableIdentity({
+            trackId: hand.trackId,
+            handedness: hand.handedness,
+            handednessConfidence: hand.handednessConfidence!,
+          });
+      }
       const pointer = hand.measurements.indexTip;
       const pinchRatio = normalizedCalibrationPinchRatio(
         hand.measurements.pinchDistance,
         hand.measurements.palmScale,
         current.openPalmSamples,
         hand.measurements.pinchRatio,
+      );
+      const drawingClutchRatio = normalizedCalibrationDrawingClutchRatio(
+        hand.measurements,
+        current.openPalmSamples,
       );
       if (
         !Number.isFinite(pointer.x) ||
@@ -371,6 +510,11 @@ export function SpatialCameraControl({
         if (calibrationStageRef.current === "closed") {
           closedPinchCaptureRef.current = interruptClosedPinchCapture(
             closedPinchCaptureRef.current,
+          );
+          updateCalibrationCounts(current);
+        } else if (calibrationStageRef.current === "drawing_clutch") {
+          closedDrawingClutchCaptureRef.current = interruptClosedPinchCapture(
+            closedDrawingClutchCaptureRef.current,
           );
           updateCalibrationCounts(current);
         }
@@ -411,21 +555,36 @@ export function SpatialCameraControl({
             MAX_CALIBRATION_REACH_SAMPLES,
           ),
         };
-      else if (
-        calibrationStageRef.current === "open" &&
-        Number.isFinite(pinchRatio) &&
-        hand.measurements.thumbTipConfidence >= 0.5 &&
-        isClearlyOpenPinch(pinchRatio, current.openPalmSamples)
-      )
-        next = {
-          ...current,
-          openPinchRatios: appendRecentCalibrationSample(
-            current.openPinchRatios,
-            pinchRatio,
-            MAX_CALIBRATION_PINCH_SAMPLES,
-          ),
-        };
-      else if (calibrationStageRef.current === "closed") {
+      else if (calibrationStageRef.current === "open") {
+        const openPinchRatios =
+          Number.isFinite(pinchRatio) &&
+          hand.measurements.thumbTipConfidence >= 0.5 &&
+          isClearlyOpenPinch(pinchRatio, current.openPalmSamples)
+            ? appendRecentCalibrationSample(
+                current.openPinchRatios,
+                pinchRatio,
+                MAX_CALIBRATION_PINCH_SAMPLES,
+              )
+            : current.openPinchRatios;
+        const openDrawingClutchRatios =
+          drawingClutchRatio !== null &&
+          (hand.measurements.middleTipConfidence ?? 0) >= 0.5
+            ? appendRecentCalibrationSample(
+                current.openDrawingClutchRatios ?? [],
+                drawingClutchRatio,
+                MAX_CALIBRATION_PINCH_SAMPLES,
+              )
+            : (current.openDrawingClutchRatios ?? []);
+        if (
+          openPinchRatios !== current.openPinchRatios ||
+          openDrawingClutchRatios !== current.openDrawingClutchRatios
+        )
+          next = {
+            ...current,
+            openPinchRatios,
+            openDrawingClutchRatios,
+          };
+      } else if (calibrationStageRef.current === "closed") {
         if (
           Number.isFinite(pinchRatio) &&
           isClearlyClosedPinch(pinchRatio, current.openPinchRatios)
@@ -452,6 +611,37 @@ export function SpatialCameraControl({
           updateCalibrationCounts(current);
           return;
         }
+      } else if (calibrationStageRef.current === "drawing_clutch") {
+        if (
+          drawingClutchRatio !== null &&
+          (hand.measurements.middleTipConfidence ?? 0) >= 0.5 &&
+          isClearlyClosedPinch(
+            drawingClutchRatio,
+            current.openDrawingClutchRatios ?? [],
+          )
+        ) {
+          const closed = appendStableClosedPinchSample(
+            current.closedDrawingClutchRatios ?? [],
+            closedDrawingClutchCaptureRef.current,
+            {
+              ratio: drawingClutchRatio,
+              capturedAt: frame.timestamp,
+              source: frame.source,
+              trackId: hand.trackId,
+            },
+          );
+          closedDrawingClutchCaptureRef.current = closed.state;
+          next = {
+            ...current,
+            closedDrawingClutchRatios: closed.samples,
+          };
+        } else {
+          closedDrawingClutchCaptureRef.current = interruptClosedPinchCapture(
+            closedDrawingClutchCaptureRef.current,
+          );
+          updateCalibrationCounts(current);
+          return;
+        }
       }
       if (next === current) return;
       calibrationSamplesRef.current = next;
@@ -460,131 +650,258 @@ export function SpatialCameraControl({
     [acceptCalibrationSource, updateCalibrationCounts],
   );
 
-  const captureCalibrationObservation = useCallback((
-    observation: HandTrackingObservation,
-  ) => {
-    const current = calibrationSamplesRef.current;
-    if (observation.mode === "idle" || observation.mode === "bimanual_pinch") {
-      if (calibrationStageRef.current === "closed") {
-        closedPinchCaptureRef.current = interruptClosedPinchCapture(
-          closedPinchCaptureRef.current,
-        );
-        updateCalibrationCounts(current);
-      }
-      return;
-    }
-    const source = observation.source ?? "semantic-observation";
-    if (!acceptCalibrationSource(source)) return;
-    const pointer = observation.measurements?.indexTip ?? observation.pointer;
-    const pinchRatio = observation.measurements
-      ? normalizedCalibrationPinchRatio(
-          observation.measurements.pinchDistance,
-          observation.measurements.palmScale,
-          current.openPalmSamples,
-          observation.measurements.pinchRatio,
-        )
-      : observation.pinchRatio;
-    if (
-      !Number.isFinite(pointer.x) ||
-      !Number.isFinite(pointer.y) ||
-      pointer.x < 0 ||
-      pointer.x > 1 ||
-      pointer.y < 0 ||
-      pointer.y > 1
-    ) {
-      if (calibrationStageRef.current === "closed") {
-        closedPinchCaptureRef.current = interruptClosedPinchCapture(
-          closedPinchCaptureRef.current,
-        );
-        updateCalibrationCounts(current);
-      }
-      return;
-    }
-    const openPalmSamples =
-      calibrationStageRef.current === "baseline" &&
-      observation.mode === "open_palm" &&
-      observation.measurements &&
-      observation.landmarks &&
-      isOpenPalmCalibrationPose(observation.landmarks, 0.5)
-        ? appendRecentCalibrationSample(
-            current.openPalmSamples ?? [],
-            {
-              center: observation.measurements.palmMcpCentroid,
-              palmScale: observation.measurements.palmScale,
-              pinchDistance: observation.measurements.pinchDistance,
-              orientationRadians: openPalmOrientationRadians(
-                observation.landmarks,
-              ),
-              confidence: Math.min(
-                observation.confidence,
-                observation.measurements.confidence,
-                observation.measurements.indexTipConfidence,
-                observation.measurements.thumbTipConfidence,
-              ),
-            },
-            OPEN_PALM_SCAN_FRAMES,
-          )
-        : current.openPalmSamples;
-    const reachSamples =
-      calibrationStageRef.current === "reach"
-        ? appendRecentCalibrationSample(
-            current.reachSamples,
-            pointer,
-            MAX_CALIBRATION_REACH_SAMPLES,
-          )
-        : current.reachSamples;
-    const openPinchRatios =
-      calibrationStageRef.current === "open" &&
-      (observation.mode === "point" || observation.mode === "open_palm") &&
-      Number.isFinite(pinchRatio) &&
-      isClearlyOpenPinch(pinchRatio as number, current.openPalmSamples)
-        ? appendRecentCalibrationSample(
-            current.openPinchRatios,
-            pinchRatio as number,
-            MAX_CALIBRATION_PINCH_SAMPLES,
-          )
-        : current.openPinchRatios;
-    let closedPinchRatios = current.closedPinchRatios;
-    if (calibrationStageRef.current === "closed") {
+  const captureCalibrationObservation = useCallback(
+    (observation: HandTrackingObservation) => {
+      const current = calibrationSamplesRef.current;
       if (
-        observation.mode === "pinch" &&
-        Number.isFinite(pinchRatio) &&
-        isClearlyClosedPinch(
-          pinchRatio as number,
-          current.openPinchRatios,
-        )
+        observation.mode === "idle" ||
+        observation.mode === "bimanual_pinch"
       ) {
-        const closed = appendStableClosedPinchSample(
-          current.closedPinchRatios,
-          closedPinchCaptureRef.current,
-          {
-            ratio: pinchRatio as number,
-            capturedAt: observation.timestamp,
-            source,
-            trackId: observation.trackId ?? "semantic-hand",
-          },
+        if (calibrationStageRef.current === "closed") {
+          closedPinchCaptureRef.current = interruptClosedPinchCapture(
+            closedPinchCaptureRef.current,
+          );
+          updateCalibrationCounts(current);
+        } else if (calibrationStageRef.current === "drawing_clutch") {
+          closedDrawingClutchCaptureRef.current = interruptClosedPinchCapture(
+            closedDrawingClutchCaptureRef.current,
+          );
+          updateCalibrationCounts(current);
+        }
+        return;
+      }
+      const source = observation.source ?? "semantic-observation";
+      if (!acceptCalibrationSource(source)) return;
+      const observationTrackId = observation.trackId ?? "semantic-hand";
+      const activeTrackId = calibrationTrackIdRef.current;
+      const otherHandRequirement = otherHandRequirementRef.current;
+      if (
+        activeTrackId === null &&
+        otherHandRequirement &&
+        (observationTrackId === otherHandRequirement.trackId ||
+          observation.handedness === otherHandRequirement.handedness ||
+          !isReliableTrackedHandedness(
+            observation.handedness ?? "unknown",
+            observation.handednessConfidence,
+          ))
+      ) {
+        setCalibrationError(
+          `Show your other hand (${oppositeHand(otherHandRequirement.handedness)}). CommandCanvas requires a new track and reliable opposite handedness before recording a second calibration.`,
         );
-        closedPinchCaptureRef.current = closed.state;
-        closedPinchRatios = closed.samples;
-      } else {
-        closedPinchCaptureRef.current = interruptClosedPinchCapture(
-          closedPinchCaptureRef.current,
+        return;
+      }
+      if (activeTrackId === null && otherHandRequirement)
+        setCalibrationError(null);
+      const reliableHandednessReplacement =
+        activeTrackId !== null &&
+        activeTrackId !== observationTrackId &&
+        observation.handedness === calibrationHandednessRef.current &&
+        isReliableTrackedHandedness(
+          observation.handedness ?? "unknown",
+          observation.handednessConfidence,
+        ) &&
+        isReliableTrackedHandedness(
+          calibrationHandednessRef.current,
+          calibrationHandednessConfidenceRef.current,
+        );
+      if (
+        activeTrackId !== null &&
+        activeTrackId !== observationTrackId &&
+        !reliableHandednessReplacement
+      ) {
+        if (calibrationStageRef.current === "closed") {
+          closedPinchCaptureRef.current = interruptClosedPinchCapture(
+            closedPinchCaptureRef.current,
+          );
+        } else if (calibrationStageRef.current === "drawing_clutch") {
+          closedDrawingClutchCaptureRef.current = interruptClosedPinchCapture(
+            closedDrawingClutchCaptureRef.current,
+          );
+        }
+        updateCalibrationCounts(current);
+        return;
+      }
+      if (activeTrackId !== observationTrackId) {
+        calibrationTrackIdRef.current = observationTrackId;
+        calibrationHandednessRef.current = observation.handedness ?? "unknown";
+        calibrationHandednessConfidenceRef.current =
+          observation.handednessConfidence;
+        setCalibrationReliableIdentity(
+          isReliableTrackedHandedness(
+            observation.handedness ?? "unknown",
+            observation.handednessConfidence,
+          ) && observation.handedness !== "unknown"
+            ? {
+                trackId: observationTrackId,
+                handedness: observation.handedness!,
+                handednessConfidence: observation.handednessConfidence!,
+              }
+            : null,
         );
       }
-    }
-    calibrationSamplesRef.current = {
-      ...current,
-      openPalmSamples,
-      reachSamples,
-      openPinchRatios,
-      closedPinchRatios,
-    };
-    updateCalibrationCounts(calibrationSamplesRef.current);
-  }, [acceptCalibrationSource, updateCalibrationCounts]);
+      const pointer = observation.measurements?.indexTip ?? observation.pointer;
+      const pinchRatio = observation.measurements
+        ? normalizedCalibrationPinchRatio(
+            observation.measurements.pinchDistance,
+            observation.measurements.palmScale,
+            current.openPalmSamples,
+            observation.measurements.pinchRatio,
+          )
+        : observation.pinchRatio;
+      const drawingClutchRatio = observation.measurements
+        ? normalizedCalibrationDrawingClutchRatio(
+            observation.measurements,
+            current.openPalmSamples,
+          )
+        : null;
+      if (
+        !Number.isFinite(pointer.x) ||
+        !Number.isFinite(pointer.y) ||
+        pointer.x < 0 ||
+        pointer.x > 1 ||
+        pointer.y < 0 ||
+        pointer.y > 1
+      ) {
+        if (calibrationStageRef.current === "closed") {
+          closedPinchCaptureRef.current = interruptClosedPinchCapture(
+            closedPinchCaptureRef.current,
+          );
+          updateCalibrationCounts(current);
+        } else if (calibrationStageRef.current === "drawing_clutch") {
+          closedDrawingClutchCaptureRef.current = interruptClosedPinchCapture(
+            closedDrawingClutchCaptureRef.current,
+          );
+          updateCalibrationCounts(current);
+        }
+        return;
+      }
+      const openPalmSamples =
+        calibrationStageRef.current === "baseline" &&
+        observation.mode === "open_palm" &&
+        observation.measurements &&
+        observation.landmarks &&
+        isOpenPalmCalibrationPose(observation.landmarks, 0.5)
+          ? appendRecentCalibrationSample(
+              current.openPalmSamples ?? [],
+              {
+                center: observation.measurements.palmMcpCentroid,
+                palmScale: observation.measurements.palmScale,
+                pinchDistance: observation.measurements.pinchDistance,
+                orientationRadians: openPalmOrientationRadians(
+                  observation.landmarks,
+                ),
+                confidence: Math.min(
+                  observation.confidence,
+                  observation.measurements.confidence,
+                  observation.measurements.indexTipConfidence,
+                  observation.measurements.thumbTipConfidence,
+                ),
+              },
+              OPEN_PALM_SCAN_FRAMES,
+            )
+          : current.openPalmSamples;
+      const reachSamples =
+        calibrationStageRef.current === "reach"
+          ? appendRecentCalibrationSample(
+              current.reachSamples,
+              pointer,
+              MAX_CALIBRATION_REACH_SAMPLES,
+            )
+          : current.reachSamples;
+      const openPinchRatios =
+        calibrationStageRef.current === "open" &&
+        (observation.mode === "point" || observation.mode === "open_palm") &&
+        Number.isFinite(pinchRatio) &&
+        isClearlyOpenPinch(pinchRatio as number, current.openPalmSamples)
+          ? appendRecentCalibrationSample(
+              current.openPinchRatios,
+              pinchRatio as number,
+              MAX_CALIBRATION_PINCH_SAMPLES,
+            )
+          : current.openPinchRatios;
+      const openDrawingClutchRatios =
+        calibrationStageRef.current === "open" &&
+        (observation.mode === "point" || observation.mode === "open_palm") &&
+        drawingClutchRatio !== null &&
+        (observation.measurements?.middleTipConfidence ?? 0) >= 0.5
+          ? appendRecentCalibrationSample(
+              current.openDrawingClutchRatios ?? [],
+              drawingClutchRatio,
+              MAX_CALIBRATION_PINCH_SAMPLES,
+            )
+          : (current.openDrawingClutchRatios ?? []);
+      let closedPinchRatios = current.closedPinchRatios;
+      let closedDrawingClutchRatios = current.closedDrawingClutchRatios ?? [];
+      if (calibrationStageRef.current === "closed") {
+        if (
+          observation.mode === "pinch" &&
+          Number.isFinite(pinchRatio) &&
+          isClearlyClosedPinch(pinchRatio as number, current.openPinchRatios)
+        ) {
+          const closed = appendStableClosedPinchSample(
+            current.closedPinchRatios,
+            closedPinchCaptureRef.current,
+            {
+              ratio: pinchRatio as number,
+              capturedAt: observation.timestamp,
+              source,
+              trackId: observationTrackId,
+            },
+          );
+          closedPinchCaptureRef.current = closed.state;
+          closedPinchRatios = closed.samples;
+        } else {
+          closedPinchCaptureRef.current = interruptClosedPinchCapture(
+            closedPinchCaptureRef.current,
+          );
+        }
+      }
+      if (calibrationStageRef.current === "drawing_clutch") {
+        if (
+          drawingClutchRatio !== null &&
+          (observation.measurements?.middleTipConfidence ?? 0) >= 0.5 &&
+          isClearlyClosedPinch(
+            drawingClutchRatio,
+            current.openDrawingClutchRatios ?? [],
+          )
+        ) {
+          const closed = appendStableClosedPinchSample(
+            current.closedDrawingClutchRatios ?? [],
+            closedDrawingClutchCaptureRef.current,
+            {
+              ratio: drawingClutchRatio,
+              capturedAt: observation.timestamp,
+              source,
+              trackId: observationTrackId,
+            },
+          );
+          closedDrawingClutchCaptureRef.current = closed.state;
+          closedDrawingClutchRatios = closed.samples;
+        } else {
+          closedDrawingClutchCaptureRef.current = interruptClosedPinchCapture(
+            closedDrawingClutchCaptureRef.current,
+          );
+        }
+      }
+      calibrationSamplesRef.current = {
+        ...current,
+        openPalmSamples,
+        reachSamples,
+        openPinchRatios,
+        closedPinchRatios,
+        openDrawingClutchRatios,
+        closedDrawingClutchRatios,
+      };
+      updateCalibrationCounts(calibrationSamplesRef.current);
+    },
+    [acceptCalibrationSource, updateCalibrationCounts],
+  );
 
   function setCalibrationCaptureStage(stage: CalibrationStage) {
     if (stage === "closed") {
       closedPinchCaptureRef.current = emptyClosedPinchCaptureState();
+    } else if (stage === "drawing_clutch") {
+      closedDrawingClutchCaptureRef.current = emptyClosedPinchCaptureState();
     }
     calibrationStageRef.current = stage;
     setCalibrationStage(stage);
@@ -615,17 +932,42 @@ export function SpatialCameraControl({
     setCalibrationCaptureStage("open");
   }
 
-  function useCapturedCalibration() {
+  function buildCurrentCalibrationProfile(): {
+    readonly profile: HandCalibrationProfile;
+    readonly identity: CalibratedHandIdentity | null;
+  } | null {
     const result = buildHandCalibration(calibrationSamplesRef.current);
     if (!result.accepted) {
       setCalibrationError(calibrationRefusalMessage(result.reason));
-      return;
+      return null;
     }
     const trackId = calibrationTrackIdRef.current;
+    const drawingClutchEnvelope = assessPinchCalibrationEnvelope(
+      calibrationSamplesRef.current.closedDrawingClutchRatios ?? [],
+      calibrationSamplesRef.current.openDrawingClutchRatios ?? [],
+    );
+    const hasDrawingClutchCalibration =
+      trackId !== null &&
+      drawingClutchEnvelope.accepted &&
+      drawingClutchEnvelope.closedUpper !== null &&
+      drawingClutchEnvelope.openLower !== null;
     const profile: HandCalibrationProfile = {
       ...result.profile,
       ...(trackId
         ? {
+            reachCalibrations: [
+              {
+                trackId,
+                handedness: calibrationHandednessRef.current,
+                ...(calibrationHandednessConfidenceRef.current === undefined
+                  ? {}
+                  : {
+                      handednessConfidence:
+                        calibrationHandednessConfidenceRef.current,
+                    }),
+                cameraBounds: result.profile.cameraBounds,
+              },
+            ],
             pinchCalibrations: [
               {
                 trackId,
@@ -642,13 +984,88 @@ export function SpatialCameraControl({
             ],
           }
         : {}),
+      ...(hasDrawingClutchCalibration
+        ? {
+            drawingClutchCalibrations: [
+              {
+                trackId,
+                handedness: calibrationHandednessRef.current,
+                ...(calibrationHandednessConfidenceRef.current === undefined
+                  ? {}
+                  : {
+                      handednessConfidence:
+                        calibrationHandednessConfidenceRef.current,
+                    }),
+                closedRatio: drawingClutchEnvelope.closedUpper,
+                openRatio: drawingClutchEnvelope.openLower,
+                openSampleCount:
+                  calibrationSamplesRef.current.openDrawingClutchRatios
+                    ?.length ?? 0,
+                closedSampleCount:
+                  calibrationSamplesRef.current.closedDrawingClutchRatios
+                    ?.length ?? 0,
+                capturedAt: calibrationSamplesRef.current.createdAt,
+              },
+            ],
+          }
+        : {}),
     };
+    const handedness = calibrationHandednessRef.current;
+    const handednessConfidence = calibrationHandednessConfidenceRef.current;
+    return {
+      profile,
+      identity:
+        trackId !== null &&
+        (handedness === "left" || handedness === "right") &&
+        typeof handednessConfidence === "number" &&
+        isReliableTrackedHandedness(handedness, handednessConfidence)
+          ? { trackId, handedness, handednessConfidence }
+          : null,
+    };
+  }
+
+  function useCapturedCalibration() {
+    const current = buildCurrentCalibrationProfile();
+    if (!current) return;
+    const profile = completedFirstHandProfileRef.current
+      ? mergeHandCalibrationProfiles(
+          completedFirstHandProfileRef.current,
+          current.profile,
+        )
+      : current.profile;
+    completedFirstHandProfileRef.current = null;
+    otherHandRequirementRef.current = null;
+    setCompletedFirstHandProfile(null);
+    setOtherHandTarget(null);
     retainedCalibrationRef.current = profile;
     setCapturedCalibration(profile);
     setCapturedCalibrationKind("calibrated");
     controller.setPinchThresholds?.(pinchThresholdSet(profile));
     calibrationResultHandlerRef.current?.({ accepted: true, profile });
     startSpatialMode();
+  }
+
+  function calibrateOtherHand() {
+    const current = buildCurrentCalibrationProfile();
+    if (!current) return;
+    const drawingMeasured = Boolean(
+      current.profile.drawingClutchCalibrations?.length,
+    );
+    if (!current.identity || !drawingMeasured) {
+      setCalibrationError(
+        "Calibrate thumb-to-middle drawing and establish reliable left/right tracking before adding the other hand.",
+      );
+      return;
+    }
+    completedFirstHandProfileRef.current = current.profile;
+    otherHandRequirementRef.current = current.identity;
+    setCompletedFirstHandProfile(current.profile);
+    retainedCalibrationRef.current = current.profile;
+    setCapturedCalibration(current.profile);
+    setCapturedCalibrationKind("calibrated");
+    controller.setPinchThresholds?.(pinchThresholdSet(current.profile));
+    resetCalibrationPass();
+    setOtherHandTarget(oppositeHand(current.identity.handedness));
   }
 
   function skipCalibration() {
@@ -662,6 +1079,10 @@ export function SpatialCameraControl({
       reason: "skipped",
       profile,
     };
+    completedFirstHandProfileRef.current = null;
+    otherHandRequirementRef.current = null;
+    setCompletedFirstHandProfile(null);
+    setOtherHandTarget(null);
     retainedCalibrationRef.current = profile;
     setCapturedCalibration(profile);
     setCapturedCalibrationKind("skipped");
@@ -671,6 +1092,26 @@ export function SpatialCameraControl({
   }
 
   function returnToCanvas() {
+    const completedFirstHandProfile = completedFirstHandProfileRef.current;
+    if (completedFirstHandProfile) {
+      completedFirstHandProfileRef.current = null;
+      otherHandRequirementRef.current = null;
+      setCompletedFirstHandProfile(null);
+      setOtherHandTarget(null);
+      retainedCalibrationRef.current = completedFirstHandProfile;
+      setCapturedCalibration(completedFirstHandProfile);
+      setCapturedCalibrationKind("calibrated");
+      controller.setPinchThresholds?.(
+        pinchThresholdSet(completedFirstHandProfile),
+      );
+      calibrationResultHandlerRef.current?.({
+        accepted: true,
+        profile: completedFirstHandProfile,
+      });
+      if (status.state === "ready") startSpatialMode();
+      else setPreviewExpanded(false);
+      return;
+    }
     if (!retainedCalibration && onCalibrationResult) return;
     if (status.state === "ready") startSpatialMode();
     else setPreviewExpanded(false);
@@ -728,10 +1169,12 @@ export function SpatialCameraControl({
       }
     });
     const sensorFramesAvailable = Boolean(controller.subscribeSensorFrames);
-    const unsubscribeSensorFrames = controller.subscribeSensorFrames?.((frame) => {
-      if (calibrationOpenRef.current) setLastSensorFrame(frame);
-      captureCalibrationSensorFrame(frame);
-    });
+    const unsubscribeSensorFrames = controller.subscribeSensorFrames?.(
+      (frame) => {
+        setLastSensorFrame(frame);
+        captureCalibrationSensorFrame(frame);
+      },
+    );
     const unsubscribeObservations = controller.subscribeObservations(
       (observation) => {
         setLastObservation(observation.mode === "idle" ? null : observation);
@@ -743,10 +1186,7 @@ export function SpatialCameraControl({
               ? "pointConfidence"
               : "pinchConfidence"]: observation.confidence,
           }));
-        if (
-          calibrationOpenRef.current &&
-          !sensorFramesAvailable
-        )
+        if (calibrationOpenRef.current && !sensorFramesAvailable)
           captureCalibrationObservation(observation);
         if (spatialModeStartedRef.current && !calibrationOpenRef.current)
           observationHandlerRef.current?.(observation);
@@ -777,7 +1217,7 @@ export function SpatialCameraControl({
     if (!lastObservation || lastObservation.mode === "idle") return;
     const capturedAt =
       "capturedAt" in lastObservation
-        ? lastObservation.capturedAt ?? lastObservation.timestamp
+        ? (lastObservation.capturedAt ?? lastObservation.timestamp)
         : lastObservation.timestamp;
     if (
       !Number.isFinite(capturedAt) ||
@@ -807,6 +1247,11 @@ export function SpatialCameraControl({
       if (lifecycleStopIssuedRef.current) return;
       const current = controller.getStatus();
       if (current.state !== "starting" && current.state !== "ready") return;
+      lifecycleResumeRef.current = {
+        spatialModeStarted: spatialModeStartedRef.current,
+        spatialModeRequested: spatialModeRequestedRef.current,
+        target: uploadConsent.get() ? "private-relay" : "local",
+      };
       lifecycleStopIssuedRef.current = true;
       controller.stop();
       setRuntimeDetailsOpen(false);
@@ -819,13 +1264,39 @@ export function SpatialCameraControl({
     const stopWhenHidden = () => {
       if (document.visibilityState === "hidden") stopForPageLifecycle();
     };
+    const resumeWhenVisible = () => {
+      if (document.visibilityState === "hidden") return;
+      const resume = lifecycleResumeRef.current;
+      if (!resume || !lifecycleStopIssuedRef.current) return;
+      const video = videoRef.current;
+      if (!video) return;
+      const current = controller.getStatus();
+      if (current.state === "starting" || current.state === "ready") {
+        lifecycleResumeRef.current = null;
+        lifecycleStopIssuedRef.current = false;
+        return;
+      }
+      lifecycleResumeRef.current = null;
+      lifecycleStopIssuedRef.current = false;
+      spatialModeStartedRef.current = resume.spatialModeStarted;
+      spatialModeRequestedRef.current = resume.spatialModeRequested;
+      setStartingTarget(resume.target);
+      setSensorPreviewVisible(true);
+      setPreviewExpanded(false);
+      void controller.start(video).catch(() => undefined);
+    };
     document.addEventListener("visibilitychange", stopWhenHidden);
+    document.addEventListener("visibilitychange", resumeWhenVisible);
     window.addEventListener("pagehide", stopForPageLifecycle);
+    window.addEventListener("pageshow", resumeWhenVisible);
     return () => {
       document.removeEventListener("visibilitychange", stopWhenHidden);
+      document.removeEventListener("visibilitychange", resumeWhenVisible);
       window.removeEventListener("pagehide", stopForPageLifecycle);
+      window.removeEventListener("pageshow", resumeWhenVisible);
+      lifecycleResumeRef.current = null;
     };
-  }, [controller, setPreviewExpanded]);
+  }, [controller, setPreviewExpanded, uploadConsent]);
 
   function startTracking({
     preserveSpatialMode = false,
@@ -836,6 +1307,7 @@ export function SpatialCameraControl({
   } = {}) {
     const video = videoRef.current;
     if (!video) return;
+    lifecycleResumeRef.current = null;
     lifecycleStopIssuedRef.current = false;
     setStartingTarget(target);
     if (!preserveSpatialMode) {
@@ -847,6 +1319,7 @@ export function SpatialCameraControl({
   }
 
   function stopTracking() {
+    lifecycleResumeRef.current = null;
     lifecycleStopIssuedRef.current = true;
     controller.stop();
     setRuntimeDetailsOpen(false);
@@ -877,8 +1350,8 @@ export function SpatialCameraControl({
     !previewExpanded &&
     !sensorPip &&
     (status.state === "off" || status.state === "starting");
-  const calibrationTrackedHands = previewExpanded
-    ? (lastSensorFrame?.hands.map((hand) => ({
+  const sensorTrackedHands =
+    lastSensorFrame?.hands.map((hand) => ({
         handedness: hand.handedness,
         pointer: hand.measurements.indexTip,
         motionPointer: hand.measurements.palmMcpCentroid,
@@ -890,11 +1363,10 @@ export function SpatialCameraControl({
         pinchDistance: hand.measurements.pinchDistance,
         pinchRatio: hand.measurements.pinchRatio,
         trackingState: "tracked" as const,
-      })) ?? [])
-    : [];
+      })) ?? [];
   const trackedHands =
-    previewExpanded && lastSensorFrame
-      ? calibrationTrackedHands
+    lastSensorFrame
+      ? sensorTrackedHands
       : lastObservation?.mode === "bimanual_pinch"
         ? lastObservation.hands
         : lastObservation && lastObservation.mode !== "idle"
@@ -998,7 +1470,9 @@ export function SpatialCameraControl({
               beginCalibrationCapture();
             }}
             disabled={
-              previewExpanded && !retainedCalibration && Boolean(onCalibrationResult)
+              previewExpanded &&
+              !retainedCalibration &&
+              Boolean(onCalibrationResult)
             }
           >
             {previewExpanded ? "Done" : "Calibrate"}
@@ -1028,12 +1502,17 @@ export function SpatialCameraControl({
               const next = event.currentTarget.checked;
               uploadConsent.set(next);
               setPrivateGpuConsent(next);
-              restartTrackingForEnginePreference(next ? "private-relay" : "local");
+              restartTrackingForEnginePreference(
+                next ? "private-relay" : "local",
+              );
             }}
           />
           <span>
             <strong>Use private GPU hand tracking</strong>
-            <small>Explicit camera-upload consent. Local tracking remains the fallback.</small>
+            <small>
+              Explicit camera-upload consent. Local tracking remains the
+              fallback.
+            </small>
           </span>
         </label>
       ) : null}
@@ -1061,7 +1540,9 @@ export function SpatialCameraControl({
           />
           <div className="camera-sensor-context">
             <strong>
-              {previewExpanded ? "Calibration view only" : "Sensor preview only"}
+              {previewExpanded
+                ? "Calibration view only"
+                : "Sensor preview only"}
             </strong>
             <span>
               {previewExpanded
@@ -1122,19 +1603,19 @@ export function SpatialCameraControl({
           <span className="camera-preview-label">
             {previewExpanded && lastSensorFrame?.hands.length === 0
               ? "READY · show one hand"
-              : previewExpanded && calibrationTrackedHands.length > 0
-                ? `TRACKED · ${calibrationStage === "baseline" ? "hold your whole hand open" : calibrationStage === "reach" ? "move fingertip around your comfortable area" : calibrationStage === "open" ? "hold fingers apart" : calibrationStage === "closed" ? "touch thumb and index" : "ready to apply"}`
-              : detectedMode === "pinch"
-                ? "PINCH · ready to hold"
-                : detectedMode === "bimanual_pinch"
-                  ? "TWO HANDS · resize object or zoom canvas"
-                  : detectedMode === "open_palm"
-                    ? "OPEN · pen up or pan blank canvas"
-                    : detectedMode === "point"
-                      ? "POINT · move over an object, then pinch"
-                      : status.state === "ready"
-                        ? "READY · show one hand"
-                        : "Preview appears after permission"}
+              : previewExpanded && sensorTrackedHands.length > 0
+                ? `TRACKED · ${calibrationStage === "baseline" ? "hold your whole hand open" : calibrationStage === "reach" ? "move fingertip around your comfortable area" : calibrationStage === "open" ? "hold fingers apart" : calibrationStage === "closed" ? "touch thumb and index" : calibrationStage === "drawing_clutch" ? "touch thumb and middle; keep index extended" : "ready to apply"}`
+                : detectedMode === "pinch"
+                  ? "PINCH · ready to hold"
+                  : detectedMode === "bimanual_pinch"
+                    ? "TWO HANDS · resize object or zoom canvas"
+                    : detectedMode === "open_palm"
+                      ? "OPEN · pen up or pan blank canvas"
+                      : detectedMode === "point"
+                        ? "POINT · move over an object, then pinch"
+                        : status.state === "ready"
+                          ? "READY · show one hand"
+                          : "Preview appears after permission"}
           </span>
         </div>
       </div>
@@ -1164,10 +1645,7 @@ export function SpatialCameraControl({
             Details
           </button>
           {runtimeDetailsOpen ? (
-            <div
-              id={runtimeDetailsId}
-              className="camera-runtime-details"
-            >
+            <div id={runtimeDetailsId} className="camera-runtime-details">
               <div
                 className="camera-calibration-readout"
                 aria-label="Hand calibration readout"
@@ -1182,8 +1660,11 @@ export function SpatialCameraControl({
                   <span>Engine starting</span>
                 )}
                 {engineStatus?.executionProvider ? (
-                  <span data-execution-provider={engineStatus.executionProvider}>
-                    Provider {executionProviderLabel(engineStatus.executionProvider)}
+                  <span
+                    data-execution-provider={engineStatus.executionProvider}
+                  >
+                    Provider{" "}
+                    {executionProviderLabel(engineStatus.executionProvider)}
                     {adapterLabel(engineStatus.adapter)
                       ? ` · ${adapterLabel(engineStatus.adapter)}`
                       : ""}
@@ -1219,8 +1700,8 @@ export function SpatialCameraControl({
                 engineStatus.droppedBeforeSend !== undefined ? (
                   <span data-hand-relay-pipeline-metrics>
                     {Math.round(engineStatus.encodeLatencyMs)} ms encode ·{" "}
-                    {Math.round(engineStatus.relayRoundTripMs)} ms relay round trip ·
-                    dropped {engineStatus.droppedBeforeEncode} raw /{" "}
+                    {Math.round(engineStatus.relayRoundTripMs)} ms relay round
+                    trip · dropped {engineStatus.droppedBeforeEncode} raw /{" "}
                     {engineStatus.droppedBeforeSend} encoded
                   </span>
                 ) : null}
@@ -1253,7 +1734,10 @@ export function SpatialCameraControl({
                 </span>
                 <span>Keep both hands inside frame · use even front light</span>
               </div>
-              <div className="gesture-self-check" aria-label="Gesture self-check">
+              <div
+                className="gesture-self-check"
+                aria-label="Gesture self-check"
+              >
                 <strong>
                   Gesture self-check ·{" "}
                   {Number(selfCheck.pointConfidence !== undefined) +
@@ -1277,7 +1761,9 @@ export function SpatialCameraControl({
                     complete.
                   </em>
                 ) : (
-                  <em>Show a clear point, then touch thumb and index finger.</em>
+                  <em>
+                    Show a clear point, then touch thumb and index finger.
+                  </em>
                 )}
               </div>
             </div>
@@ -1285,7 +1771,10 @@ export function SpatialCameraControl({
         </div>
       ) : null}
       {previewExpanded ? (
-        <div className="camera-calibration-actions" aria-label="Hand calibration samples">
+        <div
+          className="camera-calibration-actions"
+          aria-label="Hand calibration samples"
+        >
           <div
             className="camera-calibration-progress"
             role="status"
@@ -1295,31 +1784,45 @@ export function SpatialCameraControl({
             <strong>
               {calibrationStage === "baseline"
                 ? calibrationCounts.baseline >= MIN_CALIBRATION_PINCH_SAMPLES
-                  ? `1 of 4 · Open-hand scan complete · ${calibrationCounts.baseline} stable frames`
-                  : `1 of 4 · Scanning open hand — ${calibrationCounts.baseline}/${OPEN_PALM_SCAN_FRAMES} stable frames`
+                  ? `1 of 5 · Open-hand scan complete · ${calibrationCounts.baseline} stable frames`
+                  : `1 of 5 · Scanning open hand — ${calibrationCounts.baseline}/${OPEN_PALM_SCAN_FRAMES} stable frames`
                 : calibrationStage === "reach"
-                ? `2 of 4 · Map comfortable reach · ${calibrationCounts.reach} samples`
-                : calibrationStage === "open"
-                  ? `3 of 4 · Open fingers · ${calibrationCounts.open} samples`
-                  : calibrationStage === "closed"
-                    ? `4 of 4 · Touch thumb and index · ${calibrationCounts.closed} samples`
-                    : "Calibration ready to review"}
+                  ? `2 of 5 · Map comfortable reach · ${calibrationCounts.reach} samples`
+                  : calibrationStage === "open"
+                    ? `3 of 5 · Open fingers · ${calibrationCounts.open} samples`
+                    : calibrationStage === "closed"
+                      ? `4 of 5 · Touch thumb and index · ${calibrationCounts.closed} samples`
+                      : calibrationStage === "drawing_clutch"
+                        ? `5 of 5 · Touch thumb and middle · ${calibrationCounts.drawingClosed} samples`
+                        : "Calibration ready to review"}
             </strong>
-            <span>{calibrationCounts.baseline} baseline · {calibrationCounts.reach} reach · {calibrationCounts.open} open · {calibrationCounts.closed} closed</span>
+            <span>
+              {calibrationCounts.baseline} baseline · {calibrationCounts.reach}{" "}
+              reach · {calibrationCounts.open} open · {calibrationCounts.closed}{" "}
+              closed · {calibrationCounts.drawingClosed} drawing clutch
+            </span>
             <small>
               {calibrationStage === "baseline"
                 ? "Hold one whole open hand comfortably in frame. All 21 landmarks must remain visible and stable while CommandCanvas learns 2D hand scale, center, envelope, and confidence."
                 : calibrationStage === "reach"
-                ? calibrationCounts.reach >= MIN_CALIBRATION_REACH_SAMPLES &&
-                  !calibrationCounts.reachReady
-                  ? "Keep moving left, right, up, and down inside a comfortable area. The next step unlocks when the comfortable area is wide enough; you do not need to reach the camera edges."
-                  : "Move your index fingertip around a small, comfortable rectangle. You do not need to reach the camera edges; this region maps to the entire canvas."
-                : calibrationStage === "open"
-                  ? "Hold one hand naturally open with thumb and index clearly apart. CommandCanvas compares this pose with the whole-hand scan before recording it."
-                  : calibrationStage === "closed"
-                    ? "Touch the pads of your thumb and index finger. Calibration learns your pinch before gesture classification."
-                    : "Your reach is frozen, so open and closed samples cannot shrink the usable canvas area."}
+                  ? calibrationCounts.reach >= MIN_CALIBRATION_REACH_SAMPLES &&
+                    !calibrationCounts.reachReady
+                    ? "Keep moving left, right, up, and down inside a comfortable area. The next step unlocks when the comfortable area is wide enough; you do not need to reach the camera edges."
+                    : "Move your index fingertip around a small, comfortable rectangle. You do not need to reach the camera edges; this region maps to the entire canvas."
+                  : calibrationStage === "open"
+                    ? "Hold one hand naturally open with thumb and index clearly apart. CommandCanvas compares this pose with the whole-hand scan before recording it."
+                    : calibrationStage === "closed"
+                      ? "Touch the pads of your thumb and index finger. Calibration learns your pinch before gesture classification."
+                      : calibrationStage === "drawing_clutch"
+                        ? "Touch thumb and middle fingertip while keeping your index finger extended. The index remains the brush; this separate clutch only controls pen down."
+                        : "Your reach is frozen, so open and closed samples cannot shrink the usable canvas area."}
             </small>
+            {completedFirstHandProfile && otherHandTarget ? (
+              <small className="camera-calibration-hand-coverage" role="status">
+                {handCalibrationCoverageLabel(completedFirstHandProfile)}
+                {` · Now calibrating ${otherHandTarget} hand`}
+              </small>
+            ) : null}
           </div>
           {calibrationStage === "baseline" ? (
             <button
@@ -1340,8 +1843,7 @@ export function SpatialCameraControl({
               className="camera-calibration-primary"
               aria-label="Continue to open hand"
               disabled={
-                status.state !== "ready" ||
-                !calibrationCounts.reachReady
+                status.state !== "ready" || !calibrationCounts.reachReady
               }
               onClick={continueFromReach}
             >
@@ -1360,14 +1862,39 @@ export function SpatialCameraControl({
             >
               Next · close pinch
             </button>
+          ) : calibrationStage === "closed" &&
+            calibrationCounts.drawingOpen >= MIN_CALIBRATION_PINCH_SAMPLES ? (
+            <button
+              type="button"
+              className="camera-calibration-primary"
+              aria-label="Continue to drawing clutch"
+              disabled={
+                status.state !== "ready" || !calibrationCounts.closedReady
+              }
+              onClick={() => setCalibrationCaptureStage("drawing_clutch")}
+            >
+              Next · drawing clutch
+            </button>
           ) : calibrationStage === "closed" ? (
             <button
               type="button"
               className="camera-calibration-primary"
               aria-label="Review hand calibration"
               disabled={
+                status.state !== "ready" || !calibrationCounts.closedReady
+              }
+              onClick={() => setCalibrationCaptureStage("review")}
+            >
+              Review calibration
+            </button>
+          ) : calibrationStage === "drawing_clutch" ? (
+            <button
+              type="button"
+              className="camera-calibration-primary"
+              aria-label="Review hand calibration"
+              disabled={
                 status.state !== "ready" ||
-                !calibrationCounts.closedReady
+                !calibrationCounts.drawingClosedReady
               }
               onClick={() => setCalibrationCaptureStage("review")}
             >
@@ -1384,32 +1911,71 @@ export function SpatialCameraControl({
               Use calibration
             </button>
           )}
+          {calibrationStage === "drawing_clutch" ? (
+            <button
+              type="button"
+              className="camera-calibration-skip"
+              aria-label="Use provisional drawing clutch"
+              disabled={status.state !== "ready"}
+              onClick={() => setCalibrationCaptureStage("review")}
+            >
+              Use provisional drawing clutch
+            </button>
+          ) : null}
           {calibrationError ? (
             <p className="camera-error-detail" role="alert">
               {calibrationError}
             </p>
           ) : null}
           {calibrationStage === "review" ? (
+            <>
+              {calibrationCounts.drawingClosedReady &&
+              calibrationReliableIdentity !== null &&
+              completedFirstHandProfile === null ? (
+                <button
+                  type="button"
+                  className="camera-calibration-primary"
+                  aria-label="Calibrate other hand"
+                  disabled={status.state !== "ready"}
+                  onClick={calibrateOtherHand}
+                >
+                  Calibrate other hand
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="camera-calibration-restart"
+                aria-label="Restart hand calibration"
+                disabled={status.state !== "ready"}
+                onClick={resetCalibrationCapture}
+              >
+                Start over
+              </button>
+            </>
+          ) : null}
+          {completedFirstHandProfile ? (
             <button
               type="button"
-              className="camera-calibration-restart"
-              aria-label="Restart hand calibration"
+              className="camera-calibration-skip"
+              aria-label="Use first hand calibration"
               disabled={status.state !== "ready"}
-              onClick={resetCalibrationCapture}
+              onClick={returnToCanvas}
             >
-              Start over
+              Use first hand
             </button>
-          ) : null}
-          <button
-            type="button"
-            className="camera-calibration-skip"
-            aria-label="Skip hand calibration"
-            disabled={status.state !== "ready"}
-            onClick={skipCalibration}
-          >
-            Skip for now
-          </button>
-          {retainedCalibration || !onCalibrationResult ? (
+          ) : (
+            <button
+              type="button"
+              className="camera-calibration-skip"
+              aria-label="Skip hand calibration"
+              disabled={status.state !== "ready"}
+              onClick={skipCalibration}
+            >
+              Skip for now
+            </button>
+          )}
+          {completedFirstHandProfile === null &&
+          (retainedCalibration || !onCalibrationResult) ? (
             <button
               type="button"
               aria-label="Return to full canvas"
@@ -1422,22 +1988,32 @@ export function SpatialCameraControl({
         </div>
       ) : null}
       {retainedCalibration && retainedCalibrationKind && !previewExpanded ? (
-        <span className="camera-calibration-retained" role="status">
-          {retainedCalibrationKind === "skipped"
-            ? "Default controls · calibration skipped"
-            : "Calibrated for this camera session"}
-        </span>
+        <>
+          <span className="camera-calibration-retained" role="status">
+            {retainedCalibrationKind === "skipped"
+              ? "Default controls · calibration skipped · drawing clutch provisional"
+              : retainedCalibration.drawingClutchCalibrations?.length
+                ? "Calibrated for this camera session · drawing clutch measured for this hand"
+                : "Calibrated for this camera session · drawing clutch provisional"}
+          </span>
+          <span className="camera-calibration-hand-coverage">
+            {handCalibrationCoverageLabel(retainedCalibration)}
+          </span>
+        </>
       ) : null}
-      {engineStatus?.processingLocation === "private-relay" || privateGpuConsent ? (
+      {engineStatus?.processingLocation === "private-relay" ||
+      privateGpuConsent ? (
         <p>
           Bounded camera frames are uploaded only while hand input is active and
-          private GPU consent remains on. The relay reports semantic landmarks and
-          does not retain raw frames. Disable consent to close it immediately.
+          private GPU consent remains on. The relay reports semantic landmarks
+          and does not retain raw frames. Disable consent to close it
+          immediately.
         </p>
       ) : (
         <p>
           Camera frames stay in this browser. The active local hand-pose engine
-          downloads its model in your browser. Only semantic canvas commands are shared.
+          downloads its model in your browser. Only semantic canvas commands are
+          shared.
         </p>
       )}
       {status.state === "refused" || status.state === "unavailable" ? (
@@ -1524,6 +2100,45 @@ export function SpatialCameraControl({
   }
 }
 
+function oppositeHand(handedness: "left" | "right") {
+  return handedness === "left" ? ("right" as const) : ("left" as const);
+}
+
+function mergeHandCalibrationProfiles(
+  first: HandCalibrationProfile,
+  second: HandCalibrationProfile,
+): HandCalibrationProfile {
+  return {
+    ...first,
+    reachCalibrations: [
+      ...(first.reachCalibrations ?? []),
+      ...(second.reachCalibrations ?? []),
+    ],
+    pinchCalibrations: [
+      ...(first.pinchCalibrations ?? []),
+      ...(second.pinchCalibrations ?? []),
+    ],
+    drawingClutchCalibrations: [
+      ...(first.drawingClutchCalibrations ?? []),
+      ...(second.drawingClutchCalibrations ?? []),
+    ],
+  };
+}
+
+function handCalibrationCoverageLabel(profile: HandCalibrationProfile) {
+  return (["left", "right"] as const)
+    .map((handedness) => {
+      const pinchMeasured = profile.pinchCalibrations?.some(
+        (calibration) => calibration.handedness === handedness,
+      );
+      const drawingMeasured = profile.drawingClutchCalibrations?.some(
+        (calibration) => calibration.handedness === handedness,
+      );
+      return `${handedness[0]!.toUpperCase()}${handedness.slice(1)} hand: pinch ${pinchMeasured ? "measured" : "provisional"}, drawing clutch ${drawingMeasured ? "measured" : "provisional"}`;
+    })
+    .join(" · ");
+}
+
 function pinchThresholdSet(
   profile: HandCalibrationProfile,
 ): HandTrackingPinchThresholdSet {
@@ -1534,10 +2149,16 @@ function pinchThresholdSet(
     byTrackId: Object.fromEntries(
       calibrations.map((calibration) => [
         calibration.trackId,
-        resolvePinchThresholds({
-          pinchClosedRatio: calibration.closedRatio,
-          pinchOpenRatio: calibration.openRatio,
-        }),
+        {
+          ...resolvePinchThresholds({
+            pinchClosedRatio: calibration.closedRatio,
+            pinchOpenRatio: calibration.openRatio,
+          }),
+          handedness: calibration.handedness,
+          ...(calibration.handednessConfidence === undefined
+            ? {}
+            : { handednessConfidence: calibration.handednessConfidence }),
+        },
       ]),
     ),
     byHandedness: Object.fromEntries(
@@ -1556,14 +2177,6 @@ function pinchThresholdSet(
   };
 }
 
-function prefersCollapsedSensorPreview() {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(max-width: 720px)").matches
-  );
-}
-
 function sensorPipSafeBounds(
   workspace: DOMRect,
   dock: DOMRect | undefined,
@@ -1573,7 +2186,9 @@ function sensorPipSafeBounds(
   const inset = 8;
   const maxBottom = Math.min(
     workspace.bottom - inset,
-    dock && dock.top > workspace.top ? dock.top - inset : workspace.bottom - inset,
+    dock && dock.top > workspace.top
+      ? dock.top - inset
+      : workspace.bottom - inset,
   );
   return {
     left: workspace.left + inset,
@@ -1596,6 +2211,8 @@ function emptyCalibrationSamples(deviceKey: string): HandCalibrationSamples {
     reachSamples: [],
     closedPinchRatios: [],
     openPinchRatios: [],
+    closedDrawingClutchRatios: [],
+    openDrawingClutchRatios: [],
   };
 }
 
@@ -1640,6 +2257,30 @@ function normalizedCalibrationPinchRatio(
   }
 }
 
+function normalizedCalibrationDrawingClutchRatio(
+  measurements: HandTrackingSensorFrame["hands"][number]["measurements"],
+  openPalmSamples: readonly OpenPalmCalibrationSample[] | undefined,
+) {
+  if (!measurements.middleTip) return null;
+  const distance = Math.hypot(
+    measurements.middleTip.x - measurements.thumbTip.x,
+    measurements.middleTip.y - measurements.thumbTip.y,
+  );
+  const baseline = assessOpenPalmCalibrationBaseline(openPalmSamples ?? []);
+  try {
+    return normalizePinchDistance(
+      distance,
+      measurements.palmScale,
+      baseline.accepted ? baseline.baseline : null,
+    );
+  } catch {
+    const fallback = measurements.drawingClutchRatio;
+    return typeof fallback === "number" && Number.isFinite(fallback)
+      ? fallback
+      : null;
+  }
+}
+
 function appendRecentCalibrationSample<T>(
   samples: readonly T[],
   sample: T,
@@ -1658,8 +2299,7 @@ function isClearlyClosedPinch(
   if (openRatios.length < MIN_CALIBRATION_PINCH_SAMPLES) return false;
   const envelope = assessPinchCalibrationEnvelope([], openRatios);
   return (
-    envelope.maximumClosed !== null &&
-    pinchRatio <= envelope.maximumClosed
+    envelope.maximumClosed !== null && pinchRatio <= envelope.maximumClosed
   );
 }
 
@@ -1697,9 +2337,7 @@ function appendStableClosedPinchSample(
     (state.lastCapturedAt !== null &&
       evidence.capturedAt - state.lastCapturedAt >
         MAX_CLOSED_PINCH_SAMPLE_GAP_MS);
-  const previous = continuityBroken
-    ? emptyClosedPinchCaptureState()
-    : state;
+  const previous = continuityBroken ? emptyClosedPinchCaptureState() : state;
   const candidate = appendRecentCalibrationSample(
     previous.candidate,
     evidence,
@@ -1707,9 +2345,7 @@ function appendStableClosedPinchSample(
   );
   const acceptedMedian = samples.length > 0 ? medianRatio(samples) : null;
   const plateauDelta =
-    acceptedMedian === null
-      ? null
-      : Math.max(0.05, acceptedMedian * 0.12);
+    acceptedMedian === null ? null : Math.max(0.05, acceptedMedian * 0.12);
   const replacementPending =
     previous.replacementPending ||
     (acceptedMedian !== null &&
@@ -1723,8 +2359,7 @@ function appendStableClosedPinchSample(
     stable: false,
     replacementPending,
   };
-  const heldForMs =
-    evidence.capturedAt - candidate[0]!.capturedAt;
+  const heldForMs = evidence.capturedAt - candidate[0]!.capturedAt;
   if (
     candidate.length < MIN_CALIBRATION_PINCH_SAMPLES ||
     heldForMs < MIN_CLOSED_PINCH_HOLD_MS
@@ -1741,8 +2376,7 @@ function appendStableClosedPinchSample(
   const netDrift = Math.abs(ratios[ratios.length - 1]! - ratios[0]!);
   const maximumSpread = Math.max(0.06, Math.min(0.14, median * 0.35));
   const maximumNetDrift = Math.max(0.04, Math.min(0.08, median * 0.2));
-  const windowStable =
-    spread <= maximumSpread && netDrift <= maximumNetDrift;
+  const windowStable = spread <= maximumSpread && netDrift <= maximumNetDrift;
   if (!windowStable)
     return {
       samples,
@@ -1831,11 +2465,27 @@ function calibrationRefusalMessage(
 }
 
 const HAND_CONNECTIONS = [
-  [0, 1], [1, 2], [2, 3], [3, 4],
-  [0, 5], [5, 6], [6, 7], [7, 8],
-  [5, 9], [9, 10], [10, 11], [11, 12],
-  [9, 13], [13, 14], [14, 15], [15, 16],
-  [13, 17], [17, 18], [18, 19], [19, 20], [0, 17],
+  [0, 1],
+  [1, 2],
+  [2, 3],
+  [3, 4],
+  [0, 5],
+  [5, 6],
+  [6, 7],
+  [7, 8],
+  [5, 9],
+  [9, 10],
+  [10, 11],
+  [11, 12],
+  [9, 13],
+  [13, 14],
+  [14, 15],
+  [15, 16],
+  [13, 17],
+  [17, 18],
+  [18, 19],
+  [19, 20],
+  [0, 17],
 ] as const;
 
 function confidencePercent(confidence: number) {

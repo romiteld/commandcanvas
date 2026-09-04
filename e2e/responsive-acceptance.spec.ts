@@ -27,6 +27,19 @@ for (const viewport of supportedViewports) {
     await expectInViewport(workspaceCta, viewport);
     await expectNoHorizontalOverflow(page, viewport.label);
 
+    await page.goto("/demo", { waitUntil: "domcontentloaded" });
+    await expectNoHorizontalOverflow(page, `${viewport.label} demo entry`);
+    if (viewport.width >= 390 && viewport.height >= 844) {
+      const demoEntryHeight = await page.evaluate(() => ({
+        viewport: window.innerHeight,
+        document: document.documentElement.scrollHeight,
+      }));
+      expect(
+        demoEntryHeight.document,
+        `${viewport.label} demo entry should fit without incidental scrolling`,
+      ).toBeLessThanOrEqual(demoEntryHeight.viewport + 1);
+    }
+
     await page.goto("/local", { waitUntil: "domcontentloaded" });
     const shell = page.getByRole("main", { name: "Spatial command surface" });
     const canvas = page.getByRole("region", { name: "Infinite canvas" });
@@ -40,7 +53,11 @@ for (const viewport of supportedViewports) {
     const primaryDockButtons = dock.locator(".tool-dock-primary > button");
     await expect(primaryDockButtons).toHaveCount(5);
     for (let index = 0; index < 5; index += 1)
-      await expectMinimumTarget(primaryDockButtons.nth(index), 44, viewport.label);
+      await expectMinimumTarget(
+        primaryDockButtons.nth(index),
+        44,
+        viewport.label,
+      );
     await expectMinimumTarget(commandTrigger, 44, viewport.label);
 
     await page.getByRole("button", { name: "Open create menu" }).click();
@@ -48,19 +65,23 @@ for (const viewport of supportedViewports) {
     await expect(createNote).toBeVisible();
     await expectInViewport(createNote, viewport);
     await createNote.click();
-    await expect(page.getByRole("button", { name: "Select New thought" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Select New thought" }),
+    ).toBeVisible();
 
     const canvasBefore = await requiredBox(canvas, `${viewport.label} canvas`);
     await commandTrigger.click();
     await expect(
-      page.getByRole("complementary", { name: "ChatGPT command drawer" }),
+      page.getByRole("complementary", { name: "WebMCP activity and CommandCanvas Live Voice drawer" }),
     ).toBeVisible();
     expectBoxClose(
       await requiredBox(canvas, `${viewport.label} command-drawer canvas`),
       canvasBefore,
       `${viewport.label} command drawer`,
     );
-    await page.getByRole("button", { name: "Close ChatGPT command drawer" }).click();
+    await page
+      .getByRole("button", { name: "Close WebMCP activity and CommandCanvas Live Voice drawer" })
+      .click();
 
     await systemTrigger.click();
     await expect(
@@ -75,7 +96,10 @@ for (const viewport of supportedViewports) {
 
     if (viewport.width === 844 && viewport.height === 390) {
       const canvasBox = await requiredBox(canvas, "844x390 landscape canvas");
-      expect(canvasBox.height, "844x390 landscape canvas height").toBeGreaterThan(220);
+      expect(
+        canvasBox.height,
+        "844x390 landscape canvas height",
+      ).toBeGreaterThan(220);
       await expectInViewport(
         page.getByRole("button", { name: "Close system status drawer" }),
         viewport,
@@ -84,7 +108,9 @@ for (const viewport of supportedViewports) {
   });
 }
 
-test("covers the compact-control breakpoint edges", async ({ page }, testInfo) => {
+test("covers the compact-control breakpoint edges", async ({
+  page,
+}, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-desktop");
 
   for (const width of [481, 568, 767]) {
@@ -113,9 +139,11 @@ async function expectPersistentControlsInBoundsAndDisjoint(
 ) {
   const dock = page.getByRole("complementary", { name: "Object tools" });
   const commandTrigger = page.getByRole("button", {
-    name: "Open ChatGPT Site Tools and activity drawer",
+    name: "Open WebMCP agent activity",
   });
-  const systemTrigger = page.getByRole("button", { name: "Open system status" });
+  const systemTrigger = page.getByRole("button", {
+    name: "Open system status",
+  });
   const activityTrigger = page.getByRole("button", {
     name: "Open activity drawer",
     exact: true,
@@ -128,8 +156,7 @@ async function expectPersistentControlsInBoundsAndDisjoint(
   ] as const;
   const label = viewport.label ?? `${viewport.width}x${viewport.height}`;
 
-  for (const [, control] of controls)
-    await expectInViewport(control, viewport);
+  for (const [, control] of controls) await expectInViewport(control, viewport);
 
   for (let first = 0; first < controls.length; first += 1)
     for (let second = first + 1; second < controls.length; second += 1)
@@ -147,9 +174,10 @@ async function expectNoHorizontalOverflow(page: Page, label: string) {
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
   }));
-  expect(geometry.scrollWidth, `${label} horizontal overflow`).toBeLessThanOrEqual(
-    geometry.clientWidth + 1,
-  );
+  expect(
+    geometry.scrollWidth,
+    `${label} horizontal overflow`,
+  ).toBeLessThanOrEqual(geometry.clientWidth + 1);
 }
 
 async function expectViewportShell(
@@ -165,11 +193,15 @@ async function expectViewportShell(
     scrollY: window.scrollY,
   }));
   const shellBox = await requiredBox(shell, "workspace shell");
-  expect(Math.abs(shellBox.height - viewport.height), "workspace shell height").toBeLessThanOrEqual(1);
+  expect(
+    Math.abs(shellBox.height - viewport.height),
+    "workspace shell height",
+  ).toBeLessThanOrEqual(1);
   expect(shellBox.x, "workspace shell left edge").toBeGreaterThanOrEqual(0);
-  expect(shellBox.x + shellBox.width, "workspace shell right edge").toBeLessThanOrEqual(
-    viewport.width + 1,
-  );
+  expect(
+    shellBox.x + shellBox.width,
+    "workspace shell right edge",
+  ).toBeLessThanOrEqual(viewport.width + 1);
   expect(geometry.documentScrollHeight, "document height").toBeLessThanOrEqual(
     geometry.innerHeight + 1,
   );
@@ -177,7 +209,10 @@ async function expectViewportShell(
     geometry.innerHeight + 1,
   );
   expect({ x: geometry.scrollX, y: geometry.scrollY }).toEqual({ x: 0, y: 0 });
-  await expectNoHorizontalOverflow(page, `${viewport.width}x${viewport.height} workspace`);
+  await expectNoHorizontalOverflow(
+    page,
+    `${viewport.width}x${viewport.height} workspace`,
+  );
 }
 
 async function expectInViewport(
@@ -192,17 +227,31 @@ async function expectInViewport(
   expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 1);
 }
 
-async function expectMinimumTarget(locator: Locator, minimum: number, label: string) {
+async function expectMinimumTarget(
+  locator: Locator,
+  minimum: number,
+  label: string,
+) {
   const box = await requiredBox(locator, `${label} touch target`);
-  expect(box.width, `${label} touch target width`).toBeGreaterThanOrEqual(minimum);
-  expect(box.height, `${label} touch target height`).toBeGreaterThanOrEqual(minimum);
+  expect(box.width, `${label} touch target width`).toBeGreaterThanOrEqual(
+    minimum,
+  );
+  expect(box.height, `${label} touch target height`).toBeGreaterThanOrEqual(
+    minimum,
+  );
 }
 
 async function expectNoOverlap(first: Locator, second: Locator, label: string) {
   const a = await requiredBox(first, `${label} first control`);
   const b = await requiredBox(second, `${label} second control`);
-  const overlapWidth = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
-  const overlapHeight = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  const overlapWidth = Math.max(
+    0,
+    Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x),
+  );
+  const overlapHeight = Math.max(
+    0,
+    Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y),
+  );
   expect(overlapWidth * overlapHeight, `${label} overlap area`).toBe(0);
 }
 
@@ -218,5 +267,8 @@ function expectBoxClose(
   label: string,
 ) {
   for (const key of ["x", "y", "width", "height"] as const)
-    expect(Math.abs(actual[key] - expected[key]), `${label} ${key}`).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(actual[key] - expected[key]),
+      `${label} ${key}`,
+    ).toBeLessThanOrEqual(1);
 }

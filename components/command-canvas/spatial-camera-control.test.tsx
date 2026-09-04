@@ -135,6 +135,7 @@ function calibrationSensorFrame(
   landmarks = trackedLandmarks(),
   source: HandTrackingSensorFrame["source"] = "calibration-test",
   handednessConfidence: number | undefined = 0.97,
+  handedness: "left" | "right" | "unknown" = "right",
 ): HandTrackingSensorFrame {
   return {
     timestamp,
@@ -142,7 +143,7 @@ function calibrationSensorFrame(
     receivedAt: timestamp,
     hands: [
       {
-        handedness: "right",
+        handedness,
         ...(handednessConfidence === undefined ? {} : { handednessConfidence }),
         trackId,
         confidence: 0.97,
@@ -200,6 +201,160 @@ function calibrationObservation(
   };
 }
 
+function drawingCalibrationSensorFrame(
+  pointer: { x: number; y: number },
+  pinchRatio: number,
+  drawingClutchRatio: number,
+  timestamp: number,
+  trackId = "calibration-hand",
+  handedness: "left" | "right" | "unknown" = "right",
+  handednessConfidence: number | undefined = 0.97,
+): HandTrackingSensorFrame {
+  const frame = calibrationSensorFrame(
+    pointer,
+    pinchRatio,
+    timestamp,
+    trackId,
+    trackedLandmarks(),
+    "calibration-test",
+    handednessConfidence,
+    handedness,
+  );
+  const hand = frame.hands[0]!;
+  return {
+    ...frame,
+    hands: [
+      {
+        ...hand,
+        measurements: {
+          ...hand.measurements,
+          middleTip: {
+            x:
+              hand.measurements.thumbTip.x +
+              drawingClutchRatio * hand.measurements.palmScale,
+            y: pointer.y,
+          },
+          drawingClutchRatio,
+          middleTipConfidence: 0.94,
+        },
+      },
+    ],
+  };
+}
+
+async function completeMeasuredHandCalibrationToReview(
+  user: ReturnType<typeof userEvent.setup>,
+  fake: ReturnType<typeof fakeController>,
+  options: {
+    readonly startedAt: number;
+    readonly trackId: string;
+    readonly handedness: "left" | "right";
+    readonly openPinchRatio?: number;
+    readonly closedPinchRatio?: number;
+    readonly openDrawingClutchRatio?: number;
+    readonly closedDrawingClutchRatio?: number;
+  },
+) {
+  const {
+    startedAt,
+    trackId,
+    handedness,
+    openPinchRatio = 0.72,
+    closedPinchRatio = 0.22,
+    openDrawingClutchRatio = 0.82,
+    closedDrawingClutchRatio = 0.24,
+  } = options;
+  act(() => {
+    for (let sample = 0; sample < 6; sample += 1)
+      fake.emitSensor(
+        calibrationSensorFrame(
+          { x: 0.5 + (sample % 2) * 0.004, y: 0.5 },
+          openPinchRatio,
+          startedAt + sample * 16,
+          trackId,
+          openPalmLandmarks(),
+          "calibration-test",
+          0.97,
+          handedness,
+        ),
+      );
+  });
+  await user.click(
+    screen.getByRole("button", { name: "Continue to reach mapping" }),
+  );
+
+  const corners = [
+    { x: 0.36, y: 0.34 },
+    { x: 0.64, y: 0.34 },
+    { x: 0.36, y: 0.66 },
+    { x: 0.64, y: 0.66 },
+  ];
+  act(() => {
+    for (let sample = 0; sample < 12; sample += 1)
+      fake.emitSensor(
+        drawingCalibrationSensorFrame(
+          corners[sample % corners.length]!,
+          openPinchRatio,
+          openDrawingClutchRatio,
+          startedAt + 500 + sample * 16,
+          trackId,
+          handedness,
+        ),
+      );
+  });
+  await user.click(
+    screen.getByRole("button", { name: "Continue to open hand" }),
+  );
+  act(() => {
+    for (let sample = 0; sample < 8; sample += 1)
+      fake.emitSensor(
+        drawingCalibrationSensorFrame(
+          { x: 0.5, y: 0.5 },
+          openPinchRatio,
+          openDrawingClutchRatio,
+          startedAt + 1_000 + sample * 16,
+          trackId,
+          handedness,
+        ),
+      );
+  });
+  await user.click(
+    screen.getByRole("button", { name: "Continue to closed pinch" }),
+  );
+  act(() => {
+    for (let sample = 0; sample < 8; sample += 1)
+      fake.emitSensor(
+        drawingCalibrationSensorFrame(
+          { x: 0.5, y: 0.5 },
+          closedPinchRatio,
+          openDrawingClutchRatio,
+          startedAt + 1_500 + sample * 16,
+          trackId,
+          handedness,
+        ),
+      );
+  });
+  await user.click(
+    screen.getByRole("button", { name: "Continue to drawing clutch" }),
+  );
+  act(() => {
+    for (let sample = 0; sample < 8; sample += 1)
+      fake.emitSensor(
+        drawingCalibrationSensorFrame(
+          { x: 0.5, y: 0.5 },
+          openPinchRatio,
+          closedDrawingClutchRatio,
+          startedAt + 2_000 + sample * 16,
+          trackId,
+          handedness,
+        ),
+      );
+  });
+  await user.click(
+    screen.getByRole("button", { name: "Review hand calibration" }),
+  );
+}
+
 async function establishOpenPalmBaseline(
   user: ReturnType<typeof userEvent.setup>,
   fake: ReturnType<typeof fakeController>,
@@ -220,12 +375,7 @@ async function establishOpenPalmBaseline(
         ),
       );
       fake.emit(
-        calibrationObservation(
-          "open_palm",
-          pointer,
-          openPinchRatio,
-          timestamp,
-        ),
+        calibrationObservation("open_palm", pointer, openPinchRatio, timestamp),
       );
     }
   });
@@ -277,6 +427,36 @@ async function advanceToClosedPinch(
 }
 
 describe("SpatialCameraControl", () => {
+  it("keeps a legacy calibration profile and labels its drawing clutch provisional", () => {
+    const fake = fakeController();
+    render(
+      <SpatialCameraControl
+        calibrationKind="calibrated"
+        calibrationProfile={{
+          deviceKey: "legacy-camera",
+          cameraBounds: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+          safeCanvasInsetPx: 24,
+          pinchClosedRatio: 0.22,
+          pinchOpenRatio: 0.72,
+          mirrorX: true,
+          createdAt: 1,
+        }}
+        createController={() => fake.controller}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "Calibrated for this camera session · drawing clutch provisional",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        /left hand: pinch provisional, drawing clutch provisional.*right hand: pinch provisional, drawing clutch provisional/i,
+      ),
+    ).toBeVisible();
+  });
+
   it("requires a stable whole open hand before point reach and pinch calibration", async () => {
     const user = userEvent.setup();
     const fake = fakeController();
@@ -289,7 +469,9 @@ describe("SpatialCameraControl", () => {
     );
     act(() => fake.setStatus({ state: "ready" }));
 
-    expect(screen.getByText(/scanning open hand — 0\/6 stable frames/i)).toBeVisible();
+    expect(
+      screen.getByText(/scanning open hand — 0\/6 stable frames/i),
+    ).toBeVisible();
     const next = screen.getByRole("button", {
       name: "Continue to reach mapping",
     });
@@ -332,9 +514,11 @@ describe("SpatialCameraControl", () => {
           ),
         );
     });
-    expect(screen.getByText(/open-hand scan complete · 6 stable frames/i)).toBeVisible();
+    expect(
+      screen.getByText(/open-hand scan complete · 6 stable frames/i),
+    ).toBeVisible();
     await user.click(next);
-    expect(screen.getByText(/2 of 4 · map comfortable reach/i)).toBeVisible();
+    expect(screen.getByText(/2 of 5 · map comfortable reach/i)).toBeVisible();
   });
 
   it("counts a co-emitted raw and semantic baseline inference only once", () => {
@@ -364,9 +548,7 @@ describe("SpatialCameraControl", () => {
             openPalmLandmarks(),
           ),
         );
-        fake.emit(
-          calibrationObservation("open_palm", pointer, 0.7, timestamp),
-        );
+        fake.emit(calibrationObservation("open_palm", pointer, 0.7, timestamp));
       }
     });
     expect(next).toBeDisabled();
@@ -384,12 +566,67 @@ describe("SpatialCameraControl", () => {
             openPalmLandmarks(),
           ),
         );
-        fake.emit(
-          calibrationObservation("open_palm", pointer, 0.7, timestamp),
-        );
+        fake.emit(calibrationObservation("open_palm", pointer, 0.7, timestamp));
       }
     });
     expect(next).toBeEnabled();
+  });
+
+  it("does not mix calibration evidence from a reliably different hand", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        onCalibrationOpenChange={() => undefined}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await establishOpenPalmBaseline(user, fake, 4_800);
+
+    const corners = [
+      { x: 0.36, y: 0.34 },
+      { x: 0.64, y: 0.34 },
+      { x: 0.36, y: 0.66 },
+      { x: 0.64, y: 0.66 },
+    ];
+    act(() => {
+      for (let sample = 0; sample < 12; sample += 1) {
+        const otherHand = calibrationSensorFrame(
+          corners[sample % corners.length]!,
+          0.7,
+          5_000 + sample * 16,
+          "different-hand",
+        );
+        fake.emitSensor({
+          ...otherHand,
+          hands: [{ ...otherHand.hands[0]!, handedness: "left" }],
+        });
+      }
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Continue to open hand" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText(/2 of 5 · map comfortable reach · 0 samples/i),
+    ).toBeVisible();
+
+    act(() => {
+      for (let sample = 0; sample < 12; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            corners[sample % corners.length]!,
+            0.7,
+            5_500 + sample * 16,
+            "calibration-hand",
+          ),
+        );
+    });
+    expect(
+      screen.getByRole("button", { name: "Continue to open hand" }),
+    ).toBeEnabled();
   });
 
   it("requires a visible opt-in before the private GPU controller can observe upload consent", async () => {
@@ -412,14 +649,20 @@ describe("SpatialCameraControl", () => {
       name: "Use private GPU hand tracking",
     });
     expect(consent).not.toBeChecked();
-    expect(createController.mock.calls[0]?.[0]?.cameraUploadConsent()).toBe(false);
+    expect(createController.mock.calls[0]?.[0]?.cameraUploadConsent()).toBe(
+      false,
+    );
     expect(fake.controller.start).not.toHaveBeenCalled();
 
     await user.click(consent);
     expect(consent).toBeChecked();
-    expect(createController.mock.calls[0]?.[0]?.cameraUploadConsent()).toBe(true);
+    expect(createController.mock.calls[0]?.[0]?.cameraUploadConsent()).toBe(
+      true,
+    );
     expect(
-      screen.getByText(/bounded camera frames are uploaded only while hand input is active/i),
+      screen.getByText(
+        /bounded camera frames are uploaded only while hand input is active/i,
+      ),
     ).toBeVisible();
   });
 
@@ -465,7 +708,9 @@ describe("SpatialCameraControl", () => {
     expect(fake.controller.stop).toHaveBeenCalledTimes(2);
     expect(fake.controller.start).toHaveBeenCalledTimes(3);
     act(() => fake.setStatus({ state: "starting" }));
-    expect(await screen.findByText("Starting local hand tracking…")).toBeVisible();
+    expect(
+      await screen.findByText("Starting local hand tracking…"),
+    ).toBeVisible();
   });
 
   it("stops an active camera exactly once when pagehide and visibility cleanup overlap", async () => {
@@ -491,6 +736,219 @@ describe("SpatialCameraControl", () => {
       configurable: true,
       value: "visible",
     });
+  });
+
+  it("resumes an active hand session after hidden to visible and restores canvas observations", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    const onObservation = vi.fn();
+    render(
+      <SpatialCameraControl
+        createController={() => fake.controller}
+        onObservation={onObservation}
+      />,
+    );
+
+    try {
+      await user.click(
+        screen.getByRole("button", { name: "Enable hand input" }),
+      );
+      act(() => fake.setStatus({ state: "ready" }));
+      act(() =>
+        fake.emit({
+          mode: "point",
+          pointer: { x: 0.25, y: 0.4 },
+          confidence: 0.96,
+          timestamp: 1_000,
+        }),
+      );
+      expect(onObservation).toHaveBeenCalledOnce();
+
+      act(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        fake.setStatus({ state: "off" });
+      });
+      expect(fake.controller.stop).toHaveBeenCalledOnce();
+
+      act(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(fake.controller.start).toHaveBeenCalledTimes(2);
+
+      act(() => fake.setStatus({ state: "ready" }));
+      act(() =>
+        fake.emit({
+          mode: "point",
+          pointer: { x: 0.7, y: 0.55 },
+          confidence: 0.97,
+          timestamp: 2_000,
+        }),
+      );
+      expect(onObservation).toHaveBeenCalledTimes(2);
+      expect(onObservation).toHaveBeenLastCalledWith(
+        expect.objectContaining({ timestamp: 2_000 }),
+      );
+    } finally {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+    }
+  });
+
+  it("coalesces overlapping mobile lifecycle events into one stop and one restart", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    render(<SpatialCameraControl createController={() => fake.controller} />);
+
+    try {
+      await user.click(
+        screen.getByRole("button", { name: "Enable hand input" }),
+      );
+      act(() => fake.setStatus({ state: "ready" }));
+
+      act(() => {
+        window.dispatchEvent(new Event("pagehide"));
+        window.dispatchEvent(new Event("pagehide"));
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        fake.setStatus({ state: "off" });
+      });
+      expect(fake.controller.stop).toHaveBeenCalledOnce();
+
+      act(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        window.dispatchEvent(new Event("pageshow"));
+        fake.setStatus({ state: "starting" });
+        document.dispatchEvent(new Event("visibilitychange"));
+        window.dispatchEvent(new Event("pageshow"));
+        window.dispatchEvent(new Event("pageshow"));
+      });
+
+      expect(fake.controller.start).toHaveBeenCalledTimes(2);
+      expect(fake.controller.stop).toHaveBeenCalledOnce();
+    } finally {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+    }
+  });
+
+  it("does not reopen the camera after the user explicitly disables hand input", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController();
+    render(<SpatialCameraControl createController={() => fake.controller} />);
+
+    try {
+      await user.click(
+        screen.getByRole("button", { name: "Enable hand input" }),
+      );
+      act(() => fake.setStatus({ state: "ready" }));
+      await user.click(
+        screen.getByRole("button", { name: "Disable hand input" }),
+      );
+      act(() => fake.setStatus({ state: "off" }));
+
+      act(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        window.dispatchEvent(new Event("pagehide"));
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        window.dispatchEvent(new Event("pageshow"));
+      });
+
+      expect(fake.controller.start).toHaveBeenCalledOnce();
+      expect(fake.controller.stop).toHaveBeenCalledOnce();
+    } finally {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+    }
+  });
+
+  it("makes the mobile sensor preview visible after lifecycle recovery", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(max-width: 720px)",
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(() => true),
+      })),
+    );
+    const user = userEvent.setup();
+    const fake = fakeController();
+    const { container } = render(
+      <SpatialCameraControl createController={() => fake.controller} />,
+    );
+
+    try {
+      await user.click(
+        screen.getByRole("button", { name: "Enable hand input" }),
+      );
+      act(() => fake.setStatus({ state: "ready" }));
+      await user.click(
+        screen.getByRole("button", { name: "Hide hand sensor preview" }),
+      );
+      expect(container.querySelector(".spatial-camera-control")).toHaveClass(
+        "is-sensor-pip-hidden",
+      );
+
+      act(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        fake.setStatus({ state: "off" });
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        fake.setStatus({ state: "ready" });
+      });
+
+      expect(
+        container.querySelector(".spatial-camera-control"),
+      ).not.toHaveClass("is-sensor-pip-hidden");
+      expect(
+        screen.getByRole("button", { name: "Hide hand sensor preview" }),
+      ).toBeVisible();
+    } finally {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+      vi.unstubAllGlobals();
+    }
   });
 
   it("labels the actual private relay provider, device, processing latency, and transit latency", async () => {
@@ -548,16 +1006,22 @@ describe("SpatialCameraControl", () => {
     await user.click(
       screen.getByRole("button", { name: "Show hand tracking details" }),
     );
-    expect(screen.getByText("Provider CUDA · NVIDIA GeForce RTX 3090 Ti")).toBeVisible();
     expect(
-      screen.getByText("24 ms GPU processing · 61 ms capture/result round trip"),
+      screen.getByText("Provider CUDA · NVIDIA GeForce RTX 3090 Ti"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "24 ms GPU processing · 61 ms capture/result round trip",
+      ),
     ).toBeVisible();
     expect(
       screen.getByText(
         "8 ms encode · 42 ms relay round trip · dropped 2 raw / 0 encoded",
       ),
     ).toBeVisible();
-    expect(screen.queryByText(/high-performance webgpu adapter requested/i)).toBeNull();
+    expect(
+      screen.queryByText(/high-performance webgpu adapter requested/i),
+    ).toBeNull();
   });
 
   it("enters spatial control automatically after the one required permission action", async () => {
@@ -631,9 +1095,7 @@ describe("SpatialCameraControl", () => {
   it("keeps camera off until an explicit click and explains local processing", async () => {
     const user = userEvent.setup();
     const fake = fakeController();
-    render(
-      <SpatialCameraControl createController={() => fake.controller} />,
-    );
+    render(<SpatialCameraControl createController={() => fake.controller} />);
 
     expect(
       screen.getByText(
@@ -667,7 +1129,9 @@ describe("SpatialCameraControl", () => {
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
 
     act(() => fake.setStatus({ state: "ready" }));
-    expect(await screen.findByText("Hand input ready · local only")).toBeVisible();
+    expect(
+      await screen.findByText("Hand input ready · local only"),
+    ).toBeVisible();
     expect(screen.queryByText(/hand detected/i)).toBeNull();
 
     fake.emit({
@@ -681,7 +1145,9 @@ describe("SpatialCameraControl", () => {
       expect.objectContaining({ mode: "pinch" }),
     );
 
-    await user.click(screen.getByRole("button", { name: "Disable hand input" }));
+    await user.click(
+      screen.getByRole("button", { name: "Disable hand input" }),
+    );
     expect(fake.controller.stop).toHaveBeenCalledOnce();
   });
 
@@ -768,7 +1234,9 @@ describe("SpatialCameraControl", () => {
     });
 
     expect(
-      await screen.findByText("YOLO26 · WebGPU · 24.1 Hz · p95 71 ms · dropped 2"),
+      await screen.findByText(
+        "YOLO26 · WebGPU · 24.1 Hz · p95 71 ms · dropped 2",
+      ),
     ).toBeVisible();
     await vi.waitFor(() =>
       expect(fake.controller.acknowledgeRendered).toHaveBeenCalledWith(333),
@@ -808,7 +1276,9 @@ describe("SpatialCameraControl", () => {
     });
 
     expect(
-      await screen.findByText("YOLO26 · WebGPU · 24.1 Hz · p95 71 ms · dropped 0"),
+      await screen.findByText(
+        "YOLO26 · WebGPU · 24.1 Hz · p95 71 ms · dropped 0",
+      ),
     ).toBeVisible();
     const disclosure = screen.getByRole("button", {
       name: "Show hand tracking details",
@@ -858,9 +1328,7 @@ describe("SpatialCameraControl", () => {
       screen.getByText("High-performance WebGPU adapter requested"),
     ).toBeVisible();
     expect(
-      screen.getByText(
-        "WebGPU fallback · WebGPU did not return a GPU adapter",
-      ),
+      screen.getByText("WebGPU fallback · WebGPU did not return a GPU adapter"),
     ).toBeVisible();
     expect(screen.queryByText(/3090/i)).toBeNull();
   });
@@ -960,7 +1428,9 @@ describe("SpatialCameraControl", () => {
     ).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Calibration view only")).toBeVisible();
     expect(
-      screen.getByText("Return to the canvas to move, draw, resize, or throw objects."),
+      screen.getByText(
+        "Return to the canvas to move, draw, resize, or throw objects.",
+      ),
     ).toBeVisible();
 
     act(() =>
@@ -974,11 +1444,13 @@ describe("SpatialCameraControl", () => {
         timestamp: 1_000,
       }),
     );
-    expect(container.querySelectorAll("[data-tracked-hand-pointer]")).toHaveLength(
-      1,
-    );
+    expect(
+      container.querySelectorAll("[data-tracked-hand-pointer]"),
+    ).toHaveLength(1);
     expect(container.querySelectorAll("[data-hand-keypoint]")).toHaveLength(21);
-    expect(container.querySelectorAll("[data-hand-connection]")).toHaveLength(21);
+    expect(container.querySelectorAll("[data-hand-connection]")).toHaveLength(
+      21,
+    );
     await user.click(
       screen.getByRole("button", { name: "Show hand tracking details" }),
     );
@@ -1022,13 +1494,19 @@ describe("SpatialCameraControl", () => {
     );
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => fake.setStatus({ state: "ready" }));
-    await user.click(screen.getByRole("button", { name: "Open hand calibration" }));
+    await user.click(
+      screen.getByRole("button", { name: "Open hand calibration" }),
+    );
 
     expect(container.querySelector(".spatial-camera-control")).toHaveClass(
       "is-calibrating-full-canvas",
     );
-    await user.click(screen.getByRole("button", { name: "Return to full canvas" }));
-    const control = container.querySelector<HTMLElement>(".spatial-camera-control");
+    await user.click(
+      screen.getByRole("button", { name: "Return to full canvas" }),
+    );
+    const control = container.querySelector<HTMLElement>(
+      ".spatial-camera-control",
+    );
     expect(control).toHaveClass("is-sensor-pip");
 
     act(() =>
@@ -1064,19 +1542,73 @@ describe("SpatialCameraControl", () => {
       height: 200,
       toJSON: () => ({}),
     });
-    const drag = screen.getByRole("button", { name: "Move hand sensor preview" });
+    const drag = screen.getByRole("button", {
+      name: "Move hand sensor preview",
+    });
     fireEvent.pointerDown(drag, { pointerId: 8, clientX: 40, clientY: 40 });
     fireEvent.pointerMove(drag, { pointerId: 8, clientX: 100, clientY: 120 });
     fireEvent.pointerUp(drag, { pointerId: 8, clientX: 100, clientY: 120 });
     expect(control?.style.getPropertyValue("--sensor-pip-x")).toBe("60px");
     expect(control?.style.getPropertyValue("--sensor-pip-y")).toBe("80px");
 
-    await user.click(screen.getByRole("button", { name: "Hide hand sensor preview" }));
+    await user.click(
+      screen.getByRole("button", { name: "Hide hand sensor preview" }),
+    );
     expect(control).toHaveClass("is-sensor-pip-hidden");
-    expect(screen.getByRole("button", { name: "Show hand sensor preview" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Show hand sensor preview" }),
+    ).toBeVisible();
   });
 
-  it("starts the mobile sensor PiP collapsed after calibration", async () => {
+  it("renders both raw sensor hands in the PiP even when semantic arbitration emits one", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    const { container } = render(
+      <SpatialCameraControl createController={() => fake.controller} />,
+    );
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => fake.setStatus({ state: "ready" }));
+    const left = calibrationSensorFrame(
+      { x: 0.3, y: 0.4 },
+      0.7,
+      4_200,
+      "left-track",
+      trackedLandmarks(),
+      "sensor-test",
+      0.99,
+      "left",
+    );
+    const right = calibrationSensorFrame(
+      { x: 0.7, y: 0.4 },
+      0.7,
+      4_200,
+      "right-track",
+      trackedLandmarks(),
+      "sensor-test",
+      0.99,
+      "right",
+    );
+
+    act(() => {
+      fake.emit({
+        mode: "point",
+        pointer: { x: 0.3, y: 0.4 },
+        confidence: 0.97,
+        trackId: "left-track",
+        landmarks: trackedLandmarks(),
+        timestamp: 4_200,
+      });
+      fake.emitSensor({
+        ...left,
+        hands: [left.hands[0]!, right.hands[0]!],
+      });
+    });
+
+    expect(container.querySelectorAll("[data-hand-skeleton]")).toHaveLength(2);
+    expect(container.querySelectorAll("[data-hand-keypoint]")).toHaveLength(42);
+  });
+
+  it("keeps the mobile sensor PiP visible after calibration and lets the user hide it", async () => {
     vi.stubGlobal(
       "matchMedia",
       vi.fn((query: string) => ({
@@ -1097,9 +1629,20 @@ describe("SpatialCameraControl", () => {
         <SpatialCameraControl createController={() => fake.controller} />,
       );
 
-      await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+      await user.click(
+        screen.getByRole("button", { name: "Enable hand input" }),
+      );
       act(() => fake.setStatus({ state: "ready" }));
 
+      expect(
+        container.querySelector(".spatial-camera-control"),
+      ).not.toHaveClass("is-sensor-pip-hidden");
+      expect(
+        screen.getByRole("button", { name: "Hide hand sensor preview" }),
+      ).toBeVisible();
+      await user.click(
+        screen.getByRole("button", { name: "Hide hand sensor preview" }),
+      );
       expect(container.querySelector(".spatial-camera-control")).toHaveClass(
         "is-sensor-pip-hidden",
       );
@@ -1183,7 +1726,462 @@ describe("SpatialCameraControl", () => {
         pinchOpenRatio: 0.72,
       },
     });
-    expect(screen.getByText(/calibrated for this camera session/i)).toBeVisible();
+    expect(
+      screen.getByText(/calibrated for this camera session/i),
+    ).toBeVisible();
+  });
+
+  it("calibrates thumb-middle drawing clutch separately from thumb-index pinch", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    const results: SpatialCalibrationResult[] = [];
+    const view = render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        calibrationDeviceKey="drawing-camera"
+        onCalibrationOpenChange={() => undefined}
+        onCalibrationResult={(result) => results.push(result)}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await establishOpenPalmBaseline(user, fake, 70_000);
+
+    const corners = [
+      { x: 0.36, y: 0.34 },
+      { x: 0.64, y: 0.34 },
+      { x: 0.36, y: 0.66 },
+      { x: 0.64, y: 0.66 },
+    ];
+    act(() => {
+      for (let sample = 0; sample < 12; sample += 1)
+        fake.emitSensor(
+          drawingCalibrationSensorFrame(
+            corners[sample % corners.length]!,
+            0.7,
+            0.82,
+            71_000 + sample * 16,
+          ),
+        );
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Continue to open hand" }),
+    );
+    act(() => {
+      for (let sample = 0; sample < 8; sample += 1)
+        fake.emitSensor(
+          drawingCalibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.72,
+            0.82,
+            72_000 + sample * 16,
+          ),
+        );
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Continue to closed pinch" }),
+    );
+    act(() => {
+      for (let sample = 0; sample < 8; sample += 1)
+        fake.emitSensor(
+          drawingCalibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.22,
+            0.82,
+            73_000 + sample * 16,
+          ),
+        );
+    });
+
+    expect(
+      screen.queryByRole("button", { name: "Review hand calibration" }),
+    ).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Continue to drawing clutch" }),
+    );
+    expect(
+      screen.getByText(/touch thumb and middle.*index finger extended/i),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Use provisional drawing clutch" }),
+    ).toBeVisible();
+    act(() => {
+      for (let sample = 0; sample < 8; sample += 1)
+        fake.emitSensor(
+          drawingCalibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.72,
+            0.24,
+            74_000 + sample * 16,
+          ),
+        );
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Review hand calibration" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Use hand calibration" }),
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      accepted: true,
+      profile: {
+        pinchClosedRatio: 0.22,
+        pinchOpenRatio: 0.72,
+        drawingClutchCalibrations: [
+          {
+            trackId: "calibration-hand",
+            handedness: "right",
+            closedRatio: 0.24,
+            openRatio: 0.82,
+            openSampleCount: 8,
+            closedSampleCount: 8,
+          },
+        ],
+      },
+    });
+    view.rerender(
+      <SpatialCameraControl
+        calibrationOpen={false}
+        createController={() => fake.controller}
+        calibrationDeviceKey="drawing-camera"
+        onCalibrationOpenChange={() => undefined}
+        onCalibrationResult={(result) => results.push(result)}
+      />,
+    );
+    expect(
+      screen.getByText(
+        /calibrated for this camera session.*drawing clutch measured for this hand/i,
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        /left hand: pinch provisional, drawing clutch provisional.*right hand: pinch measured, drawing clutch measured/i,
+      ),
+    ).toBeVisible();
+  });
+
+  it("offers other-hand calibration without removing single-hand acceptance", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        calibrationDeviceKey="two-hand-camera"
+        onCalibrationOpenChange={() => undefined}
+        onCalibrationResult={() => undefined}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await completeMeasuredHandCalibrationToReview(user, fake, {
+      startedAt: 80_000,
+      trackId: "right-hand-track",
+      handedness: "right",
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Use hand calibration" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Calibrate other hand" }),
+    ).toBeEnabled();
+  });
+
+  it("starts an independent pass and refuses to count the already measured hand", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    const results: SpatialCalibrationResult[] = [];
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        calibrationDeviceKey="two-hand-camera"
+        onCalibrationOpenChange={() => undefined}
+        onCalibrationResult={(result) => results.push(result)}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await completeMeasuredHandCalibrationToReview(user, fake, {
+      startedAt: 90_000,
+      trackId: "right-hand-track",
+      handedness: "right",
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: "Calibrate other hand" }),
+    );
+    // The public completion callback retains its existing once-per-accepted-flow
+    // semantics. The first hand is retained internally until the user accepts
+    // the final one- or two-hand profile.
+    expect(results).toHaveLength(0);
+    expect(
+      screen.getByText(/right hand: pinch measured, drawing clutch measured/i),
+    ).toBeVisible();
+    expect(screen.getByText(/1 of 5 · scanning open hand/i)).toBeVisible();
+
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5 + (sample % 2) * 0.004, y: 0.5 },
+            0.72,
+            93_000 + sample * 16,
+            "right-hand-reacquired",
+            openPalmLandmarks(),
+            "calibration-test",
+            0.99,
+            "right",
+          ),
+        );
+    });
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5 + (sample % 2) * 0.004, y: 0.5 },
+            0.72,
+            94_000 + sample * 16,
+            "right-hand-track",
+            openPalmLandmarks(),
+            "calibration-test",
+            0.99,
+            "left",
+          ),
+        );
+    });
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1)
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5 + (sample % 2) * 0.004, y: 0.5 },
+            0.72,
+            95_000 + sample * 16,
+            "unreliable-left-track",
+            openPalmLandmarks(),
+            "calibration-test",
+            0.42,
+            "left",
+          ),
+        );
+    });
+
+    expect(screen.getByText(/scanning open hand — 0\/6/i)).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /show your other hand.*left/i,
+    );
+  });
+
+  it("accepts one unambiguous opposite hand while the completed hand remains visible", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        calibrationDeviceKey="two-hand-camera"
+        onCalibrationOpenChange={() => undefined}
+        onCalibrationResult={() => undefined}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await completeMeasuredHandCalibrationToReview(user, fake, {
+      startedAt: 96_000,
+      trackId: "right-hand-track",
+      handedness: "right",
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Calibrate other hand" }),
+    );
+
+    act(() => {
+      for (let sample = 0; sample < 6; sample += 1) {
+        const completed = calibrationSensorFrame(
+          { x: 0.64, y: 0.5 },
+          0.72,
+          99_000 + sample * 16,
+          "right-hand-track",
+          openPalmLandmarks(),
+          "calibration-test",
+          0.99,
+          "right",
+        );
+        const opposite = calibrationSensorFrame(
+          { x: 0.36 + (sample % 2) * 0.004, y: 0.5 },
+          0.72,
+          99_000 + sample * 16,
+          "left-hand-track",
+          openPalmLandmarks(),
+          "calibration-test",
+          0.99,
+          "left",
+        );
+        fake.emitSensor({
+          ...opposite,
+          hands: [completed.hands[0]!, opposite.hands[0]!],
+        });
+      }
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Continue to reach mapping" }),
+    ).toBeEnabled();
+    expect(screen.getByText(/open-hand scan complete · 6 stable frames/i)).toBeVisible();
+  });
+
+  it("merges independently measured opposite-hand pinch and drawing calibration", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    const results: SpatialCalibrationResult[] = [];
+    const renderControl = (calibrationOpen: boolean) => (
+      <SpatialCameraControl
+        calibrationOpen={calibrationOpen}
+        createController={() => fake.controller}
+        calibrationDeviceKey="two-hand-camera"
+        onCalibrationOpenChange={() => undefined}
+        onCalibrationResult={(result) => results.push(result)}
+      />
+    );
+    const view = render(renderControl(true));
+    act(() => fake.setStatus({ state: "ready" }));
+    await completeMeasuredHandCalibrationToReview(user, fake, {
+      startedAt: 100_000,
+      trackId: "right-hand-track",
+      handedness: "right",
+      openPinchRatio: 0.72,
+      closedPinchRatio: 0.22,
+      openDrawingClutchRatio: 0.82,
+      closedDrawingClutchRatio: 0.24,
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Calibrate other hand" }),
+    );
+    await completeMeasuredHandCalibrationToReview(user, fake, {
+      startedAt: 110_000,
+      trackId: "left-hand-track",
+      handedness: "left",
+      openPinchRatio: 0.76,
+      closedPinchRatio: 0.26,
+      openDrawingClutchRatio: 0.86,
+      closedDrawingClutchRatio: 0.28,
+    });
+    act(() =>
+      fake.emitSensor(
+        calibrationSensorFrame(
+          { x: 0.5, y: 0.5 },
+          0.76,
+          113_000,
+          "left-hand-track",
+          trackedLandmarks(),
+          "calibration-test",
+          0.99,
+          "right",
+        ),
+      ),
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Calibrate other hand" }),
+    ).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Use hand calibration" }),
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      accepted: true,
+      profile: {
+        pinchClosedRatio: 0.22,
+        pinchOpenRatio: 0.72,
+        pinchCalibrations: [
+          {
+            trackId: "right-hand-track",
+            handedness: "right",
+            closedRatio: 0.22,
+            openRatio: 0.72,
+          },
+          {
+            trackId: "left-hand-track",
+            handedness: "left",
+            closedRatio: 0.26,
+            openRatio: 0.76,
+          },
+        ],
+        drawingClutchCalibrations: [
+          {
+            trackId: "right-hand-track",
+            handedness: "right",
+            closedRatio: 0.24,
+            openRatio: 0.82,
+          },
+          {
+            trackId: "left-hand-track",
+            handedness: "left",
+            closedRatio: 0.28,
+            openRatio: 0.86,
+          },
+        ],
+        reachCalibrations: [
+          {
+            trackId: "right-hand-track",
+            handedness: "right",
+            cameraBounds: expect.any(Object),
+          },
+          {
+            trackId: "left-hand-track",
+            handedness: "left",
+            cameraBounds: expect.any(Object),
+          },
+        ],
+      },
+    });
+    view.rerender(renderControl(false));
+    expect(
+      screen.getByText(
+        /left hand: pinch measured, drawing clutch measured.*right hand: pinch measured, drawing clutch measured/i,
+      ),
+    ).toBeVisible();
+  });
+
+  it("keeps the accepted first hand when the optional second pass is abandoned", async () => {
+    const user = userEvent.setup();
+    const fake = fakeController({ sensorFrames: true });
+    const results: SpatialCalibrationResult[] = [];
+    render(
+      <SpatialCameraControl
+        calibrationOpen
+        createController={() => fake.controller}
+        calibrationDeviceKey="two-hand-camera"
+        onCalibrationOpenChange={() => undefined}
+        onCalibrationResult={(result) => results.push(result)}
+      />,
+    );
+    act(() => fake.setStatus({ state: "ready" }));
+    await completeMeasuredHandCalibrationToReview(user, fake, {
+      startedAt: 120_000,
+      trackId: "right-hand-track",
+      handedness: "right",
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Calibrate other hand" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Use first hand calibration" }),
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      accepted: true,
+      profile: {
+        pinchCalibrations: [
+          { trackId: "right-hand-track", handedness: "right" },
+        ],
+        drawingClutchCalibrations: [
+          { trackId: "right-hand-track", handedness: "right" },
+        ],
+      },
+    });
   });
 
   it("rejects inadequate reach before asking for pinch poses", async () => {
@@ -1213,7 +2211,7 @@ describe("SpatialCameraControl", () => {
       name: "Continue to open hand",
     });
     expect(continueToOpen).toBeDisabled();
-    expect(screen.getByText(/2 of 4 · map comfortable reach/i)).toBeVisible();
+    expect(screen.getByText(/2 of 5 · map comfortable reach/i)).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "Continue to closed pinch" }),
     ).toBeNull();
@@ -1261,7 +2259,11 @@ describe("SpatialCameraControl", () => {
     act(() => {
       for (let sample = 0; sample < 16; sample += 1)
         fake.emitSensor(
-          calibrationSensorFrame(corners[sample % corners.length]!, 0.7, 20_000 + sample * 16),
+          calibrationSensorFrame(
+            corners[sample % corners.length]!,
+            0.7,
+            20_000 + sample * 16,
+          ),
         );
     });
     await user.click(
@@ -1281,7 +2283,11 @@ describe("SpatialCameraControl", () => {
     act(() => {
       for (let sample = 0; sample < 40; sample += 1)
         fake.emitSensor(
-          calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.34, 22_000 + sample * 16),
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.34,
+            22_000 + sample * 16,
+          ),
         );
     });
     await user.click(
@@ -1303,13 +2309,20 @@ describe("SpatialCameraControl", () => {
     expect(fake.controller.setPinchThresholds).toHaveBeenCalledWith({
       fallback: { engage: 0.43, release: 0.556 },
       byTrackId: {
-        "calibration-hand": { engage: 0.43, release: 0.556 },
+        "calibration-hand": {
+          engage: 0.43,
+          release: 0.556,
+          handedness: "right",
+          handednessConfidence: 0.97,
+        },
       },
       byHandedness: {
         right: { engage: 0.43, release: 0.556 },
       },
     });
-    expect(screen.getByText(/calibrated for this camera session/i)).toBeVisible();
+    expect(
+      screen.getByText(/calibrated for this camera session/i),
+    ).toBeVisible();
   });
 
   it("does not learn a closed hand as the open-pinch calibration", async () => {
@@ -1351,11 +2364,7 @@ describe("SpatialCameraControl", () => {
     act(() => {
       for (let sample = 0; sample < 6; sample += 1)
         fake.emitSensor(
-          calibrationSensorFrame(
-            { x: 0.5, y: 0.5 },
-            2.4,
-            21_500 + sample * 16,
-          ),
+          calibrationSensorFrame({ x: 0.5, y: 0.5 }, 2.4, 21_500 + sample * 16),
         );
     });
     expect(continueToClosed).toBeDisabled();
@@ -1375,11 +2384,7 @@ describe("SpatialCameraControl", () => {
     act(() => {
       for (let sample = 0; sample < 6; sample += 1)
         fake.emitSensor(
-          calibrationSensorFrame(
-            { x: 0.5, y: 0.5 },
-            0.7,
-            23_000 + sample * 16,
-          ),
+          calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.7, 23_000 + sample * 16),
         );
     });
     expect(continueToClosed).toBeEnabled();
@@ -1454,19 +2459,33 @@ describe("SpatialCameraControl", () => {
     act(() => {
       for (let sample = 0; sample < 12; sample += 1)
         fake.emitSensor(
-          calibrationSensorFrame(corners[sample % corners.length]!, 0.7, 23_000 + sample * 16),
+          calibrationSensorFrame(
+            corners[sample % corners.length]!,
+            0.7,
+            23_000 + sample * 16,
+          ),
         );
     });
-    await user.click(screen.getByRole("button", { name: "Continue to open hand" }));
+    await user.click(
+      screen.getByRole("button", { name: "Continue to open hand" }),
+    );
     act(() => {
       for (let sample = 0; sample < 6; sample += 1)
-        fake.emitSensor(calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.7, 24_000 + sample * 16));
+        fake.emitSensor(
+          calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.7, 24_000 + sample * 16),
+        );
     });
-    await user.click(screen.getByRole("button", { name: "Continue to closed pinch" }));
+    await user.click(
+      screen.getByRole("button", { name: "Continue to closed pinch" }),
+    );
     act(() => {
       [0.63, 0.6, 0.57, 0.54, 0.51, 0.48].forEach((ratio, sample) =>
         fake.emitSensor(
-          calibrationSensorFrame({ x: 0.5, y: 0.5 }, ratio, 25_000 + sample * 16),
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            ratio,
+            25_000 + sample * 16,
+          ),
         ),
       );
     });
@@ -1476,7 +2495,13 @@ describe("SpatialCameraControl", () => {
     ).toBeDisabled();
     act(() => {
       for (let sample = 0; sample < 6; sample += 1)
-        fake.emitSensor(calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.34, 26_000 + sample * 16));
+        fake.emitSensor(
+          calibrationSensorFrame(
+            { x: 0.5, y: 0.5 },
+            0.34,
+            26_000 + sample * 16,
+          ),
+        );
     });
     expect(
       screen.getByRole("button", { name: "Review hand calibration" }),
@@ -1589,7 +2614,7 @@ describe("SpatialCameraControl", () => {
       ),
     );
 
-    expect(screen.getByText(/1 of 4 · scanning open hand/i)).toBeVisible();
+    expect(screen.getByText(/1 of 5 · scanning open hand/i)).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent(
       /hand tracking switched engines/i,
     );
@@ -1629,9 +2654,7 @@ describe("SpatialCameraControl", () => {
     expect(review).toBeEnabled();
 
     act(() =>
-      fake.emitSensor(
-        calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.34, 40_000),
-      ),
+      fake.emitSensor(calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.34, 40_000)),
     );
     expect(review).toBeDisabled();
     act(() => {
@@ -1693,9 +2716,7 @@ describe("SpatialCameraControl", () => {
     expect(review).toBeEnabled();
 
     act(() =>
-      fake.emitSensor(
-        calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.7, 46_900),
-      ),
+      fake.emitSensor(calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.7, 46_900)),
     );
     expect(review).toBeEnabled();
   });
@@ -1721,11 +2742,7 @@ describe("SpatialCameraControl", () => {
     act(() => {
       for (let sample = 0; sample < 6; sample += 1)
         fake.emitSensor(
-          calibrationSensorFrame(
-            { x: 0.5, y: 0.5 },
-            0.5,
-            42_500 + sample * 16,
-          ),
+          calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.5, 42_500 + sample * 16),
         );
     });
     expect(
@@ -1841,11 +2858,7 @@ describe("SpatialCameraControl", () => {
     act(() => {
       for (let sample = 0; sample < 6; sample += 1)
         fake.emitSensor(
-          calibrationSensorFrame(
-            { x: 0.5, y: 0.5 },
-            0.7,
-            32_000 + sample * 16,
-          ),
+          calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.7, 32_000 + sample * 16),
         );
     });
     await user.click(
@@ -1880,7 +2893,9 @@ describe("SpatialCameraControl", () => {
     );
     await user.click(screen.getByRole("button", { name: "Enable hand input" }));
     act(() => fake.setStatus({ state: "ready" }));
-    await user.click(screen.getByRole("button", { name: "Skip hand calibration" }));
+    await user.click(
+      screen.getByRole("button", { name: "Skip hand calibration" }),
+    );
 
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ accepted: false, reason: "skipped" });
@@ -1892,8 +2907,12 @@ describe("SpatialCameraControl", () => {
         onCalibrationResult={(result) => results.push(result)}
       />,
     );
-    expect(screen.getByText(/default controls · calibration skipped/i)).toBeVisible();
-    expect(screen.queryByText(/calibrated for this camera session/i)).toBeNull();
+    expect(
+      screen.getByText(/default controls · calibration skipped/i),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/calibrated for this camera session/i),
+    ).toBeNull();
   });
 
   it("clears personalized pinch thresholds when the retained profile is removed", () => {
@@ -1957,7 +2976,11 @@ describe("SpatialCameraControl", () => {
     expect(fake.controller.setPinchThresholds).toHaveBeenCalledWith({
       fallback: { engage: 0.4, release: 0.54 },
       byTrackId: {
-        "expired-track": { engage: 0.415, release: 0.548 },
+        "expired-track": {
+          engage: 0.415,
+          release: 0.548,
+          handedness: "right",
+        },
       },
       byHandedness: {},
     });
@@ -1992,9 +3015,13 @@ describe("SpatialCameraControl", () => {
       screen.getByRole("button", { name: "Continue to open hand" }),
     ).toBeDisabled();
     expect(
-      screen.getByText(/next step unlocks when the comfortable area is wide enough/i),
+      screen.getByText(
+        /next step unlocks when the comfortable area is wide enough/i,
+      ),
     ).toBeVisible();
-    expect(screen.queryByText(/calibrated for this camera session/i)).toBeNull();
+    expect(
+      screen.queryByText(/calibrated for this camera session/i),
+    ).toBeNull();
   });
 
   it("resets every sample when controlled calibration is reopened", async () => {
@@ -2019,7 +3046,9 @@ describe("SpatialCameraControl", () => {
           ),
         );
     });
-    expect(screen.getByText(/map comfortable reach · 12 samples/i)).toBeVisible();
+    expect(
+      screen.getByText(/map comfortable reach · 12 samples/i),
+    ).toBeVisible();
 
     view.rerender(
       <SpatialCameraControl
@@ -2036,8 +3065,12 @@ describe("SpatialCameraControl", () => {
       />,
     );
 
-    expect(screen.getByText(/scanning open hand — 0\/6 stable frames/i)).toBeVisible();
-    expect(screen.getByText(/0 baseline · 0 reach · 0 open · 0 closed/i)).toBeVisible();
+    expect(
+      screen.getByText(/scanning open hand — 0\/6 stable frames/i),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/0 baseline · 0 reach · 0 open · 0 closed/i),
+    ).toBeVisible();
   });
 
   it("reacquires the only visible hand instead of freezing calibration on an expired track", async () => {
@@ -2079,7 +3112,9 @@ describe("SpatialCameraControl", () => {
         );
     });
 
-    expect(screen.getByText(/map comfortable reach · 12 samples/i)).toBeVisible();
+    expect(
+      screen.getByText(/map comfortable reach · 12 samples/i),
+    ).toBeVisible();
   });
 
   it("clears stale calibration landmarks when the detector reports no hand", () => {
@@ -2102,7 +3137,9 @@ describe("SpatialCameraControl", () => {
       });
       fake.emitSensor(calibrationSensorFrame({ x: 0.5, y: 0.5 }, 0.7, 60_000));
     });
-    expect(container.querySelectorAll("[data-tracked-hand-pointer]")).toHaveLength(1);
+    expect(
+      container.querySelectorAll("[data-tracked-hand-pointer]"),
+    ).toHaveLength(1);
 
     act(() =>
       fake.emitSensor({
@@ -2113,7 +3150,9 @@ describe("SpatialCameraControl", () => {
       }),
     );
 
-    expect(container.querySelectorAll("[data-tracked-hand-pointer]")).toHaveLength(0);
+    expect(
+      container.querySelectorAll("[data-tracked-hand-pointer]"),
+    ).toHaveLength(0);
     expect(container.querySelectorAll("[data-hand-keypoint]")).toHaveLength(0);
   });
 
@@ -2160,7 +3199,9 @@ describe("SpatialCameraControl", () => {
           x: 0.16 + (sample % 20) * 0.034,
           y: 0.14 + (sample % 18) * 0.04,
         };
-        fake.emit(calibrationObservation("point", pointer, 0.72, 6_000 + sample * 16));
+        fake.emit(
+          calibrationObservation("point", pointer, 0.72, 6_000 + sample * 16),
+        );
       }
     });
     await user.click(
@@ -2172,7 +3213,9 @@ describe("SpatialCameraControl", () => {
           x: 0.16 + (sample % 20) * 0.034,
           y: 0.14 + (sample % 18) * 0.04,
         };
-        fake.emit(calibrationObservation("point", pointer, 0.72, 12_000 + sample * 16));
+        fake.emit(
+          calibrationObservation("point", pointer, 0.72, 12_000 + sample * 16),
+        );
       }
     });
     await user.click(
@@ -2184,11 +3227,15 @@ describe("SpatialCameraControl", () => {
           x: 0.16 + (sample % 20) * 0.034,
           y: 0.14 + (sample % 18) * 0.04,
         };
-        fake.emit(calibrationObservation("pinch", pointer, 0.22, 18_000 + sample * 16));
+        fake.emit(
+          calibrationObservation("pinch", pointer, 0.22, 18_000 + sample * 16),
+        );
       }
     });
 
-    expect(screen.getByText(/240 reach · 120 open · 120 closed/i)).toBeVisible();
+    expect(
+      screen.getByText(/240 reach · 120 open · 120 closed/i),
+    ).toBeVisible();
   });
 
   it("clamps extreme PiP drags to the mobile workspace and dock on every side", async () => {
@@ -2197,7 +3244,9 @@ describe("SpatialCameraControl", () => {
       <SpatialCameraControl createController={() => fake.controller} />,
     );
     act(() => fake.setStatus({ state: "ready" }));
-    const control = container.querySelector<HTMLElement>(".spatial-camera-control");
+    const control = container.querySelector<HTMLElement>(
+      ".spatial-camera-control",
+    );
     if (!control) throw new Error("Expected hand input control.");
     const workspace = control.parentElement as HTMLElement;
     const dock = document.createElement("div");
@@ -2247,7 +3296,9 @@ describe("SpatialCameraControl", () => {
       };
     });
 
-    const drag = screen.getByRole("button", { name: "Move hand sensor preview" });
+    const drag = screen.getByRole("button", {
+      name: "Move hand sensor preview",
+    });
     const move = (pointerId: number, x: number, y: number) => {
       fireEvent.pointerDown(drag, { pointerId, clientX: 100, clientY: 100 });
       fireEvent.pointerMove(drag, { pointerId, clientX: x, clientY: y });
@@ -2339,7 +3390,10 @@ describe("SpatialCameraControl", () => {
 
   it.each([
     [
-      { state: "refused", message: "Camera permission was not granted." } as const,
+      {
+        state: "refused",
+        message: "Camera permission was not granted.",
+      } as const,
       "Camera permission refused · pointer active",
     ],
     [

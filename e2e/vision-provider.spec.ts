@@ -60,13 +60,13 @@ test("rasterizes a pointer sketch for real vision and preserves it beside the st
     });
     roomId = await roomCapture.resolveRoomId();
     await page
-      .getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" })
+      .getByRole("button", { name: "Open WebMCP agent activity" })
       .click();
     await page
       .getByLabel("Your OpenAI API key")
       .fill(providerOpenAiKey!);
     await page
-      .getByRole("button", { name: "Close ChatGPT command drawer" })
+      .getByRole("button", { name: "Close WebMCP activity and CommandCanvas Live Voice drawer" })
       .click();
     await createArchitectureSketch(page);
 

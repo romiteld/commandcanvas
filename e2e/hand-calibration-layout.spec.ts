@@ -192,7 +192,7 @@ test("uses a large mobile calibration surface then returns to a hideable PiP", a
   expect(geometry.scrollWidth).toBe(geometry.clientWidth);
   expect(geometry.videoObjectFit).toBe("contain");
   expect(geometry.boundaryCount).toBe(0);
-  await expect(page.getByText(/1 of 4 · scanning open hand/i)).toBeVisible();
+  await expect(page.getByText(/1 of 5 · scanning open hand/i)).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Continue to reach mapping" }),
   ).toBeDisabled();
@@ -236,17 +236,63 @@ test("uses a large mobile calibration surface then returns to a hideable PiP", a
   await page.setViewportSize({ width: 390, height: 844 });
 
   await page.getByRole("button", { name: "Skip hand calibration" }).click();
-  await expect(page.getByText("Default controls · calibration skipped")).toHaveCount(1);
-  await expect(page.getByText("Calibrated for this camera session")).toHaveCount(0);
+  await expect(
+    page.getByText(
+      "Default controls · calibration skipped · drawing clutch provisional",
+    ),
+  ).toHaveCount(1);
+  await expect(
+    page.getByText(/Calibrated for this camera session/),
+  ).toHaveCount(0);
   const sensor = page.locator(".spatial-camera-control");
   await expect(sensor).toHaveClass(/is-sensor-pip/);
-  await expect(sensor).toHaveClass(/is-sensor-pip-hidden/);
+  await expect(sensor).not.toHaveClass(/is-sensor-pip-hidden/);
   const sensorBox = await sensor.boundingBox();
   if (!sensorBox) throw new Error("The hand sensor PiP geometry is unavailable.");
   expect(sensorBox.width).toBeLessThanOrEqual(300);
   expect(sensorBox.height).toBeLessThan(viewport.height * 0.55);
   await expect(page.getByRole("region", { name: "Hand interaction controls" })).toBeVisible();
 
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page
+    .getByRole("button", { name: "Draw with index finger" })
+    .click();
+  const drawToolbar = page.getByRole("region", {
+    name: "Hand interaction controls",
+  });
+  await expect(
+    page.getByText(
+      "Index aims · touch thumb + middle to draw · separate to lift",
+    ),
+  ).toBeVisible();
+  const drawToolbarBounds = await drawToolbar.boundingBox();
+  const drawViewport = page.viewportSize();
+  if (!drawToolbarBounds || !drawViewport)
+    throw new Error("The compact Draw toolbar geometry is unavailable.");
+  expect(drawToolbarBounds.x).toBeGreaterThanOrEqual(0);
+  expect(drawToolbarBounds.y).toBeGreaterThanOrEqual(0);
+  expect(drawToolbarBounds.x + drawToolbarBounds.width).toBeLessThanOrEqual(
+    drawViewport.width,
+  );
+  expect(drawToolbarBounds.y + drawToolbarBounds.height).toBeLessThanOrEqual(
+    drawViewport.height,
+  );
+  const drawGeometry = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(drawGeometry.scrollWidth).toBe(drawGeometry.clientWidth);
+  await page.getByRole("button", { name: "Cancel hand sketch" }).click();
+
+  const hideControl = await sensor
+    .getByRole("button", { name: "Hide hand sensor preview" })
+    .boundingBox();
+  if (!hideControl) throw new Error("Hide hand sensor preview geometry is unavailable.");
+  expect(hideControl.width).toBeGreaterThanOrEqual(44);
+  expect(hideControl.height).toBeGreaterThanOrEqual(44);
+
+  await page.getByRole("button", { name: "Hide hand sensor preview" }).click();
+  await expect(sensor).toHaveClass(/is-sensor-pip-hidden/);
   const showControl = await sensor
     .getByRole("button", { name: "Show hand sensor preview" })
     .boundingBox();
@@ -256,7 +302,11 @@ test("uses a large mobile calibration surface then returns to a hideable PiP", a
 
   await page.getByRole("button", { name: "Show hand sensor preview" }).click();
   await expect(sensor).not.toHaveClass(/is-sensor-pip-hidden/);
-  await expect(page.getByText("Default controls · calibration skipped")).toBeVisible();
+  await expect(
+    page.getByText(
+      "Default controls · calibration skipped · drawing clutch provisional",
+    ),
+  ).toBeVisible();
   for (const accessibleName of [
     "Move hand sensor preview",
     "Hide hand sensor preview",
@@ -273,6 +323,68 @@ test("uses a large mobile calibration surface then returns to a hideable PiP", a
 
   await page.getByRole("button", { name: "Hide hand sensor preview" }).click();
   await expect(sensor).toHaveClass(/is-sensor-pip-hidden/);
+});
+
+test("recovers active mobile hand input after the page returns to the foreground", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-mobile");
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/local", { waitUntil: "domcontentloaded" });
+  await page.getByRole("region", { name: "Infinite canvas" }).waitFor();
+
+  const handInput = page.getByRole("region", {
+    name: "Hand input",
+    exact: true,
+  });
+  await handInput
+    .getByRole("button", { name: "Enable hand input" })
+    .click();
+  await expect(
+    handInput.getByText("Hand input ready · local only", { exact: true }),
+  ).toBeVisible({ timeout: 60_000 });
+  await handInput
+    .getByRole("button", { name: "Skip hand calibration" })
+    .click();
+  await expect(handInput).toHaveClass(/is-sensor-pip/);
+  await expect(handInput).not.toHaveClass(/is-sensor-pip-hidden/);
+
+  await page.evaluate(() => {
+    const state = { value: "visible" as DocumentVisibilityState };
+    Object.defineProperty(window, "__commandCanvasTestVisibility", {
+      configurable: true,
+      value: state,
+    });
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => state.value,
+    });
+    state.value = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(
+    handInput.getByRole("button", { name: "Enable hand input" }),
+  ).toBeVisible();
+
+  await page.evaluate(() => {
+    const state = (
+      window as typeof window & {
+        __commandCanvasTestVisibility: { value: DocumentVisibilityState };
+      }
+    ).__commandCanvasTestVisibility;
+    state.value = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("pageshow"));
+  });
+
+  await expect(
+    handInput.getByText("Hand input ready · local only", { exact: true }),
+  ).toBeVisible({ timeout: 60_000 });
+  await expect(
+    handInput.getByRole("button", { name: "Disable hand input" }),
+  ).toBeVisible();
+  await expect(handInput).not.toHaveClass(/is-sensor-pip-hidden/);
 });
 
 test("keeps desktop calibration bounded over a visible canvas", async ({

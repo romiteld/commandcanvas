@@ -5,13 +5,15 @@ import { describe, expect, it, vi } from "vitest";
 import { deliverMeetingInvitation } from "@/lib/supabase/invitation-email";
 
 const TOKEN = "a".repeat(43);
+const EXPECTED_JOIN_URL =
+  "https://commandcanvas.example/meet#invite=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const input = {
   idempotencyKey:
     "commandcanvas:invite:33333333-3333-4333-8333-333333333333",
   recipientEmail: "sarah@example.com",
   recipientName: "Sarah",
   roomName: "Product review",
-  joinUrl: `https://commandcanvas.example/meet#invite=${TOKEN}`,
+  joinUrl: EXPECTED_JOIN_URL,
   expiresAt: "2026-08-29T12:00:00.000Z",
 };
 
@@ -63,8 +65,16 @@ describe("meeting invitation delivery", () => {
     const body = JSON.parse(fetcher.mock.calls[0]![1]!.body as string);
     expect(body.to).toEqual(["sarah@example.com"]);
     expect(body.html).toContain(
-      `https://commandcanvas.example/meet#invite=${TOKEN}`,
+      EXPECTED_JOIN_URL,
     );
+    expect(body.text).toBe(`Hi Sarah,
+
+You were invited to the Product review CommandCanvas meeting.
+
+Verify your email and join the room:
+${EXPECTED_JOIN_URL}
+
+This invitation expires Sat, 29 Aug 2026 12:00:00 GMT.`);
     expect(body.subject).toBe("Join Product review in CommandCanvas");
   });
 

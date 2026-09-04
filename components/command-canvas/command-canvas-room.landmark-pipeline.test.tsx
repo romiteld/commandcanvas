@@ -19,7 +19,7 @@ import type {
   HandTrackingWorkerOutboundMessage,
 } from "@/lib/gesture/hand-tracking-worker-core";
 
-type LandmarkMode = "point" | "pinch" | "neutral";
+type LandmarkMode = "point" | "draw" | "pinch" | "neutral";
 
 class TestLandmarkWorker implements HandTrackingWorkerLike {
   onmessage:
@@ -158,6 +158,90 @@ beforeEach(() => {
 });
 
 describe("production landmark frames through the canonical room pipeline", () => {
+  it("explains the virtual pen clutch in Draw mode", async () => {
+    const user = userEvent.setup();
+    const source = createTestLandmarkFrameSource();
+    const store = createCanvasStore("room-draw-clutch-copy", storeDependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => source.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await startCalibratedHandInput(user);
+
+    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+
+    expect(
+      screen.getByText(
+        "Index aims · touch thumb + middle to draw · separate to lift",
+      ),
+    ).toBeVisible();
+  });
+
+  it("keeps raw landmark feedback pen-up until the clutch confirms drawing and releases", async () => {
+    const user = userEvent.setup();
+    const source = createTestLandmarkFrameSource();
+    const store = createCanvasStore("room-draw-clutch-feedback", storeDependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => source.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await startCalibratedHandInput(user);
+    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+
+    act(() => {
+      source.emit({
+        x: 0.3,
+        y: 0.3,
+        gain: "draw",
+        mode: "point",
+        timestamp: 1_000,
+      });
+    });
+    expect(screen.getByText("HOVER · CLUTCH TO DRAW")).toBeVisible();
+
+    act(() => {
+      source.emit({
+        x: 0.34,
+        y: 0.34,
+        gain: "draw",
+        mode: "draw",
+        timestamp: 1_016,
+      });
+      source.emit({
+        x: 0.38,
+        y: 0.38,
+        gain: "draw",
+        mode: "draw",
+        timestamp: 1_032,
+      });
+    });
+    expect(screen.getByText("DRAWING")).toBeVisible();
+
+    act(() => {
+      source.emit({
+        x: 0.42,
+        y: 0.42,
+        gain: "draw",
+        mode: "point",
+        timestamp: 1_048,
+      });
+      source.emit({
+        x: 0.46,
+        y: 0.46,
+        gain: "draw",
+        mode: "point",
+        timestamp: 1_064,
+      });
+    });
+    expect(screen.getByText("HOVER · CLUTCH TO DRAW")).toBeVisible();
+  });
+
   it("threads explicit Draw mode to relaxed index-led raw landmark interpretation", async () => {
     const user = userEvent.setup();
     const source = createTestLandmarkFrameSource();
@@ -177,15 +261,23 @@ describe("production landmark frames through the canonical room pipeline", () =>
         x: 0.3,
         y: 0.3,
         gain: "draw",
-        mode: "point",
+        mode: "draw",
         timestamp: 1_050,
+        supportVisibility: 0.2,
+      });
+      source.emit({
+        x: 0.35,
+        y: 0.35,
+        gain: "draw",
+        mode: "draw",
+        timestamp: 1_058,
         supportVisibility: 0.2,
       });
       source.emit({
         x: 0.4,
         y: 0.4,
         gain: "draw",
-        mode: "point",
+        mode: "draw",
         timestamp: 1_066,
         supportVisibility: 0.2,
       });
@@ -199,7 +291,7 @@ describe("production landmark frames through the canonical room pipeline", () =>
       });
     });
 
-    expect(source.observations).toEqual(["point", "point", "idle"]);
+    expect(source.observations).toEqual(["point", "point", "point", "idle"]);
     expect(screen.getByText("1 stroke ready")).toBeVisible();
     expect(screen.queryByRole("complementary", { name: /drawer/i })).toBeNull();
   });
@@ -227,14 +319,21 @@ describe("production landmark frames through the canonical room pipeline", () =>
           x: 0.2 + stroke * 0.08,
           y: 0.25 + stroke * 0.04,
           gain: "draw",
-          mode: "point",
+          mode: "draw",
           timestamp,
+        });
+        source.emit({
+          x: 0.23 + stroke * 0.08,
+          y: 0.285 + stroke * 0.04,
+          gain: "draw",
+          mode: "draw",
+          timestamp: timestamp + 8,
         });
         source.emit({
           x: 0.26 + stroke * 0.08,
           y: 0.32 + stroke * 0.04,
           gain: "draw",
-          mode: "point",
+          mode: "draw",
           timestamp: timestamp + 16,
         });
         source.emit({
@@ -250,10 +349,13 @@ describe("production landmark frames through the canonical room pipeline", () =>
     expect(source.observations).toEqual([
       "point",
       "point",
+      "point",
       "idle",
       "point",
       "point",
+      "point",
       "idle",
+      "point",
       "point",
       "point",
       "idle",
@@ -357,7 +459,9 @@ function productionLandmarks(
   points[17] = { x: 0.42, y: 0.65, z: 0, visibility: 0.99 };
   points[18] = { x: 0.4, y: 0.72, z: 0, visibility: 0.99 };
   points[20] = { x: 0.37, y: 0.79, z: 0, visibility: 0.99 };
-  for (const index of [10, 12, 14, 16, 18, 20] as const)
+  // The drawing clutch needs reliable thumb/middle tips even when the other
+  // curled support fingers are intentionally low-confidence.
+  for (const index of [10, 14, 16, 18, 20] as const)
     points[index] = { ...points[index], visibility: supportVisibility };
 
   const cameraX = inverseFallbackAxis(canvasX, 1_000, gain, 0.15, 0.7);
@@ -385,6 +489,13 @@ function productionLandmarks(
   points[4] =
     mode === "pinch"
       ? { x: rawIndex.x + 0.008, y: rawIndex.y, z: 0, visibility: 0.99 }
+      : mode === "draw"
+        ? {
+            x: points[12].x + 0.008,
+            y: points[12].y,
+            z: 0,
+            visibility: 0.99,
+          }
       : {
           x: rawIndex.x - 0.2,
           y: rawIndex.y,

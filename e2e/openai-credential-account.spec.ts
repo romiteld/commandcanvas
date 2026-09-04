@@ -81,7 +81,7 @@ test.describe("verified account OpenAI credential", () => {
         timeout: 20_000,
       });
       await page
-        .getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" })
+        .getByRole("button", { name: "Open WebMCP agent activity" })
         .click();
       const keyInput = page.getByLabel("Your OpenAI API key");
       await expect(keyInput).toBeVisible();
@@ -117,7 +117,7 @@ test.describe("verified account OpenAI credential", () => {
         timeout: 20_000,
       });
       await page
-        .getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" })
+        .getByRole("button", { name: "Open WebMCP agent activity" })
         .click();
       await expect(
         page.getByText("Saved to your CommandCanvas account"),

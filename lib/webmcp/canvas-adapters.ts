@@ -28,7 +28,7 @@ import type {
 // room member and retain `webmcp` as the interaction source.
 const WEBMCP_AGENT = {
   id: "agent-site-tools",
-  displayName: "Site Tools agent",
+  displayName: "WebMCP agent",
   type: "agent" as const,
 };
 
@@ -74,6 +74,7 @@ export function createCanvasWebMcpAdapters(
             {
               type: "object.transform",
               objectId: request.input.objectId,
+              expectedVersion: request.input.expectedVersion,
               transform: request.input.transform,
             },
             request.signal,
@@ -85,6 +86,7 @@ export function createCanvasWebMcpAdapters(
             {
               type: "object.set_flags",
               objectId: request.input.objectId,
+              expectedVersion: request.input.expectedVersion,
               flags: request.input.state,
             },
             request.signal,
@@ -96,6 +98,7 @@ export function createCanvasWebMcpAdapters(
             {
               type: "object.discard",
               objectId: request.input.objectId,
+              expectedVersion: request.input.expectedVersion,
             },
             request.signal,
             capabilitySource(request),
@@ -107,6 +110,7 @@ export function createCanvasWebMcpAdapters(
                 {
                   type: "objects.group",
                   objectIds: request.input.objectIds,
+                  expectedVersions: request.input.expectedVersions,
                   frame: {
                     id: request.input.frame.id,
                     type: "frame",
@@ -127,6 +131,7 @@ export function createCanvasWebMcpAdapters(
                 {
                   type: "objects.ungroup",
                   frameId: request.input.frameId,
+                  expectedVersion: request.input.expectedVersion,
                 },
                 request.signal,
                 capabilitySource(request),
@@ -170,12 +175,11 @@ function createSemanticObject(
 ): Promise<WebMcpToolResult> | WebMcpToolResult {
   const state = options.store.getState();
   const input = request.input as
-    | SemanticCanvasObjectInput
-    | { object: NewCanvasObject };
+    SemanticCanvasObjectInput | { object: NewCanvasObject };
   if ("object" in input)
-    return executeMutation(
+    return createAndSelectAgentObject(
       options,
-      { type: "object.create", object: input.object },
+      input.object,
       request.signal,
       capabilitySource(request),
     );
@@ -211,19 +215,65 @@ function createSemanticObject(
       };
   }
 
-  return executeMutation(
+  return createAndSelectAgentObject(
     options,
-    {
-      type: "object.create",
-      object: buildSemanticCanvasObject(input, {
-        viewport: state.viewport,
-        objects: state.canvas.objects,
-        selectedObjectId: state.selectedObjectId,
-      }),
-    },
+    buildSemanticCanvasObject(input, {
+      viewport: state.viewport,
+      objects: state.canvas.objects,
+      selectedObjectId: state.selectedObjectId,
+    }),
     request.signal,
     capabilitySource(request),
   );
+}
+
+async function createAndSelectAgentObject(
+  options: CanvasWebMcpAdapterOptions,
+  object: NewCanvasObject,
+  signal: AbortSignal,
+  source: "webmcp" | "voice",
+): Promise<WebMcpToolResult> {
+  const selectionAtSubmission = options.store.getState().selectedObjectId;
+  const result = await executeMutation(
+    options,
+    { type: "object.create", object },
+    signal,
+    source,
+  );
+  if (!result.ok) return result;
+
+  const resultData =
+    result.data &&
+    typeof result.data === "object" &&
+    !Array.isArray(result.data)
+      ? result.data
+      : {};
+  const affectedObjectIds = Array.isArray(resultData.affectedObjectIds)
+    ? resultData.affectedObjectIds.filter(
+        (candidate): candidate is string => typeof candidate === "string",
+      )
+    : [];
+  if (affectedObjectIds.length !== 1 || affectedObjectIds[0] !== object.id)
+    return {
+      ok: false,
+      code: "execution_failed",
+      message: "The canvas did not confirm the exact created object.",
+    };
+
+  const latest = options.store.getState();
+  const confirmed = latest.canvas.objects[object.id];
+
+  // A network-backed create can finish after the person has deliberately
+  // selected something else.  Stable-ID follow-ups do not need selection, so
+  // preserve that newer human choice instead of snapping the UI back.
+  if (
+    confirmed &&
+    !confirmed.deletedAt &&
+    confirmed.type === object.type &&
+    latest.selectedObjectId === selectionAtSubmission
+  )
+    latest.selectObject(confirmed.id);
+  return { ...result, data: { ...resultData, objectId: object.id } };
 }
 
 function appendObjectContent(
@@ -414,10 +464,10 @@ function commandFailure(error: CommandError): WebMcpToolFailure {
     error.code === "NOTHING_TO_UNDO" || error.code === "NOTHING_TO_REDO"
       ? "not_available"
       : error.code === "INVALID_COMMAND"
-      ? "invalid_input"
-      : error.code === "OBJECT_PINNED"
-        ? "forbidden"
-        : "execution_failed";
+        ? "invalid_input"
+        : error.code === "OBJECT_PINNED"
+          ? "forbidden"
+          : "execution_failed";
   return { ok: false, code, message: error.message };
 }
 

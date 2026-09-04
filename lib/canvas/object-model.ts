@@ -11,6 +11,7 @@ const widthSchema = z.number().finite().min(160).max(2_000);
 const heightSchema = z.number().finite().min(80).max(1_400);
 const zIndexSchema = z.number().int().min(0).max(100_000);
 const rotationSchema = z.number().finite().min(-180).max(180);
+const objectVersionSchema = z.number().int().min(1).max(1_000_000_000);
 const safeHttpUrlSchema = z
   .url()
   .max(2_048)
@@ -113,11 +114,192 @@ const sketchStrokeSchema = z
   })
   .strict();
 
+const normalizedSketchPointSchema = z
+  .object({
+    x: z.number().finite().min(0).max(1),
+    y: z.number().finite().min(0).max(1),
+  })
+  .strict();
+
+const sketchStrokeSampleSchema = z
+  .object({
+    strokeId: objectIdSchema,
+    handTrackId: z.string().trim().min(1).max(128),
+    timestampMs: z.number().finite().nonnegative(),
+    sampleKind: z.enum([
+      "measured",
+      "short-gap predicted",
+      "interpolated",
+    ]),
+    rawIndexTip: normalizedSketchPointSchema,
+    filteredIndexTip: normalizedSketchPointSchema,
+    renderedPoint: sketchPointSchema,
+    confidence: z.number().finite().min(0).max(1),
+  })
+  .strict();
+
+const sketchStrokeReceiptSchema = z
+  .object({
+    strokeId: objectIdSchema,
+    handTrackId: z.string().trim().min(1).max(128),
+    penDownAt: z.number().finite().nonnegative(),
+    penUpAt: z.number().finite().nonnegative(),
+    pointCount: z.number().int().min(2).max(2_000),
+    measuredPointCount: z.number().int().min(0).max(2_000),
+    predictedPointCount: z.number().int().min(0).max(2_000),
+    interpolatedPointCount: z.number().int().min(0).max(2_000),
+    longGapBridgeCount: z.literal(0),
+    terminationReason: z.enum([
+      "gesture-release",
+      "draw-mode-exit",
+      "tracking-timeout",
+      "identity-loss",
+      "explicit-cancel",
+      "session-end",
+    ]),
+    sampleProvenanceVersion: z.literal(1).optional(),
+    samples: z.array(sketchStrokeSampleSchema).min(2).max(2_000).optional(),
+  })
+  .strict()
+  .refine((receipt) => receipt.penUpAt >= receipt.penDownAt, {
+    message: "A stroke receipt cannot end before pen-down.",
+  })
+  .refine(
+    (receipt) =>
+      receipt.measuredPointCount +
+        receipt.predictedPointCount +
+        receipt.interpolatedPointCount ===
+      receipt.pointCount,
+    { message: "Stroke receipt sample counts must equal pointCount." },
+  )
+  .superRefine((receipt, context) => {
+    const hasVersion = receipt.sampleProvenanceVersion !== undefined;
+    const hasSamples = receipt.samples !== undefined;
+    if (hasVersion !== hasSamples) {
+      context.addIssue({
+        code: "custom",
+        path: hasVersion ? ["samples"] : ["sampleProvenanceVersion"],
+        message:
+          "Stroke sample provenance version and samples must be stored together.",
+      });
+      return;
+    }
+    if (!receipt.samples) return;
+
+    if (receipt.samples.length !== receipt.pointCount)
+      context.addIssue({
+        code: "custom",
+        path: ["samples"],
+        message: "Stroke sample provenance must cover every stored point.",
+      });
+
+    const sampleKindCounts = {
+      measured: 0,
+      "short-gap predicted": 0,
+      interpolated: 0,
+    };
+    for (const [index, sample] of receipt.samples.entries()) {
+      sampleKindCounts[sample.sampleKind] += 1;
+      if (sample.strokeId !== receipt.strokeId)
+        context.addIssue({
+          code: "custom",
+          path: ["samples", index, "strokeId"],
+          message: "Every sample must bind to its receipt stroke ID.",
+        });
+      if (sample.handTrackId !== receipt.handTrackId)
+        context.addIssue({
+          code: "custom",
+          path: ["samples", index, "handTrackId"],
+          message: "Every sample must bind to its receipt hand track ID.",
+        });
+      if (
+        sample.timestampMs < receipt.penDownAt ||
+        sample.timestampMs > receipt.penUpAt
+      )
+        context.addIssue({
+          code: "custom",
+          path: ["samples", index, "timestampMs"],
+          message: "Sample timestamps must fall within the stroke interval.",
+        });
+      if (
+        index > 0 &&
+        sample.timestampMs <= receipt.samples[index - 1]!.timestampMs
+      )
+        context.addIssue({
+          code: "custom",
+          path: ["samples", index, "timestampMs"],
+          message: "Stroke sample timestamps must be strictly increasing.",
+        });
+    }
+
+    if (
+      sampleKindCounts.measured !== receipt.measuredPointCount ||
+      sampleKindCounts["short-gap predicted"] !==
+        receipt.predictedPointCount ||
+      sampleKindCounts.interpolated !== receipt.interpolatedPointCount
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["samples"],
+        message: "Stroke sample kinds must match the receipt category counts.",
+      });
+  });
+
 export const sketchPayloadSchema = z
   .object({
     strokes: z.array(sketchStrokeSchema).max(128),
+    strokeReceipts: z.array(sketchStrokeReceiptSchema).max(128).optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (payload) =>
+      new Set(payload.strokes.map((stroke) => stroke.id)).size ===
+      payload.strokes.length,
+    { message: "Every stored stroke ID must be unique within the sketch." },
+  )
+  .refine(
+    (payload) =>
+      !payload.strokeReceipts ||
+      (payload.strokeReceipts.length === payload.strokes.length &&
+        payload.strokeReceipts.every(
+          (receipt, index) => receipt.strokeId === payload.strokes[index]?.id,
+        )),
+    { message: "Stroke receipts must bind every stored stroke in order." },
+  )
+  .superRefine((payload, context) => {
+    if (!payload.strokeReceipts) return;
+    for (const [strokeIndex, receipt] of payload.strokeReceipts.entries()) {
+      const stroke = payload.strokes[strokeIndex];
+      if (!stroke || receipt.strokeId !== stroke.id) continue;
+      if (!receipt.samples) continue;
+      if (receipt.pointCount !== stroke.points.length)
+        context.addIssue({
+          code: "custom",
+          path: ["strokeReceipts", strokeIndex, "pointCount"],
+          message: "Stroke receipt pointCount must match the stored stroke.",
+        });
+      for (const [sampleIndex, sample] of receipt.samples.entries()) {
+        const point = stroke.points[sampleIndex];
+        if (!point) continue;
+        if (
+          sample.renderedPoint.x !== point.x ||
+          sample.renderedPoint.y !== point.y
+        )
+          context.addIssue({
+            code: "custom",
+            path: [
+              "strokeReceipts",
+              strokeIndex,
+              "samples",
+              sampleIndex,
+              "renderedPoint",
+            ],
+            message:
+              "Sample renderedPoint must match its aligned stored stroke point.",
+          });
+      }
+    }
+  });
 
 const diagramNodeSchema = z
   .object({
@@ -500,7 +682,7 @@ export const canvasCommandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("object.append_note_text"),
       objectId: objectIdSchema,
-      expectedVersion: z.number().int().min(1).max(1_000_000_000),
+      expectedVersion: objectVersionSchema,
       text: z.string().trim().min(1).max(NOTE_APPEND_TEXT_MAX_LENGTH),
     })
     .strict(),
@@ -508,6 +690,7 @@ export const canvasCommandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("object.transform"),
       objectId: objectIdSchema,
+      expectedVersion: objectVersionSchema.optional(),
       transform: transformSchema,
     })
     .strict(),
@@ -515,11 +698,16 @@ export const canvasCommandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("object.set_flags"),
       objectId: objectIdSchema,
+      expectedVersion: objectVersionSchema.optional(),
       flags: flagsSchema,
     })
     .strict(),
   z
-    .object({ type: z.literal("object.discard"), objectId: objectIdSchema })
+    .object({
+      type: z.literal("object.discard"),
+      objectId: objectIdSchema,
+      expectedVersion: objectVersionSchema.optional(),
+    })
     .strict(),
   z
     .object({
@@ -529,13 +717,46 @@ export const canvasCommandSchema = z.discriminatedUnion("type", [
         .min(1)
         .max(20)
         .refine((ids) => new Set(ids).size === ids.length),
+      expectedVersions: z
+        .array(
+          z
+            .object({
+              objectId: objectIdSchema,
+              expectedVersion: objectVersionSchema,
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(20)
+        .refine(
+          (versions) =>
+            new Set(versions.map((version) => version.objectId)).size ===
+            versions.length,
+        )
+        .optional(),
       frame: newFrameObjectSchema,
     })
-    .strict(),
+    .strict()
+    .superRefine((value, context) => {
+      if (!value.expectedVersions) return;
+      const expectedIds = new Set(
+        value.expectedVersions.map((version) => version.objectId),
+      );
+      if (
+        expectedIds.size !== value.objectIds.length ||
+        value.objectIds.some((objectId) => !expectedIds.has(objectId))
+      )
+        context.addIssue({
+          code: "custom",
+          path: ["expectedVersions"],
+          message: "Expected versions must cover exactly the grouped objects.",
+        });
+    }),
   z
     .object({
       type: z.literal("objects.ungroup"),
       frameId: objectIdSchema,
+      expectedVersion: objectVersionSchema.optional(),
     })
     .strict(),
   z.object({ type: z.literal("history.undo") }).strict(),

@@ -71,28 +71,37 @@ function renderSurface(
 }
 
 describe("ChatGptCommandSurface", () => {
-  it("visually distinguishes page Site Tools from separately billed Live Voice", () => {
+  it("frames WebMCP as automatic agent tools with a separate activity inspector", async () => {
+    const user = userEvent.setup();
     renderSurface();
 
     const group = screen.getByRole("group", {
-      name: "ChatGPT Site Tools and CommandCanvas Live Voice",
+      name: "WebMCP tools and CommandCanvas Live Voice",
     });
     expect(group).toHaveClass("chatgpt-command-pill");
     expect(group.querySelectorAll("button")).toHaveLength(2);
-    expect(within(group).getByText("ChatGPT")).toBeVisible();
-    expect(within(group).getByText("Site Tools")).toBeVisible();
+    expect(within(group).getByText("WebMCP")).toBeVisible();
+    expect(within(group).getByText("tools")).toBeVisible();
     expect(within(group).getByText("Live voice")).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Open WebMCP agent activity" }),
+    );
     expect(
-      screen.getByRole("button", {
-        name: "Open ChatGPT Site Tools and activity drawer",
-      }),
-    ).toBeInTheDocument();
+      screen.getByText(
+        /CommandCanvas registers its WebMCP tools automatically when the live canvas is ready/i,
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        /Compatible agents can discover and invoke them without opening this activity drawer/i,
+      ),
+    ).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Start CommandCanvas Live Voice" }),
     ).toHaveClass("chatgpt-voice-segment");
   });
 
-  it("starts the explicit in-page Live Voice path even when Site Tools are registered", async () => {
+  it("starts the explicit in-page Live Voice path even when WebMCP tools are registered", async () => {
     const user = userEvent.setup();
     const callbacks = renderSurface();
 
@@ -108,13 +117,16 @@ describe("ChatGptCommandSurface", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/registration surface alone does not prove which agent host/i),
+      screen.getAllByText(/an actual invocation and receipt below prove page execution/i),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByText(/does not authenticate which compatible agent host initiated it/i),
+    ).toHaveLength(2);
+    expect(
+      screen.getByText(/CommandCanvas never receives that surrounding ChatGPT credential/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/CommandCanvas never receives that ChatGPT credential/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/does not promise that ChatGPT Voice will invoke Site Tools/i),
+      screen.getByText(/does not promise that ChatGPT Voice will invoke WebMCP tools/i),
     ).toBeInTheDocument();
   });
 
@@ -134,7 +146,7 @@ describe("ChatGptCommandSurface", () => {
     expect(callOrder).toEqual(["voice", "drawer"]);
   });
 
-  it("keeps the active local microphone stoppable when Site Tools register later", async () => {
+  it("keeps the active local microphone stoppable when WebMCP tools register later", async () => {
     const user = userEvent.setup();
     const callbacks = renderSurface({
       surfaceState: { status: "registered_to_page", registeredToolCount: 10 },
@@ -159,8 +171,8 @@ describe("ChatGptCommandSurface", () => {
     expect(callbacks.onToggleRealtimeVoice).not.toHaveBeenCalled();
     expect(screen.getByText(/registered to this page/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/agent-host identity and discovery are not confirmed/i),
-    ).toBeInTheDocument();
+      screen.getAllByText(/an actual invocation and receipt below prove page execution/i),
+    ).toHaveLength(2);
     await user.click(
       screen.getByRole("button", {
         name: "Start CommandCanvas Live Voice from drawer",
@@ -190,8 +202,8 @@ describe("ChatGptCommandSurface", () => {
       />,
     );
     expect(
-      screen.getByText(/registration surface alone does not prove which agent host/i),
-    ).toBeInTheDocument();
+      screen.getAllByText(/an actual invocation and receipt below prove page execution/i),
+    ).toHaveLength(2);
 
     view.rerender(
       <ChatGptCommandSurface
@@ -207,14 +219,14 @@ describe("ChatGptCommandSurface", () => {
     );
 
     expect(
-      screen.getByText("Site Tools unavailable in this browser session"),
+      screen.getByText("WebMCP tools unavailable in this browser session"),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText(/registration surface alone does not prove which agent host/i),
+      screen.queryByText(/an actual invocation and receipt below prove page execution/i),
     ).not.toBeInTheDocument();
   });
 
-  it("does not mistake a missing Site Tools surface for a missing ChatGPT login", () => {
+  it("does not mistake unavailable WebMCP tools for a missing ChatGPT login", () => {
     renderSurface({
       surfaceState: { status: "unavailable" },
       drawerOpen: true,
@@ -224,10 +236,10 @@ describe("ChatGptCommandSurface", () => {
       screen.getByText(/no additional ChatGPT sign-in is required/i),
     ).toBeVisible();
     expect(
-      screen.getByText(/this browser session did not expose Site Tools/i),
+      screen.getByText(/this browser session did not expose WebMCP tools/i),
     ).toBeVisible();
     expect(
-      screen.getByText(/Browser Settings.*Permissions.*Enable site tools/i),
+      screen.getByText(/Availability can depend on the browser/i),
     ).toBeVisible();
     expect(
       screen.queryByText(/^Open this page inside ChatGPT/i),
@@ -302,7 +314,9 @@ describe("ChatGptCommandSurface", () => {
       commandDrawerDeferred: true,
     });
 
-    const drawer = screen.getByLabelText("ChatGPT command drawer");
+    const drawer = screen.getByLabelText(
+      "WebMCP activity and CommandCanvas Live Voice drawer",
+    );
     expect(drawer).toHaveAttribute("aria-hidden", "true");
     expect(drawer).toHaveAttribute("inert");
     expect(drawer).not.toHaveClass("is-open");

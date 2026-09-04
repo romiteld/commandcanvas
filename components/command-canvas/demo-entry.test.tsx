@@ -424,7 +424,7 @@ describe("DemoEntry", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("reports the Site Tools surface after hydration without claiming a ChatGPT host identity", async () => {
+  it("reports WebMCP registration-surface detection without treating the entry gate as a tool switch", async () => {
     Object.defineProperty(document, "modelContext", {
       configurable: true,
       value: { registerTool: vi.fn() },
@@ -438,10 +438,18 @@ describe("DemoEntry", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText(/Site Tools registration surface is available/i),
+        screen.getByText(/A WebMCP registration surface was detected in this tab/i),
       ).toBeVisible(),
     );
-    expect(screen.queryByText(/ChatGPT Site Tools can register/i)).toBeNull();
+    expect(
+      screen.getByText(/automatically registers its tools when the live canvas is ready/i),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/activity drawer.*only inspects registration and activity/i),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/WebMCP tools are available in this tab/i),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText(/signed in as/i)).not.toBeInTheDocument();
   });
 

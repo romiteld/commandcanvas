@@ -231,20 +231,22 @@ describe("Realtime voice WebRTC controller", () => {
 
   it("passes one session cancellation signal through an unresolved intent and reports cancellation", async () => {
     let observedSignal: AbortSignal | undefined;
-    const onIntent = vi.fn<RealtimeVoiceControllerOptions["onIntent"]>(
-      async (_intent, _source, turn) => {
-        observedSignal = turn?.signal;
+    const invokeCapability = vi.fn<
+      NonNullable<RealtimeVoiceControllerOptions["invokeCapability"]>
+    >(
+      async (_capability, _input, signal) => {
+        observedSignal = signal;
         return await new Promise((resolve, reject) => {
-          turn?.signal.addEventListener(
+          signal.addEventListener(
             "abort",
-            () => reject(turn.signal.reason),
+            () => reject(signal.reason),
             { once: true },
           );
           void resolve;
         });
       },
     );
-    const setup = harness({ onIntent });
+    const setup = harness({ invokeCapability });
     await setup.controller.start();
     setup.channel.open();
     setup.channel.message({ type: "session.created", session: { type: "realtime" } });
@@ -257,7 +259,7 @@ describe("Realtime voice WebRTC controller", () => {
         arguments: "{}",
       },
     });
-    await vi.waitFor(() => expect(onIntent).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(invokeCapability).toHaveBeenCalledOnce());
 
     setup.controller.stop();
 
@@ -278,15 +280,23 @@ describe("Realtime voice WebRTC controller", () => {
 
   it("keeps an already-committed canvas outcome visible when Stop suppresses the provider follow-up", async () => {
     let resolveIntent:
-      | ((value: { ok: true; message: string }) => void)
+      | ((value: {
+          ok: true;
+          status: "completed";
+          message: string;
+        }) => void)
       | undefined;
-    const onIntent = vi.fn(
+    const invokeCapability = vi.fn(
       () =>
-        new Promise<{ ok: true; message: string }>((resolve) => {
+        new Promise<{
+          ok: true;
+          status: "completed";
+          message: string;
+        }>((resolve) => {
           resolveIntent = resolve;
         }),
     );
-    const setup = harness({ onIntent });
+    const setup = harness({ invokeCapability });
     await setup.controller.start();
     setup.channel.open();
     setup.channel.message({ type: "session.created", session: { type: "realtime" } });
@@ -299,9 +309,13 @@ describe("Realtime voice WebRTC controller", () => {
         arguments: "{}",
       },
     });
-    await vi.waitFor(() => expect(onIntent).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(invokeCapability).toHaveBeenCalledOnce());
 
-    resolveIntent?.({ ok: true, message: "Board committed with a receipt." });
+    resolveIntent?.({
+      ok: true,
+      status: "completed",
+      message: "Board committed with a receipt.",
+    });
     setup.controller.stop();
 
     await vi.waitFor(() =>
@@ -536,7 +550,12 @@ describe("Realtime voice WebRTC controller", () => {
   });
 
   it("executes a validated semantic creation, returns function_call_output, then asks the model to respond", async () => {
-    const setup = harness();
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Object created.",
+    }));
+    const setup = harness({ invokeCapability });
     await setup.controller.start();
     setup.channel.open();
     setup.channel.message({ type: "session.created", session: { type: "realtime" } });
@@ -553,12 +572,10 @@ describe("Realtime voice WebRTC controller", () => {
     });
     await vi.waitFor(() => expect(setup.channel.sent).toHaveLength(2));
 
-    expect(vi.mocked(setup.onIntent).mock.calls[0]?.slice(0, 2)).toEqual([
-      { type: "create_semantic_object", object: SEMANTIC_NOTE_OBJECT },
-      "voice",
-    ]);
-    expect(vi.mocked(setup.onIntent).mock.calls[0]?.[2]?.signal).toBeInstanceOf(
-      AbortSignal,
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "create_object",
+      { object: SEMANTIC_NOTE_OBJECT },
+      expect.any(AbortSignal),
     );
     expect(JSON.parse(setup.channel.sent[0]!)).toEqual({
       type: "conversation.item.create",
@@ -706,8 +723,28 @@ describe("Realtime voice WebRTC controller", () => {
     expect(consumeSketchNarration).toHaveBeenCalledOnce();
   });
 
-  it("passes the originating input item to its canvas tool", async () => {
-    const setup = harness();
+  it("passes the active session cancellation signal to its canonical canvas tool", async () => {
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Discarded.",
+    }));
+    const setup = harness({
+      invokeCapability,
+      inspectCanvas: async () => ({
+        scope: "selected",
+        roomId: ROOM_ID,
+        revision: 4,
+        selectedObjectId: "note-selected",
+        objects: [
+          { id: "note-selected", type: "note", title: "Selected", version: 3 },
+        ],
+        receipts: [],
+        truncation: {
+          objects: { total: 1, returned: 1, omitted: 0 },
+        },
+      }),
+    });
     await setup.controller.start();
     setup.channel.open();
     setup.channel.message({ type: "session.created", session: { type: "realtime" } });
@@ -731,16 +768,11 @@ describe("Realtime voice WebRTC controller", () => {
       },
     });
 
-    await vi.waitFor(() => expect(setup.onIntent).toHaveBeenCalledOnce());
-    expect(vi.mocked(setup.onIntent).mock.calls[0]?.slice(0, 2)).toEqual([
-      { type: "discard_selected" },
-      "voice",
-    ]);
-    expect(vi.mocked(setup.onIntent).mock.calls[0]?.[2]).toMatchObject({
-      itemId: "item-tool-turn",
-    });
-    expect(vi.mocked(setup.onIntent).mock.calls[0]?.[2]?.signal).toBeInstanceOf(
-      AbortSignal,
+    await vi.waitFor(() => expect(invokeCapability).toHaveBeenCalledOnce());
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "discard_object",
+      { objectId: "note-selected", expectedVersion: 3 },
+      expect.any(AbortSignal),
     );
   });
 
@@ -820,14 +852,24 @@ describe("Realtime voice WebRTC controller", () => {
   });
 
   it("settles a response only after an already-queued function item finishes", async () => {
-    let resolveIntent: ((value: { ok: true; message: string }) => void) | undefined;
-    const onIntent = vi.fn(
+    let resolveIntent:
+      | ((value: {
+          ok: true;
+          status: "completed";
+          message: string;
+        }) => void)
+      | undefined;
+    const invokeCapability = vi.fn(
       () =>
-        new Promise<{ ok: true; message: string }>((resolve) => {
+        new Promise<{
+          ok: true;
+          status: "completed";
+          message: string;
+        }>((resolve) => {
           resolveIntent = resolve;
         }),
     );
-    const setup = harness({ onIntent });
+    const setup = harness({ invokeCapability });
     await setup.controller.start();
     setup.channel.open();
     setup.channel.message({ type: "session.created", session: { type: "realtime" } });
@@ -844,16 +886,21 @@ describe("Realtime voice WebRTC controller", () => {
       response: { status: "completed", output: [functionItem] },
     });
 
-    await vi.waitFor(() => expect(onIntent).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(invokeCapability).toHaveBeenCalledOnce());
     expect(setup.responseOutcomes).toEqual([]);
-    resolveIntent?.({ ok: true, message: "Board submitted." });
+    resolveIntent?.({
+      ok: true,
+      status: "completed",
+      message: "Board submitted.",
+    });
     await vi.waitFor(() =>
       expect(setup.responseOutcomes).toEqual(["completed"]),
     );
   });
 
   it("returns an invalid-argument refusal without invoking a canvas intent", async () => {
-    const setup = harness();
+    const invokeCapability = vi.fn();
+    const setup = harness({ invokeCapability });
     await setup.controller.start();
     setup.channel.open();
     setup.channel.message({ type: "session.created", session: { type: "realtime" } });
@@ -871,6 +918,7 @@ describe("Realtime voice WebRTC controller", () => {
     await vi.waitFor(() => expect(setup.channel.sent).toHaveLength(2));
 
     expect(setup.onIntent).not.toHaveBeenCalled();
+    expect(invokeCapability).not.toHaveBeenCalled();
     const output = JSON.parse(JSON.parse(setup.channel.sent[0]!).item.output);
     expect(output).toEqual({
       ok: false,
@@ -1000,15 +1048,27 @@ describe("Realtime voice WebRTC controller", () => {
   });
 
   it("serializes canvas tool submissions even when provider calls arrive together", async () => {
-    let releaseFirst!: (value: { ok: true; message: string }) => void;
-    const first = new Promise<{ ok: true; message: string }>((resolve) => {
+    let releaseFirst!: (value: {
+      ok: true;
+      status: "completed";
+      message: string;
+    }) => void;
+    const first = new Promise<{
+      ok: true;
+      status: "completed";
+      message: string;
+    }>((resolve) => {
       releaseFirst = resolve;
     });
-    const onIntent = vi
-      .fn<RealtimeVoiceControllerOptions["onIntent"]>()
+    const invokeCapability = vi
+      .fn<NonNullable<RealtimeVoiceControllerOptions["invokeCapability"]>>()
       .mockReturnValueOnce(first)
-      .mockReturnValue({ ok: true, message: "Second submitted." });
-    const setup = harness({ onIntent });
+      .mockResolvedValue({
+        ok: true,
+        status: "completed",
+        message: "Second submitted.",
+      });
+    const setup = harness({ invokeCapability });
     await setup.controller.start();
     setup.channel.open();
     setup.channel.message({ type: "session.created", session: { type: "realtime" } });
@@ -1031,13 +1091,17 @@ describe("Realtime voice WebRTC controller", () => {
         arguments: "{}",
       },
     });
-    await vi.waitFor(() => expect(onIntent).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(invokeCapability).toHaveBeenCalledTimes(1));
 
-    releaseFirst({ ok: true, message: "First submitted." });
-    await vi.waitFor(() => expect(onIntent).toHaveBeenCalledTimes(2));
-    expect(onIntent.mock.calls.map(([intent]) => intent.type)).toEqual([
-      "undo",
-      "redo",
+    releaseFirst({
+      ok: true,
+      status: "completed",
+      message: "First submitted.",
+    });
+    await vi.waitFor(() => expect(invokeCapability).toHaveBeenCalledTimes(2));
+    expect(invokeCapability.mock.calls.map(([capability, input]) => [capability, input])).toEqual([
+      ["history_action", { action: "undo" }],
+      ["history_action", { action: "redo" }],
     ]);
   });
 

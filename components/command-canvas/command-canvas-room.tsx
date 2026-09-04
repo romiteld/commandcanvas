@@ -77,10 +77,13 @@ import type { RealtimeVoiceIntentResult } from "@/lib/realtime-voice/tools";
 import {
   createGestureSketchCommand,
   createInitialSpatialGestureState,
+  finishSpatialDrawing,
   reduceSpatialGesture,
   spatialGestureCompletionToCommand,
+  type GestureStrokeReceipt,
   type SpatialGestureEffect,
   type SpatialGestureCompletionEffect,
+  type SpatialGestureInput,
   type SpatialGestureState,
 } from "@/lib/gesture/spatial-gesture";
 import {
@@ -102,8 +105,53 @@ const configuredSourceRevision =
 const sourceRevision = /^[0-9a-f]{40}$/.test(configuredSourceRevision)
   ? configuredSourceRevision
   : "main";
-const correspondingSourceUrl =
-  `https://github.com/romiteld/commandcanvas/tree/${sourceRevision}`;
+const correspondingSourceUrl = `https://github.com/romiteld/commandcanvas/tree/${sourceRevision}`;
+
+function completedGestureStrokeReceipt(
+  effect: Extract<SpatialGestureEffect, { type: "stroke.commit" }>,
+): GestureStrokeReceipt {
+  const hasSampleVersion = effect.sampleProvenanceVersion !== undefined;
+  const hasSamples = effect.samples !== undefined;
+  if (
+    !effect.strokeId ||
+    !effect.handTrackId ||
+    effect.penDownAt === undefined ||
+    effect.penUpAt === undefined ||
+    effect.pointCount === undefined ||
+    effect.measuredPointCount === undefined ||
+    effect.predictedPointCount === undefined ||
+    effect.interpolatedPointCount === undefined ||
+    effect.longGapBridgeCount !== 0 ||
+    !effect.terminationReason ||
+    hasSampleVersion !== hasSamples
+  )
+    throw new Error(
+      "A committed finger stroke needs a complete safety receipt.",
+    );
+  return {
+    strokeId: effect.strokeId,
+    handTrackId: effect.handTrackId,
+    penDownAt: effect.penDownAt,
+    penUpAt: effect.penUpAt,
+    pointCount: effect.pointCount,
+    measuredPointCount: effect.measuredPointCount,
+    predictedPointCount: effect.predictedPointCount,
+    interpolatedPointCount: effect.interpolatedPointCount,
+    longGapBridgeCount: 0,
+    terminationReason: effect.terminationReason,
+    ...(effect.samples
+      ? {
+          sampleProvenanceVersion: 1 as const,
+          samples: effect.samples.map((sample) => ({
+            ...sample,
+            rawIndexTip: { ...sample.rawIndexTip },
+            filteredIndexTip: { ...sample.filteredIndexTip },
+            renderedPoint: { ...sample.renderedPoint },
+          })),
+        }
+      : {}),
+  };
+}
 
 export interface CommandCanvasRoomProps {
   store: StoreApi<CanvasStoreState>;
@@ -138,10 +186,7 @@ export interface CommandCanvasRoomProps {
 }
 
 export type CommandCanvasRoomStatus =
-  | "local"
-  | "connecting"
-  | "live"
-  | "offline";
+  "local" | "connecting" | "live" | "offline";
 
 export interface CommandCanvasParticipant {
   id: string;
@@ -250,13 +295,15 @@ export function CommandCanvasRoom({
   const [gestureExitAnimations, setGestureExitAnimations] = useState<
     Record<string, "discard-left" | "discard-right">
   >({});
-  const [gestureEdgePreview, setGestureEdgePreview] = useState<
-    Extract<SpatialGestureEffect, { type: "object.preview_edge_action" }> | null
-  >(null);
-  const [palmFinishPreview, setPalmFinishPreview] = useState<number | null>(null);
-  const [workspaceOverlay, setWorkspaceOverlay] = useState<WorkspaceOverlay>(
+  const [gestureEdgePreview, setGestureEdgePreview] = useState<Extract<
+    SpatialGestureEffect,
+    { type: "object.preview_edge_action" }
+  > | null>(null);
+  const [palmFinishPreview, setPalmFinishPreview] = useState<number | null>(
     null,
   );
+  const [workspaceOverlay, setWorkspaceOverlay] =
+    useState<WorkspaceOverlay>(null);
   const [handCalibrationOpen, setHandCalibrationOpen] = useState(false);
   const [handCalibrationProfile, setHandCalibrationProfile] =
     useState<HandCalibrationProfile | null>(null);
@@ -288,7 +335,14 @@ export function CommandCanvasRoom({
   );
   const canvasMotionLayerRef = useRef<CanvasMotionLayer | null>(null);
   const gesturePreviewObjectId = useRef<string | null>(null);
-  const gestureSketchStrokesRef = useRef<readonly (readonly CanvasPoint[])[]>([]);
+  const gestureSketchStrokesRef = useRef<readonly (readonly CanvasPoint[])[]>(
+    [],
+  );
+  const gestureSketchStrokeReceiptsRef = useRef<
+    readonly GestureStrokeReceipt[]
+  >([]);
+  const gestureSketchFinalizingRef = useRef(false);
+  const gestureSketchObjectIdRef = useRef<string | null>(null);
   const strokeSampleStateRef = useRef<StrokeSampleState>(
     createInitialStrokeSampleState(),
   );
@@ -366,8 +420,7 @@ export function CommandCanvasRoom({
   const commandPending = commandExecution.status === "pending";
   const sketchTransformPending = sketchTransformExecution.status === "pending";
   const interactionPending = commandPending || sketchTransformPending;
-  const drawingActive =
-    sketchComposerOpen || handInteractionMode === "draw";
+  const drawingActive = sketchComposerOpen || handInteractionMode === "draw";
 
   // Header controls and drawers share one state owner. It is deliberately not
   // an effect: an overlay switch must be atomic, not briefly coexist in a
@@ -383,8 +436,7 @@ export function CommandCanvasRoom({
   function setHeaderControlsOpen(next: SetStateAction<boolean>) {
     setWorkspaceOverlay((current) => {
       const currentOpen = current === "header";
-      const shouldOpen =
-        typeof next === "function" ? next(currentOpen) : next;
+      const shouldOpen = typeof next === "function" ? next(currentOpen) : next;
       return shouldOpen ? "header" : null;
     });
   }
@@ -435,7 +487,9 @@ export function CommandCanvasRoom({
   }, [commandDrawerDeferred, drawingActive]);
 
   useEffect(() => {
-    const layer = createCanvasMotionLayer({ root: () => canvasViewportRef.current });
+    const layer = createCanvasMotionLayer({
+      root: () => canvasViewportRef.current,
+    });
     canvasMotionLayerRef.current = layer;
     return () => {
       layer.dispose();
@@ -481,17 +535,18 @@ export function CommandCanvasRoom({
       initialCompactCompositionFitRef.current = true;
       if (measured.width > 640) return;
       const state = store.getState();
-      const worldBounds = Object.values(state.canvas.objects).flatMap((object) =>
-        object.deletedAt
-          ? []
-          : [
-              {
-                x: object.x,
-                y: object.y,
-                width: object.width,
-                height: object.minimized ? 62 : object.height,
-              },
-            ],
+      const worldBounds = Object.values(state.canvas.objects).flatMap(
+        (object) =>
+          object.deletedAt
+            ? []
+            : [
+                {
+                  x: object.x,
+                  y: object.y,
+                  width: object.width,
+                  height: object.minimized ? 62 : object.height,
+                },
+              ],
       );
       if (worldBounds.length < 2) return;
       const fitted = fitViewportToWorldBounds(
@@ -667,10 +722,7 @@ export function CommandCanvasRoom({
       setSketchTransformExecution({ status: "idle" });
       if (result.diagramObjectId) {
         selectObject(result.diagramObjectId);
-        revealSketchTransformation(
-          selectedObject.id,
-          result.diagramObjectId,
-        );
+        revealSketchTransformation(selectedObject.id, result.diagramObjectId);
       }
     } catch (error) {
       setSketchTransformExecution({
@@ -860,7 +912,9 @@ export function CommandCanvasRoom({
 
   function openPointerSketch() {
     const measured = canvasViewportRef.current?.getBoundingClientRect();
-    const compact = Boolean(measured && measured.width > 0 && measured.width <= 640);
+    const compact = Boolean(
+      measured && measured.width > 0 && measured.width <= 640,
+    );
     setPointerSketchDimensions(
       compact
         ? {
@@ -899,10 +953,7 @@ export function CommandCanvasRoom({
     if (fitted) setViewport(fitted);
   }
 
-  function createNote(
-    source: CanvasCommandSource = "pointer",
-    text?: string,
-  ) {
+  function createNote(source: CanvasCommandSource = "pointer", text?: string) {
     const object = buildNoteObject(text);
     runCommand(
       {
@@ -1025,7 +1076,10 @@ export function CommandCanvasRoom({
         ? [object]
         : [];
     });
-    if (groupable.length < 2 || groupable.length !== current.selectedObjectIds.length)
+    if (
+      groupable.length < 2 ||
+      groupable.length !== current.selectedObjectIds.length
+    )
       return;
 
     const padding = 44;
@@ -1067,19 +1121,21 @@ export function CommandCanvasRoom({
   }
 
   function ungroupSelectedFrame(source: CanvasCommandSource = "pointer") {
-    if (!selectedFrame || selectedFrame.deletedAt || selectedFrame.type !== "frame")
+    if (
+      !selectedFrame ||
+      selectedFrame.deletedAt ||
+      selectedFrame.type !== "frame"
+    )
       return;
-    runCommand(
-      { type: "objects.ungroup", frameId: selectedFrame.id },
-      source,
-    );
+    runCommand({ type: "objects.ungroup", frameId: selectedFrame.id }, source);
   }
 
   function rotateSelectedObject(
     delta: number,
     source: CanvasCommandSource = "pointer",
   ) {
-    if (!selectedObject || selectedObject.deletedAt || selectedObject.pinned) return;
+    if (!selectedObject || selectedObject.deletedAt || selectedObject.pinned)
+      return;
     runCommand(
       {
         type: "object.transform",
@@ -1160,7 +1216,10 @@ export function CommandCanvasRoom({
   ): Promise<RealtimeVoiceIntentResult> {
     const text = rawText.replace(/\s+/g, " ").trim();
     if (!text)
-      return { ok: false, message: "Say what you want to add to the selected note." };
+      return {
+        ok: false,
+        message: "Say what you want to add to the selected note.",
+      };
     if (text.length > NOTE_APPEND_TEXT_MAX_LENGTH)
       return {
         ok: false,
@@ -1257,16 +1316,23 @@ export function CommandCanvasRoom({
   ): Promise<RealtimeVoiceIntentResult> {
     const text = rawText.replace(/\s+/g, " ").trim();
     if (!text)
-      return { ok: false, message: "No completed speech was available to add." };
+      return {
+        ok: false,
+        message: "No completed speech was available to add.",
+      };
     if (text.length > NOTE_APPEND_TEXT_MAX_LENGTH)
       return {
         ok: false,
-        message: "Keep each dictated thought turn to 1,000 characters or fewer.",
+        message:
+          "Keep each dictated thought turn to 1,000 characters or fewer.",
       };
 
     const objectId = activeVoiceThoughtIdRef.current;
     if (!objectId)
-      return { ok: false, message: "Start a new thought before dictating into it." };
+      return {
+        ok: false,
+        message: "Start a new thought before dictating into it.",
+      };
     const current = store.getState().canvas.objects[objectId];
     if (!current || current.deletedAt || current.type !== "note") {
       return abortVoiceThoughtCapture(
@@ -1295,7 +1361,8 @@ export function CommandCanvasRoom({
       updated.version !== current.version + 1 ||
       updated.payload.text !== expectedText
     ) {
-      const message = "The shared canvas did not confirm that thought transcript.";
+      const message =
+        "The shared canvas did not confirm that thought transcript.";
       realtimeConfirmationFailure(message);
       return abortVoiceThoughtCapture(message);
     }
@@ -1315,7 +1382,9 @@ export function CommandCanvasRoom({
     return { ok: true, message: "Thought capture finished." };
   }
 
-  function abortVoiceThoughtCapture(message: string): RealtimeVoiceIntentResult {
+  function abortVoiceThoughtCapture(
+    message: string,
+  ): RealtimeVoiceIntentResult {
     activeVoiceThoughtIdRef.current = null;
     setVoiceThoughtDraft(null);
     return { ok: false, message, thoughtCapture: "aborted" };
@@ -1413,11 +1482,11 @@ export function CommandCanvasRoom({
         if (handInteractionMode !== "draw")
           return { ok: false, message: "Start a tracked-hand drawing first." };
         const activeStrokeReady =
-          spatialGestureState.current.phase === "drawing" &&
+          spatialGestureState.current.drawing !== null &&
           spatialGestureState.current.stroke.length >= 2;
         if (gestureSketchStrokesRef.current.length === 0 && !activeStrokeReady)
           return { ok: false, message: "Draw at least one line first." };
-        finishHandDrawing();
+        finishHandDrawing(currentInteractionTimestamp());
         return { ok: true, message: "Finger sketch command submitted." };
       }
       case "cancel_sketch":
@@ -1493,19 +1562,9 @@ export function CommandCanvasRoom({
       case "unpin_selected":
         return setSelectedFlagFromHuman(source, "pinned", false, "Unpin");
       case "minimize_selected":
-        return setSelectedFlagFromHuman(
-          source,
-          "minimized",
-          true,
-          "Minimize",
-        );
+        return setSelectedFlagFromHuman(source, "minimized", true, "Minimize");
       case "restore_selected":
-        return setSelectedFlagFromHuman(
-          source,
-          "minimized",
-          false,
-          "Restore",
-        );
+        return setSelectedFlagFromHuman(source, "minimized", false, "Restore");
       case "discard_selected": {
         const discardTarget =
           target ??
@@ -1601,12 +1660,7 @@ export function CommandCanvasRoom({
     object: CanvasObject,
   ) {
     event.stopPropagation();
-    if (
-      multiSelectMode ||
-      event.shiftKey ||
-      event.ctrlKey ||
-      event.metaKey
-    )
+    if (multiSelectMode || event.shiftKey || event.ctrlKey || event.metaKey)
       return;
     selectObject(object.id);
     if (object.pinned || interactionPending) return;
@@ -1626,7 +1680,12 @@ export function CommandCanvasRoom({
 
   function updateObjectDrag(event: ReactPointerEvent<HTMLButtonElement>) {
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const preview = objectDragTransform(drag, event.clientX, event.clientY, viewport.scale);
+    const preview = objectDragTransform(
+      drag,
+      event.clientX,
+      event.clientY,
+      viewport.scale,
+    );
     setObjectPreviews((current) => ({
       ...current,
       [drag.objectId]: preview,
@@ -1773,10 +1832,26 @@ export function CommandCanvasRoom({
           handTargetObjectIdRef.current,
         ),
         edgePreviewVisible: edgePreviewVisibleRef.current,
+        drawingEnabled:
+          handInteractionMode === "draw" && handDrawingTool !== "erase",
       },
     );
     spatialRoomInputState.current = roomInput.state;
-    const input = roomInput.input;
+    const input: SpatialGestureInput =
+      roomInput.input.mode === "point" &&
+      roomInput.input.drawing &&
+      observation.mode !== "idle" &&
+      observation.mode !== "bimanual_pinch" &&
+      observation.measurements
+        ? {
+            ...roomInput.input,
+            drawing: {
+              ...roomInput.input.drawing,
+              rawIndexTip: observation.measurements.indexTip,
+              filteredIndexTip: observation.pointer,
+            },
+          }
+        : roomInput.input;
     const displayPointer =
       input.mode === "idle"
         ? null
@@ -1786,7 +1861,8 @@ export function CommandCanvasRoom({
               y: (input.pointers[0].y + input.pointers[1].y) / 2,
             }
           : input.pointer;
-    if (displayPointer) canvasMotionLayerRef.current?.previewCursor(displayPointer);
+    if (displayPointer)
+      canvasMotionLayerRef.current?.previewCursor(displayPointer);
     else canvasMotionLayerRef.current?.hideCursor();
 
     if (handInteractionMode === "draw" && handDrawingTool === "erase") {
@@ -1822,12 +1898,19 @@ export function CommandCanvasRoom({
       });
       strokeSampleStateRef.current = sampled.state;
       resetPalmFinishPreview();
-      if (!sampled.accepted) {
+      // Sampling may suppress redundant trajectory points, never a clutch edge.
+      // Dropping the one `engaged` sample would leave the reducer permanently
+      // pen-up while the clutch itself was already down.
+      if (
+        !sampled.accepted &&
+        input.drawing?.transition === "none" &&
+        spatialGestureState.current.drawing
+      ) {
         updateHandFeedback({
           mode: input.mode,
           pointer: displayPointer!,
           interactionPhase: spatialGestureState.current.phase,
-          label: "DRAWING",
+          label: input.drawing?.penDown ? "DRAWING" : "HOVER · CLUTCH TO DRAW",
         });
         return;
       }
@@ -1888,7 +1971,8 @@ export function CommandCanvasRoom({
     )
       setHandFeedback(null);
     if (observation.mode !== "idle") {
-      const semanticMode = input.mode === "idle" ? observation.mode : input.mode;
+      const semanticMode =
+        input.mode === "idle" ? observation.mode : input.mode;
       updateHandFeedback({
         mode: semanticMode,
         pointer: displayPointer!,
@@ -1917,7 +2001,12 @@ export function CommandCanvasRoom({
         return;
       case "stroke.commit": {
         const next = [...gestureSketchStrokesRef.current, effect.points];
+        const receipt = completedGestureStrokeReceipt(effect);
         gestureSketchStrokesRef.current = next;
+        gestureSketchStrokeReceiptsRef.current = [
+          ...gestureSketchStrokeReceiptsRef.current,
+          receipt,
+        ];
         setGestureSketchStrokes(next);
         return;
       }
@@ -2029,7 +2118,8 @@ export function CommandCanvasRoom({
           typeof window.matchMedia === "function" &&
           window.matchMedia("(prefers-reduced-motion: reduce)").matches;
         if (effect.action === "discard" && !reduceMotion) {
-          const exit = effect.edge === "right" ? "discard-right" : "discard-left";
+          const exit =
+            effect.edge === "right" ? "discard-right" : "discard-left";
           setGestureExitAnimations((current) => ({
             ...current,
             [target.id]: exit,
@@ -2178,15 +2268,12 @@ export function CommandCanvasRoom({
       palmFinishPreviewValueRef.current = progress;
       setPalmFinishPreview(progress);
     }
-    if (elapsed >= 300) finishHandDrawing();
+    if (elapsed >= 300) finishHandDrawing(timestamp);
   }
 
   function openHandCalibration() {
     const previewObjectId = gesturePreviewObjectId.current;
-    if (
-      previewObjectId &&
-      !gestureExitTimeoutsRef.current.has(previewObjectId)
-    )
+    if (previewObjectId && !gestureExitTimeoutsRef.current.has(previewObjectId))
       clearObjectPreview(previewObjectId);
     gesturePreviewObjectId.current = null;
     spatialGestureState.current = createInitialSpatialGestureState();
@@ -2203,6 +2290,9 @@ export function CommandCanvasRoom({
     spatialGestureState.current = createInitialSpatialGestureState();
     clearScheduledStrokePreview();
     gestureSketchStrokesRef.current = [];
+    gestureSketchStrokeReceiptsRef.current = [];
+    gestureSketchFinalizingRef.current = false;
+    gestureSketchObjectIdRef.current = null;
     setGestureSketchStrokes([]);
     strokeSampleStateRef.current = createInitialStrokeSampleState();
     resetPalmFinishPreview();
@@ -2220,6 +2310,9 @@ export function CommandCanvasRoom({
     spatialGestureState.current = createInitialSpatialGestureState();
     clearScheduledStrokePreview();
     gestureSketchStrokesRef.current = [];
+    gestureSketchStrokeReceiptsRef.current = [];
+    gestureSketchFinalizingRef.current = false;
+    gestureSketchObjectIdRef.current = null;
     setGestureSketchStrokes([]);
     strokeSampleStateRef.current = createInitialStrokeSampleState();
     resetPalmFinishPreview();
@@ -2231,16 +2324,24 @@ export function CommandCanvasRoom({
     setDockMenu(null);
   }
 
-  function finishHandDrawing() {
-    const activeStroke =
-      spatialGestureState.current.phase === "drawing" &&
-      spatialGestureState.current.stroke.length >= 2
-        ? spatialGestureState.current.stroke
-        : null;
-    const strokes = activeStroke
-      ? [...gestureSketchStrokesRef.current, activeStroke]
-      : gestureSketchStrokesRef.current;
+  function finishHandDrawing(penUpAt: number) {
+    if (gestureSketchFinalizingRef.current) return;
+    const currentDrawing = spatialGestureState.current.drawing;
+    const finalization = finishSpatialDrawing(
+      spatialGestureState.current,
+      Math.max(
+        penUpAt,
+        currentDrawing?.lastMeasuredAt ?? 0,
+        currentDrawing?.penDownAt ?? 0,
+      ),
+    );
+    spatialGestureState.current = finalization.state;
+    for (const effect of finalization.effects)
+      applySpatialGestureEffect(effect);
+    const strokes = gestureSketchStrokesRef.current;
     if (strokes.length === 0) return;
+    const strokeReceipts = gestureSketchStrokeReceiptsRef.current;
+    if (strokeReceipts.length !== strokes.length) return;
     const activeObjects = Object.values(store.getState().canvas.objects).filter(
       (object) => !object.deletedAt,
     );
@@ -2248,18 +2349,26 @@ export function CommandCanvasRoom({
       (maximum, object) => Math.max(maximum, object.zIndex),
       0,
     );
-    const objectId = createClientId("sketch");
+    const objectId =
+      gestureSketchObjectIdRef.current ?? createClientId("sketch");
+    gestureSketchObjectIdRef.current = objectId;
+    const command = createGestureSketchCommand(strokes, {
+      objectId,
+      strokeIds: strokeReceipts.map((receipt) => receipt.strokeId),
+      strokeReceipts,
+      zIndex: highestZ + 1,
+    });
+    gestureSketchFinalizingRef.current = true;
     runCommand(
-      createGestureSketchCommand(strokes, {
-        objectId,
-        strokeIds: strokes.map(() => createClientId("stroke")),
-        zIndex: highestZ + 1,
-      }),
+      command,
       "gesture",
       () => {
         spatialGestureState.current = createInitialSpatialGestureState();
         clearScheduledStrokePreview();
         gestureSketchStrokesRef.current = [];
+        gestureSketchStrokeReceiptsRef.current = [];
+        gestureSketchFinalizingRef.current = false;
+        gestureSketchObjectIdRef.current = null;
         setGestureSketchStrokes([]);
         strokeSampleStateRef.current = createInitialStrokeSampleState();
         resetPalmFinishPreview();
@@ -2269,7 +2378,30 @@ export function CommandCanvasRoom({
         setHandFeedback(null);
         selectObject(objectId);
       },
+      () => {
+        gestureSketchFinalizingRef.current = false;
+        resetPalmFinishPreview();
+      },
     );
+  }
+
+  function toggleHandDrawingTool(penUpAt: number) {
+    const currentDrawing = spatialGestureState.current.drawing;
+    const finalization = finishSpatialDrawing(
+      spatialGestureState.current,
+      Math.max(
+        penUpAt,
+        currentDrawing?.lastMeasuredAt ?? 0,
+        currentDrawing?.penDownAt ?? 0,
+      ),
+    );
+    spatialGestureState.current = finalization.state;
+    for (const effect of finalization.effects)
+      applySpatialGestureEffect(effect);
+    spatialRoomInputState.current = createInitialSpatialRoomInputState();
+    clearScheduledStrokePreview();
+    handEraseLatchedRef.current = false;
+    setHandDrawingTool((current) => (current === "draw" ? "erase" : "draw"));
   }
 
   function eraseNearestGestureStroke(
@@ -2279,7 +2411,8 @@ export function CommandCanvasRoom({
     const currentViewport = store.getState().viewport;
     const point = {
       x: (pointer.x * bounds.width - currentViewport.x) / currentViewport.scale,
-      y: (pointer.y * bounds.height - currentViewport.y) / currentViewport.scale,
+      y:
+        (pointer.y * bounds.height - currentViewport.y) / currentViewport.scale,
     };
     const radius = 34 / currentViewport.scale;
     const strokes = gestureSketchStrokesRef.current;
@@ -2295,6 +2428,10 @@ export function CommandCanvasRoom({
     if (nearestIndex < 0 || nearestDistance > radius) return;
     const next = strokes.filter((_stroke, index) => index !== nearestIndex);
     gestureSketchStrokesRef.current = next;
+    gestureSketchStrokeReceiptsRef.current =
+      gestureSketchStrokeReceiptsRef.current.filter(
+        (_receipt, index) => index !== nearestIndex,
+      );
     setGestureSketchStrokes(next);
   }
 
@@ -2404,12 +2541,28 @@ export function CommandCanvasRoom({
       }
       case "fit_all":
         return fitWorkspaceObjects(objects)
-          ? { ok: true, status: "completed", message: "Canvas fitted to all active objects." }
-          : { ok: false, code: "not_available", message: "not available yet: add canvas content first" };
+          ? {
+              ok: true,
+              status: "completed",
+              message: "Canvas fitted to all active objects.",
+            }
+          : {
+              ok: false,
+              code: "not_available",
+              message: "not available yet: add canvas content first",
+            };
       case "fit_selected":
         return fitWorkspaceObjects(selectedObjects)
-          ? { ok: true, status: "completed", message: "Canvas fitted to the selected objects." }
-          : { ok: false, code: "not_available", message: "not available yet: select an object first" };
+          ? {
+              ok: true,
+              status: "completed",
+              message: "Canvas fitted to the selected objects.",
+            }
+          : {
+              ok: false,
+              code: "not_available",
+              message: "not available yet: select an object first",
+            };
       case "focus_selected":
         if (!selectedObject || selectedObject.deletedAt)
           return {
@@ -2470,11 +2623,10 @@ export function CommandCanvasRoom({
     if (onCanvasPointerWorldMove) {
       const bounds = event.currentTarget.getBoundingClientRect();
       onCanvasPointerWorldMove(
-        screenToWorld(
-          { x: event.clientX, y: event.clientY },
-          viewport,
-          { left: bounds.left, top: bounds.top },
-        ),
+        screenToWorld({ x: event.clientX, y: event.clientY }, viewport, {
+          left: bounds.left,
+          top: bounds.top,
+        }),
       );
     }
     if (!pan || pan.pointerId !== event.pointerId) return;
@@ -2549,7 +2701,9 @@ export function CommandCanvasRoom({
         aria-hidden={drawingActive || undefined}
       >
         <div className="brand-lockup">
-          <span className="brand-mark" aria-hidden="true">CC</span>
+          <span className="brand-mark" aria-hidden="true">
+            CC
+          </span>
           <div>
             <p className="eyebrow">CommandCanvas</p>
             <h1>Spatial command surface</h1>
@@ -2557,7 +2711,10 @@ export function CommandCanvasRoom({
         </div>
 
         <div className="room-identity" aria-label="Room status">
-          <span className={`status-dot status-dot-${roomStatus}`} aria-hidden="true" />
+          <span
+            className={`status-dot status-dot-${roomStatus}`}
+            aria-hidden="true"
+          />
           <strong>{roomLabel}</strong>
           <span>{roomStatus.toUpperCase()}</span>
           <span>R{canvas.revision}</span>
@@ -2740,8 +2897,13 @@ export function CommandCanvasRoom({
                   diagram={diagram}
                 />
               ))}
-              {handInteractionMode === "draw" || gestureSketchStrokes.length > 0 ? (
-                <svg className="gesture-stroke-preview" aria-hidden="true" viewBox="0 0 1 1">
+              {handInteractionMode === "draw" ||
+              gestureSketchStrokes.length > 0 ? (
+                <svg
+                  className="gesture-stroke-preview"
+                  aria-hidden="true"
+                  viewBox="0 0 1 1"
+                >
                   {gestureSketchStrokes
                     .filter((points) => points.length > 0)
                     .map((points, index) => (
@@ -2767,7 +2929,10 @@ export function CommandCanvasRoom({
                   preview={objectPreviews[object.id]}
                   isSelected={selectedObjectIds.includes(object.id)}
                   isPrimary={selectedObjectId === object.id}
-                  childCount={objects.filter((child) => child.parentId === object.id).length}
+                  childCount={
+                    objects.filter((child) => child.parentId === object.id)
+                      .length
+                  }
                   isHeld={
                     drag?.objectId === object.id ||
                     handFeedback?.grabbedObjectId === object.id
@@ -2779,7 +2944,9 @@ export function CommandCanvasRoom({
                   onPointerMove={updateObjectDrag}
                   onPointerUp={finishObjectDrag}
                   onPointerCancel={cancelObjectDrag}
-                  onResizePointerDown={(event) => startObjectResize(event, object)}
+                  onResizePointerDown={(event) =>
+                    startObjectResize(event, object)
+                  }
                   onResizePointerMove={updateObjectResize}
                   onResizePointerUp={finishObjectResize}
                   onResizePointerCancel={cancelObjectResize}
@@ -2845,7 +3012,9 @@ export function CommandCanvasRoom({
                   }}
                 >
                   <span className="remote-cursor-pointer" />
-                  <span className="remote-cursor-name">{cursor.displayName}</span>
+                  <span className="remote-cursor-name">
+                    {cursor.displayName}
+                  </span>
                 </div>
               );
             })}
@@ -2927,7 +3096,12 @@ export function CommandCanvasRoom({
                         : "TRACKING LOST · SKETCH PRESERVED"}
                     </strong>
                     <span>
-                      {gestureSketchStrokes.length} {gestureSketchStrokes.length === 1 ? "stroke" : "strokes"} ready
+                      {gestureSketchStrokes.length}{" "}
+                      {gestureSketchStrokes.length === 1 ? "stroke" : "strokes"}{" "}
+                      ready
+                    </span>
+                    <span className="hand-draw-clutch-instruction">
+                      Index aims · touch thumb + middle to draw · separate to lift
                     </span>
                     {palmFinishPreview !== null ? (
                       <span
@@ -2942,26 +3116,28 @@ export function CommandCanvasRoom({
                           } as CSSProperties
                         }
                       >
-                        OPEN PALM · HOLD TO FINISH {Math.round(palmFinishPreview * 100)}%
+                        OPEN PALM · HOLD TO FINISH{" "}
+                        {Math.round(palmFinishPreview * 100)}%
                       </span>
                     ) : null}
                     <button
                       type="button"
-                      aria-label={handDrawingTool === "draw" ? "Use hand eraser" : "Use hand draw"}
+                      aria-label={
+                        handDrawingTool === "draw"
+                          ? "Use hand eraser"
+                          : "Use hand draw"
+                      }
                       aria-pressed={handDrawingTool === "erase"}
-                      onClick={() => {
-                        spatialGestureState.current = createInitialSpatialGestureState();
-                        clearScheduledStrokePreview();
-                        handEraseLatchedRef.current = false;
-                        setHandDrawingTool((current) => current === "draw" ? "erase" : "draw");
-                      }}
+                      onClick={(event) =>
+                        toggleHandDrawingTool(event.timeStamp)
+                      }
                     >
                       {handDrawingTool === "draw" ? "Erase" : "Draw"}
                     </button>
                     <button
                       type="button"
                       aria-label="Finish hand sketch"
-                      onClick={finishHandDrawing}
+                      onClick={(event) => finishHandDrawing(event.timeStamp)}
                     >
                       Finish
                     </button>
@@ -2982,8 +3158,14 @@ export function CommandCanvasRoom({
                 <span className="empty-crosshair" aria-hidden="true" />
                 <p>No objects yet</p>
                 <span>
-                  Ask through Site Tools, start Live Voice, draw, or choose an
-                  object below.
+                  {webMcpSurfaceState.status === "registered_to_page" ||
+                  webMcpSurfaceState.status === "invoked"
+                    ? realtimeVoice && !realtimeVoice.disabled
+                      ? "Ask through WebMCP agent tools, start Live Voice, draw, or choose an object below."
+                      : "Ask through WebMCP agent tools, draw, or choose an object below."
+                    : realtimeVoice && !realtimeVoice.disabled
+                      ? "Start Live Voice, draw, or choose an object below."
+                      : "Draw or choose an object below."}
                 </span>
               </div>
             ) : null}
@@ -3026,12 +3208,17 @@ export function CommandCanvasRoom({
             createController={createHandTrackingController}
             privateGpuRelayAvailable={privateGpuRelayAvailable}
             pointPolicy={
-              handInteractionMode === "draw" ? "draw-index-led" : "deliberate"
+              handInteractionMode === "draw"
+                ? "draw-index-led"
+                : "spatial-index-led"
             }
             onCalibrationResult={(result) => {
-              spatialRoomInputState.current = createInitialSpatialRoomInputState();
+              spatialRoomInputState.current =
+                createInitialSpatialRoomInputState();
               setHandCalibrationProfile(result.profile);
-              setHandCalibrationKind(result.accepted ? "calibrated" : "skipped");
+              setHandCalibrationKind(
+                result.accepted ? "calibrated" : "skipped",
+              );
             }}
             onCalibrationOpenChange={(open) => {
               if (open) {
@@ -3057,129 +3244,175 @@ export function CommandCanvasRoom({
           aria-label="Object tools"
         >
           <div className="tool-dock-primary">
-          <button
-            type="button"
-            aria-label="Open create menu"
-            aria-expanded={dockMenu === "create"}
-            className={dockMenu === "create" ? "is-active" : undefined}
-            disabled={interactionPending || drawingActive}
-            onClick={() => setDockMenu((current) => current === "create" ? null : "create")}
-          >
-            <span aria-hidden="true">＋</span><small>Create</small>
-          </button>
-          <button
-            type="button"
-            onClick={openPointerSketch}
-            aria-label={
-              handTrackingStatus.state === "ready"
-                ? "Draw with touch, stylus, or mouse"
-                : "Create sketch"
-            }
-            aria-pressed={sketchComposerOpen}
-            className={sketchComposerOpen ? "is-active" : undefined}
-            disabled={interactionPending || drawingActive}
-          >
-            <span aria-hidden="true">⌁</span>
-            <small>Draw</small>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (handTrackingStatus.state === "ready") {
-                beginHandDrawing();
-                return;
+            <button
+              type="button"
+              aria-label="Open create menu"
+              aria-expanded={dockMenu === "create"}
+              className={dockMenu === "create" ? "is-active" : undefined}
+              disabled={interactionPending || drawingActive}
+              onClick={() =>
+                setDockMenu((current) =>
+                  current === "create" ? null : "create",
+                )
               }
-              openHandCalibration();
-            }}
-            aria-label={
-              handInteractionMode === "draw"
-                ? "Drawing with hand"
-                : handTrackingStatus.state === "ready"
-                ? "Draw with hand"
-                : "Start hand interaction"
-            }
-            aria-pressed={handInteractionMode === "draw"}
-            className={handInteractionMode === "draw" ? "is-active" : undefined}
-            disabled={interactionPending || drawingActive}
-          >
-            <span aria-hidden="true">☝</span>
-            <small>Hand</small>
-          </button>
-          <button
-            type="button"
-            aria-label="Undo last change"
-            disabled={drawingActive || interactionPending || canvas.receipts.length === 0}
-            onClick={() => runCommand({ type: "history.undo" }, "typed")}
-          >
-            <span aria-hidden="true">↶</span><small>Undo</small>
-          </button>
-          <button
-            type="button"
-            aria-label="Open more canvas actions"
-            aria-expanded={dockMenu === "more"}
-            className={dockMenu === "more" ? "is-active" : undefined}
-            disabled={interactionPending || drawingActive}
-            onClick={() => setDockMenu((current) => current === "more" ? null : "more")}
-          >
-            <span aria-hidden="true">•••</span><small>More</small>
-          </button>
+            >
+              <span aria-hidden="true">＋</span>
+              <small>Create</small>
+            </button>
+            <button
+              type="button"
+              onClick={openPointerSketch}
+              aria-label={
+                handTrackingStatus.state === "ready"
+                  ? "Draw with touch, stylus, or mouse"
+                  : "Create sketch"
+              }
+              aria-pressed={sketchComposerOpen}
+              className={sketchComposerOpen ? "is-active" : undefined}
+              disabled={interactionPending || drawingActive}
+            >
+              <span aria-hidden="true">⌁</span>
+              <small>Draw</small>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (handTrackingStatus.state === "ready") {
+                  beginHandDrawing();
+                  return;
+                }
+                openHandCalibration();
+              }}
+              aria-label={
+                handInteractionMode === "draw"
+                  ? "Drawing with hand"
+                  : handTrackingStatus.state === "ready"
+                    ? "Draw with hand"
+                    : "Start hand interaction"
+              }
+              aria-pressed={handInteractionMode === "draw"}
+              className={
+                handInteractionMode === "draw" ? "is-active" : undefined
+              }
+              disabled={interactionPending || drawingActive}
+            >
+              <span aria-hidden="true">☝</span>
+              <small>Hand</small>
+            </button>
+            <button
+              type="button"
+              aria-label="Undo last change"
+              disabled={
+                drawingActive ||
+                interactionPending ||
+                canvas.receipts.length === 0
+              }
+              onClick={() => runCommand({ type: "history.undo" }, "typed")}
+            >
+              <span aria-hidden="true">↶</span>
+              <small>Undo</small>
+            </button>
+            <button
+              type="button"
+              aria-label="Open more canvas actions"
+              aria-expanded={dockMenu === "more"}
+              className={dockMenu === "more" ? "is-active" : undefined}
+              disabled={interactionPending || drawingActive}
+              onClick={() =>
+                setDockMenu((current) => (current === "more" ? null : "more"))
+              }
+            >
+              <span aria-hidden="true">•••</span>
+              <small>More</small>
+            </button>
           </div>
           <div
             className={`tool-dock-menu${dockMenu === "create" ? " is-open" : ""}`}
             aria-label="Create objects"
           >
-              <button type="button" onClick={() => { createNote(); setDockMenu(null); }} aria-label="Create note" disabled={interactionPending || drawingActive}>
-                <span aria-hidden="true">＋</span><small>Note</small>
-              </button>
-              <button type="button" onClick={() => { createTaskBoard(); setDockMenu(null); }} aria-label="Create task board" disabled={interactionPending || drawingActive}>
-                <span aria-hidden="true">▦</span><small>Board</small>
-              </button>
-              <button type="button" onClick={() => { createSchedule(); setDockMenu(null); }} aria-label="Create schedule" disabled={interactionPending || drawingActive}>
-                <span aria-hidden="true">31</span><small>Schedule</small>
-              </button>
+            <button
+              type="button"
+              onClick={() => {
+                createNote();
+                setDockMenu(null);
+              }}
+              aria-label="Create note"
+              disabled={interactionPending || drawingActive}
+            >
+              <span aria-hidden="true">＋</span>
+              <small>Note</small>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                createTaskBoard();
+                setDockMenu(null);
+              }}
+              aria-label="Create task board"
+              disabled={interactionPending || drawingActive}
+            >
+              <span aria-hidden="true">▦</span>
+              <small>Board</small>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                createSchedule();
+                setDockMenu(null);
+              }}
+              aria-label="Create schedule"
+              disabled={interactionPending || drawingActive}
+            >
+              <span aria-hidden="true">31</span>
+              <small>Schedule</small>
+            </button>
           </div>
           <div
             className={`tool-dock-menu${dockMenu === "more" ? " is-open" : ""}`}
             aria-label="More canvas actions"
           >
-          <button
-            type="button"
-            aria-label={
-              multiSelectMode
-                ? "Disable multiple selection"
-                : "Enable multiple selection"
-            }
-            aria-pressed={multiSelectMode}
-            className={multiSelectMode ? "is-active" : undefined}
-            disabled={interactionPending || drawingActive}
-            onClick={() => setMultiSelectMode((current) => !current)}
-          >
-            <span aria-hidden="true">◇</span><small>Select</small>
-          </button>
-          <button
-            type="button"
-            aria-label="Group selected objects"
-            disabled={interactionPending || drawingActive || !canGroup}
-            onClick={() => groupSelectedObjects()}
-          >
-            <span aria-hidden="true">▣</span><small>Group</small>
-          </button>
-          <button
-            type="button"
-            aria-label="Ungroup selected frame"
-            disabled={interactionPending || drawingActive || !canUngroup}
-            onClick={() => ungroupSelectedFrame()}
-          >
-            <span aria-hidden="true">▢</span><small>Ungroup</small>
-          </button>
-          <button
-            type="button"
-            aria-label="Redo last undone change"
-            disabled={interactionPending || drawingActive || !canRedo}
-            onClick={() => runCommand({ type: "history.redo" }, "typed")}
-          >
-            <span aria-hidden="true">↷</span><small>Redo</small>
-          </button>
+            <button
+              type="button"
+              aria-label={
+                multiSelectMode
+                  ? "Disable multiple selection"
+                  : "Enable multiple selection"
+              }
+              aria-pressed={multiSelectMode}
+              className={multiSelectMode ? "is-active" : undefined}
+              disabled={interactionPending || drawingActive}
+              onClick={() => setMultiSelectMode((current) => !current)}
+            >
+              <span aria-hidden="true">◇</span>
+              <small>Select</small>
+            </button>
+            <button
+              type="button"
+              aria-label="Group selected objects"
+              disabled={interactionPending || drawingActive || !canGroup}
+              onClick={() => groupSelectedObjects()}
+            >
+              <span aria-hidden="true">▣</span>
+              <small>Group</small>
+            </button>
+            <button
+              type="button"
+              aria-label="Ungroup selected frame"
+              disabled={interactionPending || drawingActive || !canUngroup}
+              onClick={() => ungroupSelectedFrame()}
+            >
+              <span aria-hidden="true">▢</span>
+              <small>Ungroup</small>
+            </button>
+            <button
+              type="button"
+              aria-label="Redo last undone change"
+              disabled={interactionPending || drawingActive || !canRedo}
+              onClick={() => runCommand({ type: "history.redo" }, "typed")}
+            >
+              <span aria-hidden="true">↷</span>
+              <small>Redo</small>
+            </button>
           </div>
         </aside>
 
@@ -3201,7 +3434,9 @@ export function CommandCanvasRoom({
             setHandCalibrationOpen(false);
             setOpenDrawer(null);
           }}
-          onToggleRealtimeVoice={() => realtimeVoiceControlRef.current?.toggle()}
+          onToggleRealtimeVoice={() =>
+            realtimeVoiceControlRef.current?.toggle()
+          }
           onViewAllActivity={() => {
             setHeaderControlsOpen(false);
             setDockMenu(null);
@@ -3278,7 +3513,10 @@ export function CommandCanvasRoom({
           packetPanel={meetingPacketPanel}
         />
 
-        {latestReceipt && latestReceiptVisible && !drawingActive && openDrawer !== "activity" ? (
+        {latestReceipt &&
+        latestReceiptVisible &&
+        !drawingActive &&
+        openDrawer !== "activity" ? (
           <button
             type="button"
             className="latest-activity-toast"
@@ -3292,7 +3530,9 @@ export function CommandCanvasRoom({
             </span>
             <span>
               <strong>{latestReceipt.description}</strong>
-              <small>R{latestReceipt.revision} · {latestReceipt.source}</small>
+              <small>
+                R{latestReceipt.revision} · {latestReceipt.source}
+              </small>
             </span>
           </button>
         ) : null}
@@ -3302,13 +3542,27 @@ export function CommandCanvasRoom({
         lastError ? (
           <div className="operation-toast" role="status" aria-live="polite">
             {commandExecution.status === "pending" ? (
-              <><strong>Applying command…</strong><span>Waiting for the shared canvas to confirm the change.</span></>
+              <>
+                <strong>Applying command…</strong>
+                <span>
+                  Waiting for the shared canvas to confirm the change.
+                </span>
+              </>
             ) : commandExecution.status === "refused" ? (
-              <><strong>Command refused</strong><span>{commandExecution.message}</span></>
+              <>
+                <strong>Command refused</strong>
+                <span>{commandExecution.message}</span>
+              </>
             ) : sketchTransformExecution.status === "refused" ? (
-              <><strong>Sketch interpretation failed</strong><span>{sketchTransformExecution.message}</span></>
+              <>
+                <strong>Sketch interpretation failed</strong>
+                <span>{sketchTransformExecution.message}</span>
+              </>
             ) : lastError ? (
-              <><strong>{lastError.code}</strong><span>{lastError.message}</span></>
+              <>
+                <strong>{lastError.code}</strong>
+                <span>{lastError.message}</span>
+              </>
             ) : null}
           </div>
         ) : null}
@@ -3321,71 +3575,95 @@ export function CommandCanvasRoom({
           aria-hidden={openDrawer === "system" ? undefined : true}
           inert={openDrawer !== "system"}
         >
-            <DrawerHeading
-              eyebrow="Quiet until needed"
-              title="Inputs & services"
-              closeLabel="Close system status drawer"
-              onClose={() => {
-                setHandCalibrationOpen(false);
-                setOpenDrawer(null);
-              }}
+          <DrawerHeading
+            eyebrow="Quiet until needed"
+            title="Inputs & services"
+            closeLabel="Close system status drawer"
+            onClose={() => {
+              setHandCalibrationOpen(false);
+              setOpenDrawer(null);
+            }}
+          />
+          <section className="service-stack" aria-label="Service status">
+            <ServiceState
+              label="WebMCP"
+              value={serviceStatus?.webMcp?.value ?? "WebMCP not exercised"}
+              tone={serviceStatus?.webMcp?.tone ?? "idle"}
             />
-            <section className="service-stack" aria-label="Service status">
-              <ServiceState
-                label="WebMCP"
-                value={serviceStatus?.webMcp?.value ?? "WebMCP not exercised"}
-                tone={serviceStatus?.webMcp?.tone ?? "idle"}
-              />
-              <ServiceState
-                label="Collaboration"
-                value={serviceStatus?.collaboration?.value ?? "Realtime not connected"}
-                tone={serviceStatus?.collaboration?.tone ?? "idle"}
-                announce
-              />
-              <ServiceState label="Spatial input" value={spatialServiceState.value} tone={spatialServiceState.tone} />
-            </section>
-            {previewBoundary ? (
-              <section className="preview-system-notice" aria-label="Demo preview details">
-                <strong>{previewBoundary.label}</strong>
-                <div>{previewBoundary.description}</div>
-              </section>
-            ) : null}
-            <a
-              className="source-offer"
-              href={correspondingSourceUrl}
-              target="_blank"
-              rel="noreferrer"
+            <ServiceState
+              label="Collaboration"
+              value={
+                serviceStatus?.collaboration?.value ?? "Realtime not connected"
+              }
+              tone={serviceStatus?.collaboration?.tone ?? "idle"}
+              announce
+            />
+            <ServiceState
+              label="Spatial input"
+              value={spatialServiceState.value}
+              tone={spatialServiceState.tone}
+            />
+          </section>
+          {previewBoundary ? (
+            <section
+              className="preview-system-notice"
+              aria-label="Demo preview details"
             >
-              <span>Source · MIT</span>
-              <span aria-hidden="true">↗</span>
-            </a>
+              <strong>{previewBoundary.label}</strong>
+              <div>{previewBoundary.description}</div>
+            </section>
+          ) : null}
+          <a
+            className="source-offer"
+            href={correspondingSourceUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <span>Source · MIT</span>
+            <span aria-hidden="true">↗</span>
+          </a>
         </aside>
 
         {openDrawer === "activity" ? (
-          <aside className="command-rail overlay-drawer" aria-label="Activity drawer">
+          <aside
+            className="command-rail overlay-drawer"
+            aria-label="Activity drawer"
+          >
             <DrawerHeading
               eyebrow="Visible, reversible, attributable"
               title="Activity"
               closeLabel="Close activity drawer"
               onClose={() => setOpenDrawer(null)}
             />
-            <section className="activity-section" aria-labelledby="activity-heading">
+            <section
+              className="activity-section"
+              aria-labelledby="activity-heading"
+            >
               <div className="activity-header">
                 <h3 id="activity-heading">Room receipts</h3>
                 <span>{canvas.receipts.length}</span>
               </div>
               {canvas.receipts.length === 0 ? (
-                <p className="activity-empty">Human, collaborator, and agent actions land in one receipt stream.</p>
+                <p className="activity-empty">
+                  Human, collaborator, and agent actions land in one receipt
+                  stream.
+                </p>
               ) : (
                 <ol className="receipt-list">
                   {[...canvas.receipts].reverse().map((receipt) => (
                     <li key={receipt.id}>
-                      <span className={`actor-token actor-${receipt.actor.type}`}>
-                        {receipt.actor.type === "agent" ? "AI" : initials(receipt.actor.displayName)}
+                      <span
+                        className={`actor-token actor-${receipt.actor.type}`}
+                      >
+                        {receipt.actor.type === "agent"
+                          ? "AI"
+                          : initials(receipt.actor.displayName)}
                       </span>
                       <div>
                         <p>{receipt.description}</p>
-                        <span>R{receipt.revision} · {receipt.source}</span>
+                        <span>
+                          R{receipt.revision} · {receipt.source}
+                        </span>
                       </div>
                     </li>
                   ))}
@@ -3466,7 +3744,15 @@ function CanvasObjectCard({
     <article
       className={`canvas-object ${typeClass}${isSelected ? " is-selected" : ""}${isTargeted ? " is-hand-target" : ""}${isHeld ? " is-held" : ""}${object.minimized ? " is-minimized" : ""}`}
       data-gesture-exit={gestureExit}
-      data-object-state={object.minimized ? "minimized" : isHeld ? "held" : isTargeted ? "target" : "open"}
+      data-object-state={
+        object.minimized
+          ? "minimized"
+          : isHeld
+            ? "held"
+            : isTargeted
+              ? "target"
+              : "open"
+      }
       data-canvas-object={object.id}
       style={{
         left: `var(--gesture-x, ${preview?.x ?? object.x}px)`,
@@ -3489,7 +3775,9 @@ function CanvasObjectCard({
             <button
               type="button"
               className="object-transform-action"
-              aria-label={transformPending ? "Interpreting sketch…" : "Make usable"}
+              aria-label={
+                transformPending ? "Interpreting sketch…" : "Make usable"
+              }
               disabled={commandsDisabled}
               onClick={onMakeUsable}
             >
@@ -3583,7 +3871,9 @@ function CanvasObjectCard({
         <span className="object-title-line">
           <strong>{object.title}</strong>
           {object.type === "diagram" &&
-          !object.payload.interpretationSummary.startsWith("Prepared demo fallback") ? (
+          !object.payload.interpretationSummary.startsWith(
+            "Prepared demo fallback",
+          ) ? (
             <span className="object-provenance object-provenance-agent">
               <span aria-hidden="true">✦</span> Agent structured
             </span>
@@ -3616,7 +3906,9 @@ function CanvasObjectCard({
           <span className="resize-corner resize-corner-sw" aria-hidden="true" />
         </>
       ) : null}
-      {object.pinned ? <span className="pin-state">Pinned to canvas</span> : null}
+      {object.pinned ? (
+        <span className="pin-state">Pinned to canvas</span>
+      ) : null}
     </article>
   );
 }
@@ -3685,7 +3977,9 @@ function CanvasObjectContent({
               <span className="schedule-day-label">{day.label}</span>
               {day.entries.map((entry) => (
                 <span key={entry.id} className="schedule-entry-preview">
-                  <time dateTime={`${day.date}T${entry.time}`}>{entry.time}</time>
+                  <time dateTime={`${day.date}T${entry.time}`}>
+                    {entry.time}
+                  </time>
                   <b>{entry.title}</b>
                   {entry.owner ? <small>{entry.owner}</small> : null}
                 </span>
@@ -3703,7 +3997,9 @@ function CanvasObjectContent({
             height={object.height}
             payload={object.payload}
           />
-          <small>Original source · {object.payload.strokes.length} strokes</small>
+          <small>
+            Original source · {object.payload.strokes.length} strokes
+          </small>
         </div>
       );
     case "diagram":
@@ -3719,7 +4015,9 @@ function CanvasObjectContent({
     case "frame":
       return (
         <div className="frame-preview">
-          <span>{childCount} {childCount === 1 ? "object" : "objects"}</span>
+          <span>
+            {childCount} {childCount === 1 ? "object" : "objects"}
+          </span>
           <small>Move or rotate this frame to carry its contents.</small>
         </div>
       );
@@ -3820,13 +4118,7 @@ function TransformationBridge({
   );
 }
 
-function CompactStatus({
-  label,
-  tone,
-}: {
-  label: string;
-  tone: ServiceTone;
-}) {
+function CompactStatus({ label, tone }: { label: string; tone: ServiceTone }) {
   return (
     <span className={`compact-status compact-status-${tone}`}>
       <span aria-hidden="true" />
@@ -3887,11 +4179,11 @@ function contextualHandLabel(
   if (mode !== "bimanual_pinch" && trackingState === "grace")
     return "REACQUIRE";
   if (interactionMode === "draw")
-    return mode === "point"
+    return state.drawing
       ? "DRAWING"
       : mode === "open_palm"
         ? "PEN UP"
-        : "DRAW · READY";
+        : "HOVER · CLUTCH TO DRAW";
   if (edgePreview?.armed)
     return edgePreview.action === "discard"
       ? "THROW ARMED"
@@ -3904,8 +4196,7 @@ function contextualHandLabel(
   if (state.held) return "HELD";
   if (state.phase === "panning")
     return mode === "bimanual_pinch" ? "CANVAS ZOOM" : "PAN";
-  if (state.phase === "pinch_pending" || mode === "pinch")
-    return "PINCH";
+  if (state.phase === "pinch_pending" || mode === "pinch") return "PINCH";
   if (state.candidate) return "TARGET";
   return "POINT";
 }
@@ -3916,16 +4207,12 @@ function handControlGainState(
   targetObjectId: string | null,
 ) {
   if (interactionMode === "draw") return "draw" as const;
-  if (
-    state.phase === "transforming_two" ||
-    state.phase === "two_hand_pending"
-  )
+  if (state.phase === "transforming_two" || state.phase === "two_hand_pending")
     return "two_hand" as const;
   if (state.held) return "held" as const;
   if (targetObjectId || state.candidate) return "target" as const;
   return "hover" as const;
 }
-
 
 interface ObjectTransformPreview {
   x?: number;
@@ -3944,10 +4231,7 @@ function effectiveObjectZIndex(zIndex: number, isPrimary: boolean) {
   return isPrimary ? SELECTED_OBJECT_RENDER_Z_INDEX : zIndex;
 }
 
-function distanceToStroke(
-  point: CanvasPoint,
-  stroke: readonly CanvasPoint[],
-) {
+function distanceToStroke(point: CanvasPoint, stroke: readonly CanvasPoint[]) {
   if (stroke.length === 0) return Number.POSITIVE_INFINITY;
   if (stroke.length === 1)
     return Math.hypot(point.x - stroke[0].x, point.y - stroke[0].y);
@@ -4024,9 +4308,9 @@ function isPromiseLike(
 ): value is Promise<void | CommandResult> {
   return Boolean(
     value &&
-      typeof value === "object" &&
-      "then" in value &&
-      typeof value.then === "function",
+    typeof value === "object" &&
+    "then" in value &&
+    typeof value.then === "function",
   );
 }
 
@@ -4133,6 +4417,11 @@ function createClientId(prefix: string) {
   return `${prefix}-${suffix}`;
 }
 
+/** Read only from explicit voice/tool events, never while rendering. */
+function currentInteractionTimestamp() {
+  return globalThis.performance.now();
+}
+
 function serviceStateForHandTracking(
   status: HandTrackingStatus,
   fallback: CommandCanvasServiceStatus["spatialInput"],
@@ -4145,7 +4434,10 @@ function serviceStateForHandTracking(
     case "ready":
       return { value: "Hand input ready · local only", tone: "ready" };
     case "refused":
-      return { value: "Camera permission refused · pointer active", tone: "idle" };
+      return {
+        value: "Camera permission refused · pointer active",
+        tone: "idle",
+      };
     case "unavailable":
       return { value: "Hand input unavailable · pointer active", tone: "idle" };
   }

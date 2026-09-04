@@ -25,7 +25,7 @@ const hostContext = {
 };
 
 describe("CanvasCapabilityCatalog transport projections", () => {
-  it("keeps the eleven public Site Tools stable and appends workspace control", () => {
+  it("keeps the eleven public WebMCP tools stable and appends workspace control", () => {
     expect(CANVAS_CAPABILITY_NAMES).toEqual([
       "get_canvas_state",
       "create_object",

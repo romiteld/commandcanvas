@@ -42,6 +42,12 @@ describe("normal meeting lobby", () => {
       screen.getByText(/ChatGPT desktop app's built-in browser/i),
     ).toBeVisible();
     expect(
+      screen.getByText(/surrounding compatible agent host uses its signed-in ChatGPT account for WebMCP tools/i),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/page tools operate on CommandCanvas state and do not receive the ChatGPT credential/i),
+    ).toBeVisible();
+    expect(
       screen.getByText(/own website session apart from Chrome/i),
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "Email me a code" })).toBeVisible();
@@ -225,7 +231,7 @@ describe("normal meeting private hand relay binding", () => {
 });
 
 describe("normal meeting capability runtime", () => {
-  it("executes Live Voice mutations without requiring a Site Tools registration target", async () => {
+  it("executes Live Voice mutations without requiring a WebMCP registration target", async () => {
     const store = createCanvasStore("room-live-voice", {
       actor: { id: "host-1", displayName: "Daniel", type: "human" },
       createId: (prefix) => `${prefix}-fixture`,
@@ -280,7 +286,7 @@ describe("normal meeting capability runtime", () => {
   });
 });
 
-describe("meeting invitation lifecycle and Site Tools", () => {
+describe("meeting invitation lifecycle and WebMCP tools", () => {
   it("retains the scrubbed token across the StrictMode effect replay", () => {
     const memory = {
       read: { current: false },
@@ -298,7 +304,7 @@ describe("meeting invitation lifecycle and Site Tools", () => {
     expect(replaceState).toHaveBeenCalledTimes(1);
   });
 
-  it("registers standard-room Site Tools and aborts every lifecycle signal on disposal", async () => {
+  it("registers standard-room WebMCP tools and aborts every lifecycle signal on disposal", async () => {
     const roomId = "11111111-1111-4111-8111-111111111111";
     const store = createCanvasStore(roomId, {
       actor: { id: "host", displayName: "Danny", type: "human" },
@@ -459,7 +465,7 @@ describe("meeting invitation lifecycle and Site Tools", () => {
     );
   });
 
-  it("lets an authenticated participant create an ordinary canvas object through their own Site Tools", async () => {
+  it("lets an authenticated participant create an ordinary canvas object through WebMCP", async () => {
     const roomId = "11111111-1111-4111-8111-111111111111";
     const store = createCanvasStore(roomId, {
       actor: { id: "participant", displayName: "Sarah", type: "participant" },

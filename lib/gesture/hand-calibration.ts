@@ -23,6 +23,10 @@ export interface HandCalibrationProfile {
   readonly openPalmBaseline?: OpenPalmCalibrationBaseline;
   /** Session-scoped hand-specific pinch evidence; global ratios remain fallback. */
   readonly pinchCalibrations?: readonly HandPinchCalibration[];
+  /** Comfortable reach retained per physical hand for full-viewport mapping. */
+  readonly reachCalibrations?: readonly HandReachCalibration[];
+  /** Session-scoped thumb-to-middle evidence. Unmatched hands use a provisional policy. */
+  readonly drawingClutchCalibrations?: readonly HandDrawingClutchCalibration[];
 }
 
 export interface HandPinchCalibration {
@@ -32,6 +36,25 @@ export interface HandPinchCalibration {
   readonly handednessConfidence?: number;
   readonly closedRatio: number;
   readonly openRatio: number;
+}
+
+export interface HandReachCalibration {
+  readonly trackId: string;
+  readonly handedness: "left" | "right" | "unknown";
+  readonly handednessConfidence?: number;
+  readonly cameraBounds: NormalizedRect;
+}
+
+export interface HandDrawingClutchCalibration {
+  readonly trackId: string;
+  readonly handedness: "left" | "right" | "unknown";
+  /** Detector evidence for safely reusing this calibration across track IDs. */
+  readonly handednessConfidence?: number;
+  readonly closedRatio: number;
+  readonly openRatio: number;
+  readonly openSampleCount: number;
+  readonly closedSampleCount: number;
+  readonly capturedAt: number;
 }
 
 export interface OpenPalmCalibrationSample {
@@ -65,6 +88,9 @@ export interface HandCalibrationSamples {
   readonly reachSamples: readonly NormalizedPoint[];
   readonly closedPinchRatios: readonly number[];
   readonly openPinchRatios: readonly number[];
+  /** Thumb-to-middle distance samples; absent on legacy calibration profiles. */
+  readonly closedDrawingClutchRatios?: readonly number[];
+  readonly openDrawingClutchRatios?: readonly number[];
   /** Present for the deliberate open-palm-first calibration flow. */
   readonly openPalmSamples?: readonly OpenPalmCalibrationSample[];
 }
@@ -258,6 +284,7 @@ const PINCH_VOTE_MAX_WINDOW_MS = 360;
 const PINCH_VOTE_CADENCE_MULTIPLIER = 2.5;
 const PINCH_VOTE_COUNT = 2;
 const PINCH_HISTORY_SIZE = 3;
+const PINCH_UNCERTAINTY_GRACE_MS = 180;
 const REACQUIRE_FREEZE_MS = 120;
 const REACQUIRE_VISIBLE_MS = 150;
 const REACQUIRE_TIMEOUT_MS = 300;
@@ -467,6 +494,50 @@ export function resolvePinchThresholds(
   };
 }
 
+export function resolveHandCameraBounds(
+  calibration: Pick<HandCalibrationProfile, "cameraBounds" | "reachCalibrations">,
+  identity: {
+    readonly trackId: string;
+    readonly handedness: "left" | "right" | "unknown";
+    readonly handednessReliable: boolean;
+  },
+): NormalizedRect {
+  const calibrations = calibration.reachCalibrations ?? [];
+  const exact = calibrations.find(
+    (candidate) =>
+      candidate.trackId === identity.trackId &&
+      calibrationIdentityCompatible(candidate.handedness, identity),
+  );
+  if (exact) return exact.cameraBounds;
+  if (identity.handednessReliable && identity.handedness !== "unknown") {
+    const handedness = calibrations.find(
+      (candidate) =>
+        candidate.handedness === identity.handedness &&
+        candidate.handedness !== "unknown" &&
+        typeof candidate.handednessConfidence === "number" &&
+        Number.isFinite(candidate.handednessConfidence) &&
+        candidate.handednessConfidence >= 0.8,
+    );
+    if (handedness) return handedness.cameraBounds;
+  }
+  return calibration.cameraBounds;
+}
+
+function calibrationIdentityCompatible(
+  calibratedHandedness: "left" | "right" | "unknown",
+  identity: {
+    readonly handedness: "left" | "right" | "unknown";
+    readonly handednessReliable: boolean;
+  },
+) {
+  return (
+    !identity.handednessReliable ||
+    identity.handedness === "unknown" ||
+    calibratedHandedness === "unknown" ||
+    calibratedHandedness === identity.handedness
+  );
+}
+
 export function createInitialPinchVoteState(): PinchVoteState {
   return {
     pinched: false,
@@ -583,16 +654,28 @@ export function voteCalibratedPinch(
         ignored: true,
       },
     };
-  if (!isConfidentPinchSample(input))
+  if (!isConfidentPinchSample(input)) {
+    const uncertaintyExpired =
+      state.pinched &&
+      (state.lastConfidentAt === null ||
+        input.timestamp - state.lastConfidentAt > PINCH_UNCERTAINTY_GRACE_MS);
     return {
-      state: { ...state, lastEvidenceTimestamp: input.timestamp },
+      state: uncertaintyExpired
+        ? {
+            pinched: false,
+            recentConfidentRatios: [],
+            lastConfidentAt: null,
+            lastEvidenceTimestamp: input.timestamp,
+          }
+        : { ...state, lastEvidenceTimestamp: input.timestamp },
       snapshot: {
-        pinched: state.pinched,
+        pinched: uncertaintyExpired ? false : state.pinched,
         candidate: null,
-        transition: null,
+        transition: uncertaintyExpired ? "released" : null,
         ignored: false,
       },
     };
+  }
   const voteWindowMs = calibratedPinchVoteWindowMs(state, input.timestamp);
   const recentConfidentRatios = [
     ...state.recentConfidentRatios,

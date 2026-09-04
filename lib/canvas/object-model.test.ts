@@ -14,6 +14,80 @@ const geometry = {
   zIndex: 2,
 };
 
+const provenancePoints = [
+  { x: 12, y: 18 },
+  { x: 48, y: 36 },
+];
+
+function legacyStrokeReceipt(overrides: Record<string, unknown> = {}) {
+  return {
+    strokeId: "stroke-provenance",
+    handTrackId: "right-hand-1",
+    penDownAt: 1_000,
+    penUpAt: 1_032,
+    pointCount: 2,
+    measuredPointCount: 2,
+    predictedPointCount: 0,
+    interpolatedPointCount: 0,
+    longGapBridgeCount: 0,
+    terminationReason: "gesture-release",
+    ...overrides,
+  };
+}
+
+function versionedStrokeReceipt(overrides: Record<string, unknown> = {}) {
+  return {
+    ...legacyStrokeReceipt(),
+    sampleProvenanceVersion: 1,
+    samples: [
+      {
+        strokeId: "stroke-provenance",
+        handTrackId: "right-hand-1",
+        timestampMs: 1_000,
+        sampleKind: "measured",
+        rawIndexTip: { x: 0.25, y: 0.3 },
+        filteredIndexTip: { x: 0.26, y: 0.31 },
+        renderedPoint: provenancePoints[0],
+        confidence: 0.98,
+      },
+      {
+        strokeId: "stroke-provenance",
+        handTrackId: "right-hand-1",
+        timestampMs: 1_016,
+        sampleKind: "measured",
+        rawIndexTip: { x: 0.4, y: 0.45 },
+        filteredIndexTip: { x: 0.39, y: 0.44 },
+        renderedPoint: provenancePoints[1],
+        confidence: 0.96,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function provenanceSketchObject(
+  receipt: Record<string, unknown> = versionedStrokeReceipt(),
+  points: ReadonlyArray<{ x: number; y: number }> = provenancePoints,
+) {
+  return {
+    id: "sketch-provenance",
+    type: "sketch",
+    title: "Finger stroke provenance",
+    ...geometry,
+    payload: {
+      strokes: [
+        {
+          id: "stroke-provenance",
+          color: "#12233d",
+          width: 4,
+          points,
+        },
+      ],
+      strokeReceipts: [receipt],
+    },
+  };
+}
+
 describe("newCanvasObjectSchema", () => {
   it("accepts the task-board payload used by the project-planning demo", () => {
     const input = {
@@ -142,6 +216,205 @@ describe("newCanvasObjectSchema", () => {
     expect(diagram.data.payload).toMatchObject({
       sourceSketchId: "sketch-rough-system",
     });
+  });
+
+  it("rejects duplicate immutable stroke IDs in one sketch", () => {
+    const result = newCanvasObjectSchema.safeParse({
+      id: "sketch-duplicate-strokes",
+      type: "sketch",
+      title: "Invalid duplicate strokes",
+      ...geometry,
+      payload: {
+        strokes: [
+          {
+            id: "stroke-duplicate",
+            color: "#12233d",
+            width: 4,
+            points: [
+              { x: 12, y: 18 },
+              { x: 48, y: 36 },
+            ],
+          },
+          {
+            id: "stroke-duplicate",
+            color: "#f6b44c",
+            width: 4,
+            points: [
+              { x: 52, y: 42 },
+              { x: 88, y: 64 },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a legacy aggregate stroke receipt without sample provenance", () => {
+    expect(
+      newCanvasObjectSchema.safeParse(
+        provenanceSketchObject(legacyStrokeReceipt()),
+      ).success,
+    ).toBe(true);
+  });
+
+  it("accepts complete versioned per-point stroke provenance", () => {
+    expect(
+      newCanvasObjectSchema.safeParse(provenanceSketchObject()).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    {
+      label: "version without samples",
+      receipt: legacyStrokeReceipt({ sampleProvenanceVersion: 1 }),
+    },
+    {
+      label: "samples without version",
+      receipt: legacyStrokeReceipt({
+        samples: versionedStrokeReceipt().samples,
+      }),
+    },
+  ])("rejects $label", ({ receipt }) => {
+    expect(
+      newCanvasObjectSchema.safeParse(provenanceSketchObject(receipt)).success,
+    ).toBe(false);
+  });
+
+  it("rejects a versioned receipt whose sample array is not full length", () => {
+    const points = [...provenancePoints, { x: 72, y: 54 }];
+    const receipt = versionedStrokeReceipt({
+      pointCount: 3,
+      measuredPointCount: 3,
+    });
+
+    expect(
+      newCanvasObjectSchema.safeParse(provenanceSketchObject(receipt, points))
+        .success,
+    ).toBe(false);
+  });
+
+  it("rejects a receipt whose point count does not match its stored stroke", () => {
+    const samples = [
+      ...versionedStrokeReceipt().samples,
+      {
+        strokeId: "stroke-provenance",
+        handTrackId: "right-hand-1",
+        timestampMs: 1_024,
+        sampleKind: "measured",
+        rawIndexTip: { x: 0.5, y: 0.55 },
+        filteredIndexTip: { x: 0.49, y: 0.54 },
+        renderedPoint: { x: 72, y: 54 },
+        confidence: 0.95,
+      },
+    ];
+    const receipt = versionedStrokeReceipt({
+      pointCount: 3,
+      measuredPointCount: 3,
+      samples,
+    });
+
+    expect(
+      newCanvasObjectSchema.safeParse(provenanceSketchObject(receipt)).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "stroke ID",
+      samples: versionedStrokeReceipt().samples.map((sample, index) =>
+        index === 1 ? { ...sample, strokeId: "stroke-other" } : sample,
+      ),
+    },
+    {
+      label: "hand track ID",
+      samples: versionedStrokeReceipt().samples.map((sample, index) =>
+        index === 1 ? { ...sample, handTrackId: "left-hand-2" } : sample,
+      ),
+    },
+  ])("rejects a sample with a mismatched $label", ({ samples }) => {
+    expect(
+      newCanvasObjectSchema.safeParse(
+        provenanceSketchObject(versionedStrokeReceipt({ samples })),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("rejects sample kinds that do not match the receipt category counts", () => {
+    const receipt = versionedStrokeReceipt({
+      measuredPointCount: 1,
+      predictedPointCount: 1,
+    });
+
+    expect(
+      newCanvasObjectSchema.safeParse(provenanceSketchObject(receipt)).success,
+    ).toBe(false);
+  });
+
+  it("rejects the internal predicted shorthand in the durable provenance vocabulary", () => {
+    const samples = versionedStrokeReceipt().samples.map((sample, index) =>
+      index === 1 ? { ...sample, sampleKind: "predicted" } : sample,
+    );
+    const receipt = versionedStrokeReceipt({
+      measuredPointCount: 1,
+      predictedPointCount: 1,
+      samples,
+    });
+
+    expect(
+      newCanvasObjectSchema.safeParse(provenanceSketchObject(receipt)).success,
+    ).toBe(false);
+  });
+
+  it("accepts the exact offline short-gap predicted provenance vocabulary", () => {
+    const samples = versionedStrokeReceipt().samples.map((sample, index) =>
+      index === 1
+        ? { ...sample, sampleKind: "short-gap predicted" }
+        : sample,
+    );
+    const receipt = versionedStrokeReceipt({
+      measuredPointCount: 1,
+      predictedPointCount: 1,
+      samples,
+    });
+
+    expect(
+      newCanvasObjectSchema.safeParse(provenanceSketchObject(receipt)).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    {
+      label: "outside the pen interval",
+      timestampMs: 999,
+    },
+    {
+      label: "not strictly increasing",
+      timestampMs: 1_000,
+    },
+  ])("rejects sample timestamps $label", ({ timestampMs }) => {
+    const samples = versionedStrokeReceipt().samples.map((sample, index) =>
+      index === 1 ? { ...sample, timestampMs } : sample,
+    );
+
+    expect(
+      newCanvasObjectSchema.safeParse(
+        provenanceSketchObject(versionedStrokeReceipt({ samples })),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("rejects a sample whose rendered point is not the aligned stored point", () => {
+    const samples = versionedStrokeReceipt().samples.map((sample, index) =>
+      index === 1 ? { ...sample, renderedPoint: { x: 47, y: 36 } } : sample,
+    );
+
+    expect(
+      newCanvasObjectSchema.safeParse(
+        provenanceSketchObject(versionedStrokeReceipt({ samples })),
+      ).success,
+    ).toBe(false);
   });
 
   it("accepts a generic node-and-edge diagram without treating it as architecture", () => {

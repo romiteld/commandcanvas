@@ -139,6 +139,32 @@ describe("spatial gesture geometry and retained fallbacks", () => {
         {
           objectId: "sketch-hand-1",
           strokeIds: ["stroke-hand-1", "stroke-hand-2"],
+          strokeReceipts: [
+            {
+              strokeId: "stroke-hand-1",
+              handTrackId: "hand-a",
+              penDownAt: 1000,
+              penUpAt: 1100,
+              pointCount: 2,
+              measuredPointCount: 2,
+              predictedPointCount: 0,
+              interpolatedPointCount: 0,
+              longGapBridgeCount: 0,
+              terminationReason: "gesture-release",
+            },
+            {
+              strokeId: "stroke-hand-2",
+              handTrackId: "hand-a",
+              penDownAt: 1200,
+              penUpAt: 1300,
+              pointCount: 2,
+              measuredPointCount: 2,
+              predictedPointCount: 0,
+              interpolatedPointCount: 0,
+              longGapBridgeCount: 0,
+              terminationReason: "draw-mode-exit",
+            },
+          ],
           zIndex: 7,
         },
       ),
@@ -154,6 +180,32 @@ describe("spatial gesture geometry and retained fallbacks", () => {
         height: 122,
         zIndex: 7,
         payload: {
+          strokeReceipts: [
+            {
+              strokeId: "stroke-hand-1",
+              handTrackId: "hand-a",
+              penDownAt: 1000,
+              penUpAt: 1100,
+              pointCount: 2,
+              measuredPointCount: 2,
+              predictedPointCount: 0,
+              interpolatedPointCount: 0,
+              longGapBridgeCount: 0,
+              terminationReason: "gesture-release",
+            },
+            {
+              strokeId: "stroke-hand-2",
+              handTrackId: "hand-a",
+              penDownAt: 1200,
+              penUpAt: 1300,
+              pointCount: 2,
+              measuredPointCount: 2,
+              predictedPointCount: 0,
+              interpolatedPointCount: 0,
+              longGapBridgeCount: 0,
+              terminationReason: "draw-mode-exit",
+            },
+          ],
           strokes: [
             {
               id: "stroke-hand-1",
@@ -177,5 +229,138 @@ describe("spatial gesture geometry and retained fallbacks", () => {
         },
       },
     });
+  });
+
+  it("converts world-space sample provenance to the aligned local stroke points", () => {
+    const command = createGestureSketchCommand(
+      [
+        [
+          { x: 90, y: 120 },
+          { x: 150, y: 150 },
+        ],
+      ],
+      {
+        objectId: "sketch-provenance",
+        strokeIds: ["stroke-provenance"],
+        strokeReceipts: [
+          {
+            strokeId: "stroke-provenance",
+            handTrackId: "hand-a",
+            penDownAt: 1_000,
+            penUpAt: 1_032,
+            pointCount: 2,
+            measuredPointCount: 2,
+            predictedPointCount: 0,
+            interpolatedPointCount: 0,
+            longGapBridgeCount: 0,
+            terminationReason: "gesture-release",
+            sampleProvenanceVersion: 1,
+            samples: [
+              {
+                strokeId: "stroke-provenance",
+                handTrackId: "hand-a",
+                timestampMs: 1_000,
+                sampleKind: "measured",
+                rawIndexTip: { x: 0.2, y: 0.3 },
+                filteredIndexTip: { x: 0.21, y: 0.31 },
+                renderedPoint: { x: 90, y: 120 },
+                confidence: 0.97,
+              },
+              {
+                strokeId: "stroke-provenance",
+                handTrackId: "hand-a",
+                timestampMs: 1_016,
+                sampleKind: "measured",
+                rawIndexTip: { x: 0.3, y: 0.4 },
+                filteredIndexTip: { x: 0.31, y: 0.41 },
+                renderedPoint: { x: 150, y: 150 },
+                confidence: 0.96,
+              },
+            ],
+          },
+        ],
+        zIndex: 7,
+      },
+    );
+
+    expect(command).toMatchObject({
+      type: "object.create",
+      object: {
+        payload: {
+          strokeReceipts: [
+            {
+              sampleProvenanceVersion: 1,
+              samples: [
+                { renderedPoint: { x: 16, y: 16 } },
+                { renderedPoint: { x: 76, y: 46 } },
+              ],
+            },
+          ],
+          strokes: [
+            {
+              points: [
+                { x: 16, y: 16 },
+                { x: 76, y: 46 },
+              ],
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("refuses versioned sample provenance that is not aligned to its world stroke", () => {
+    expect(() =>
+      createGestureSketchCommand(
+        [
+          [
+            { x: 90, y: 120 },
+            { x: 150, y: 150 },
+          ],
+        ],
+        {
+          objectId: "sketch-misaligned",
+          strokeIds: ["stroke-misaligned"],
+          strokeReceipts: [
+            {
+              strokeId: "stroke-misaligned",
+              handTrackId: "hand-a",
+              penDownAt: 1_000,
+              penUpAt: 1_032,
+              pointCount: 2,
+              measuredPointCount: 2,
+              predictedPointCount: 0,
+              interpolatedPointCount: 0,
+              longGapBridgeCount: 0,
+              terminationReason: "gesture-release",
+              sampleProvenanceVersion: 1,
+              samples: [
+                {
+                  strokeId: "stroke-misaligned",
+                  handTrackId: "hand-a",
+                  timestampMs: 1_000,
+                  sampleKind: "measured",
+                  rawIndexTip: { x: 0.2, y: 0.3 },
+                  filteredIndexTip: { x: 0.21, y: 0.31 },
+                  renderedPoint: { x: 90, y: 120 },
+                  confidence: 0.97,
+                },
+                {
+                  strokeId: "stroke-misaligned",
+                  handTrackId: "hand-a",
+                  timestampMs: 1_016,
+                  sampleKind: "measured",
+                  rawIndexTip: { x: 0.3, y: 0.4 },
+                  filteredIndexTip: { x: 0.31, y: 0.41 },
+                  renderedPoint: { x: 149, y: 150 },
+                  confidence: 0.96,
+                },
+              ],
+            },
+          ],
+          zIndex: 7,
+        },
+      ),
+    ).toThrow(RangeError);
   });
 });

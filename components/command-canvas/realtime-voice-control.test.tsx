@@ -72,6 +72,14 @@ describe("RealtimeVoiceControl", () => {
     expect(
       screen.getByText(/sent transiently through CommandCanvas/i),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /when this page is opened inside a compatible ChatGPT host, that host uses the account signed into ChatGPT to discover and invoke WebMCP tools/i,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/ChatGPT Site Tools use the account/i),
+    ).not.toBeInTheDocument();
 
     await user.type(input, `  ${apiKey}  `);
     expect(screen.queryByText(apiKey)).not.toBeInTheDocument();
@@ -439,7 +447,7 @@ describe("RealtimeVoiceControl", () => {
     );
   });
 
-  it("offers buffered spoken drawing context to canonical capability tools exactly once", async () => {
+  it("offers buffered spoken drawing context until the canonical capability acknowledges it", async () => {
     let callbacks: RealtimeVoiceControllerOptions | undefined;
     const setup = controllerHarness();
     render(
@@ -461,10 +469,13 @@ describe("RealtimeVoiceControl", () => {
     );
     await callbacks?.onResponseSettled?.("completed", "drawing-explanation-1");
 
-    expect(callbacks?.consumeSketchNarration?.()).toBe(
+    const narration = callbacks?.peekSketchNarration?.();
+    expect(narration?.text).toBe(
       "This curve is revenue and the dashed line is the target.",
     );
-    expect(callbacks?.consumeSketchNarration?.()).toBeUndefined();
+    expect(callbacks?.peekSketchNarration?.()).toEqual(narration);
+    callbacks?.acknowledgeSketchNarration?.(narration!.id);
+    expect(callbacks?.peekSketchNarration?.()).toBeUndefined();
   });
 
   it("starts spoken sketch context after the voice drawing command", async () => {

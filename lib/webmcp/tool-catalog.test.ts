@@ -107,12 +107,14 @@ describe("WebMCP live canvas state contract", () => {
     expect(
       WEBMCP_TOOL_INPUT_SCHEMAS.transform_object.safeParse({
         objectId: "note-launch",
+        expectedVersion: 1,
         transform: { rotation: 180 },
       }).success,
     ).toBe(true);
     expect(
       WEBMCP_TOOL_INPUT_SCHEMAS.transform_object.safeParse({
         objectId: "note-launch",
+        expectedVersion: 1,
         transform: { rotation: 180.01 },
       }).success,
     ).toBe(false);
@@ -134,6 +136,10 @@ describe("WebMCP live canvas state contract", () => {
       WEBMCP_TOOL_INPUT_SCHEMAS.organize_objects.safeParse({
         action: "group",
         objectIds: ["note-launch", "board-launch"],
+        expectedVersions: [
+          { objectId: "note-launch", expectedVersion: 1 },
+          { objectId: "board-launch", expectedVersion: 1 },
+        ],
         frame,
       }).success,
     ).toBe(true);
@@ -141,12 +147,14 @@ describe("WebMCP live canvas state contract", () => {
       WEBMCP_TOOL_INPUT_SCHEMAS.organize_objects.safeParse({
         action: "ungroup",
         frameId: "frame-launch",
+        expectedVersion: 1,
       }).success,
     ).toBe(true);
     expect(
       WEBMCP_TOOL_INPUT_SCHEMAS.organize_objects.safeParse({
         action: "ungroup",
         frameId: "frame-launch",
+        expectedVersion: 1,
         objectIds: ["note-launch"],
       }).success,
     ).toBe(false);

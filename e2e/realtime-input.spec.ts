@@ -374,7 +374,7 @@ test("keeps the ordinary-browser canvas usable under an iPhone WebKit profile", 
     page
       .getByRole("complementary", { name: "System status drawer" })
       .getByRole("region", { name: "Service status" })
-      .getByText("Site Tools unavailable", { exact: true }),
+      .getByText("WebMCP tools unavailable", { exact: true }),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Close system status drawer" })

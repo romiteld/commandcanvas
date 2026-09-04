@@ -231,6 +231,54 @@ describe("hand intent validation", () => {
     });
   });
 
+  it("uses landmark 8 in Draw mode without requiring the strict support-finger pose", () => {
+    const base = frame({
+      index: { x: 0.64, y: 0.28 },
+      thumb: { x: 0.2, y: 0.5 },
+    });
+    const landmarks = [...base.landmarks] as HandLandmark[];
+    // One support finger is extended, so this is neither the legacy strict
+    // point pose nor a full open palm. Thumb-to-middle geometry may act as the
+    // drawing clutch, but it must never replace landmark 8 as the brush tip.
+    landmarks[12] = { x: 0.22, y: 0.5, z: 0, visibility: 0.95 };
+    const input = {
+      ...base,
+      landmarks: landmarks as unknown as HandLandmarks,
+    };
+
+    const strict = interpretHandFrame(
+      createInitialHandIntentState(),
+      input,
+      1_000,
+    );
+    const draw = interpretHandFrame(
+      createInitialHandIntentState(),
+      input,
+      1_000,
+      { pointPolicy: "draw-index-led" },
+    );
+
+    expect(strict.output).toMatchObject({
+      accepted: false,
+      mode: "idle",
+      reason: "no_deliberate_gesture",
+    });
+    expect(draw.output).toMatchObject({
+      accepted: true,
+      mode: "point",
+      pointer: { x: 0.64, y: 0.28 },
+    });
+    expect(draw.measurements).toMatchObject({
+      indexTip: { x: 0.64, y: 0.28 },
+      middleTip: { x: 0.22, y: 0.5 },
+    });
+    if (!draw.output.accepted) throw new Error("draw fixture must be accepted");
+    expect(draw.output.pointer).not.toEqual(draw.measurements?.middleTip);
+    expect(draw.output.pointer).not.toEqual(
+      draw.measurements?.palmMcpCentroid,
+    );
+  });
+
   it("keeps pinch authoritative even when the index is curled", () => {
     const base = frame({ thumb: { x: 0.5, y: 0.72 } });
     const landmarks = [...base.landmarks] as HandLandmark[];

@@ -250,7 +250,7 @@ const capabilityCards: Array<{ icon: IconName; tone: string; title: string; text
   { icon: "hand", tone: "tealTone", title: "Spatial hand control", text: "After camera calibration, local or private-relay landmarks can drive index drawing, grab, two-hand resize, minimize, and recoverable discard." },
   { icon: "receipt", tone: "orangeTone", title: "Shared receipts", text: "Supported canvas changes are attributed, visible, and reversible when technically reasonable." },
   { icon: "people", tone: "blueTone", title: "Live collaboration", text: "People join one room and edit the same spatial workspace in real time." },
-  { icon: "spark", tone: "purpleTone", title: "ChatGPT Site Tools", text: "Available where supported, agents use structured page tools to create, organize, and summarize." },
+  { icon: "spark", tone: "purpleTone", title: "WebMCP agent tools", text: "Available where supported, compatible agents use structured page tools to create, organize, and summarize." },
 ];
 
 const workflowCards: Array<{ title: string; text: string; visual: ReactNode }> = [

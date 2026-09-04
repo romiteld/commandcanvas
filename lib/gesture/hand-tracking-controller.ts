@@ -109,18 +109,22 @@ export interface HandTrackingPointer {
 export interface HandTrackingPinchThresholds {
   readonly engage: number;
   readonly release: number;
+  /** Optional identity provenance used to reject a recycled transient track ID. */
+  readonly handedness?: TrackedHandedness;
+  readonly handednessConfidence?: number;
 }
 
 export interface HandTrackingPinchThresholdSet {
   readonly fallback: HandTrackingPinchThresholds;
-  readonly byTrackId: Readonly<Record<HandTrackId, HandTrackingPinchThresholds>>;
+  readonly byTrackId: Readonly<
+    Record<HandTrackId, HandTrackingPinchThresholds>
+  >;
   readonly byHandedness?: Readonly<
     Partial<Record<TrackedHandedness, HandTrackingPinchThresholds>>
   >;
 }
 
-interface ResolvedTrackingPinchThresholdSet
-  extends HandTrackingPinchThresholdSet {
+interface ResolvedTrackingPinchThresholdSet extends HandTrackingPinchThresholdSet {
   readonly votePerTrack: boolean;
 }
 
@@ -147,9 +151,13 @@ export interface HandTrackingSensorFrame {
 
 export interface HandTrackingWorkerLike {
   readonly frameQueueMode?: "newest-only";
-  onmessage: ((event: MessageEvent<HandTrackingWorkerOutboundMessage>) => void) | null;
+  onmessage:
+    ((event: MessageEvent<HandTrackingWorkerOutboundMessage>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
-  postMessage(message: HandTrackingWorkerInboundMessage, transfer?: Transferable[]): void;
+  postMessage(
+    message: HandTrackingWorkerInboundMessage,
+    transfer?: Transferable[],
+  ): void;
   terminate(): void;
 }
 
@@ -164,9 +172,7 @@ export interface HandTrackingController {
   ): () => void;
   setPinchThresholds?(
     thresholds:
-      | HandTrackingPinchThresholds
-      | HandTrackingPinchThresholdSet
-      | null,
+      HandTrackingPinchThresholds | HandTrackingPinchThresholdSet | null,
   ): void;
   setPointPolicy?(policy: HandPointPolicy): void;
   getEngineStatus?(): HandTrackingEngineStatus | null;
@@ -203,8 +209,7 @@ export interface HandTrackingEngineStatus {
   runtimeMetrics?: HandRuntimeMetricsSnapshot;
 }
 
-export interface PrivateHandRelayControllerOptions
-  extends PrivateHandRelayWorkerOptions {
+export interface PrivateHandRelayControllerOptions extends PrivateHandRelayWorkerOptions {
   createWorker?: () => PrivateHandRelayWorkerLike;
 }
 
@@ -219,9 +224,7 @@ export interface HandTrackingControllerDependencies {
     | SharedHandMediaLease
     | null
     | Promise<MediaStream | SharedHandMediaLease | null>;
-  getUserMedia?: (
-    constraints: MediaStreamConstraints,
-  ) => Promise<MediaStream>;
+  getUserMedia?: (constraints: MediaStreamConstraints) => Promise<MediaStream>;
   createWorker?: () => HandTrackingWorkerLike;
   createWorkerForEngine?: (
     engine: SpatialVisionEngineDescriptor,
@@ -236,10 +239,7 @@ export interface HandTrackingControllerDependencies {
     video: HTMLVideoElement,
     callback: VideoFrameRequestCallback,
   ) => number;
-  cancelVideoFrameCallback?: (
-    video: HTMLVideoElement,
-    handle: number,
-  ) => void;
+  cancelVideoFrameCallback?: (video: HTMLVideoElement, handle: number) => void;
   setTimeout?: (callback: () => void, delayMs: number) => number;
   clearTimeout?: (handle: number) => void;
   workerReadyTimeoutMs?: number;
@@ -281,9 +281,7 @@ export function createHandTrackingController(
   const observationListeners = new Set<
     (observation: HandTrackingObservation) => void
   >();
-  const sensorListeners = new Set<
-    (frame: HandTrackingSensorFrame) => void
-  >();
+  const sensorListeners = new Set<(frame: HandTrackingSensorFrame) => void>();
   const engineListeners = new Set<
     (engine: HandTrackingEngineStatus | null) => void
   >();
@@ -495,8 +493,7 @@ export function createHandTrackingController(
     );
     run.pendingFallbackReason = undefined;
     run.pendingFallbackKind = undefined;
-    worker.onmessage = (event) =>
-      handleWorkerMessage(run, worker, event.data);
+    worker.onmessage = (event) => handleWorkerMessage(run, worker, event.data);
     worker.onerror = (event) => {
       if (activeRun !== run || run.cancelled || run.worker !== worker) return;
       handleEngineFailure(
@@ -524,12 +521,7 @@ export function createHandTrackingController(
     worker: HandTrackingWorkerLike,
     message: string,
   ) {
-    if (
-      activeRun !== run ||
-      run.cancelled ||
-      run.worker !== worker
-    )
-      return;
+    if (activeRun !== run || run.cancelled || run.worker !== worker) return;
     run.engineEpoch += 1;
     run.workerFrameInFlight = false;
     run.captureRequested = false;
@@ -565,7 +557,11 @@ export function createHandTrackingController(
       failedEngine?.descriptor.id === PRIVATE_HAND_RELAY_ENGINE_ID
         ? "private-relay"
         : "engine";
-    emit({ mode: "idle", timestamp: dependencies.now(), trackingState: "lost" });
+    emit({
+      mode: "idle",
+      timestamp: dependencies.now(),
+      trackingState: "lost",
+    });
     setStatus({ state: "starting" });
     try {
       startEngineWorker(run, nextEngineIndex);
@@ -584,9 +580,8 @@ export function createHandTrackingController(
       dependencies.requestVideoFrameCallback &&
       dependencies.cancelVideoFrameCallback
     ) {
-      const handle = dependencies.requestVideoFrameCallback(
-        run.video,
-        () => handleScheduledVideoFrame(run, null),
+      const handle = dependencies.requestVideoFrameCallback(run.video, () =>
+        handleScheduledVideoFrame(run, null),
       );
       run.scheduledFrame = { kind: "video", handle };
       return;
@@ -727,8 +722,7 @@ export function createHandTrackingController(
     run.captureLatencies.set(captured.timestamp, captured.captureLatencyMs);
     while (run.captureLatencies.size > 60) {
       const oldest = run.captureLatencies.keys().next().value as
-        | number
-        | undefined;
+        number | undefined;
       if (oldest === undefined) break;
       run.captureLatencies.delete(oldest);
     }
@@ -796,7 +790,8 @@ export function createHandTrackingController(
       emitLossOrGrace(run, receivedAt);
       return;
     }
-    const source = run.visionEngines[run.engineIndex]?.descriptor.id ?? "unknown";
+    const source =
+      run.visionEngines[run.engineIndex]?.descriptor.id ?? "unknown";
     if (message.hands.length === 0) {
       emitSensorFrame({
         timestamp: message.timestamp,
@@ -807,7 +802,11 @@ export function createHandTrackingController(
       emitLossOrGrace(run, message.timestamp);
       return;
     }
-    const stateKeys = assignHandStateKeys(run, message.hands, message.timestamp);
+    const stateKeys = assignHandStateKeys(
+      run,
+      message.hands,
+      message.timestamp,
+    );
     const activeKeys = new Set<string>();
     const interpreted = message.hands.map((hand, index) => {
       const key = stateKeys[index]!;
@@ -929,28 +928,24 @@ export function createHandTrackingController(
         : [];
     });
     if (pinches.length >= 2) {
-      const hands = pinches.slice(0, 2).map(({
-        hand,
-        output,
-        trackId,
-        measurements,
-        prediction,
-      }) => ({
-        handedness: hand.handedness,
-        ...(hand.handednessConfidence === undefined
-          ? {}
-          : { handednessConfidence: hand.handednessConfidence }),
-        pointer: output.pointer,
-        motionPointer: output.motionPointer,
-        confidence: output.confidence,
-        landmarks: hand.landmarks,
-        trackId,
-        prediction,
-        measurements: measurements ?? undefined,
-        pinchDistance: output.pinchDistance,
-        pinchRatio: output.pinchRatio,
-        trackingState: "tracked" as const,
-      })) as unknown as [HandTrackingPointer, HandTrackingPointer];
+      const hands = pinches
+        .slice(0, 2)
+        .map(({ hand, output, trackId, measurements, prediction }) => ({
+          handedness: hand.handedness,
+          ...(hand.handednessConfidence === undefined
+            ? {}
+            : { handednessConfidence: hand.handednessConfidence }),
+          pointer: output.pointer,
+          motionPointer: output.motionPointer,
+          confidence: output.confidence,
+          landmarks: hand.landmarks,
+          trackId,
+          prediction,
+          measurements: measurements ?? undefined,
+          pinchDistance: output.pinchDistance,
+          pinchRatio: output.pinchRatio,
+          trackingState: "tracked" as const,
+        })) as unknown as [HandTrackingPointer, HandTrackingPointer];
       const [first, second] = hands;
       emit({
         mode: "bimanual_pinch",
@@ -970,11 +965,21 @@ export function createHandTrackingController(
       run.lastSingleObservation = null;
       return;
     }
-    const primary = accepted.sort(
-      (left, right) =>
-        handModePriority(right.semanticMode ?? right.transition.output.mode) -
-        handModePriority(left.semanticMode ?? left.transition.output.mode),
-    )[0];
+    const ownerRelease =
+      previous?.mode === "pinch"
+        ? accepted.find(
+            (entry) =>
+              entry.trackId === previous.trackId &&
+              entry.semanticMode !== "pinch",
+          )
+        : undefined;
+    const primary =
+      ownerRelease ??
+      accepted.sort(
+        (left, right) =>
+          handModePriority(right.semanticMode ?? right.transition.output.mode) -
+          handModePriority(left.semanticMode ?? left.transition.output.mode),
+      )[0];
     if (!primary || !primary.transition.output.accepted) {
       const ownerTrackId = previous?.trackId;
       const visibleNeutral = interpreted.some(
@@ -1025,8 +1030,7 @@ export function createHandTrackingController(
     engineStatus = {
       ...engineStatus,
       executionProvider: diagnostics.executionProvider,
-      highPerformanceGpuRequested:
-        diagnostics.highPerformanceGpuRequested,
+      highPerformanceGpuRequested: diagnostics.highPerformanceGpuRequested,
       ...(diagnostics.processingLocation
         ? { processingLocation: diagnostics.processingLocation }
         : {}),
@@ -1097,7 +1101,9 @@ export function createHandTrackingController(
     const deviceClass: HandRuntimePreferenceIdentity["deviceClass"] =
       provider === "webgpu" && diagnostics?.highPerformanceGpuRequested
         ? "high-performance-gpu"
-        : provider === "webgpu" || provider === "cuda" || provider === "tensorrt"
+        : provider === "webgpu" ||
+            provider === "cuda" ||
+            provider === "tensorrt"
           ? "gpu"
           : "cpu-or-unknown";
     resetRuntimeProfile(run, engine, {
@@ -1232,7 +1238,11 @@ export function createHandTrackingController(
 
   function handleSharedCameraStopped(run: HandTrackingRun) {
     if (activeRun !== run || run.cancelled) return;
-    emit({ mode: "idle", timestamp: dependencies.now(), trackingState: "lost" });
+    emit({
+      mode: "idle",
+      timestamp: dependencies.now(),
+      trackingState: "lost",
+    });
     setEngineStatus(null);
     failUnavailable(run, SHARED_CAMERA_STOPPED_MESSAGE);
   }
@@ -1260,7 +1270,11 @@ export function createHandTrackingController(
       }
     },
     setPointPolicy(next) {
-      if (next !== "deliberate" && next !== "draw-index-led")
+      if (
+        next !== "deliberate" &&
+        next !== "draw-index-led" &&
+        next !== "spatial-index-led"
+      )
         throw new RangeError("Hand point policy is invalid.");
       if (pointPolicy === next) return;
       pointPolicy = next;
@@ -1566,7 +1580,8 @@ function matchTrackedHands(
       )
       .sort(
         (left, right) =>
-          assignmentDistance(left, timestamp) - assignmentDistance(right, timestamp),
+          assignmentDistance(left, timestamp) -
+          assignmentDistance(right, timestamp),
       );
     if (candidates[0]) return candidates[0];
   }
@@ -1584,7 +1599,8 @@ function matchTrackedHands(
     .filter(({ distance }) => distance <= HAND_TRACK_MAX_DISTANCE)
     .sort((left, right) => left.distance - right.distance)
     .flatMap(({ hand, track }) => {
-      if (matchedHands.has(hand.index) || matchedTracks.has(track.key)) return [];
+      if (matchedHands.has(hand.index) || matchedTracks.has(track.key))
+        return [];
       matchedHands.add(hand.index);
       matchedTracks.add(track.key);
       return [{ hand, track }];
@@ -1745,20 +1761,32 @@ function resolveTrackingPinchThresholds(
   handedness: TrackedHandedness,
   handednessConfidence?: number,
 ): HandTrackingPinchThresholds {
+  const exact = thresholdSet.byTrackId[trackId];
+  const currentReliable = isReliableTrackedHandedness(
+    handedness,
+    handednessConfidence,
+  );
+  const exactReliable = exact
+    ? isReliableTrackedHandedness(
+        exact.handedness ?? "unknown",
+        exact.handednessConfidence,
+      )
+    : false;
+  if (
+    exact &&
+    (!currentReliable ||
+      !exactReliable ||
+      exact.handedness === handedness)
+  )
+    return exact;
   return (
-    thresholdSet.byTrackId[trackId] ??
-    (isReliableTrackedHandedness(handedness, handednessConfidence)
-      ? thresholdSet.byHandedness?.[handedness]
-      : undefined) ??
+    (currentReliable ? thresholdSet.byHandedness?.[handedness] : undefined) ??
     thresholdSet.fallback
   );
 }
 
 function normalizeTrackingPinchThresholds(
-  input:
-    | HandTrackingPinchThresholds
-    | HandTrackingPinchThresholdSet
-    | null,
+  input: HandTrackingPinchThresholds | HandTrackingPinchThresholdSet | null,
 ): ResolvedTrackingPinchThresholdSet | null {
   if (!input) return null;
   const normalized: ResolvedTrackingPinchThresholdSet =
@@ -1867,11 +1895,12 @@ function isSharedHandMediaLease(
 function resolveDependencies(
   provided: HandTrackingControllerDependencies,
 ): ResolvedHandTrackingControllerDependencies {
-  const plan = provided.visionEnginePlan ?? createDefaultSpatialVisionEnginePlan();
+  const plan =
+    provided.visionEnginePlan ?? createDefaultSpatialVisionEnginePlan();
   const useFallback = Boolean(
     provided.visionEnginePlan ||
-      provided.createWorkerForEngine ||
-      (!provided.createWorker && !provided.loadDetector),
+    provided.createWorkerForEngine ||
+    (!provided.createWorker && !provided.loadDetector),
   );
   const localVisionEngines = useFallback
     ? [plan.primary, plan.fallback]
@@ -1905,34 +1934,33 @@ function resolveDependencies(
             throw new Error(UNAVAILABLE_MESSAGE);
           }
         : undefined;
-  const createWorkerForEngine = (
+  const createWorkerForEngine =
     createLocalWorkerForEngine || provided.privateHandRelay
-  )
-    ? (engine: SpatialVisionEngine) => {
-        if (
-          engine.descriptor.id === PRIVATE_HAND_RELAY_ENGINE_ID &&
-          provided.privateHandRelay
-        ) {
-          if (provided.privateHandRelay.createWorker)
-            return provided.privateHandRelay.createWorker();
-          return createPrivateHandRelayWorker({
-            roomId: provided.privateHandRelay.roomId,
-            getAccessToken: provided.privateHandRelay.getAccessToken,
-            cameraUploadConsent:
-              provided.privateHandRelay.cameraUploadConsent,
-            requestSession: provided.privateHandRelay.requestSession,
-            createTransport: provided.privateHandRelay.createTransport,
-            encodeFrame: provided.privateHandRelay.encodeFrame,
-            now: provided.privateHandRelay.now,
-            setTimeout: provided.privateHandRelay.setTimeout,
-            clearTimeout: provided.privateHandRelay.clearTimeout,
-          });
+      ? (engine: SpatialVisionEngine) => {
+          if (
+            engine.descriptor.id === PRIVATE_HAND_RELAY_ENGINE_ID &&
+            provided.privateHandRelay
+          ) {
+            if (provided.privateHandRelay.createWorker)
+              return provided.privateHandRelay.createWorker();
+            return createPrivateHandRelayWorker({
+              roomId: provided.privateHandRelay.roomId,
+              getAccessToken: provided.privateHandRelay.getAccessToken,
+              cameraUploadConsent:
+                provided.privateHandRelay.cameraUploadConsent,
+              requestSession: provided.privateHandRelay.requestSession,
+              createTransport: provided.privateHandRelay.createTransport,
+              encodeFrame: provided.privateHandRelay.encodeFrame,
+              now: provided.privateHandRelay.now,
+              setTimeout: provided.privateHandRelay.setTimeout,
+              clearTimeout: provided.privateHandRelay.clearTimeout,
+            });
+          }
+          if (createLocalWorkerForEngine)
+            return createLocalWorkerForEngine(engine);
+          throw new Error(UNAVAILABLE_MESSAGE);
         }
-        if (createLocalWorkerForEngine)
-          return createLocalWorkerForEngine(engine);
-        throw new Error(UNAVAILABLE_MESSAGE);
-      }
-    : undefined;
+      : undefined;
   return {
     visionEnginesForStart: () =>
       relayEngine && provided.privateHandRelay?.cameraUploadConsent()
@@ -1977,8 +2005,7 @@ function resolveDependencies(
       ((callback, delayMs) =>
         globalThis.setTimeout(callback, delayMs) as unknown as number),
     clearTimeout:
-      provided.clearTimeout ??
-      ((handle) => globalThis.clearTimeout(handle)),
+      provided.clearTimeout ?? ((handle) => globalThis.clearTimeout(handle)),
     workerReadyTimeoutMs: provided.workerReadyTimeoutMs ?? 45_000,
     now: provided.now ?? (() => performance.now()),
     preferenceStorage:
@@ -2019,14 +2046,18 @@ function createInPageHandTrackingWorker(
     terminate() {
       if (terminated) return;
       terminated = true;
-      operation = operation.then(() => runtime.handleMessage({ type: "dispose" }));
+      operation = operation.then(() =>
+        runtime.handleMessage({ type: "dispose" }),
+      );
     },
   };
   const runtime = createHandTrackingWorkerRuntime({
     loadDetector,
     postMessage(message) {
       if (!terminated)
-        endpoint.onmessage?.({ data: message } as MessageEvent<HandTrackingWorkerOutboundMessage>);
+        endpoint.onmessage?.({
+          data: message,
+        } as MessageEvent<HandTrackingWorkerOutboundMessage>);
     },
   });
   return endpoint;
@@ -2036,7 +2067,9 @@ interface ResolvedHandTrackingControllerDependencies {
   visionEnginesForStart: () => readonly SpatialVisionEngine[];
   getSharedMediaStream?: HandTrackingControllerDependencies["getSharedMediaStream"];
   getUserMedia?: HandTrackingControllerDependencies["getUserMedia"];
-  createWorkerForEngine?: (engine: SpatialVisionEngine) => HandTrackingWorkerLike;
+  createWorkerForEngine?: (
+    engine: SpatialVisionEngine,
+  ) => HandTrackingWorkerLike;
   createImageBitmap?: HandTrackingControllerDependencies["createImageBitmap"];
   requestAnimationFrame?: HandTrackingControllerDependencies["requestAnimationFrame"];
   cancelAnimationFrame?: HandTrackingControllerDependencies["cancelAnimationFrame"];
@@ -2050,7 +2083,8 @@ interface ResolvedHandTrackingControllerDependencies {
   classifyStaticPose?: HandTrackingControllerDependencies["classifyStaticPose"];
 }
 
-function safeSessionPreferenceStorage(): HandRuntimePreferenceStorage | undefined {
+function safeSessionPreferenceStorage():
+  HandRuntimePreferenceStorage | undefined {
   try {
     return typeof sessionStorage === "undefined" ? undefined : sessionStorage;
   } catch {

@@ -207,13 +207,13 @@ async function verifyRegistrationLifecycle(page: Page, mode: string) {
   // Supply a syntactically valid, non-secret session key so the request reaches
   // Playwright's deterministic route before any external provider boundary.
   await page
-    .getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" })
+    .getByRole("button", { name: "Open WebMCP agent activity" })
     .click();
   await page
     .getByLabel("Your OpenAI API key")
     .fill(["s", "k", "-", "a".repeat(24)].join(""));
   await page
-    .getByRole("button", { name: "Close ChatGPT command drawer" })
+    .getByRole("button", { name: "Close WebMCP activity and CommandCanvas Live Voice drawer" })
     .click();
 
   let releaseResponse: (() => void) | undefined;

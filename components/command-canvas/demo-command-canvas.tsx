@@ -124,7 +124,7 @@ export function DemoCommandCanvas({
   const [webMcpStatus, setWebMcpStatus] = useState<{
     value: string;
     tone: "idle" | "working" | "ready";
-  }>({ value: "Checking Site Tools…", tone: "working" });
+  }>({ value: "Checking WebMCP tools…", tone: "working" });
   const [webMcpSurfaceState, setWebMcpSurfaceState] =
     useState<WebMcpSurfaceState>({ status: "checking" });
   const [webMcpExecutionActivity, setWebMcpExecutionActivity] = useState<
@@ -246,7 +246,7 @@ export function DemoCommandCanvas({
       try {
         await navigator.share({
           title: "Join my CommandCanvas room",
-          text: "Join the live CommandCanvas workspace.",
+          text: `Join the live CommandCanvas workspace.\n\n${inviteUrl}`,
           url: inviteUrl,
         });
         setInviteState("shared");
@@ -564,7 +564,7 @@ export function DemoCommandCanvas({
     if (!webMcpTarget) {
       queueMicrotask(() => {
         if (active)
-          setWebMcpStatus({ value: "Site Tools unavailable", tone: "idle" });
+          setWebMcpStatus({ value: "WebMCP tools unavailable", tone: "idle" });
         if (active) setWebMcpSurfaceState({ status: "unavailable" });
       });
       return () => {
@@ -603,7 +603,7 @@ export function DemoCommandCanvas({
         await registry.sync();
         if (active)
           setWebMcpStatus({
-            value: `${registry.registeredToolNames().length} Site Tools registered`,
+            value: `${registry.registeredToolNames().length} WebMCP tools registered`,
             tone: "ready",
           });
         if (active)
@@ -618,7 +618,7 @@ export function DemoCommandCanvas({
       } catch {
         if (active)
           setWebMcpStatus({
-            value: "Site Tools registration failed",
+            value: "WebMCP tool registration failed",
             tone: "idle",
           });
         if (active)
@@ -653,7 +653,7 @@ export function DemoCommandCanvas({
       () =>
         {
           setWebMcpStatus({
-            value: `${registry.registeredToolNames().length} Site Tools registered`,
+            value: `${registry.registeredToolNames().length} WebMCP tools registered`,
             tone: "ready",
           });
           setWebMcpSurfaceState((current) =>
@@ -667,7 +667,7 @@ export function DemoCommandCanvas({
         },
       () => {
         setWebMcpStatus({
-          value: "Site Tools registration failed",
+          value: "WebMCP tool registration failed",
           tone: "idle",
         });
         setWebMcpSurfaceState({ status: "registration_failed" });

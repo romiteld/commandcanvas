@@ -178,7 +178,7 @@ export function MeetingCommandCanvas({
   const [workspaceController] = useState(createCanvasWorkspaceController);
   const webMcpTarget = useDocumentWebMcpTarget();
   const [webMcpStatus, setWebMcpStatus] = useState({
-    value: "Checking Site Tools…",
+    value: "Checking WebMCP tools…",
     tone: "working" as "idle" | "working" | "ready",
   });
   const [webMcpSurfaceState, setWebMcpSurfaceState] =
@@ -909,7 +909,7 @@ export function MeetingCommandCanvas({
     capabilityRuntimeRef.current = capabilityRuntime;
     if (!webMcpTarget) {
       void Promise.resolve().then(() =>
-        setWebMcpStatus({ value: "Site Tools unavailable", tone: "idle" }),
+        setWebMcpStatus({ value: "WebMCP tools unavailable", tone: "idle" }),
       );
       void Promise.resolve().then(() =>
         setWebMcpSurfaceState({ status: "unavailable" }),
@@ -955,7 +955,7 @@ export function MeetingCommandCanvas({
         await registry.sync();
         if (active)
           setWebMcpStatus({
-            value: `${registry.registeredToolNames().length} Site Tools registered`,
+            value: `${registry.registeredToolNames().length} WebMCP tools registered`,
             tone: "ready",
           });
         if (active)
@@ -969,7 +969,7 @@ export function MeetingCommandCanvas({
           );
       } catch {
         if (active)
-          setWebMcpStatus({ value: "Site Tools registration failed", tone: "idle" });
+          setWebMcpStatus({ value: "WebMCP tool registration failed", tone: "idle" });
         if (active)
           setWebMcpSurfaceState({ status: "registration_failed" });
       }
@@ -1006,7 +1006,7 @@ export function MeetingCommandCanvas({
       () =>
         {
           setWebMcpStatus({
-            value: `${registry.registeredToolNames().length} Site Tools registered`,
+            value: `${registry.registeredToolNames().length} WebMCP tools registered`,
             tone: "ready",
           });
           setWebMcpSurfaceState((current) =>
@@ -1020,7 +1020,7 @@ export function MeetingCommandCanvas({
         },
       () => {
         setWebMcpStatus({
-          value: "Site Tools registration failed",
+          value: "WebMCP tool registration failed",
           tone: "idle",
         });
         setWebMcpSurfaceState({ status: "registration_failed" });
@@ -1531,11 +1531,13 @@ export function MeetingLobby({
             </p>
             {!state.invited ? (
               <p className="meeting-chatgpt-boundary">
-                In the ChatGPT desktop app&apos;s built-in browser, Site Tools use
-                the ChatGPT account already signed into that app. CommandCanvas
-                sign-in is separate and protects this workspace. That built-in
-                browser keeps its own website session apart from Chrome, so this
-                room may still require an email code here.
+                In the ChatGPT desktop app&apos;s built-in browser, the surrounding
+                compatible agent host uses its signed-in ChatGPT account for
+                WebMCP tools. Those page tools operate on CommandCanvas state and
+                do not receive the ChatGPT credential. CommandCanvas sign-in is
+                separate and protects this workspace. That built-in browser keeps
+                its own website session apart from Chrome, so this room may still
+                require an email code here.
               </p>
             ) : null}
             <form

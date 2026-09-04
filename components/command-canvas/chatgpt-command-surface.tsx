@@ -99,20 +99,20 @@ export function ChatGptCommandSurface({
       <div
         className="chatgpt-command-pill"
         role="group"
-        aria-label="ChatGPT Site Tools and CommandCanvas Live Voice"
+        aria-label="WebMCP tools and CommandCanvas Live Voice"
       >
         <button
           type="button"
           className="chatgpt-command-segment"
-          aria-label="Open ChatGPT Site Tools and activity drawer"
+          aria-label="Open WebMCP agent activity"
           aria-expanded={drawerOpen}
           disabled={drawingActive}
           onClick={onOpenDrawer}
         >
           <span className="agent-pulse" aria-hidden="true" />
           <span className="chatgpt-command-label">
-            <strong>ChatGPT</strong>
-            <small>Site Tools</small>
+            <strong>WebMCP</strong>
+            <small>tools</small>
           </span>
         </button>
         <button
@@ -147,18 +147,18 @@ export function ChatGptCommandSurface({
         className={`command-rail overlay-drawer persistent-command-drawer chatgpt-command-drawer${
           commandDrawerInteractive ? " is-open" : ""
         }`}
-        aria-label="ChatGPT command drawer"
+        aria-label="WebMCP activity and CommandCanvas Live Voice drawer"
         aria-hidden={commandDrawerInteractive ? undefined : true}
         inert={commandDrawerInteractive ? undefined : true}
       >
         <div className="rail-heading">
           <div>
-            <p className="eyebrow">Shared command surface</p>
-            <h2>ChatGPT</h2>
+            <p className="eyebrow">Agent activity and Live Voice</p>
+            <h2>WebMCP activity</h2>
           </div>
           <button
             type="button"
-            aria-label="Close ChatGPT command drawer"
+            aria-label="Close WebMCP activity and CommandCanvas Live Voice drawer"
             onClick={onCloseDrawer}
           >
             <span aria-hidden="true">×</span>
@@ -171,14 +171,16 @@ export function ChatGptCommandSurface({
           {siteToolsRegistered ? (
             <p className="chatgpt-host-voice-guidance" role="status">
               When this page is open in the ChatGPT desktop app&apos;s built-in
-              browser, Site Tools use the ChatGPT account already signed into
-              that app. CommandCanvas never receives that ChatGPT credential. A
-              registration surface alone does not prove which agent host exposed
-              it; the activity below records actual invocations. Current OpenAI
-              guidance does not promise that ChatGPT Voice will invoke Site Tools,
-              so verify that host behavior before relying on it. The adjacent mic
-              starts CommandCanvas Live Voice, which uses a separately billed
-              user-owned OpenAI API credential.
+              browser, the surrounding host uses the ChatGPT account already
+              signed into that app to discover and invoke WebMCP tools.
+              CommandCanvas never receives that surrounding ChatGPT credential.
+              Registration alone does not prove a tool ran. An actual invocation
+              and receipt below prove page execution, but this page does not
+              authenticate which compatible agent host initiated it. Current
+              OpenAI guidance does not promise that ChatGPT Voice will invoke
+              WebMCP tools, so verify that host behavior before relying on it. The
+              adjacent mic starts CommandCanvas Live Voice, which uses a
+              separately billed user-owned OpenAI API credential.
             </p>
           ) : null}
           {siteToolsRegistered && realtimeAvailable ? (
@@ -215,10 +217,10 @@ export function ChatGptCommandSurface({
           </span>
         </section>
 
-        <section className="chatgpt-tool-activity" aria-label="Recent Site Tool activity">
-          <strong>Site Tool activity</strong>
+        <section className="chatgpt-tool-activity" aria-label="Recent WebMCP activity">
+          <strong>WebMCP activity</strong>
           {executionActivity.length === 0 ? (
-            <p>No Site Tool has been invoked on this page yet.</p>
+            <p>No WebMCP tool has been invoked on this page yet.</p>
           ) : (
             <ol>
               {executionActivity.map((event) => (
@@ -287,30 +289,30 @@ export function ChatGptCommandSurface({
 function surfaceHeading(state: WebMcpSurfaceState) {
   switch (state.status) {
     case "checking":
-      return "Checking page Site Tools";
+      return "Checking WebMCP tool registration";
     case "unavailable":
-      return "Site Tools unavailable in this browser session";
+      return "WebMCP tools unavailable in this browser session";
     case "registration_failed":
-      return "Site Tools registration failed";
+      return "WebMCP tool registration failed";
     case "registered_to_page":
-      return `${state.registeredToolCount} Site Tools registered to this page`;
+      return `${state.registeredToolCount} WebMCP tools registered to this page`;
     case "invoked":
-      return "A page Site Tool was invoked";
+      return "A WebMCP tool was invoked";
   }
 }
 
 function surfaceDescription(state: WebMcpSurfaceState) {
   switch (state.status) {
     case "checking":
-      return "CommandCanvas is checking the page registration surface.";
+      return "CommandCanvas is checking whether it can register WebMCP tools on this page.";
     case "unavailable":
-      return "No additional ChatGPT sign-in is required. This browser session did not expose Site Tools to CommandCanvas. For the competition path, open the page in the ChatGPT desktop app’s built-in browser. If you are already there, check Browser Settings → Permissions → Enable site tools; availability can also depend on your account, selected model, workspace policy, or rollout. Canvas controls and typed commands still work; CommandCanvas Live Voice is an optional, separately billed fallback.";
+      return "No additional ChatGPT sign-in is required. This browser session did not expose WebMCP tools to CommandCanvas. Availability can depend on the browser, account, selected model, workspace policy, or rollout. Canvas controls and typed commands still work; CommandCanvas Live Voice is a separate optional API-key path.";
     case "registration_failed":
-      return "The page could not register Site Tools. Canvas controls still work normally.";
+      return "The page could not register WebMCP tools. Canvas controls still work normally.";
     case "registered_to_page":
-      return "A Site Tools registration surface is present on this page. Agent-host identity and discovery are not confirmed until an actual invocation appears below.";
+      return "CommandCanvas registers its WebMCP tools automatically when the live canvas is ready. Compatible agents can discover and invoke them without opening this activity drawer. Registration alone does not prove a tool ran. An actual invocation and receipt below prove page execution, but this page does not authenticate which compatible agent host initiated it.";
     case "invoked":
-      return "This status is based on an actual page-observable Site Tool invocation.";
+      return "This status is based on an actual page-observable WebMCP tool invocation and its recorded activity.";
   }
 }
 

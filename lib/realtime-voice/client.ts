@@ -107,6 +107,9 @@ export interface RealtimeVoiceControllerOptions {
   onToolAction?: (action: RealtimeVoiceToolAction) => void;
   inspectCanvas?: RealtimeVoiceCanvasInspector;
   invokeCapability?: RealtimeVoiceCapabilityInvoker;
+  peekSketchNarration?: () => { id: string; text: string } | undefined;
+  acknowledgeSketchNarration?: (id: string) => void;
+  /** @deprecated Use peekSketchNarration and acknowledgeSketchNarration. */
   consumeSketchNarration?: () => string | undefined;
   onPlaybackBlocked?: () => void;
   platform?: RealtimeVoicePlatform;
@@ -631,6 +634,8 @@ export function createRealtimeVoiceController(
         signal: intentSignal,
         inspectCanvas: options.inspectCanvas,
         invokeCapability: options.invokeCapability,
+        peekSketchNarration: options.peekSketchNarration,
+        acknowledgeSketchNarration: options.acknowledgeSketchNarration,
         consumeSketchNarration: options.consumeSketchNarration,
       },
     );

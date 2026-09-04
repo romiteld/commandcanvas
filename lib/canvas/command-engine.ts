@@ -276,6 +276,12 @@ function transformObject(
   const current = activeObject(state, command.objectId);
   if (!current)
     return reject(state, "OBJECT_NOT_FOUND", "That object is no longer available.");
+  if (isStaleObjectVersion(current, command.expectedVersion))
+    return reject(
+      state,
+      "STALE_OBJECT_VERSION",
+      "That object changed. Inspect its latest version and try again.",
+    );
   if (current.pinned)
     return reject(
       state,
@@ -319,6 +325,12 @@ function setObjectFlags(
   const current = activeObject(state, command.objectId);
   if (!current)
     return reject(state, "OBJECT_NOT_FOUND", "That object is no longer available.");
+  if (isStaleObjectVersion(current, command.expectedVersion))
+    return reject(
+      state,
+      "STALE_OBJECT_VERSION",
+      "That object changed. Inspect its latest version and try again.",
+    );
 
   const object: CanvasObject = {
     ...current,
@@ -348,6 +360,12 @@ function discardObject(
   const current = activeObject(state, command.objectId);
   if (!current)
     return reject(state, "OBJECT_NOT_FOUND", "That object is no longer available.");
+  if (isStaleObjectVersion(current, command.expectedVersion))
+    return reject(
+      state,
+      "STALE_OBJECT_VERSION",
+      "That object changed. Inspect its latest version and try again.",
+    );
   if (
     current.type === "frame" &&
     Object.values(state.objects).some(
@@ -391,6 +409,14 @@ function groupObjects(
       `An object with ID “${command.frame.id}” already exists.`,
     );
   const selected: CanvasObject[] = [];
+  const expectedVersions = command.expectedVersions
+    ? new Map(
+        command.expectedVersions.map((entry) => [
+          entry.objectId,
+          entry.expectedVersion,
+        ]),
+      )
+    : null;
   for (const objectId of command.objectIds) {
     const object = activeObject(state, objectId);
     if (!object)
@@ -398,6 +424,12 @@ function groupObjects(
         state,
         "OBJECT_NOT_FOUND",
         "One of those objects is no longer available.",
+      );
+    if (isStaleObjectVersion(object, expectedVersions?.get(objectId)))
+      return reject(
+        state,
+        "STALE_OBJECT_VERSION",
+        "One of those objects changed. Inspect the latest group selection and try again.",
       );
     if (object.pinned)
       return reject(
@@ -473,6 +505,12 @@ function ungroupObjects(
   const frame = activeObject(state, command.frameId);
   if (!frame)
     return reject(state, "OBJECT_NOT_FOUND", "That frame is no longer available.");
+  if (isStaleObjectVersion(frame, command.expectedVersion))
+    return reject(
+      state,
+      "STALE_OBJECT_VERSION",
+      "That frame changed. Inspect its latest version and try again.",
+    );
   if (frame.type !== "frame")
     return reject(
       state,
@@ -512,6 +550,13 @@ function ungroupObjects(
     after,
     description: `${envelope.actor.displayName} ungrouped “${frame.title}”.`,
   });
+}
+
+function isStaleObjectVersion(
+  object: CanvasObject,
+  expectedVersion: number | undefined,
+) {
+  return expectedVersion !== undefined && object.version !== expectedVersion;
 }
 
 function undoLatest(

@@ -604,8 +604,9 @@ export function MeetingPacketWorkflowPanel({
           <p className="eyebrow">Structured output</p>
           <strong>Meeting packet</strong>
           <p>
-            ChatGPT can prepare this through Site Tools. This button keeps the
-            same reviewed workflow available in an ordinary browser.
+            A compatible agent can prepare this through CommandCanvas WebMCP
+            tools. This button keeps the same reviewed workflow available in an
+            ordinary browser.
           </p>
           <button
             type="button"

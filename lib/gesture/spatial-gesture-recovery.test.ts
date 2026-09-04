@@ -87,6 +87,26 @@ function point(
   };
 }
 
+function drawingPoint(
+  x: number,
+  y: number,
+  timestamp: number,
+  transition: "none" | "engaged" | "released" = "none",
+  penDown = true,
+): Extract<SpatialGestureInput, { mode: "point" }> {
+  return point(x, y, timestamp, {
+    drawing: {
+      trackId: "hand-a",
+      penDown,
+      transition,
+      normalizedDistance: penDown ? 0.2 : 0.8,
+      confidence: 0.95,
+      predicted: false,
+      sampleKind: "measured",
+    },
+  });
+}
+
 function pinch(
   x: number,
   y: number,
@@ -140,12 +160,7 @@ function hoverStable(
   return step(entered.state, point(x, y, startAt + 100), spatialScene);
 }
 
-function held(
-  spatialScene = scene,
-  x = 0.25,
-  y = 0.35,
-  startAt = 1_000,
-) {
+function held(spatialScene = scene, x = 0.25, y = 0.35, startAt = 1_000) {
   const stable = hoverStable(spatialScene, x, y, startAt);
   return step(stable.state, pinch(x, y, startAt + 110), spatialScene);
 }
@@ -154,7 +169,9 @@ function bimanual(
   first: { x: number; y: number },
   second: { x: number; y: number },
   timestamp: number,
-  overrides: Partial<Extract<SpatialGestureInput, { mode: "bimanual_pinch" }>> = {},
+  overrides: Partial<
+    Extract<SpatialGestureInput, { mode: "bimanual_pinch" }>
+  > = {},
 ): Extract<SpatialGestureInput, { mode: "bimanual_pinch" }> {
   return {
     mode: "bimanual_pinch",
@@ -211,11 +228,16 @@ function beginLeftThrow(
   );
   const middle = step(
     first.state,
-    pinch(0.16, 0.4, firstAt + Math.max(1, Math.floor((finalAt - firstAt) / 2)), {
-      reliability: reliability("hand-a", {
-        confidence: options.middleConfidence ?? 0.95,
-      }),
-    }),
+    pinch(
+      0.16,
+      0.4,
+      firstAt + Math.max(1, Math.floor((finalAt - firstAt) / 2)),
+      {
+        reliability: reliability("hand-a", {
+          confidence: options.middleConfidence ?? 0.95,
+        }),
+      },
+    ),
   );
   return step(
     middle.state,
@@ -228,10 +250,7 @@ function beginLeftThrowAtFrameRate(framesPerSecond: number) {
   const firstAt = 1_200;
   const acquired = held();
   const first = step(acquired.state, pinch(0.25, 0.4, firstAt));
-  const middle = step(
-    first.state,
-    pinch(0.16, 0.4, firstAt + frameInterval),
-  );
+  const middle = step(first.state, pinch(0.16, 0.4, firstAt + frameInterval));
   const finalAt = firstAt + frameInterval * 2;
   const final = step(middle.state, pinch(0.05, 0.4, finalAt));
   return { final, finalAt };
@@ -255,7 +274,9 @@ function applyGestureCompletion(
   completion: SpatialGestureCompletionEffect,
   spatialScene: SpatialGestureScene,
 ) {
-  const source = spatialScene.objects.find(({ id }) => id === completion.objectId);
+  const source = spatialScene.objects.find(
+    ({ id }) => id === completion.objectId,
+  );
   if (!source) throw new Error("completion fixture needs its source object");
   const canvas: CanvasState = {
     roomId: "room-command-boundary",
@@ -304,6 +325,160 @@ function applyGestureCompletion(
 }
 
 describe("authoritative spatial gesture reducer", () => {
+  it("lets direct pinch use a forgiving bounded capture halo", () => {
+    const isolated: SpatialGestureScene = {
+      ...scene,
+      objects: [
+        {
+          id: "halo-card",
+          x: 200,
+          y: 150,
+          width: 200,
+          height: 120,
+          rotation: 0,
+          zIndex: 1,
+          pinned: false,
+          minimized: false,
+        },
+      ],
+    };
+    const near = step(
+      createInitialSpatialGestureState(),
+      pinch(0.152, 0.35, 1_000),
+      isolated,
+    );
+    const acquired = step(near.state, pinch(0.152, 0.35, 1_048), isolated);
+    const distant = step(
+      createInitialSpatialGestureState(),
+      pinch(0.1, 0.35, 2_000),
+      isolated,
+    );
+
+    expect(near.state).toMatchObject({
+      phase: "pinch_pending",
+      candidate: { objectId: "halo-card" },
+    });
+    expect(acquired.state).toMatchObject({
+      phase: "held_one",
+      held: { objectId: "halo-card" },
+    });
+    expect(distant.state).toMatchObject({
+      phase: "pinch_pending",
+      candidate: null,
+      pinchPending: { objectId: null },
+    });
+    expect(distant.effects).toEqual([]);
+  });
+
+  it("re-hit-tests a direct-pinch candidate and restarts dwell when the hand moves", () => {
+    const separated: SpatialGestureScene = {
+      ...scene,
+      objects: [
+        {
+          id: "left-card",
+          x: 100,
+          y: 150,
+          width: 120,
+          height: 100,
+          zIndex: 1,
+          pinned: false,
+          minimized: false,
+        },
+        {
+          id: "right-card",
+          x: 700,
+          y: 150,
+          width: 120,
+          height: 100,
+          zIndex: 2,
+          pinned: false,
+          minimized: false,
+        },
+      ],
+    };
+    const leftPending = step(
+      createInitialSpatialGestureState(),
+      pinch(0.16, 0.33, 1_000),
+      separated,
+    );
+    const rightPending = step(
+      leftPending.state,
+      pinch(0.76, 0.33, 1_020),
+      separated,
+    );
+    const beforeRightDwell = step(
+      rightPending.state,
+      pinch(0.76, 0.33, 1_047),
+      separated,
+    );
+    const rightAcquired = step(
+      beforeRightDwell.state,
+      pinch(0.76, 0.33, 1_068),
+      separated,
+    );
+
+    expect(leftPending.state.pinchPending).toMatchObject({
+      objectId: "left-card",
+      startedAt: 1_000,
+    });
+    expect(rightPending.state.pinchPending).toMatchObject({
+      objectId: "right-card",
+      startedAt: 1_020,
+    });
+    expect(beforeRightDwell.state.phase).toBe("pinch_pending");
+    expect(rightAcquired.state).toMatchObject({
+      phase: "held_one",
+      held: { objectId: "right-card" },
+    });
+  });
+
+  it("anchors held motion to the palm baseline so pinch geometry cannot jump the object", () => {
+    const first = step(
+      createInitialSpatialGestureState(),
+      pinch(0.25, 0.35, 1_000, {
+        motionPointer: { x: 0.5, y: 0.55 },
+      }),
+    );
+    const acquired = step(
+      first.state,
+      pinch(0.28, 0.35, 1_048, {
+        motionPointer: { x: 0.5, y: 0.55 },
+      }),
+    );
+    const samePalm = step(
+      acquired.state,
+      pinch(0.32, 0.36, 1_064, {
+        motionPointer: { x: 0.5, y: 0.55 },
+      }),
+    );
+    const movedPalm = step(
+      samePalm.state,
+      pinch(0.32, 0.36, 1_080, {
+        motionPointer: { x: 0.52, y: 0.58 },
+      }),
+    );
+
+    expect(acquired.effects).toContainEqual({
+      type: "object.preview_transform",
+      objectId: "note-a",
+      transform: { x: 200, y: 150, width: 200, height: 120, rotation: 10 },
+    });
+    expect(samePalm.state.held?.currentTransform).toEqual({
+      x: 200,
+      y: 150,
+      width: 200,
+      height: 120,
+      rotation: 10,
+    });
+    expect(movedPalm.state.held?.currentTransform).toEqual({
+      x: 220,
+      y: 168,
+      width: 200,
+      height: 120,
+      rotation: 10,
+    });
+  });
+
   it("magnetically acquires an object when pinch begins without a prior POINT dwell", () => {
     const pending = step(
       createInitialSpatialGestureState(),
@@ -324,6 +499,45 @@ describe("authoritative spatial gesture reducer", () => {
     expect(acquired.effects).toContainEqual({
       type: "object.select",
       objectId: "note-a",
+    });
+  });
+
+  it("uses visible index pointers to acquire a selected object before switching to palm motion", () => {
+    const selectedScene: SpatialGestureScene = {
+      ...scene,
+      selectedObjectId: "note-a",
+    };
+    const acquired = step(
+      createInitialSpatialGestureState(),
+      bimanual(
+        { x: 0.25, y: 0.35 },
+        { x: 0.35, y: 0.35 },
+        1_000,
+        {
+          hands: [
+            {
+              pointer: { x: 0.25, y: 0.35 },
+              motionPointer: { x: 0.04, y: 0.8 },
+              ...reliability("hand-a"),
+            },
+            {
+              pointer: { x: 0.35, y: 0.35 },
+              motionPointer: { x: 0.96, y: 0.8 },
+              ...reliability("hand-b"),
+            },
+          ],
+        },
+      ),
+      selectedScene,
+    );
+
+    expect(acquired.state).toMatchObject({
+      phase: "transforming_two",
+      held: { objectId: "note-a" },
+      transform: {
+        ownerTrackId: "hand-a",
+        secondTrackId: "hand-b",
+      },
     });
   });
 
@@ -362,20 +576,18 @@ describe("authoritative spatial gesture reducer", () => {
     );
     expect(outside.state.candidate).toBeNull();
 
-    const entered = step(
-      outside.state,
-      point(0.172, 0.35, 1_010),
-      { ...scene, objects: [unrotatedA] },
-    );
+    const entered = step(outside.state, point(0.172, 0.35, 1_010), {
+      ...scene,
+      objects: [unrotatedA],
+    });
     expect(entered.state).toMatchObject({
       phase: "hover",
       candidate: { objectId: "note-a", stable: false },
     });
-    const pinchedBeforeDwell = step(
-      entered.state,
-      pinch(0.172, 0.35, 1_050),
-      { ...scene, objects: [unrotatedA] },
-    );
+    const pinchedBeforeDwell = step(entered.state, pinch(0.172, 0.35, 1_050), {
+      ...scene,
+      objects: [unrotatedA],
+    });
     expect(pinchedBeforeDwell.state).toMatchObject({
       phase: "pinch_pending",
       pinchPending: { objectId: "note-a", ownerTrackId: "hand-a" },
@@ -383,17 +595,15 @@ describe("authoritative spatial gesture reducer", () => {
     expect(pinchedBeforeDwell.effects).not.toContainEqual(
       expect.objectContaining({ type: "object.select" }),
     );
-    const beforeDwell = step(
-      entered.state,
-      point(0.172, 0.35, 1_109),
-      { ...scene, objects: [unrotatedA] },
-    );
+    const beforeDwell = step(entered.state, point(0.172, 0.35, 1_109), {
+      ...scene,
+      objects: [unrotatedA],
+    });
     expect(beforeDwell.state.candidate?.stable).toBe(false);
-    const dwelled = step(
-      beforeDwell.state,
-      point(0.172, 0.35, 1_110),
-      { ...scene, objects: [unrotatedA] },
-    );
+    const dwelled = step(beforeDwell.state, point(0.172, 0.35, 1_110), {
+      ...scene,
+      objects: [unrotatedA],
+    });
     expect(dwelled.state.candidate?.stable).toBe(true);
 
     const middleRadiusScene = {
@@ -497,7 +707,13 @@ describe("authoritative spatial gesture reducer", () => {
       phase: "held_one",
       held: {
         ownerTrackId: "hand-a",
-        currentTransform: { x: 200, y: 150, width: 200, height: 120, rotation: 10 },
+        currentTransform: {
+          x: 200,
+          y: 150,
+          width: 200,
+          height: 120,
+          rotation: 10,
+        },
       },
     });
     expect(wrongTrack.effects).toEqual([]);
@@ -609,11 +825,7 @@ describe("authoritative spatial gesture reducer", () => {
       ],
     };
     const stable = hoverStable(staleScene);
-    const acquired = step(
-      stable.state,
-      pinch(0.25, 0.35, 1_110),
-      staleScene,
-    );
+    const acquired = step(stable.state, pinch(0.25, 0.35, 1_110), staleScene);
 
     expect(acquired.effects).toContainEqual({
       type: "object.preview_transform",
@@ -628,8 +840,11 @@ describe("authoritative spatial gesture reducer", () => {
     const released = step(moved.state, point(0.5, 0.5, 1_180));
 
     expect(released.state.phase).not.toBe("awaiting_neutral");
-    expect(released.effects.filter((effect) => effect.type === "object.complete_transform"))
-      .toHaveLength(1);
+    expect(
+      released.effects.filter(
+        (effect) => effect.type === "object.complete_transform",
+      ),
+    ).toHaveLength(1);
     const nextHover = step(released.state, point(0.12, 0.35, 1_200));
     expect(nextHover.state.phase).toBe("hover");
   });
@@ -668,27 +883,34 @@ describe("authoritative spatial gesture reducer", () => {
   it("gives drawing precedence and treats open palm as pen-up without palm ink or pan", () => {
     const started = step(
       createInitialSpatialGestureState(),
-      point(0.2, 0.3, 1_000),
+      drawingPoint(0.2, 0.3, 1_000, "engaged"),
       scene,
       drawing,
     );
-    const continued = step(started.state, point(0.22, 0.32, 1_020), scene, drawing);
+    const continued = step(
+      started.state,
+      drawingPoint(0.22, 0.32, 1_020),
+      scene,
+      drawing,
+    );
     const penUp = step(continued.state, palm(0.8, 0.8, 1_040), scene, drawing);
 
     expect(penUp.effects).toEqual([
-      {
+      expect.objectContaining({
         type: "stroke.commit",
         points: [
           { x: 200, y: 180 },
           { x: 220, y: 192 },
         ],
-      },
+        handTrackId: "hand-a",
+        terminationReason: "gesture-release",
+      }),
       { type: "preview.clear" },
     ]);
     expect(penUp.effects).not.toContainEqual(
       expect.objectContaining({ type: "viewport.pan_by" }),
     );
-    expect(penUp.state.phase).toBe("idle");
+    expect(penUp.state.phase).toBe("hover");
   });
 
   it("upgrades only after the same second hand pinches near the held object for 100 ms", () => {
@@ -752,9 +974,13 @@ describe("authoritative spatial gesture reducer", () => {
 
     expect(reversed.state.phase).toBe("transforming_two");
     expect(
-      reversed.effects.find((effect) => effect.type === "object.preview_transform"),
+      reversed.effects.find(
+        (effect) => effect.type === "object.preview_transform",
+      ),
     ).toEqual(
-      ordered.effects.find((effect) => effect.type === "object.preview_transform"),
+      ordered.effects.find(
+        (effect) => effect.type === "object.preview_transform",
+      ),
     );
   });
 
@@ -850,13 +1076,22 @@ describe("authoritative spatial gesture reducer", () => {
       minimumBase.state,
       bimanual({ x: 0.324, y: 0.35 }, { x: 0.326, y: 0.35 }, 1_340),
     );
-    const minimumRelease = step(minimumPreview.state, point(0.324, 0.35, 1_360));
+    const minimumRelease = step(
+      minimumPreview.state,
+      point(0.324, 0.35, 1_360),
+    );
     const minimumCompletion = minimumRelease.effects.find(
       (effect) => effect.type === "object.complete_transform",
     );
-    if (!minimumCompletion || minimumCompletion.type !== "object.complete_transform")
+    if (
+      !minimumCompletion ||
+      minimumCompletion.type !== "object.complete_transform"
+    )
       throw new Error("expected minimum transform completion");
-    expect(minimumCompletion.transform).toMatchObject({ width: 160, height: 96 });
+    expect(minimumCompletion.transform).toMatchObject({
+      width: 160,
+      height: 96,
+    });
     const minimumApplied = applyGestureCompletion(minimumCompletion, scene);
     expect(minimumApplied.ok).toBe(true);
 
@@ -885,10 +1120,19 @@ describe("authoritative spatial gesture reducer", () => {
     const maximumCompletion = maximumRelease.effects.find(
       (effect) => effect.type === "object.complete_transform",
     );
-    if (!maximumCompletion || maximumCompletion.type !== "object.complete_transform")
+    if (
+      !maximumCompletion ||
+      maximumCompletion.type !== "object.complete_transform"
+    )
       throw new Error("expected maximum transform completion");
-    expect(maximumCompletion.transform).toMatchObject({ width: 1_750, height: 1_400 });
-    const maximumApplied = applyGestureCompletion(maximumCompletion, maximumScene);
+    expect(maximumCompletion.transform).toMatchObject({
+      width: 1_750,
+      height: 1_400,
+    });
+    const maximumApplied = applyGestureCompletion(
+      maximumCompletion,
+      maximumScene,
+    );
     expect(maximumApplied.ok).toBe(true);
 
     const rotatedScene: SpatialGestureScene = {
@@ -909,10 +1153,16 @@ describe("authoritative spatial gesture reducer", () => {
     const rotatedCompletion = rotatedRelease.effects.find(
       (effect) => effect.type === "object.complete_transform",
     );
-    if (!rotatedCompletion || rotatedCompletion.type !== "object.complete_transform")
+    if (
+      !rotatedCompletion ||
+      rotatedCompletion.type !== "object.complete_transform"
+    )
       throw new Error("expected rotated transform completion");
     expect(rotatedCompletion.transform.rotation).toBeCloseTo(-168.2, 1);
-    const rotatedApplied = applyGestureCompletion(rotatedCompletion, rotatedScene);
+    const rotatedApplied = applyGestureCompletion(
+      rotatedCompletion,
+      rotatedScene,
+    );
     expect(rotatedApplied.ok).toBe(true);
 
     const bottomHeld = held(scene, 0.25, 0.35, 2_000);
@@ -928,7 +1178,10 @@ describe("authoritative spatial gesture reducer", () => {
         effect.type === "object.complete_edge_action" &&
         effect.action === "minimize",
     );
-    if (!minimizeCompletion || minimizeCompletion.type !== "object.complete_edge_action")
+    if (
+      !minimizeCompletion ||
+      minimizeCompletion.type !== "object.complete_edge_action"
+    )
       throw new Error("expected minimize completion");
     const minimizeApplied = applyGestureCompletion(minimizeCompletion, scene);
     expect(minimizeApplied.ok).toBe(true);
@@ -965,7 +1218,10 @@ describe("authoritative spatial gesture reducer", () => {
         effect.type === "object.complete_edge_action" &&
         effect.action === "maximize",
     );
-    if (!maximizeCompletion || maximizeCompletion.type !== "object.complete_edge_action")
+    if (
+      !maximizeCompletion ||
+      maximizeCompletion.type !== "object.complete_edge_action"
+    )
       throw new Error("expected maximize completion");
     expect(maximizeCompletion.transform).toEqual({
       x: -500,
@@ -974,7 +1230,10 @@ describe("authoritative spatial gesture reducer", () => {
       height: 1_400,
       rotation: 0,
     });
-    const maximizeApplied = applyGestureCompletion(maximizeCompletion, maximizeScene);
+    const maximizeApplied = applyGestureCompletion(
+      maximizeCompletion,
+      maximizeScene,
+    );
     expect(maximizeApplied.ok).toBe(true);
   });
 
@@ -984,10 +1243,7 @@ describe("authoritative spatial gesture reducer", () => {
       upgraded.state,
       bimanual({ x: 0.3, y: 0.4 }, { x: 0.7, y: 0.5 }, 1_340),
     );
-    const dropout = step(
-      transformed.state,
-      pinch(0.3, 0.4, 1_390),
-    );
+    const dropout = step(transformed.state, pinch(0.3, 0.4, 1_390));
     expect(dropout.state.phase).toBe("lost_grace");
     expect(dropout.effects).not.toContainEqual(
       expect.objectContaining({ type: "object.complete_transform" }),
@@ -1003,8 +1259,11 @@ describe("authoritative spatial gesture reducer", () => {
     );
 
     const released = step(resumed.state, point(0.3, 0.4, 1_480));
-    expect(released.effects.filter((effect) => effect.type === "object.complete_transform"))
-      .toHaveLength(1);
+    expect(
+      released.effects.filter(
+        (effect) => effect.type === "object.complete_transform",
+      ),
+    ).toHaveLength(1);
     const after = step(released.state, point(0.31, 0.41, 1_500));
     expect(after.effects).not.toContainEqual(
       expect.objectContaining({ type: "object.complete_transform" }),
@@ -1125,18 +1384,33 @@ describe("authoritative spatial gesture reducer", () => {
   it.each([
     ["zone", () => beginLeftThrow({ zoneX: 0.065 })],
     ["velocity", () => beginLeftThrow({ firstX: 0.13 })],
-    ["minimum time window", () => beginLeftThrow({ firstSampleAt: 1_241, finalAt: 1_300 })],
-    ["maximum time window", () => beginLeftThrow({ firstSampleAt: 937, finalAt: 1_300 })],
-    ["direction cosine", () => beginLeftThrow({ firstX: 0.15, firstY: 0.1, finalY: 0.5 })],
+    [
+      "minimum time window",
+      () => beginLeftThrow({ firstSampleAt: 1_241, finalAt: 1_300 }),
+    ],
+    [
+      "maximum time window",
+      () => beginLeftThrow({ firstSampleAt: 937, finalAt: 1_300 }),
+    ],
+    [
+      "direction cosine",
+      () => beginLeftThrow({ firstX: 0.15, firstY: 0.1, finalY: 0.5 }),
+    ],
     ["confidence history", () => beginLeftThrow({ middleConfidence: 0.79 })],
   ])("refuses a side throw when its %s gate fails", (_gate, run) => {
     const valid = beginLeftThrow();
     expect(valid.effects).toContainEqual(
-      expect.objectContaining({ type: "object.preview_edge_action", armed: true }),
+      expect.objectContaining({
+        type: "object.preview_edge_action",
+        armed: true,
+      }),
     );
     const result = run();
     expect(result.effects).not.toContainEqual(
-      expect.objectContaining({ type: "object.preview_edge_action", armed: true }),
+      expect.objectContaining({
+        type: "object.preview_edge_action",
+        armed: true,
+      }),
     );
     const released = step(result.state, point(0.04, 0.4, 1_320));
     expect(released.effects).not.toContainEqual(
@@ -1209,10 +1483,11 @@ describe("authoritative spatial gesture reducer", () => {
     );
 
     const visibleAgain = acknowledgeEdge(beginLeftThrow().state);
-    const lost = step(
-      visibleAgain.state,
-      { mode: "idle", timestamp: 1_320, reason: "loss" },
-    );
+    const lost = step(visibleAgain.state, {
+      mode: "idle",
+      timestamp: 1_320,
+      reason: "loss",
+    });
     expect(lost.effects).not.toContainEqual(
       expect.objectContaining({ type: "object.complete_edge_action" }),
     );
@@ -1265,7 +1540,12 @@ describe("authoritative spatial gesture reducer", () => {
       blank,
       drawing,
     );
-    const drawingPalm = step(drawingStarted.state, palm(0.8, 0.7, 1_020), blank, drawing);
+    const drawingPalm = step(
+      drawingStarted.state,
+      palm(0.8, 0.7, 1_020),
+      blank,
+      drawing,
+    );
     expect(drawingPalm.effects).not.toContainEqual(
       expect.objectContaining({ type: "viewport.pan_by" }),
     );

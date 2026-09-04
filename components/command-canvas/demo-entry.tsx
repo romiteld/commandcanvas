@@ -193,7 +193,7 @@ export function DemoEntry({ children }: { children: ReactNode }) {
     readMountedClient,
     readMountedServer,
   );
-  const siteToolsSurfaceAvailable = useDocumentWebMcpTarget() !== null;
+  const webMcpRegistrationSurfaceDetected = useDocumentWebMcpTarget() !== null;
   const accepted = !acceptanceRevoked && (storedAccepted || memoryAccepted);
   const acceptedRef = useRef(accepted);
   const currentActorStateRef = useRef<EntryActorState>(EMPTY_ENTRY_ACTOR);
@@ -456,14 +456,14 @@ export function DemoEntry({ children }: { children: ReactNode }) {
       <h1 id="demo-entry-title">Choose how to enter CommandCanvas</h1>
       <p>
         Sign in for durable rooms, invitations, and your encrypted saved OpenAI
-        key. In the ChatGPT desktop app, Site Tools use the ChatGPT account
-        already signed into the surrounding app. CommandCanvas never receives
-        that ChatGPT credential.
+        key. In the ChatGPT desktop app, the surrounding compatible agent host
+        uses its signed-in ChatGPT account for WebMCP tools. Those page tools
+        operate on CommandCanvas state and do not receive the ChatGPT credential.
       </p>
       <p className="demo-entry-site-tools" role="status">
-        {siteToolsSurfaceAvailable
-          ? "A Site Tools registration surface is available in this tab. The surface itself does not prove which agent host exposed it; an actual invocation is shown separately after you enter."
-          : "This browser session has not exposed a Site Tools registration surface. No additional ChatGPT sign-in is required; the preview still works with visible canvas controls."}
+        {webMcpRegistrationSurfaceDetected
+          ? "A WebMCP registration surface was detected in this tab. After entry, CommandCanvas automatically registers its tools when the live canvas is ready, so compatible agents can discover and invoke them without opening the activity drawer. The activity drawer only inspects registration and activity. Surface detection is not completed registration or invocation evidence; an actual invocation and receipt are shown separately after you enter."
+          : "This browser session has not exposed a WebMCP registration surface. No additional ChatGPT sign-in is required; the preview still works with visible canvas controls."}
       </p>
       {phase.kind === "checking" ? (
         <>

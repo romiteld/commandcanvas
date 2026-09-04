@@ -3,6 +3,7 @@ import {
   createInitialHandReliabilityState,
   mapCalibratedPointer,
   reduceHandReliability,
+  resolveHandCameraBounds,
   resolvePinchThresholds,
   type CanvasBounds,
   type HandCalibrationProfile,
@@ -11,21 +12,30 @@ import {
   type HandReliabilityHandInput,
   type HandReliabilityState,
 } from "@/lib/gesture/hand-calibration";
-import type {
-  HandTrackingObservation,
-  HandTrackingPointer,
+import {
+  isReliableTrackedHandedness,
+  type HandTrackingObservation,
+  type HandTrackingPointer,
 } from "@/lib/gesture/hand-tracking-controller";
 import type {
   SpatialBimanualHand,
   SpatialGestureInput,
   SpatialReliabilityEvidence,
 } from "@/lib/gesture/spatial-gesture";
+import {
+  applyDrawingClutchPolicyAtSafeBoundary,
+  createInitialDrawingClutchState,
+  reduceDrawingClutch,
+  resolveDrawingClutchPolicy,
+  type DrawingClutchState,
+} from "@/lib/gesture/drawing-clutch";
 
 const STROKE_DISTANCE_PX = 1.75;
 const STROKE_SAMPLE_INTERVAL_MS = 12;
 
 export interface SpatialRoomInputState {
   readonly reliability: HandReliabilityState;
+  readonly drawingClutch: DrawingClutchState;
 }
 
 export interface SpatialRoomInputOptions {
@@ -33,6 +43,8 @@ export interface SpatialRoomInputOptions {
   readonly canvas: CanvasBounds;
   readonly gainState: HandControlGainState;
   readonly edgePreviewVisible: boolean;
+  /** Draw tool availability is distinct from the clutch's pen-down state. */
+  readonly drawingEnabled?: boolean;
 }
 
 export interface SpatialRoomInputTransition {
@@ -48,7 +60,10 @@ interface MappedBimanualInput {
 }
 
 export function createInitialSpatialRoomInputState(): SpatialRoomInputState {
-  return { reliability: createInitialHandReliabilityState() };
+  return {
+    reliability: createInitialHandReliabilityState(),
+    drawingClutch: createInitialDrawingClutchState(),
+  };
 }
 
 /**
@@ -69,8 +84,18 @@ export function reduceSpatialRoomObservation(
       { timestamp: observation.timestamp, hands: [] },
       thresholds,
     );
+    // A detector dropout is uncertainty, not a deliberate pen release. Keep
+    // the confirmed clutch state so the gesture reducer can apply its bounded
+    // short-gap policy. Session end and Draw-mode exit still reset explicitly.
+    const drawingClutch =
+      options.drawingEnabled && observation.trackingState === "lost"
+        ? state.drawingClutch
+        : reduceDrawingClutch(state.drawingClutch, null).state;
     return {
-      state: { reliability: reliability.state },
+      state: {
+        reliability: reliability.state,
+        drawingClutch,
+      },
       input: {
         mode: "idle",
         timestamp: observation.timestamp,
@@ -86,12 +111,14 @@ export function reduceSpatialRoomObservation(
         hand.pointer,
         options.canvas,
         "two_hand",
+        hand,
       );
       const mappedMotion = mapPointer(
         options.calibration,
         hand.motionPointer ?? hand.pointer,
         options.canvas,
         "two_hand",
+        hand,
       );
       return {
         original: hand,
@@ -120,8 +147,12 @@ export function reduceSpatialRoomObservation(
           : reliabilityFromPointer(hand.original, index)),
       };
     }) as [SpatialBimanualHand, SpatialBimanualHand];
+    const clutch = reduceDrawingClutch(state.drawingClutch, null);
     return {
-      state: { reliability: reliability.state },
+      state: {
+        reliability: reliability.state,
+        drawingClutch: clutch.state,
+      },
       input: {
         mode: "bimanual_pinch",
         pointers: [hands[0].pointer, hands[1].pointer],
@@ -141,12 +172,14 @@ export function reduceSpatialRoomObservation(
     observation.pointer,
     options.canvas,
     options.gainState,
+    observation,
   );
   const motionPointer = mapPointer(
     options.calibration,
     observation.motionPointer ?? observation.pointer,
     options.canvas,
     options.gainState,
+    observation,
   );
   const reliabilityInput = reliabilityHandInput(
     observation,
@@ -161,7 +194,8 @@ export function reduceSpatialRoomObservation(
   );
   const snapshot = reliability.snapshot.activeHand;
   const hasPhysicalPinchEvidence =
-    observation.measurements !== undefined || observation.pinchRatio !== undefined;
+    observation.measurements !== undefined ||
+    observation.pinchRatio !== undefined;
   const mode =
     observation.mode === "open_palm"
       ? "open_palm"
@@ -170,18 +204,89 @@ export function reduceSpatialRoomObservation(
           ? "pinch"
           : "point"
         : observation.mode;
+  const clutchObservation = drawingClutchObservation(observation);
+  const drawingTrackId = observation.trackId ?? "legacy-primary";
+  const drawingStateAtTrackBoundary =
+    state.drawingClutch.phase !== "pen_up" &&
+    state.drawingClutch.activeTrackId !== null &&
+    state.drawingClutch.activeTrackId !== drawingTrackId
+      ? reduceDrawingClutch(state.drawingClutch, null).state
+      : state.drawingClutch;
+  const resolvedDrawingPolicy = resolveDrawingClutchPolicy(options.calibration, {
+    trackId: drawingTrackId,
+    handedness: observation.handedness ?? "unknown",
+    handednessReliable: isReliableTrackedHandedness(
+      observation.handedness ?? "unknown",
+      observation.handednessConfidence,
+    ),
+  });
+  const calibratedDrawingState = applyDrawingClutchPolicyAtSafeBoundary(
+    drawingStateAtTrackBoundary,
+    resolvedDrawingPolicy.policy,
+  );
+  const clutch = options.drawingEnabled
+    ? reduceDrawingClutch(calibratedDrawingState, clutchObservation)
+    : reduceDrawingClutch(state.drawingClutch, null);
+  const drawingEvidence =
+    options.drawingEnabled &&
+    observation.mode !== "open_palm" &&
+    clutch.evidence.trackId
+      ? { ...clutch.evidence, trackId: clutch.evidence.trackId }
+      : undefined;
+  const commonInput = {
+    pointer,
+    motionPointer,
+    timestamp: observation.timestamp,
+    reliability: snapshot
+      ? reliabilityFromSnapshot(snapshot)
+      : reliabilityFromPointer(observation, 0),
+    ...(drawingEvidence ? { drawing: drawingEvidence } : {}),
+    edgePreviewVisible: options.edgePreviewVisible,
+  };
+  const input: SpatialGestureInput =
+    mode === "point"
+      ? { mode: "point", ...commonInput }
+      : mode === "pinch"
+        ? { mode: "pinch", ...commonInput }
+        : { mode: "open_palm", ...commonInput };
   return {
-    state: { reliability: reliability.state },
-    input: {
-      mode,
-      pointer,
-      motionPointer,
-      timestamp: observation.timestamp,
-      reliability: snapshot
-        ? reliabilityFromSnapshot(snapshot)
-        : reliabilityFromPointer(observation, 0),
-      edgePreviewVisible: options.edgePreviewVisible,
+    state: {
+      reliability: reliability.state,
+      drawingClutch: clutch.state,
     },
+    input,
+  };
+}
+
+function drawingClutchObservation(
+  observation: Exclude<
+    HandTrackingObservation,
+    { mode: "idle" | "bimanual_pinch" }
+  >,
+) {
+  const measurements = observation.measurements;
+  const normalizedDistance = measurements?.drawingClutchRatio;
+  if (
+    !measurements ||
+    typeof normalizedDistance !== "number" ||
+    !Number.isFinite(normalizedDistance)
+  )
+    return null;
+  return {
+    trackId: observation.trackId ?? "legacy-primary",
+    timestamp: observation.timestamp,
+    normalizedDistance,
+    confidence: Math.min(
+      observation.confidence,
+      measurements.confidence,
+      measurements.thumbTipConfidence,
+      measurements.middleTipConfidence ?? 0,
+    ),
+    predicted: observation.prediction?.predicted ?? false,
+    trackingState:
+      observation.trackingState === "tracked"
+        ? ("tracked" as const)
+        : ("grace" as const),
   };
 }
 
@@ -190,9 +295,25 @@ function mapPointer(
   cameraPoint: CanvasPoint,
   canvas: CanvasBounds,
   gainState: HandControlGainState,
+  identity?: Partial<
+    Pick<
+      HandTrackingPointer,
+      "trackId" | "handedness" | "handednessConfidence"
+    >
+  >,
 ): CanvasPoint {
+  const cameraBounds = identity
+    ? resolveHandCameraBounds(calibration, {
+        trackId: identity.trackId ?? "legacy-primary",
+        handedness: identity.handedness ?? "unknown",
+        handednessReliable: isReliableTrackedHandedness(
+          identity.handedness ?? "unknown",
+          identity.handednessConfidence,
+        ),
+      })
+    : calibration.cameraBounds;
   const mapped = mapCalibratedPointer(
-    calibration,
+    { ...calibration, cameraBounds },
     cameraPoint,
     canvas,
     gainState,
@@ -206,11 +327,7 @@ function mapPointer(
 function reliabilityHandInput(
   hand: Pick<
     HandTrackingPointer,
-    | "confidence"
-    | "trackId"
-    | "prediction"
-    | "trackingState"
-    | "measurements"
+    "confidence" | "trackId" | "prediction" | "trackingState" | "measurements"
   > & { readonly handedness?: "left" | "right" | "unknown" },
   fallbackIndex: number,
   pointer: CanvasPoint,
@@ -222,10 +339,8 @@ function reliabilityHandInput(
     handedness: hand.handedness ?? "unknown",
     pointer,
     confidence: hand.confidence,
-    indexTipConfidence:
-      measurements?.indexTipConfidence ?? hand.confidence,
-    thumbTipConfidence:
-      measurements?.thumbTipConfidence ?? hand.confidence,
+    indexTipConfidence: measurements?.indexTipConfidence ?? hand.confidence,
+    thumbTipConfidence: measurements?.thumbTipConfidence ?? hand.confidence,
     predicted: hand.prediction?.predicted ?? false,
     pinchRatio: measurements?.pinchRatio ?? fallbackPinchRatio,
   };
@@ -340,11 +455,7 @@ function spatialBimanualHand(
 function reliabilityFromPointer(
   hand: Pick<
     HandTrackingPointer,
-    | "confidence"
-    | "trackId"
-    | "prediction"
-    | "trackingState"
-    | "measurements"
+    "confidence" | "trackId" | "prediction" | "trackingState" | "measurements"
   >,
   fallbackIndex: number,
 ): SpatialReliabilityEvidence {
@@ -359,7 +470,6 @@ function reliabilityFromPointer(
     ),
     real: !predicted && hand.trackingState !== "grace",
     predicted,
-    trackingState:
-      hand.trackingState === "grace" ? "uncertain" : "tracked",
+    trackingState: hand.trackingState === "grace" ? "uncertain" : "tracked",
   };
 }

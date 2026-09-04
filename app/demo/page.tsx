@@ -7,7 +7,7 @@ import { isPrivateHandRelayConfigured } from "@/lib/gesture/private-hand-relay-s
 export const metadata: Metadata = {
   title: "CommandCanvas: No-signup judge preview",
   description:
-    "Review a capped shared spatial workspace with semantic objects, realtime presence, WebMCP Site Tools, and attributable receipts.",
+    "Review a capped shared spatial workspace with semantic objects, realtime presence, WebMCP agent tools, and attributable receipts.",
   referrer: "no-referrer",
   robots: { index: false, follow: false },
 };

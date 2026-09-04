@@ -232,7 +232,8 @@ describe("release dependency and README wording", () => {
     );
     expect(scripts["check:training"]).toContain("ruff check");
     expect(scripts["check:training"]).toContain("ruff format --check");
-    expect(scripts["check:training"]).toContain("mypy scripts/drawing-training");
+    expect(scripts["check:training"]).toContain("mypy");
+    expect(scripts["check:training"]).toContain("scripts/drawing-training");
     expect(scripts["check:training"]).toContain("unittest discover");
     expect(scripts.check).toContain("npm run check:training");
     expect(requirements).toContain("numpy==2.2.6");

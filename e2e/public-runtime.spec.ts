@@ -262,8 +262,8 @@ async function drawStroke(
 async function exercisePreviewOnlyPacketWorkflow(page: Page, roomId: string) {
   await openDrawer(
     page,
-    "Open ChatGPT Site Tools and activity drawer",
-    "ChatGPT command drawer",
+    "Open WebMCP agent activity",
+    "WebMCP activity and CommandCanvas Live Voice drawer",
   );
   const prepareResponsePromise = waitForPacketResponse(
     page,
@@ -323,8 +323,8 @@ async function exercisePreviewOnlyPacketWorkflow(page: Page, roomId: string) {
   await expect(page.getByText("Live demo room")).toBeVisible({ timeout: 20_000 });
   await openDrawer(
     page,
-    "Open ChatGPT Site Tools and activity drawer",
-    "ChatGPT command drawer",
+    "Open WebMCP agent activity",
+    "WebMCP activity and CommandCanvas Live Voice drawer",
   );
   await expect(page.getByText("Approved packet v1").first()).toBeVisible();
   await expect(
@@ -368,8 +368,8 @@ async function exercisePreviewOnlyPacketWorkflow(page: Page, roomId: string) {
   await expect(page.getByText("Live demo room")).toBeVisible({ timeout: 20_000 });
   await openDrawer(
     page,
-    "Open ChatGPT Site Tools and activity drawer",
-    "ChatGPT command drawer",
+    "Open WebMCP agent activity",
+    "WebMCP activity and CommandCanvas Live Voice drawer",
   );
   await expect(page.getByText("Preview only: not sent")).toBeVisible();
   await expect(
@@ -390,11 +390,11 @@ async function exerciseFakeCameraLifecycle(
   cameraResponses: Array<{ url: string; status: number }>,
 ) {
   const commandDrawer = page.getByRole("complementary", {
-    name: "ChatGPT command drawer",
+    name: "WebMCP activity and CommandCanvas Live Voice drawer",
   });
   if (await commandDrawer.isVisible()) {
     await page
-      .getByRole("button", { name: "Close ChatGPT command drawer" })
+      .getByRole("button", { name: "Close WebMCP activity and CommandCanvas Live Voice drawer" })
       .click();
     await expect(commandDrawer).toBeHidden();
   }

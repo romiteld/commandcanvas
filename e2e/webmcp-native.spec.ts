@@ -24,7 +24,7 @@ test("registers the stable catalog on Chrome's native WebMCP surface", async ({
     page
       .getByRole("complementary", { name: "System status drawer" })
       .getByRole("region", { name: "Service status" })
-      .getByText("12 Site Tools registered", { exact: true }),
+      .getByText("12 WebMCP tools registered", { exact: true }),
   ).toBeVisible();
 
   const toolNames = await page.evaluate(async () => {

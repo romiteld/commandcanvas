@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createCanvasStore } from "@/lib/canvas/canvas-store";
 import type {
   ActivityReceipt,
+  CanvasCommand,
   CanvasState,
 } from "@/lib/canvas/command-engine";
 import type { CanvasObject, NewCanvasObject } from "@/lib/canvas/object-model";
@@ -143,6 +144,7 @@ describe("canvas WebMCP adapters", () => {
       status: "completed",
       message: "Canvas state read at revision 0.",
       data: {
+        scope: "all",
         roomId: "room-demo",
         revision: 0,
         selectedObjectId: null,
@@ -529,7 +531,11 @@ describe("canvas WebMCP adapters", () => {
       },
     });
     const receipts = Array.from({ length: 20 }, (_, receiptIndex) =>
-      receiptFixture(receiptIndex, sketch.id, receiptIndex === 0 ? sketch : null),
+      receiptFixture(
+        receiptIndex,
+        sketch.id,
+        receiptIndex === 0 ? sketch : null,
+      ),
     );
     receipts[0] = { ...receipts[0], description: "d".repeat(300) };
     hydrate(store, [sketch], receipts);
@@ -657,13 +663,13 @@ describe("canvas WebMCP adapters", () => {
     expect(result).toMatchObject({
       ok: true,
       status: "completed",
-      message: "Site Tools agent created “Agent proposal”.",
+      message: "WebMCP agent created “Agent proposal”.",
     });
     expect(store.getState().canvas.receipts[0]).toMatchObject({
       source: "webmcp",
       actor: {
         id: "agent-site-tools",
-        displayName: "Site Tools agent",
+        displayName: "WebMCP agent",
         type: "agent",
       },
     });
@@ -674,6 +680,97 @@ describe("canvas WebMCP adapters", () => {
       payload: { text: "Review this proposed decision.", tone: "sky" },
     });
     expect(created?.id).toMatch(/^note-/);
+  });
+
+  it("makes a confirmed agent-created note the active target for its immediate follow-up", async () => {
+    const { store, adapters } = fixture();
+    store.getState().dispatch(
+      {
+        type: "object.create",
+        object: {
+          id: "diagram-old-selection",
+          type: "diagram",
+          title: "Old graph",
+          x: 20,
+          y: 20,
+          width: 420,
+          height: 260,
+          zIndex: 1,
+          payload: {
+            kind: "diagram",
+            interpretationSummary:
+              "This was selected before voice created a note.",
+            nodes: [
+              {
+                id: "old-node",
+                label: "Old data",
+                kind: "concept",
+                x: 40,
+                y: 40,
+                width: 140,
+                height: 70,
+              },
+            ],
+            edges: [],
+          },
+        },
+      },
+      "pointer",
+    );
+    store.getState().selectObject("diagram-old-selection");
+
+    const created = await adapters.executeTool({
+      toolName: "create_object",
+      input: {
+        type: "note",
+        title: "Demo narration",
+      },
+      source: "voice",
+      signal: new AbortController().signal,
+      context: {
+        ...context,
+        phase: { ...context.phase, hasContent: true, selection: "object" },
+      },
+    });
+    expect(created).toMatchObject({
+      ok: true,
+      status: "completed",
+      data: { objectId: expect.stringMatching(/^note-/) },
+    });
+    const createdObjectId = Object.values(store.getState().canvas.objects).find(
+      (object) => object.title === "Demo narration",
+    )?.id;
+    expect(typeof createdObjectId).toBe("string");
+    expect(store.getState().selectedObjectId).toBe(createdObjectId);
+
+    const updated = await adapters.executeTool({
+      toolName: "update_object_content",
+      input: {
+        text: "The assistant should write into the note it just created.",
+      },
+      source: "voice",
+      signal: new AbortController().signal,
+      context: {
+        ...context,
+        phase: { ...context.phase, hasContent: true, selection: "object" },
+      },
+    });
+
+    expect(updated).toMatchObject({ ok: true, status: "completed" });
+    expect(
+      store.getState().canvas.objects[String(createdObjectId)],
+    ).toMatchObject({
+      type: "note",
+      payload: {
+        text: "The assistant should write into the note it just created.",
+      },
+    });
+    expect(
+      store.getState().canvas.objects["diagram-old-selection"],
+    ).toMatchObject({
+      type: "diagram",
+      version: 1,
+    });
   });
 
   it("creates a spoken-context diagram beside an explicitly selected source sketch", async () => {
@@ -714,7 +811,9 @@ describe("canvas WebMCP adapters", () => {
       y: 30,
       payload: { sourceSketchId: "sketch-source" },
     });
-    expect(store.getState().canvas.objects["sketch-source"]?.deletedAt).toBeNull();
+    expect(
+      store.getState().canvas.objects["sketch-source"]?.deletedAt,
+    ).toBeNull();
   });
 
   it("refuses a source-sketch link unless that exact active sketch is selected", async () => {
@@ -802,7 +901,7 @@ describe("canvas WebMCP adapters", () => {
     expect(result).toMatchObject({
       ok: true,
       status: "completed",
-      message: "Site Tools agent added text to “Research thought”.",
+      message: "WebMCP agent added text to “Research thought”.",
     });
     expect(store.getState().canvas.objects["note-thought"]).toMatchObject({
       version: 2,
@@ -911,7 +1010,11 @@ describe("canvas WebMCP adapters", () => {
 
     const result = await adapters.executeTool({
       toolName: "transform_object",
-      input: { objectId: "note-pinned", transform: { x: 900 } },
+      input: {
+        objectId: "note-pinned",
+        expectedVersion: 2,
+        transform: { x: 900 },
+      },
       signal: new AbortController().signal,
       context: {
         ...context,
@@ -949,7 +1052,11 @@ describe("canvas WebMCP adapters", () => {
 
     const result = await adapters.executeTool({
       toolName: "transform_object",
-      input: { objectId: "note-rotate", transform: { rotation: -45 } },
+      input: {
+        objectId: "note-rotate",
+        expectedVersion: 1,
+        transform: { rotation: -45 },
+      },
       signal: new AbortController().signal,
       context: {
         ...context,
@@ -960,7 +1067,7 @@ describe("canvas WebMCP adapters", () => {
     expect(result).toMatchObject({
       ok: true,
       status: "completed",
-      message: "Site Tools agent transformed “Rotate me” spatially.",
+      message: "WebMCP agent transformed “Rotate me” spatially.",
     });
     expect(store.getState().canvas.objects["note-rotate"]).toMatchObject({
       rotation: -45,
@@ -1002,6 +1109,10 @@ describe("canvas WebMCP adapters", () => {
       input: {
         action: "group",
         objectIds: ["note-one", "note-two"],
+        expectedVersions: [
+          { objectId: "note-one", expectedVersion: 1 },
+          { objectId: "note-two", expectedVersion: 1 },
+        ],
         frame: {
           id: "frame-notes",
           title: "Launch notes",
@@ -1023,7 +1134,7 @@ describe("canvas WebMCP adapters", () => {
     expect(grouped).toMatchObject({
       ok: true,
       status: "completed",
-      message: "Site Tools agent grouped 2 objects in “Launch notes”.",
+      message: "WebMCP agent grouped 2 objects in “Launch notes”.",
     });
     expect(store.getState().canvas.objects["frame-notes"]).toMatchObject({
       type: "frame",
@@ -1040,7 +1151,11 @@ describe("canvas WebMCP adapters", () => {
 
     const ungrouped = await adapters.executeTool({
       toolName: "organize_objects",
-      input: { action: "ungroup", frameId: "frame-notes" },
+      input: {
+        action: "ungroup",
+        frameId: "frame-notes",
+        expectedVersion: 1,
+      },
       signal: new AbortController().signal,
       context: {
         ...context,
@@ -1051,14 +1166,18 @@ describe("canvas WebMCP adapters", () => {
     expect(ungrouped).toMatchObject({
       ok: true,
       status: "completed",
-      message: "Site Tools agent ungrouped “Launch notes”.",
+      message: "WebMCP agent ungrouped “Launch notes”.",
     });
-    expect(store.getState().canvas.objects["frame-notes"].deletedAt).not.toBeNull();
+    expect(
+      store.getState().canvas.objects["frame-notes"].deletedAt,
+    ).not.toBeNull();
     expect(store.getState().canvas.objects["note-one"].parentId).toBeNull();
-    expect(store.getState().canvas.receipts.slice(-2).map(({ action }) => action)).toEqual([
-      "group",
-      "ungroup",
-    ]);
+    expect(
+      store
+        .getState()
+        .canvas.receipts.slice(-2)
+        .map(({ action }) => action),
+    ).toEqual(["group", "ungroup"]);
   });
 
   it("undoes and redoes the latest mutation through the shared history", async () => {
@@ -1090,7 +1209,7 @@ describe("canvas WebMCP adapters", () => {
     expect(undone).toMatchObject({
       ok: true,
       status: "completed",
-      message: "Site Tools agent undid: Danny created “History note”.",
+      message: "WebMCP agent undid: Danny created “History note”.",
     });
     expect(store.getState().canvas.objects["note-history"]).toBeUndefined();
 
@@ -1103,15 +1222,17 @@ describe("canvas WebMCP adapters", () => {
     expect(redone).toMatchObject({
       ok: true,
       status: "completed",
-      message: "Site Tools agent redid: Danny created “History note”.",
+      message: "WebMCP agent redid: Danny created “History note”.",
     });
     expect(store.getState().canvas.objects["note-history"]).toMatchObject({
       title: "History note",
     });
-    expect(store.getState().canvas.receipts.slice(-2).map(({ action }) => action)).toEqual([
-      "undo",
-      "redo",
-    ]);
+    expect(
+      store
+        .getState()
+        .canvas.receipts.slice(-2)
+        .map(({ action }) => action),
+    ).toEqual(["undo", "redo"]);
   });
 
   it("returns a truthful availability failure when shared history is empty", async () => {
@@ -1134,13 +1255,22 @@ describe("canvas WebMCP adapters", () => {
   it("delegates stable mutations to an injected durable room dispatcher", async () => {
     const { store } = fixture();
     const signal = new AbortController().signal;
-    const dispatchMutation = vi.fn().mockResolvedValue({
-      ok: true,
-      status: "completed",
-      message: "CommandCanvas agent created “Durable proposal”.",
-      receiptId: "ccf31a6b-48cb-4edc-90a4-889d45ec74aa",
-      data: { revision: 7, affectedObjectIds: ["note-durable"] },
-    });
+    const dispatchMutation = vi.fn(
+      async (command: CanvasCommand) => ({
+        ok: true as const,
+        status: "completed" as const,
+        message: "CommandCanvas agent created “Durable proposal”.",
+        receiptId: "ccf31a6b-48cb-4edc-90a4-889d45ec74aa",
+        data: {
+          revision: 7,
+          affectedObjectIds: [
+            command.type === "object.create"
+              ? command.object.id
+              : "unexpected-command",
+          ],
+        },
+      }),
+    );
     const adapters = createCanvasWebMcpAdapters({ store, dispatchMutation });
 
     const result = await adapters.executeTool({

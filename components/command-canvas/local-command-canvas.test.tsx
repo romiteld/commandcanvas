@@ -22,7 +22,7 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
 
     render(<LocalCommandCanvas />);
 
-    expect(await screen.findAllByText("Site Tools unavailable")).not.toHaveLength(0);
+    expect(await screen.findAllByText("WebMCP tools unavailable")).not.toHaveLength(0);
   });
 
   it("registers the stable tool catalog against the current document surface", async () => {
@@ -39,15 +39,15 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
     render(<LocalCommandCanvas />);
 
     await waitFor(() => expect(registerTool).toHaveBeenCalledTimes(12));
-    expect(screen.getByText("12 Site Tools registered")).toBeInTheDocument();
+    expect(screen.getByText("12 WebMCP tools registered")).toBeInTheDocument();
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
+      screen.getByRole("button", { name: "Open WebMCP agent activity" }),
     );
     expect(
-      screen.getByText("12 Site Tools registered to this page"),
+      screen.getByText("12 WebMCP tools registered to this page"),
     ).toBeVisible();
     expect(
-      screen.getByText("No Site Tool has been invoked on this page yet."),
+      screen.getByText("No WebMCP tool has been invoked on this page yet."),
     ).toBeVisible();
     expect(registered.map((tool) => tool.name)).toEqual([
       "get_canvas_state",
@@ -83,16 +83,16 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
     expect(result).toMatchObject({
       ok: true,
       status: "completed",
-      message: "Site Tools agent created “Shared agent action”.",
+      message: "WebMCP agent created “Shared agent action”.",
     });
     expect(
       screen.getByRole("button", { name: "Select Shared agent action" }),
     ).toBeInTheDocument();
     expect(
-      screen.getAllByText("Site Tools agent created “Shared agent action”.").length,
+      screen.getAllByText("WebMCP agent created “Shared agent action”.").length,
     ).toBeGreaterThan(0);
     expect(screen.getAllByText("R1 · webmcp").length).toBeGreaterThan(0);
-    expect(screen.getByText("A page Site Tool was invoked")).toBeVisible();
+    expect(screen.getByText("A WebMCP tool was invoked")).toBeVisible();
     expect(screen.getByText("create object")).toBeVisible();
     expect(screen.getByText("COMPLETED")).toBeVisible();
   });
@@ -108,7 +108,7 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
     const view = render(<LocalCommandCanvas />);
 
     expect(
-      await screen.findAllByText("Site Tools unavailable"),
+      await screen.findAllByText("WebMCP tools unavailable"),
     ).not.toHaveLength(0);
     Object.defineProperty(document, "modelContext", {
       value: { registerTool },
@@ -140,7 +140,7 @@ describe("LocalCommandCanvas WebMCP bridge", () => {
       );
       const view = render(<LocalCommandCanvas />);
 
-      await screen.findAllByText("Site Tools unavailable");
+      await screen.findAllByText("WebMCP tools unavailable");
       await new Promise((resolve) => window.setTimeout(resolve, 3_200));
       Object.defineProperty(document, "modelContext", {
         value: { registerTool },

@@ -57,7 +57,7 @@ test("opens two real no-signup browsers with Presence, cursors, and durable coll
       pageA
         .getByRole("complementary", { name: "System status drawer" })
         .getByRole("region", { name: "Service status" })
-        .getByText("Site Tools unavailable", { exact: true }),
+        .getByText("WebMCP tools unavailable", { exact: true }),
     ).toBeVisible();
     await pageA
       .getByRole("button", { name: "Close system status drawer" })

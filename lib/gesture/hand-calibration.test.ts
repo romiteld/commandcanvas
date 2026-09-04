@@ -519,6 +519,41 @@ describe("calibrated pinch voting", () => {
     expect(uncertain.state.lastConfidentAt).toBe(1_040);
   });
 
+  it("bounds an unreliable-thumb pinch latch and safely releases after the grace window", () => {
+    const thresholds = { engage: 0.38, release: 0.52 };
+    const engaged = voteCalibratedPinch(
+      voteCalibratedPinch(
+        createInitialPinchVoteState(),
+        pinchSample(1_000, 0.3),
+        thresholds,
+      ).state,
+      pinchSample(1_040, 0.3),
+      thresholds,
+    );
+    const frozen = voteCalibratedPinch(
+      engaged.state,
+      pinchSample(1_180, 0.3, { thumbTipConfidence: 0.2 }),
+      thresholds,
+    );
+    const released = voteCalibratedPinch(
+      frozen.state,
+      pinchSample(1_221, 0.3, { thumbTipConfidence: 0.2 }),
+      thresholds,
+    );
+
+    expect(frozen.snapshot).toMatchObject({
+      pinched: true,
+      transition: null,
+    });
+    expect(released.snapshot).toEqual({
+      pinched: false,
+      candidate: null,
+      transition: "released",
+      ignored: false,
+    });
+    expect(released.state.recentConfidentRatios).toEqual([]);
+  });
+
   it("requires real index and thumb confidence before either pinch transition", () => {
     const thresholds = { engage: 0.38, release: 0.52 };
 

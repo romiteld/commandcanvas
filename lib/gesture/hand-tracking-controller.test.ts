@@ -137,6 +137,43 @@ beforeEach(() => {
 });
 
 describe("hand tracking controller lifecycle", () => {
+  it("emits relaxed index observations under the spatial index-led policy", async () => {
+    const { controller, worker, video } = harness();
+    const observations: HandTrackingObservation[] = [];
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
+    controller.setPointPolicy?.("spatial-index-led");
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    worker.emit({
+      type: "result",
+      timestamp: 1_000,
+      hands: [
+        {
+          handedness: "right",
+          confidence: 0.98,
+          landmarks: rawHandLandmarks({
+            pose: "relaxed_index",
+            indexTip: { x: 0.37, y: 0.24 },
+            supportVisibility: 0.18,
+          }),
+        },
+      ],
+    });
+
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        mode: "point",
+        pointer: { x: 0.63, y: 0.24 },
+        trackingState: "tracked",
+      }),
+    );
+  });
+
   it("does not request camera permission or create a worker before explicit start", () => {
     const { controller, getUserMedia, createWorker } = harness();
 
@@ -259,9 +296,12 @@ describe("hand tracking controller lifecycle", () => {
       play: vi.fn(async () => undefined),
     } as unknown as HTMLVideoElement;
     const dependencies = {
-      getUserMedia: vi.fn(async () => ({
-        getTracks: () => [track],
-      }) as unknown as MediaStream),
+      getUserMedia: vi.fn(
+        async () =>
+          ({
+            getTracks: () => [track],
+          }) as unknown as MediaStream,
+      ),
       createWorker: vi.fn(() => {
         queueMicrotask(() => browserWorker.emit({ type: "ready" }));
         return browserWorker;
@@ -307,9 +347,12 @@ describe("hand tracking controller lifecycle", () => {
         : fallbackWorker,
     );
     const controller = createHandTrackingController({
-      getUserMedia: vi.fn(async () => ({
-        getTracks: () => [track],
-      }) as unknown as MediaStream),
+      getUserMedia: vi.fn(
+        async () =>
+          ({
+            getTracks: () => [track],
+          }) as unknown as MediaStream,
+      ),
       createWorkerForEngine,
       createImageBitmap: vi.fn(
         async () => ({ close: vi.fn() }) as unknown as ImageBitmap,
@@ -322,17 +365,21 @@ describe("hand tracking controller lifecycle", () => {
     controller.subscribeEngineStatus?.((engine) => engines.push(engine));
 
     const starting = controller.start(video);
-    await vi.waitFor(() => expect(primaryWorker.postMessage).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(primaryWorker.postMessage).toHaveBeenCalled(),
+    );
     primaryWorker.emit({
       type: "error",
       message: "MediaPipe worker initialization failed",
     });
-    await vi.waitFor(() => expect(fallbackWorker.postMessage).toHaveBeenCalledWith({
-      type: "initialize",
-      wasmBaseUrl: "/mediapipe/wasm",
-      modelAssetUrl:
-        "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-    }));
+    await vi.waitFor(() =>
+      expect(fallbackWorker.postMessage).toHaveBeenCalledWith({
+        type: "initialize",
+        wasmBaseUrl: "/mediapipe/wasm",
+        modelAssetUrl:
+          "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      }),
+    );
     fallbackWorker.emit({ type: "ready" });
     await starting;
 
@@ -376,9 +423,12 @@ describe("hand tracking controller lifecycle", () => {
       play: vi.fn(async () => undefined),
     } as unknown as HTMLVideoElement;
     const controller = createHandTrackingController({
-      getUserMedia: vi.fn(async () => ({
-        getTracks: () => [{ stop: vi.fn() }],
-      }) as unknown as MediaStream),
+      getUserMedia: vi.fn(
+        async () =>
+          ({
+            getTracks: () => [{ stop: vi.fn() }],
+          }) as unknown as MediaStream,
+      ),
       privateHandRelay: {
         roomId: "11111111-1111-4111-8111-111111111111",
         getAccessToken: async () => "access-token",
@@ -395,7 +445,9 @@ describe("hand tracking controller lifecycle", () => {
     });
 
     const localStart = controller.start(video);
-    await vi.waitFor(() => expect(mediaPipeWorker.postMessage).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(mediaPipeWorker.postMessage).toHaveBeenCalled(),
+    );
     expect(createPrivateRelayWorker).not.toHaveBeenCalled();
     mediaPipeWorker.emit({ type: "ready" });
     await localStart;
@@ -403,7 +455,9 @@ describe("hand tracking controller lifecycle", () => {
 
     consent = true;
     const relayStart = controller.start(video);
-    await vi.waitFor(() => expect(createPrivateRelayWorker).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(createPrivateRelayWorker).toHaveBeenCalledOnce(),
+    );
     expect(relayWorker.postMessage).toHaveBeenCalledWith({
       type: "initialize",
       wasmBaseUrl: "private-relay",
@@ -423,7 +477,8 @@ describe("hand tracking controller lifecycle", () => {
       id: MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID,
       fallback: true,
       fallbackKind: "private-relay",
-      fallbackReason: "Private GPU relay timed out; switching to local hand tracking.",
+      fallbackReason:
+        "Private GPU relay timed out; switching to local hand tracking.",
     });
   });
 
@@ -443,9 +498,12 @@ describe("hand tracking controller lifecycle", () => {
       play: vi.fn(async () => undefined),
     } as unknown as HTMLVideoElement;
     const controller = createHandTrackingController({
-      getUserMedia: vi.fn(async () => ({
-        getTracks: () => [{ stop: vi.fn() }],
-      }) as unknown as MediaStream),
+      getUserMedia: vi.fn(
+        async () =>
+          ({
+            getTracks: () => [{ stop: vi.fn() }],
+          }) as unknown as MediaStream,
+      ),
       privateHandRelay: {
         roomId: "11111111-1111-4111-8111-111111111111",
         getAccessToken: async () => "access-token",
@@ -514,9 +572,12 @@ describe("hand tracking controller lifecycle", () => {
       play: vi.fn(async () => undefined),
     } as unknown as HTMLVideoElement;
     const controller = createHandTrackingController({
-      getUserMedia: vi.fn(async () => ({
-        getTracks: () => [{ stop: vi.fn() }],
-      }) as unknown as MediaStream),
+      getUserMedia: vi.fn(
+        async () =>
+          ({
+            getTracks: () => [{ stop: vi.fn() }],
+          }) as unknown as MediaStream,
+      ),
       createWorkerForEngine: vi.fn((engine: { id: string }) =>
         engine.id === MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID
           ? primaryWorker
@@ -533,7 +594,9 @@ describe("hand tracking controller lifecycle", () => {
     controller.subscribeEngineStatus?.((engine) => engines.push(engine));
 
     const starting = controller.start(video);
-    await vi.waitFor(() => expect(primaryWorker.postMessage).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(primaryWorker.postMessage).toHaveBeenCalled(),
+    );
     primaryWorker.emit({ type: "ready" });
     await starting;
     expect(controller.getEngineStatus?.()).toMatchObject({
@@ -594,7 +657,9 @@ describe("hand tracking controller lifecycle", () => {
       getUserMedia,
       getSharedMediaStream,
       createWorker: () => worker,
-      createImageBitmap: vi.fn(async () => ({ close: vi.fn() }) as unknown as ImageBitmap),
+      createImageBitmap: vi.fn(
+        async () => ({ close: vi.fn() }) as unknown as ImageBitmap,
+      ),
       requestAnimationFrame: vi.fn(() => 1),
       cancelAnimationFrame: vi.fn(),
       now: () => 1_000,
@@ -679,7 +744,9 @@ describe("hand tracking controller lifecycle", () => {
       now: () => 1_100,
     });
     const observations: unknown[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
 
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
@@ -766,7 +833,9 @@ describe("hand tracking controller lifecycle", () => {
   it("emits an actual point observation only after a verified landmark result", async () => {
     const { controller, worker, video } = harness();
     const observations: unknown[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     worker.emit({ type: "ready" });
@@ -813,11 +882,17 @@ describe("hand tracking controller lifecycle", () => {
     const sensorFrames: unknown[] = [];
     const observations: HandTrackingObservation[] = [];
     const calibrationController = controller as HandTrackingController & {
-      subscribeSensorFrames?: (listener: (frame: unknown) => void) => () => void;
+      subscribeSensorFrames?: (
+        listener: (frame: unknown) => void,
+      ) => () => void;
     };
     expect(calibrationController.subscribeSensorFrames).toBeTypeOf("function");
-    calibrationController.subscribeSensorFrames?.((frame) => sensorFrames.push(frame));
-    controller.subscribeObservations((observation) => observations.push(observation));
+    calibrationController.subscribeSensorFrames?.((frame) =>
+      sensorFrames.push(frame),
+    );
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
 
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
@@ -881,12 +956,17 @@ describe("hand tracking controller lifecycle", () => {
   it("applies retained calibration thresholds at the canonical gesture classifier", async () => {
     const { controller, worker, video } = harness();
     const calibratedController = controller as HandTrackingController & {
-      setPinchThresholds?: (thresholds: { engage: number; release: number }) => void;
+      setPinchThresholds?: (thresholds: {
+        engage: number;
+        release: number;
+      }) => void;
     };
     expect(calibratedController.setPinchThresholds).toBeTypeOf("function");
     calibratedController.setPinchThresholds?.({ engage: 0.36, release: 0.54 });
     const observations: HandTrackingObservation[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
 
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
@@ -910,7 +990,9 @@ describe("hand tracking controller lifecycle", () => {
   it("accepts a valid 0.60-confidence MediaPipe hand instead of hard-dropping it", async () => {
     const { controller, worker, video } = harness();
     const observations: unknown[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     worker.emit({ type: "ready" });
@@ -941,7 +1023,9 @@ describe("hand tracking controller lifecycle", () => {
     let now = 1_000;
     const { controller, worker, video } = harness(() => now);
     const observations: unknown[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     worker.emit({ type: "ready" });
@@ -1010,7 +1094,9 @@ describe("hand tracking controller lifecycle", () => {
     let now = 1_000;
     const { controller, worker, video } = harness(() => now);
     const observations: HandTrackingObservation[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     worker.emit({ type: "ready" });
@@ -1085,7 +1171,9 @@ describe("hand tracking controller lifecycle", () => {
     let now = 1_000;
     const { controller, worker, video } = harness(() => now);
     const observations: HandTrackingObservation[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     worker.emit({ type: "ready" });
@@ -1150,7 +1238,9 @@ describe("hand tracking controller lifecycle", () => {
     let now = 1_000;
     const { controller, worker, video } = harness(() => now);
     const observations: HandTrackingObservation[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     worker.emit({ type: "ready" });
@@ -1201,11 +1291,75 @@ describe("hand tracking controller lifecycle", () => {
     ]);
   });
 
+  it.each([
+    ["point", "relaxed_index"],
+    ["open_palm", "open_palm"],
+  ] as const)(
+    "gives an accepted owner %s release precedence over a bystander pinch",
+    async (expectedMode, ownerPose) => {
+      let now = 1_000;
+      const { controller, worker, video } = harness(() => now);
+      const observations: HandTrackingObservation[] = [];
+      controller.subscribeObservations((observation) =>
+        observations.push(observation),
+      );
+      controller.setPointPolicy?.("spatial-index-led");
+      const starting = controller.start(video);
+      await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+      worker.emit({ type: "ready" });
+      await starting;
+
+      worker.emit({
+        type: "result",
+        timestamp: now,
+        hands: [
+          {
+            handedness: "left",
+            handednessConfidence: 0.99,
+            confidence: 0.96,
+            landmarks: rawHandLandmarks({ pose: "pinch", offsetX: -0.2 }),
+          },
+        ],
+      });
+      const ownerTrackId =
+        observations[0]?.mode === "pinch" ? observations[0].trackId : undefined;
+      expect(ownerTrackId).toBeDefined();
+
+      now = 1_016;
+      worker.emit({
+        type: "result",
+        timestamp: now,
+        hands: [
+          {
+            handedness: "left",
+            handednessConfidence: 0.99,
+            confidence: 0.96,
+            landmarks: rawHandLandmarks({ pose: ownerPose, offsetX: -0.2 }),
+          },
+          {
+            handedness: "right",
+            handednessConfidence: 0.99,
+            confidence: 0.96,
+            landmarks: rawHandLandmarks({ pose: "pinch", offsetX: 0.2 }),
+          },
+        ],
+      });
+
+      expect(observations.at(-1)).toMatchObject({
+        mode: expectedMode,
+        trackId: ownerTrackId,
+        trackingState: "tracked",
+      });
+    },
+  );
+
   it("produces one spatially continuous track for a rapid label flip and reordered second-hand entrance", async () => {
     let now = 1_000;
     const { controller, worker, video } = harness(() => now);
     const observations: HandTrackingObservation[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     worker.emit({ type: "ready" });
@@ -1253,7 +1407,9 @@ describe("hand tracking controller lifecycle", () => {
     });
 
     const primaryFrames = observations.filter(
-      (observation): observation is Extract<
+      (
+        observation,
+      ): observation is Extract<
         HandTrackingObservation,
         { mode: "point" | "pinch" | "open_palm" }
       > => observation.mode !== "idle" && observation.mode !== "bimanual_pinch",
@@ -1274,7 +1430,9 @@ describe("hand tracking controller lifecycle", () => {
     for (const observation of primaryFrames) {
       const measurements = observation.measurements;
       if (!observation.trackId || !measurements)
-        throw new Error("The controller must produce Task 1 measurement provenance.");
+        throw new Error(
+          "The controller must produce Task 1 measurement provenance.",
+        );
       reliability = reduceHandReliability(
         reliability,
         {
@@ -1305,7 +1463,9 @@ describe("hand tracking controller lifecycle", () => {
   it("emits a semantic bimanual pinch with two tagged pointers and span", async () => {
     const { controller, worker, video } = harness();
     const observations: unknown[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     worker.emit({ type: "ready" });
@@ -1377,7 +1537,9 @@ describe("hand tracking controller lifecycle", () => {
         prediction: { predicted: boolean };
       }[];
     }> = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     controller.subscribeSensorFrames?.((frame) => sensorFrames.push(frame));
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
@@ -1442,7 +1604,9 @@ describe("hand tracking controller lifecycle", () => {
   it("does not promote bimanual state when either raw hand is below confidence", async () => {
     const { controller, worker, video } = harness();
     const observations: HandTrackingObservation[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     worker.emit({ type: "ready" });
@@ -1478,7 +1642,9 @@ describe("hand tracking controller lifecycle", () => {
     const sensorFrames: Array<{
       hands: readonly { trackId: string; handedness: string }[];
     }> = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     controller.subscribeSensorFrames?.((frame) => sensorFrames.push(frame));
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
@@ -1525,7 +1691,9 @@ describe("hand tracking controller lifecycle", () => {
     expect(
       observations
         .slice(beforeFlip)
-        .some((entry) => entry.mode === "pinch" || entry.mode === "bimanual_pinch"),
+        .some(
+          (entry) => entry.mode === "pinch" || entry.mode === "bimanual_pinch",
+        ),
     ).toBe(false);
 
     for (const timestamp of [1_048, 1_064])
@@ -1544,6 +1712,54 @@ describe("hand tracking controller lifecycle", () => {
     expect(observations.at(-1)?.mode).toBe("pinch");
   });
 
+  it("does not apply recycled exact-track pinch thresholds to an incompatible reliable hand", async () => {
+    const { controller, worker, video } = harness();
+    const observations: HandTrackingObservation[] = [];
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
+    controller.setPinchThresholds?.({
+      fallback: { engage: 0.08, release: 0.12 },
+      byTrackId: {
+        "hand-track-1": {
+          engage: 0.4,
+          release: 0.6,
+          handedness: "left",
+          handednessConfidence: 0.99,
+        },
+      },
+      byHandedness: {
+        right: { engage: 0.08, release: 0.12 },
+      },
+    } as Parameters<NonNullable<typeof controller.setPinchThresholds>>[0]);
+    const starting = controller.start(video);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    worker.emit({ type: "ready" });
+    await starting;
+
+    for (const timestamp of [1_000, 1_016])
+      worker.emit({
+        type: "result",
+        timestamp,
+        hands: [
+          {
+            handedness: "right",
+            handednessConfidence: 0.99,
+            confidence: 0.98,
+            landmarks: rawHandLandmarks({ pose: "pinch" }),
+          },
+        ],
+      });
+
+    expect(
+      observations.some(
+        (observation) =>
+          observation.mode === "pinch" ||
+          observation.mode === "bimanual_pinch",
+      ),
+    ).toBe(false);
+  });
+
   it("votes each raw hand with its track-specific pinch calibration before bimanual emission", async () => {
     let now = 1_000;
     const { controller, worker, video } = harness(() => now);
@@ -1551,7 +1767,9 @@ describe("hand tracking controller lifecycle", () => {
     const sensorFrames: Array<{
       hands: readonly { trackId: string; handedness: string }[];
     }> = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     controller.subscribeSensorFrames?.((frame) => sensorFrames.push(frame));
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
@@ -1576,11 +1794,16 @@ describe("hand tracking controller lifecycle", () => {
     });
     const tracked = sensorFrames.at(-1)?.hands;
     expect(tracked).toHaveLength(2);
-    const leftTrack = tracked?.find((entry) => entry.handedness === "left")?.trackId;
-    const rightTrack = tracked?.find((entry) => entry.handedness === "right")?.trackId;
+    const leftTrack = tracked?.find(
+      (entry) => entry.handedness === "left",
+    )?.trackId;
+    const rightTrack = tracked?.find(
+      (entry) => entry.handedness === "right",
+    )?.trackId;
     expect(leftTrack).toBeTruthy();
     expect(rightTrack).toBeTruthy();
-    if (!leftTrack || !rightTrack) throw new Error("Expected two stable raw-hand tracks.");
+    if (!leftTrack || !rightTrack)
+      throw new Error("Expected two stable raw-hand tracks.");
 
     controller.setPinchThresholds?.({
       fallback: { engage: 0.08, release: 0.12 },
@@ -1614,7 +1837,9 @@ describe("hand tracking controller lifecycle", () => {
         ],
       });
     }
-    expect(observations.some((entry) => entry.mode === "bimanual_pinch")).toBe(false);
+    expect(observations.some((entry) => entry.mode === "bimanual_pinch")).toBe(
+      false,
+    );
 
     controller.setPinchThresholds?.({
       fallback: { engage: 0.08, release: 0.12 },
@@ -1660,7 +1885,9 @@ describe("hand tracking controller lifecycle", () => {
   it("bridges one brief missing frame while pinched, then reports lost tracking", async () => {
     const { controller, worker, video } = harness();
     const observations: unknown[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     worker.emit({ type: "ready" });
@@ -1691,7 +1918,9 @@ describe("hand tracking controller lifecycle", () => {
     let now = 1_000;
     const { controller, worker, video } = harness(() => now);
     const observations: unknown[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     worker.emit({ type: "ready" });
@@ -1743,7 +1972,9 @@ describe("hand tracking controller lifecycle", () => {
   it("bridges one brief pointing dropout so a finger stroke is not fragmented", async () => {
     const { controller, worker, video } = harness();
     const observations: unknown[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     worker.emit({ type: "ready" });
@@ -1867,7 +2098,9 @@ describe("hand tracking controller lifecycle", () => {
     const controller = createHandTrackingController({
       getUserMedia,
       createWorker,
-      createImageBitmap: vi.fn(async () => ({ close: vi.fn() }) as unknown as ImageBitmap),
+      createImageBitmap: vi.fn(
+        async () => ({ close: vi.fn() }) as unknown as ImageBitmap,
+      ),
       requestAnimationFrame: vi.fn(() => 1),
       cancelAnimationFrame: vi.fn(),
       now: () => 1_000,
@@ -1876,7 +2109,9 @@ describe("hand tracking controller lifecycle", () => {
     const staleStart = controller.start(video);
     controller.stop();
     const restarted = controller.start(video);
-    await vi.waitFor(() => expect(restartedWorker.postMessage).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(restartedWorker.postMessage).toHaveBeenCalled(),
+    );
     resolveFirst({ getTracks: () => [firstTrack] } as unknown as MediaStream);
     await staleStart;
     await vi.waitFor(() => expect(firstTrack.stop).toHaveBeenCalledOnce());
@@ -1917,7 +2152,8 @@ describe("hand tracking controller lifecycle", () => {
   });
 
   it("fails closed and releases resources when worker readiness times out", async () => {
-    const { getUserMedia, createWorker, createImageBitmap, video, track } = harness();
+    const { getUserMedia, createWorker, createImageBitmap, video, track } =
+      harness();
     let expire!: () => void;
     const controller = createHandTrackingController({
       getUserMedia,
@@ -1969,11 +2205,16 @@ describe("hand tracking controller lifecycle", () => {
       play: vi.fn(async () => undefined),
     } as unknown as HTMLVideoElement;
     const controller = createHandTrackingController({
-      getUserMedia: vi.fn(async () => ({
-        getTracks: () => [{ stop: vi.fn() }],
-      }) as unknown as MediaStream),
+      getUserMedia: vi.fn(
+        async () =>
+          ({
+            getTracks: () => [{ stop: vi.fn() }],
+          }) as unknown as MediaStream,
+      ),
       createWorker: () => worker,
-      createImageBitmap: vi.fn(async () => ({ close: vi.fn() }) as unknown as ImageBitmap),
+      createImageBitmap: vi.fn(
+        async () => ({ close: vi.fn() }) as unknown as ImageBitmap,
+      ),
       requestVideoFrameCallback,
       cancelVideoFrameCallback,
       requestAnimationFrame,
@@ -2019,7 +2260,8 @@ describe("hand tracking controller lifecycle", () => {
   });
 
   it("keeps first inference plus only the newest pending bitmap and closes the superseded bitmap", async () => {
-    const { controller, worker, video, frames, bitmaps, createImageBitmap } = harness();
+    const { controller, worker, video, frames, bitmaps, createImageBitmap } =
+      harness();
     Object.defineProperty(video, "currentTime", {
       configurable: true,
       writable: true,
@@ -2042,12 +2284,16 @@ describe("hand tracking controller lifecycle", () => {
     expect(bitmaps[1]?.close).toHaveBeenCalledOnce();
     expect(bitmaps[2]?.close).not.toHaveBeenCalled();
     expect(
-      worker.postMessage.mock.calls.filter(([message]) => message.type === "frame"),
+      worker.postMessage.mock.calls.filter(
+        ([message]) => message.type === "frame",
+      ),
     ).toHaveLength(1);
 
     worker.emit({ type: "result", timestamp: 1_000, hands: [] });
     expect(
-      worker.postMessage.mock.calls.filter(([message]) => message.type === "frame"),
+      worker.postMessage.mock.calls.filter(
+        ([message]) => message.type === "frame",
+      ),
     ).toHaveLength(2);
     expect(worker.postMessage).toHaveBeenLastCalledWith(
       { type: "frame", frame: bitmaps[2], timestamp: 1_000 },
@@ -2072,16 +2318,22 @@ describe("hand tracking controller lifecycle", () => {
       play: vi.fn(async () => undefined),
     } as unknown as HTMLVideoElement;
     const controller = createHandTrackingController({
-      getUserMedia: vi.fn(async () => ({
-        getTracks: () => [{ stop: vi.fn() }],
-      }) as unknown as MediaStream),
+      getUserMedia: vi.fn(
+        async () =>
+          ({
+            getTracks: () => [{ stop: vi.fn() }],
+          }) as unknown as MediaStream,
+      ),
       createWorkerForEngine: vi.fn((engine: { id: string }) =>
         engine.id === MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID
           ? primaryWorker
           : fallbackWorker,
       ),
       createImageBitmap: vi.fn(
-        () => new Promise<ImageBitmap>((resolve) => { resolveBitmap = resolve; }),
+        () =>
+          new Promise<ImageBitmap>((resolve) => {
+            resolveBitmap = resolve;
+          }),
       ),
       requestAnimationFrame: vi.fn((callback) => {
         frames.set(++frameId, callback);
@@ -2092,19 +2344,25 @@ describe("hand tracking controller lifecycle", () => {
     });
 
     const starting = controller.start(video);
-    await vi.waitFor(() => expect(primaryWorker.postMessage).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(primaryWorker.postMessage).toHaveBeenCalled(),
+    );
     primaryWorker.emit({ type: "ready" });
     await starting;
     [...frames.values()].at(-1)?.(1_000);
     primaryWorker.emit({ type: "error", message: "primary stopped" });
-    await vi.waitFor(() => expect(fallbackWorker.postMessage).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(fallbackWorker.postMessage).toHaveBeenCalled(),
+    );
     resolveBitmap(bitmap);
     await Promise.resolve();
     await Promise.resolve();
 
     expect(bitmap.close).toHaveBeenCalledOnce();
     expect(
-      fallbackWorker.postMessage.mock.calls.some(([message]) => message.type === "frame"),
+      fallbackWorker.postMessage.mock.calls.some(
+        ([message]) => message.type === "frame",
+      ),
     ).toBe(false);
     fallbackWorker.emit({ type: "ready" });
     expect(controller.getEngineStatus?.()?.runtimeMetrics).toMatchObject({
@@ -2125,9 +2383,12 @@ describe("hand tracking controller lifecycle", () => {
       play: vi.fn(async () => undefined),
     } as unknown as HTMLVideoElement;
     const controller = createHandTrackingController({
-      getUserMedia: vi.fn(async () => ({
-        getTracks: () => [{ stop: vi.fn() }],
-      }) as unknown as MediaStream),
+      getUserMedia: vi.fn(
+        async () =>
+          ({
+            getTracks: () => [{ stop: vi.fn() }],
+          }) as unknown as MediaStream,
+      ),
       createWorkerForEngine: vi.fn((engine: { id: string }) =>
         engine.id === MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID
           ? primaryWorker
@@ -2148,12 +2409,16 @@ describe("hand tracking controller lifecycle", () => {
     });
 
     const starting = controller.start(video);
-    await vi.waitFor(() => expect(primaryWorker.postMessage).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(primaryWorker.postMessage).toHaveBeenCalled(),
+    );
     primaryWorker.emit({ type: "ready" });
     await starting;
     [...frames.values()].at(-1)?.(1_000);
     primaryWorker.emit({ type: "error", message: "primary stopped" });
-    await vi.waitFor(() => expect(fallbackWorker.postMessage).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(fallbackWorker.postMessage).toHaveBeenCalled(),
+    );
     fallbackWorker.emit({ type: "ready" });
     expect(controller.getStatus()).toEqual({ state: "ready" });
 
@@ -2182,21 +2447,28 @@ describe("hand tracking controller lifecycle", () => {
       play: vi.fn(async () => undefined),
     } as unknown as HTMLVideoElement;
     const controller = createHandTrackingController({
-      getUserMedia: vi.fn(async () => ({
-        getTracks: () => [{ stop: vi.fn() }],
-      }) as unknown as MediaStream),
+      getUserMedia: vi.fn(
+        async () =>
+          ({
+            getTracks: () => [{ stop: vi.fn() }],
+          }) as unknown as MediaStream,
+      ),
       createWorkerForEngine: vi.fn((engine: { id: string }) =>
         engine.id === MEDIA_PIPE_SPATIAL_VISION_ENGINE_ID
           ? primaryWorker
           : fallbackWorker,
       ),
-      createImageBitmap: vi.fn(async () => ({ close: vi.fn() }) as unknown as ImageBitmap),
+      createImageBitmap: vi.fn(
+        async () => ({ close: vi.fn() }) as unknown as ImageBitmap,
+      ),
       requestAnimationFrame: vi.fn(() => 1),
       cancelAnimationFrame: vi.fn(),
       now: () => now,
     });
     const starting = controller.start(video);
-    await vi.waitFor(() => expect(primaryWorker.postMessage).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(primaryWorker.postMessage).toHaveBeenCalled(),
+    );
     primaryWorker.emit({ type: "ready" });
     await starting;
 
@@ -2242,19 +2514,26 @@ describe("hand tracking controller lifecycle", () => {
         fallback: basePlan.primary,
         fallbackOn: ["initialization-error", "runtime-error"],
       },
-      getUserMedia: vi.fn(async () => ({
-        getTracks: () => [{ stop: vi.fn() }],
-      }) as unknown as MediaStream),
+      getUserMedia: vi.fn(
+        async () =>
+          ({
+            getTracks: () => [{ stop: vi.fn() }],
+          }) as unknown as MediaStream,
+      ),
       createWorkerForEngine: vi.fn((engine: { id: string }) =>
         engine.id === "private-gpu-test" ? candidateWorker : fallbackWorker,
       ),
-      createImageBitmap: vi.fn(async () => ({ close: vi.fn() }) as unknown as ImageBitmap),
+      createImageBitmap: vi.fn(
+        async () => ({ close: vi.fn() }) as unknown as ImageBitmap,
+      ),
       requestAnimationFrame: vi.fn(() => 1),
       cancelAnimationFrame: vi.fn(),
       now: () => now,
     });
     const starting = controller.start(video);
-    await vi.waitFor(() => expect(candidateWorker.postMessage).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(candidateWorker.postMessage).toHaveBeenCalled(),
+    );
     candidateWorker.emit({ type: "ready" });
     await starting;
 
@@ -2283,7 +2562,9 @@ describe("hand tracking controller lifecycle", () => {
     let now = 1_120;
     const { controller, worker, video } = harness(() => now);
     const observations: HandTrackingObservation[] = [];
-    controller.subscribeObservations((observation) => observations.push(observation));
+    controller.subscribeObservations((observation) =>
+      observations.push(observation),
+    );
     const starting = controller.start(video);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
     worker.emit({ type: "ready" });
@@ -2298,14 +2579,19 @@ describe("hand tracking controller lifecycle", () => {
     worker.emit({
       type: "result",
       timestamp: 1_120,
-      hands: [{
-        handedness: "left",
-        confidence: 0.96,
-        landmarks: hand({ x: 0.6, y: 0.4 }, { x: 0.62, y: 0.4 }),
-      }],
+      hands: [
+        {
+          handedness: "left",
+          confidence: 0.96,
+          landmarks: hand({ x: 0.6, y: 0.4 }, { x: 0.62, y: 0.4 }),
+        },
+      ],
     });
 
-    expect(observations[0]).toMatchObject({ mode: "point", trackingState: "tracked" });
+    expect(observations[0]).toMatchObject({
+      mode: "point",
+      trackingState: "tracked",
+    });
     expect(observations[1]).toEqual({
       mode: "idle",
       timestamp: 1_240.001,

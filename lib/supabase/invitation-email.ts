@@ -86,6 +86,7 @@ export async function deliverMeetingInvitation(
         to: [input.data.recipientEmail],
         subject: `Join ${input.data.roomName} in CommandCanvas`,
         html: invitationHtml(input.data),
+        text: invitationText(input.data),
       }),
     });
     if (!response.ok)
@@ -113,6 +114,17 @@ function invitationHtml(input: z.output<typeof inputSchema>) {
   const url = escapeHtml(input.joinUrl);
   const expires = escapeHtml(new Date(input.expiresAt).toUTCString());
   return `<main><h1>Join ${room}</h1><p>Hi ${name}, you were invited to a CommandCanvas meeting.</p><p><a href="${url}">Verify your email and join the room</a></p><p>This invitation expires ${expires}.</p></main>`;
+}
+
+function invitationText(input: z.output<typeof inputSchema>) {
+  return `Hi ${input.recipientName},
+
+You were invited to the ${input.roomName} CommandCanvas meeting.
+
+Verify your email and join the room:
+${input.joinUrl}
+
+This invitation expires ${new Date(input.expiresAt).toUTCString()}.`;
 }
 
 function escapeHtml(value: string) {

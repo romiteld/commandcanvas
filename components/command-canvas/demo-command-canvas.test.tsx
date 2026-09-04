@@ -361,7 +361,7 @@ describe("DemoCommandCanvas", () => {
       render(<DemoCommandCanvas environment={harness.environment} />);
       await user.click(
         await screen.findByRole("button", {
-          name: "Open ChatGPT Site Tools and activity drawer",
+          name: "Open WebMCP agent activity",
         }),
       );
       const input = await screen.findByLabelText("Your OpenAI API key");
@@ -683,7 +683,7 @@ describe("DemoCommandCanvas", () => {
       render(<DemoCommandCanvas environment={harness.environment} />);
       await screen.findByText("Live demo room");
       await user.click(
-        screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
+        screen.getByRole("button", { name: "Open WebMCP agent activity" }),
       );
       await waitFor(() => {
         expect(
@@ -763,7 +763,7 @@ describe("DemoCommandCanvas", () => {
     }
   });
 
-  it("keeps a button fallback for packet preparation when Site Tools are unavailable", async () => {
+  it("keeps a button fallback for packet preparation when WebMCP tools are unavailable", async () => {
     const user = userEvent.setup();
     const preparePacket = vi.fn(async () => ({
       ok: true as const,
@@ -798,7 +798,7 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
+      screen.getByRole("button", { name: "Open WebMCP agent activity" }),
     );
     await user.click(
       screen.getByRole("button", { name: "Prepare meeting packet" }),
@@ -811,7 +811,7 @@ describe("DemoCommandCanvas", () => {
     expect(await screen.findByText("Draft v1")).toBeVisible();
   });
 
-  it("recovers one Site Tool catalog when the document surface arrives after the demo room", async () => {
+  it("recovers one WebMCP tool catalog when the document surface arrives after the demo room", async () => {
     delete (document as unknown as { modelContext?: unknown }).modelContext;
     const signals: AbortSignal[] = [];
     const registerTool = vi.fn(
@@ -825,7 +825,7 @@ describe("DemoCommandCanvas", () => {
     );
 
     await screen.findByText("Live demo room");
-    await screen.findAllByText("Site Tools unavailable");
+    await screen.findAllByText("WebMCP tools unavailable");
     Object.defineProperty(document, "modelContext", {
       configurable: true,
       value: { registerTool },
@@ -903,7 +903,7 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
+      screen.getByRole("button", { name: "Open WebMCP agent activity" }),
     );
 
     expect(await screen.findByText("Approved packet v2")).toBeVisible();
@@ -996,7 +996,7 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
+      screen.getByRole("button", { name: "Open WebMCP agent activity" }),
     );
     await user.click(
       screen.getByRole("button", { name: "Prepare meeting packet" }),
@@ -1100,7 +1100,7 @@ describe("DemoCommandCanvas", () => {
     render(<DemoCommandCanvas environment={harness.environment} />);
     await screen.findByText("Live demo room");
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
+      screen.getByRole("button", { name: "Open WebMCP agent activity" }),
     );
     await user.click(
       screen.getByRole("button", { name: "Prepare meeting packet" }),
@@ -1400,7 +1400,7 @@ describe("DemoCommandCanvas", () => {
     ).not.toBeNull();
     expect(screen.queryByText(/fixture collaborator/i)).toBeNull();
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
+      screen.getByRole("button", { name: "Open WebMCP agent activity" }),
     );
     expect(screen.getByRole("button", { name: "Start live voice" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Run direct command" })).toBeNull();
@@ -1408,7 +1408,7 @@ describe("DemoCommandCanvas", () => {
     expect(screen.getByRole("button", { name: "Run direct command" })).toBeVisible();
   });
 
-  it("shares the real host invite natively when the browser exposes share", async () => {
+  it("includes the full capability invite URL in the native share text", async () => {
     const user = userEvent.setup();
     const share = vi.fn(async () => undefined);
     Object.defineProperty(navigator, "share", {
@@ -1423,7 +1423,8 @@ describe("DemoCommandCanvas", () => {
 
     expect(share).toHaveBeenCalledWith({
       title: "Join my CommandCanvas room",
-      text: "Join the live CommandCanvas workspace.",
+      text:
+        "Join the live CommandCanvas workspace.\n\nhttps://commandcanvas.example/demo?room=room&join=token",
       url: "https://commandcanvas.example/demo?room=room&join=token",
     });
     expect(copyInvite).not.toHaveBeenCalled();

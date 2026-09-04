@@ -114,6 +114,12 @@ class LatestVoiceHandlers {
   private sessionGeneration = 0;
   private activeSessionSignal: AbortSignal | undefined;
   private draftTurnKey: string | null = null;
+  private sketchNarrationSequence = 0;
+  private pendingSketchNarration: {
+    id: string;
+    text: string;
+    turns: readonly string[];
+  } | null = null;
 
   constructor(
     private readToken: () => string | null,
@@ -160,10 +166,40 @@ class LatestVoiceHandlers {
     return this.invokeCanonicalCapability(...args);
   }
 
-  consumeSketchNarration() {
+  peekSketchNarration() {
+    if (
+      this.pendingSketchNarration &&
+      startsWithTurns(
+        this.recentSpokenContext,
+        this.pendingSketchNarration.turns,
+      )
+    )
+      return {
+        id: this.pendingSketchNarration.id,
+        text: this.pendingSketchNarration.text,
+      };
+    this.pendingSketchNarration = null;
     const narration = spokenNarration(this.recentSpokenContext);
-    this.resetSpokenContext();
-    return narration;
+    if (!narration) return undefined;
+    this.pendingSketchNarration = {
+      id: `sketch-narration-${this.sessionGeneration}-${++this.sketchNarrationSequence}`,
+      text: narration,
+      turns: [...this.recentSpokenContext],
+    };
+    return {
+      id: this.pendingSketchNarration.id,
+      text: this.pendingSketchNarration.text,
+    };
+  }
+
+  acknowledgeSketchNarration(id: string) {
+    const pending = this.pendingSketchNarration;
+    if (!pending || pending.id !== id) return;
+    if (startsWithTurns(this.recentSpokenContext, pending.turns))
+      this.recentSpokenContext = this.recentSpokenContext.slice(
+        pending.turns.length,
+      );
+    this.pendingSketchNarration = null;
   }
 
   async onIntent(
@@ -215,13 +251,14 @@ class LatestVoiceHandlers {
     if (intent.type !== "transform_selected_sketch")
       return this.submit(intent, source, turnContext);
 
-    const narration = spokenNarration(this.recentSpokenContext);
-    this.resetSpokenContext();
-    return this.submit(
-      narration ? { ...intent, narration } : intent,
+    const narration = this.peekSketchNarration();
+    const result = await this.submit(
+      narration ? { ...intent, narration: narration.text } : intent,
       source,
       turnContext,
     );
+    if (result.ok && narration) this.acknowledgeSketchNarration(narration.id);
+    return result;
   }
 
   rememberTranscriptDelta(rawDelta: string, itemId?: string) {
@@ -470,6 +507,7 @@ class LatestVoiceHandlers {
 
   resetSpokenContext() {
     this.recentSpokenContext = [];
+    this.pendingSketchNarration = null;
   }
 
   resetSessionContext() {
@@ -608,8 +646,12 @@ export const RealtimeVoiceControl = forwardRef<
       latestHandlers.invokeCapability(capability, input, signal),
     [latestHandlers],
   );
-  const consumeLatestSketchNarration = useCallback(
-    () => latestHandlers.consumeSketchNarration(),
+  const peekLatestSketchNarration = useCallback(
+    () => latestHandlers.peekSketchNarration(),
+    [latestHandlers],
+  );
+  const acknowledgeLatestSketchNarration = useCallback(
+    (id: string) => latestHandlers.acknowledgeSketchNarration(id),
     [latestHandlers],
   );
 
@@ -668,7 +710,8 @@ export const RealtimeVoiceControl = forwardRef<
         ...(capabilityInvocationAvailable
           ? { invokeCapability: invokeLatestCapability }
           : {}),
-        consumeSketchNarration: consumeLatestSketchNarration,
+        peekSketchNarration: peekLatestSketchNarration,
+        acknowledgeSketchNarration: acknowledgeLatestSketchNarration,
         onPlaybackBlocked() {
           setPlaybackBlocked(true);
         },
@@ -684,7 +727,8 @@ export const RealtimeVoiceControl = forwardRef<
       inspectLatestCanvas,
       capabilityInvocationAvailable,
       invokeLatestCapability,
-      consumeLatestSketchNarration,
+      peekLatestSketchNarration,
+      acknowledgeLatestSketchNarration,
     ],
   );
   const state = useSyncExternalStore(
@@ -978,10 +1022,11 @@ export const RealtimeVoiceControl = forwardRef<
         </ol>
       ) : null}
       <p className="realtime-voice-privacy">
-        ChatGPT Site Tools use the account signed into ChatGPT and do not need
-        this key. For embedded Live Voice, audio travels to OpenAI only while
-        voice is on. Canvas mutations still pass through the same validated
-        command and receipt pipeline.
+        When this page is opened inside a compatible ChatGPT host, that host
+        uses the account signed into ChatGPT to discover and invoke WebMCP
+        tools; CommandCanvas never receives that credential. For embedded Live
+        Voice, audio travels to OpenAI only while voice is on. Canvas mutations
+        still pass through the same validated command and receipt pipeline.
       </p>
     </section>
   );
@@ -1035,6 +1080,16 @@ function spokenNarration(turns: readonly string[]): string | undefined {
   const narration = turns.join("\n").trim();
   if (!narration) return undefined;
   return narration.slice(0, MAX_DIAGRAM_TRANSFORM_NARRATION_CHARS);
+}
+
+function startsWithTurns(
+  turns: readonly string[],
+  prefix: readonly string[],
+) {
+  return (
+    prefix.length <= turns.length &&
+    prefix.every((turn, index) => turns[index] === turn)
+  );
 }
 
 function toolActivity(

@@ -241,19 +241,31 @@ test("processes a recorded human-hand MediaStream with the local detector and re
       });
       await expect(continueToClosed).toBeEnabled({ timeout: 30_000 });
       await continueToClosed.click();
-      const reviewCalibration = page.getByRole("button", {
-        name: "Review hand calibration",
+      const continueToDrawingClutch = page.getByRole("button", {
+        name: "Continue to drawing clutch",
       });
-      await expect(reviewCalibration).toBeEnabled({ timeout: 30_000 });
-      await reviewCalibration.click();
+      if (await continueToDrawingClutch.isVisible()) {
+        await expect(continueToDrawingClutch).toBeEnabled({ timeout: 30_000 });
+        await continueToDrawingClutch.click();
+        await page
+          .getByRole("button", { name: "Use provisional drawing clutch" })
+          .click();
+      } else {
+        const reviewCalibration = page.getByRole("button", {
+          name: "Review hand calibration",
+        });
+        await expect(reviewCalibration).toBeEnabled({ timeout: 30_000 });
+        await reviewCalibration.click();
+      }
       await page
         .getByRole("button", { name: "Use hand calibration" })
         .click();
       await expect(
-        handInput.getByText("Calibrated for this camera session", {
-          exact: true,
-        }),
-      ).toHaveText("Calibrated for this camera session");
+        handInput.getByText(
+          "Calibrated for this camera session · drawing clutch provisional",
+          { exact: true },
+        ),
+      ).toBeVisible();
       await expect(handInput.getByRole("alert")).toHaveCount(0);
     } else {
       await page.getByRole("button", { name: "Skip hand calibration" }).click();

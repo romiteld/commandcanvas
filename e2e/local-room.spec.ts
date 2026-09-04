@@ -20,7 +20,7 @@ test("creates, pins, and undoes one semantic object with visible receipts", asyn
     name: "Service status",
   });
   await expect(
-    serviceStatus.getByText("Site Tools unavailable", { exact: true }),
+    serviceStatus.getByText("WebMCP tools unavailable", { exact: true }),
   ).toBeVisible();
   await expect(
     serviceStatus.getByText("Realtime not connected", { exact: true }),
@@ -95,7 +95,7 @@ test("bridges a document.modelContext invocation into the live canvas", async ({
     page
       .getByRole("complementary", { name: "System status drawer" })
       .getByRole("region", { name: "Service status" })
-      .getByText("12 Site Tools registered", { exact: true }),
+      .getByText("12 WebMCP tools registered", { exact: true }),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Close system status drawer" })
@@ -135,7 +135,7 @@ test("bridges a document.modelContext invocation into the live canvas", async ({
     page.getByRole("button", { name: "Select Browser agent action" }),
   ).toBeVisible();
   const agentReceipt = page.getByRole("button", {
-    name: "Open activity drawer: Site Tools agent created “Browser agent action”.",
+    name: "Open activity drawer: WebMCP agent created “Browser agent action”.",
   });
   await expect(agentReceipt).toBeVisible();
   await expect(agentReceipt.getByText("R1 · webmcp", { exact: true })).toBeVisible();
@@ -255,13 +255,13 @@ test("opens command and system controls over the workspace without resizing the 
   if (!before) throw new Error("canvas geometry is unavailable");
 
   await expect(
-    page.getByRole("complementary", { name: "ChatGPT command drawer" }),
+    page.getByRole("complementary", { name: "WebMCP activity and CommandCanvas Live Voice drawer" }),
   ).toHaveCount(0);
   await page
-    .getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" })
+    .getByRole("button", { name: "Open WebMCP agent activity" })
     .click();
   await expect(
-    page.getByRole("complementary", { name: "ChatGPT command drawer" }),
+    page.getByRole("complementary", { name: "WebMCP activity and CommandCanvas Live Voice drawer" }),
   ).toBeVisible();
   await expect(
     page.getByRole("textbox", { name: "Direct canvas command" }),
@@ -269,7 +269,7 @@ test("opens command and system controls over the workspace without resizing the 
   expect(await canvas.boundingBox()).toEqual(before);
 
   await page
-    .getByRole("button", { name: "Close ChatGPT command drawer" })
+    .getByRole("button", { name: "Close WebMCP activity and CommandCanvas Live Voice drawer" })
     .click();
   await page.getByRole("button", { name: "Open system status" }).click();
   await expect(
@@ -390,7 +390,7 @@ test("reviews a deterministic browser speech transcript before a canonical voice
 
   await page.goto("/local");
   await page
-    .getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" })
+    .getByRole("button", { name: "Open WebMCP agent activity" })
     .click();
   expect(
     await page.evaluate(

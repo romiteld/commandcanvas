@@ -322,4 +322,25 @@ describe("persisted meeting packet delivery truth", () => {
       screen.queryByRole("button", { name: "Request email send" }),
     ).toBeNull();
   });
+
+  it("presents packet preparation as a WebMCP capability with a human fallback", () => {
+    const controller = workflowController(false);
+    render(
+      <MeetingPacketWorkflowPanel
+        workflow={{
+          ...controller,
+          state: { packet: null, canStageSend: false },
+          getStatus: () => "none",
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText(/prepare this through CommandCanvas WebMCP tools/i),
+    ).toBeVisible();
+    expect(screen.queryByText(/through Site Tools/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Prepare meeting packet" }),
+    ).toBeEnabled();
+  });
 });

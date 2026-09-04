@@ -29,6 +29,12 @@ jobs:
           cache: pip
           cache-dependency-path: scripts/requirements-training.txt
 
+      - name: Pin package manager
+        run: |
+          npm install --global npm@11.5.2
+          test "$(node --version)" = "v$(cat .nvmrc)"
+          test "$(npm --version)" = "11.5.2"
+
       - name: Install locked dependencies
         run: npm ci
 

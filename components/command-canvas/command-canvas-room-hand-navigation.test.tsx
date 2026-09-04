@@ -10,6 +10,7 @@ import type {
   HandTrackingStatus,
 } from "@/lib/gesture/hand-tracking-controller";
 import type { HandControlGainState } from "@/lib/gesture/hand-calibration";
+import type { HandPointPolicy } from "@/lib/gesture/hand-intent";
 
 function store() {
   let id = 0;
@@ -50,6 +51,7 @@ function fakeHandController() {
     (next: HandTrackingObservation) => void
   >();
   let pinching = false;
+  let pointPolicy: HandPointPolicy | null = null;
   const controller: HandTrackingController = {
     getStatus: () => status,
     subscribeStatus(listener) {
@@ -59,6 +61,9 @@ function fakeHandController() {
     subscribeObservations(listener) {
       observationListeners.add(listener);
       return () => observationListeners.delete(listener);
+    },
+    setPointPolicy(next) {
+      pointPolicy = next;
     },
     start: vi.fn(async () => undefined),
     stop: vi.fn(),
@@ -86,6 +91,9 @@ function fakeHandController() {
       );
       pinching =
         observation.mode === "pinch" || observation.mode === "bimanual_pinch";
+    },
+    getPointPolicy() {
+      return pointPolicy;
     },
   };
 }
@@ -120,9 +128,7 @@ function inverseFallbackAxis(
     canvasRatio < safeRatio
       ? -edgeExtrapolation * (1 - canvasRatio / safeRatio)
       : canvasRatio > 1 - safeRatio
-        ? 1 +
-          edgeExtrapolation *
-            (1 - (1 - canvasRatio) / safeRatio)
+        ? 1 + edgeExtrapolation * (1 - (1 - canvasRatio) / safeRatio)
         : (canvasRatio - safeRatio) / (1 - safeRatio * 2);
   const beforeGain = (comfortable - 0.5) / gain + 0.5;
   return cameraStart + beforeGain * cameraSpan;
@@ -159,6 +165,48 @@ function toCameraObservation(
   };
 }
 
+function drawingMeasurements(x: number, y: number) {
+  return {
+    indexTip: { x, y },
+    thumbTip: { x: x - 0.08, y: y + 0.08 },
+    middleTip: { x: x - 0.06, y: y + 0.08 },
+    pinchMidpoint: { x: x - 0.04, y: y + 0.04 },
+    palmMcpCentroid: { x: x - 0.02, y: y + 0.18 },
+    pinchDistance: 0.12,
+    palmScale: 0.2,
+    pinchRatio: 0.6,
+    drawingClutchRatio: 0.2,
+    confidence: 0.97,
+    indexTipConfidence: 0.97,
+    thumbTipConfidence: 0.97,
+    middleTipConfidence: 0.97,
+  };
+}
+
+function drawStroke(
+  hand: ReturnType<typeof fakeHandController>,
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  timestamp: number,
+) {
+  const midpoint = {
+    x: (start.x + end.x) / 2,
+    y: (start.y + end.y) / 2,
+  };
+  for (const [offset, pointer] of [
+    [0, start],
+    [8, midpoint],
+    [16, end],
+  ] as const)
+    hand.emit({
+      mode: "point",
+      pointer,
+      measurements: drawingMeasurements(pointer.x, pointer.y),
+      confidence: 0.97,
+      timestamp: timestamp + offset,
+    });
+}
+
 function setCanvasBounds(container: HTMLElement) {
   const viewport = container.querySelector<HTMLElement>(".canvas-viewport");
   if (!viewport) throw new Error("Canvas viewport did not render.");
@@ -175,9 +223,7 @@ function setCanvasBounds(container: HTMLElement) {
   });
 }
 
-async function enableHand(
-  hand: ReturnType<typeof fakeHandController>,
-) {
+async function enableHand(hand: ReturnType<typeof fakeHandController>) {
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Open system status" }));
   await user.click(screen.getByRole("button", { name: "Enable hand input" }));
@@ -233,6 +279,20 @@ function acquireAt(
 }
 
 describe("CommandCanvas hand-only navigation", () => {
+  it("configures manipulation as spatial index-led pointing", () => {
+    const target = store();
+    const hand = fakeHandController();
+
+    render(
+      <CommandCanvasRoom
+        store={target}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+
+    expect(hand.getPointPolicy()).toBe("spatial-index-led");
+  });
+
   it("pans the local viewport with an open palm over blank canvas without a receipt", async () => {
     const target = store();
     const hand = fakeHandController();
@@ -298,18 +358,25 @@ describe("CommandCanvas hand-only navigation", () => {
     );
     setCanvasBounds(container);
     const user = await enableHand(hand);
-    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+    await user.click(
+      screen.getByRole("button", { name: "Draw with index finger" }),
+    );
     act(() => {
-      hand.emit({ mode: "point", pointer: { x: 0.2, y: 0.3 }, confidence: 0.96, timestamp: 1_000 });
-      hand.emit({ mode: "point", pointer: { x: 0.3, y: 0.4 }, confidence: 0.96, timestamp: 1_016 });
-      hand.emit({ mode: "idle", timestamp: 1_032 });
+      drawStroke(hand, { x: 0.2, y: 0.3 }, { x: 0.3, y: 0.4 }, 1_000);
+      hand.emit({ mode: "idle", timestamp: 1_032, trackingState: "lost" });
       hand.setStatus({ state: "unavailable", message: "Detector stopped." });
     });
 
     expect(screen.getByText("TRACKING LOST · SKETCH PRESERVED")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Finish hand sketch" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Cancel hand sketch" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Finish hand sketch" }));
+    expect(
+      screen.getByRole("button", { name: "Finish hand sketch" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Cancel hand sketch" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Finish hand sketch" }),
+    );
     expect(
       Object.values(target.getState().canvas.objects).filter(
         (object) => object.type === "sketch",
@@ -329,13 +396,21 @@ describe("CommandCanvas hand-only navigation", () => {
     );
     setCanvasBounds(container);
     const user = await enableHand(hand);
-    await user.click(screen.getByRole("button", { name: "Select selected-card" }));
-    expect(screen.getByRole("toolbar", { name: "selected-card spatial controls" })).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Select selected-card" }),
+    );
+    expect(
+      screen.getByRole("toolbar", { name: "selected-card spatial controls" }),
+    ).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+    await user.click(
+      screen.getByRole("button", { name: "Draw with index finger" }),
+    );
 
     expect(target.getState().selectedObjectId).toBeNull();
-    expect(screen.queryByRole("toolbar", { name: "selected-card spatial controls" })).toBeNull();
+    expect(
+      screen.queryByRole("toolbar", { name: "selected-card spatial controls" }),
+    ).toBeNull();
   });
 
   it("grabs the card that is visually raised above an overlapping card", async () => {
@@ -351,15 +426,21 @@ describe("CommandCanvas hand-only navigation", () => {
     );
     setCanvasBounds(container);
     const user = await enableHand(hand);
-    await user.click(screen.getByRole("button", { name: "Select raised-card" }));
+    await user.click(
+      screen.getByRole("button", { name: "Select raised-card" }),
+    );
 
     act(() => acquireAt(hand, 0.3, 0.4));
 
     expect(
-      screen.getByRole("button", { name: "Select raised-card" }).closest("article"),
+      screen
+        .getByRole("button", { name: "Select raised-card" })
+        .closest("article"),
     ).toHaveClass("is-held");
     expect(
-      screen.getByRole("button", { name: "Select durably-higher" }).closest("article"),
+      screen
+        .getByRole("button", { name: "Select durably-higher" })
+        .closest("article"),
     ).not.toHaveClass("is-held");
   });
 
@@ -378,9 +459,16 @@ describe("CommandCanvas hand-only navigation", () => {
 
     act(() => {
       acquireAt(hand, 0.055, 0.4);
-      hand.emit({ mode: "pinch", pointer: { x: 0.05, y: 0.4 }, confidence: 0.97, timestamp: 1_126 });
+      hand.emit({
+        mode: "pinch",
+        pointer: { x: 0.05, y: 0.4 },
+        confidence: 0.97,
+        timestamp: 1_126,
+      });
     });
-    expect(container.querySelector(".gesture-edge-discard-left")).not.toHaveClass("is-armed");
+    expect(
+      container.querySelector(".gesture-edge-discard-left"),
+    ).not.toHaveClass("is-armed");
 
     act(() =>
       hand.emit({

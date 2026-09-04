@@ -8,7 +8,10 @@ import {
   sampleTrackedStrokePoint,
   spatialInputFromHandObservation,
 } from "@/lib/gesture/spatial-room-input";
-import type { HandCalibrationProfile } from "@/lib/gesture/hand-calibration";
+import {
+  mapCalibratedPointer,
+  type HandCalibrationProfile,
+} from "@/lib/gesture/hand-calibration";
 
 type SingleHandObservation = Exclude<
   HandTrackingObservation,
@@ -59,6 +62,525 @@ function measuredObservation(
 }
 
 describe("spatial room input adapter", () => {
+  it("maps each tracked hand through its own reach calibration", () => {
+    const canvas = { left: 0, top: 0, width: 1_000, height: 500 };
+    const profile = {
+      ...calibration({
+        cameraBounds: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 },
+        safeCanvasInsetPx: 0,
+        mirrorX: false,
+      }),
+      reachCalibrations: [
+        {
+          trackId: "recycled-track",
+          handedness: "left" as const,
+          handednessConfidence: 0.98,
+          cameraBounds: { x: 0.4, y: 0.3, width: 0.2, height: 0.4 },
+        },
+        {
+          trackId: "right-track",
+          handedness: "right" as const,
+          handednessConfidence: 0.98,
+          cameraBounds: { x: 0.7, y: 0.3, width: 0.2, height: 0.4 },
+        },
+      ],
+    } as HandCalibrationProfile;
+    const left = {
+      ...measuredObservation(500),
+      trackId: "left-track",
+      handedness: "left" as const,
+      handednessConfidence: 0.99,
+      pointer: { x: 0.5, y: 0.5 },
+      motionPointer: { x: 0.5, y: 0.5 },
+      measurements: {
+        ...measuredObservation(500).measurements!,
+        indexTip: { x: 0.5, y: 0.5 },
+        palmMcpCentroid: { x: 0.5, y: 0.5 },
+      },
+    };
+    const recycledAsRight = {
+      ...measuredObservation(600),
+      trackId: "recycled-track",
+      handedness: "right" as const,
+      handednessConfidence: 0.99,
+      pointer: { x: 0.8, y: 0.5 },
+      motionPointer: { x: 0.8, y: 0.5 },
+      measurements: {
+        ...measuredObservation(600).measurements!,
+        indexTip: { x: 0.8, y: 0.5 },
+        palmMcpCentroid: { x: 0.8, y: 0.5 },
+      },
+    };
+    const options = {
+      calibration: profile,
+      canvas,
+      gainState: "hover" as const,
+      edgePreviewVisible: false,
+    };
+
+    const leftInput = reduceSpatialRoomObservation(
+      createInitialSpatialRoomInputState(),
+      left,
+      options,
+    );
+    const rightInput = reduceSpatialRoomObservation(
+      createInitialSpatialRoomInputState(),
+      recycledAsRight,
+      options,
+    );
+
+    expect(leftInput.input).toMatchObject({ pointer: { x: 0.5, y: 0.5 } });
+    expect(rightInput.input).toMatchObject({ pointer: { x: 0.5, y: 0.5 } });
+  });
+
+  it("uses a matching per-hand drawing calibration without changing thumb-index pinch", () => {
+    const canvas = { left: 0, top: 0, width: 1_000, height: 500 };
+    const base = measuredObservation(2_000);
+    const calibratedObservation = (timestamp: number): SingleHandObservation => ({
+      ...base,
+      timestamp,
+      handedness: "right",
+      handednessConfidence: 0.97,
+      measurements: {
+        ...base.measurements!,
+        middleTip: { x: 0.5, y: 0.5 },
+        drawingClutchRatio: 0.4,
+        middleTipConfidence: 0.96,
+      },
+    });
+    const options = {
+      calibration: calibration({
+        pinchClosedRatio: 0.2,
+        pinchOpenRatio: 0.8,
+        drawingClutchCalibrations: [
+          {
+            trackId: "track-a",
+            handedness: "right" as const,
+            handednessConfidence: 0.97,
+            closedRatio: 0.4,
+            openRatio: 0.8,
+            openSampleCount: 8,
+            closedSampleCount: 8,
+            capturedAt: 1_000,
+          },
+        ],
+      }),
+      canvas,
+      gainState: "draw" as const,
+      edgePreviewVisible: false,
+      drawingEnabled: true,
+    };
+
+    const pending = reduceSpatialRoomObservation(
+      createInitialSpatialRoomInputState(),
+      calibratedObservation(2_000),
+      options,
+    );
+    const engaged = reduceSpatialRoomObservation(
+      pending.state,
+      calibratedObservation(2_016),
+      options,
+    );
+
+    expect(engaged.input).toMatchObject({
+      mode: "point",
+      drawing: { penDown: true, transition: "engaged" },
+    });
+    expect(engaged.state.drawingClutch.policy).toMatchObject({
+      engageThreshold: 0.5,
+      releaseThreshold: 0.64,
+    });
+  });
+
+  it("does not reuse handedness drawing calibration without reliable handedness", () => {
+    const canvas = { left: 0, top: 0, width: 1_000, height: 500 };
+    const base = measuredObservation(3_000);
+    const observation = (timestamp: number): SingleHandObservation => ({
+      ...base,
+      timestamp,
+      trackId: "replacement-track",
+      handedness: "right",
+      handednessConfidence: 0.42,
+      measurements: {
+        ...base.measurements!,
+        middleTip: { x: 0.5, y: 0.5 },
+        drawingClutchRatio: 0.4,
+        middleTipConfidence: 0.96,
+      },
+    });
+    const options = {
+      calibration: calibration({
+        drawingClutchCalibrations: [
+          {
+            trackId: "expired-track",
+            handedness: "right" as const,
+            handednessConfidence: 0.97,
+            closedRatio: 0.4,
+            openRatio: 0.8,
+            openSampleCount: 8,
+            closedSampleCount: 8,
+            capturedAt: 1_000,
+          },
+        ],
+      }),
+      canvas,
+      gainState: "draw" as const,
+      edgePreviewVisible: false,
+      drawingEnabled: true,
+    };
+
+    const pending = reduceSpatialRoomObservation(
+      createInitialSpatialRoomInputState(),
+      observation(3_000),
+      options,
+    );
+    const stillHovering = reduceSpatialRoomObservation(
+      pending.state,
+      observation(3_016),
+      options,
+    );
+
+    expect(stillHovering.input).toMatchObject({
+      mode: "point",
+      drawing: { penDown: false, transition: "none" },
+    });
+    expect(stillHovering.state.drawingClutch.policy).toMatchObject({
+      engageThreshold: 0.32,
+      releaseThreshold: 0.52,
+    });
+  });
+
+  it("resets an uncommitted candidate before switching to another hand policy", () => {
+    const canvas = { left: 0, top: 0, width: 1_000, height: 500 };
+    const base = measuredObservation(3_500);
+    const observation = (
+      trackId: string,
+      timestamp: number,
+      drawingClutchRatio: number,
+    ): SingleHandObservation => ({
+      ...base,
+      timestamp,
+      trackId,
+      handedness: trackId === "track-a" ? "right" : "left",
+      handednessConfidence: 0.98,
+      measurements: {
+        ...base.measurements!,
+        middleTip: { x: 0.5, y: 0.5 },
+        drawingClutchRatio,
+        middleTipConfidence: 0.96,
+      },
+    });
+    const options = {
+      calibration: calibration({
+        drawingClutchCalibrations: [
+          {
+            trackId: "track-a",
+            handedness: "right" as const,
+            handednessConfidence: 0.98,
+            closedRatio: 0.4,
+            openRatio: 0.8,
+            openSampleCount: 8,
+            closedSampleCount: 8,
+            capturedAt: 1_000,
+          },
+          {
+            trackId: "track-b",
+            handedness: "left" as const,
+            handednessConfidence: 0.98,
+            closedRatio: 0.1,
+            openRatio: 0.5,
+            openSampleCount: 8,
+            closedSampleCount: 8,
+            capturedAt: 1_000,
+          },
+        ],
+      }),
+      canvas,
+      gainState: "draw" as const,
+      edgePreviewVisible: false,
+      drawingEnabled: true,
+    };
+
+    const firstHandPending = reduceSpatialRoomObservation(
+      createInitialSpatialRoomInputState(),
+      observation("track-a", 3_500, 0.4),
+      options,
+    );
+    const secondHand = reduceSpatialRoomObservation(
+      firstHandPending.state,
+      observation("track-b", 3_516, 0.3),
+      options,
+    );
+
+    expect(firstHandPending.state.drawingClutch).toMatchObject({
+      phase: "engage_pending",
+      activeTrackId: "track-a",
+      policy: { engageThreshold: 0.5, releaseThreshold: 0.64 },
+    });
+    expect(secondHand.state.drawingClutch).toMatchObject({
+      phase: "pen_up",
+      activeTrackId: null,
+      policy: { engageThreshold: 0.2, releaseThreshold: 0.34 },
+    });
+    expect(secondHand.input).toMatchObject({
+      drawing: { trackId: "track-b", penDown: false, transition: "none" },
+    });
+  });
+
+  it("releases drawing-clutch ownership after a drawing-hand identity change", () => {
+    const base = measuredObservation(4_000);
+    const observation = (
+      trackId: string,
+      timestamp: number,
+    ): SingleHandObservation => ({
+      ...base,
+      timestamp,
+      trackId,
+      handedness: trackId === "track-a" ? "right" : "left",
+      handednessConfidence: 0.98,
+      measurements: {
+        ...base.measurements!,
+        middleTip: { x: 0.43, y: 0.41 },
+        drawingClutchRatio: 0.2,
+        middleTipConfidence: 0.96,
+      },
+    });
+    const options = {
+      calibration: calibration({}),
+      canvas: { left: 0, top: 0, width: 1_000, height: 500 },
+      gainState: "draw" as const,
+      edgePreviewVisible: false,
+      drawingEnabled: true,
+    };
+    const pendingA = reduceSpatialRoomObservation(
+      createInitialSpatialRoomInputState(),
+      observation("track-a", 4_000),
+      options,
+    );
+    const engagedA = reduceSpatialRoomObservation(
+      pendingA.state,
+      observation("track-a", 4_016),
+      options,
+    );
+    const pendingB = reduceSpatialRoomObservation(
+      engagedA.state,
+      observation("track-b", 4_032),
+      options,
+    );
+    const engagedB = reduceSpatialRoomObservation(
+      pendingB.state,
+      observation("track-b", 4_048),
+      options,
+    );
+
+    expect(engagedA.state.drawingClutch).toMatchObject({
+      phase: "pen_down",
+      activeTrackId: "track-a",
+    });
+    expect(pendingB.state.drawingClutch).toMatchObject({
+      phase: "engage_pending",
+      activeTrackId: "track-b",
+    });
+    expect(pendingB.input).toMatchObject({
+      drawing: {
+        trackId: "track-b",
+        penDown: false,
+        transition: "none",
+      },
+    });
+    expect(engagedB.input).toMatchObject({
+      drawing: {
+        trackId: "track-b",
+        penDown: true,
+        transition: "engaged",
+      },
+    });
+  });
+
+  it("derives a confirmed thumb-middle clutch without changing index-tip ownership", () => {
+    const canvas = { left: 0, top: 0, width: 1_000, height: 500 };
+    const base = measuredObservation(1_000);
+    const closed = (timestamp: number): SingleHandObservation => ({
+      ...base,
+      timestamp,
+      measurements: {
+        ...base.measurements!,
+        middleTip: { x: 0.43, y: 0.41 },
+        drawingClutchRatio: 0.2,
+        middleTipConfidence: 0.94,
+      },
+    });
+    const options = {
+      calibration: calibration({}),
+      canvas,
+      gainState: "draw" as const,
+      edgePreviewVisible: false,
+      drawingEnabled: true,
+    };
+
+    const pending = reduceSpatialRoomObservation(
+      createInitialSpatialRoomInputState(),
+      closed(1_000),
+      options,
+    );
+    const engaged = reduceSpatialRoomObservation(
+      pending.state,
+      closed(1_016),
+      options,
+    );
+
+    expect(pending.input).toMatchObject({
+      mode: "point",
+      drawing: { trackId: "track-a", penDown: false, transition: "none" },
+    });
+    expect(engaged.input).toMatchObject({
+      mode: "point",
+      drawing: {
+        trackId: "track-a",
+        penDown: true,
+        transition: "engaged",
+        sampleKind: "measured",
+      },
+    });
+    if (engaged.input.mode !== "point")
+      throw new Error("fixture must remain index-led");
+    expect(engaged.input.pointer).not.toEqual(
+      engaged.input.drawing?.normalizedDistance,
+    );
+  });
+
+  it("keeps landmark 8 as the only brush coordinate when the clutch engages", () => {
+    const indexTip = { x: 0.24, y: 0.31 };
+    const thumbTip = { x: 0.78, y: 0.82 };
+    const middleTip = { x: 0.8, y: 0.82 };
+    const palmMcpCentroid = { x: 0.71, y: 0.76 };
+    const observation = (timestamp: number): SingleHandObservation => ({
+      ...measuredObservation(timestamp),
+      pointer: indexTip,
+      motionPointer: palmMcpCentroid,
+      pinchRatio: 0.8,
+      measurements: {
+        ...measuredObservation(timestamp).measurements!,
+        indexTip,
+        thumbTip,
+        middleTip,
+        pinchMidpoint: {
+          x: (indexTip.x + thumbTip.x) / 2,
+          y: (indexTip.y + thumbTip.y) / 2,
+        },
+        palmMcpCentroid,
+        pinchRatio: 0.8,
+        drawingClutchRatio: 0.2,
+        middleTipConfidence: 0.96,
+      },
+    });
+    const options = {
+      calibration: calibration({
+        cameraBounds: { x: 0, y: 0, width: 1, height: 1 },
+        safeCanvasInsetPx: 0,
+        mirrorX: false,
+      }),
+      canvas: { left: 0, top: 0, width: 1_000, height: 500 },
+      gainState: "draw" as const,
+      edgePreviewVisible: false,
+      drawingEnabled: true,
+    };
+
+    const pending = reduceSpatialRoomObservation(
+      createInitialSpatialRoomInputState(),
+      observation(1_000),
+      options,
+    );
+    const engaged = reduceSpatialRoomObservation(
+      pending.state,
+      observation(1_016),
+      options,
+    );
+
+    const mappedPoint = (point: { x: number; y: number }) => {
+      const mapped = mapCalibratedPointer(
+        options.calibration,
+        point,
+        options.canvas,
+        "draw",
+      ).point;
+      return {
+        x: mapped.x / options.canvas.width,
+        y: mapped.y / options.canvas.height,
+      };
+    };
+    expect(engaged.input).toMatchObject({
+      mode: "point",
+      pointer: mappedPoint(indexTip),
+      drawing: { penDown: true, transition: "engaged" },
+    });
+    if (engaged.input.mode !== "point")
+      throw new Error("drawing fixture must remain index-led");
+    expect(engaged.input.pointer).not.toEqual(mappedPoint(thumbTip));
+    expect(engaged.input.pointer).not.toEqual(mappedPoint(middleTip));
+    expect(engaged.input.pointer).not.toEqual(mappedPoint(palmMcpCentroid));
+  });
+
+  it("preserves an engaged clutch through a bounded tracking-loss observation", () => {
+    const canvas = { left: 0, top: 0, width: 1_000, height: 500 };
+    const base = measuredObservation(1_000);
+    const closed = (timestamp: number): SingleHandObservation => ({
+      ...base,
+      timestamp,
+      measurements: {
+        ...base.measurements!,
+        middleTip: { x: 0.43, y: 0.41 },
+        drawingClutchRatio: 0.2,
+        middleTipConfidence: 0.94,
+      },
+    });
+    const options = {
+      calibration: calibration({}),
+      canvas,
+      gainState: "draw" as const,
+      edgePreviewVisible: false,
+      drawingEnabled: true,
+    };
+    const pending = reduceSpatialRoomObservation(
+      createInitialSpatialRoomInputState(),
+      closed(1_000),
+      options,
+    );
+    const engaged = reduceSpatialRoomObservation(
+      pending.state,
+      closed(1_016),
+      options,
+    );
+    const lost = reduceSpatialRoomObservation(
+      engaged.state,
+      { mode: "idle", timestamp: 1_032, trackingState: "lost" },
+      options,
+    );
+    const resumed = reduceSpatialRoomObservation(
+      lost.state,
+      closed(1_048),
+      options,
+    );
+
+    expect(lost.input).toEqual({
+      mode: "idle",
+      timestamp: 1_032,
+      reason: "loss",
+    });
+    expect(lost.state.drawingClutch).toMatchObject({
+      phase: "pen_down",
+      activeTrackId: "track-a",
+    });
+    expect(resumed.input).toMatchObject({
+      mode: "point",
+      drawing: {
+        trackId: "track-a",
+        penDown: true,
+        transition: "none",
+      },
+    });
+  });
+
   it("uses filtered intent pointers while retaining raw measurements only as evidence", () => {
     const observation: HandTrackingObservation = {
       mode: "pinch",

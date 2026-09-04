@@ -233,9 +233,54 @@ function cameraMeasurements(
     ...measurements,
     indexTip: cameraPointer(measurements.indexTip, gainState),
     thumbTip: cameraPointer(measurements.thumbTip, gainState),
+    ...(measurements.middleTip
+      ? { middleTip: cameraPointer(measurements.middleTip, gainState) }
+      : {}),
     pinchMidpoint: cameraPointer(measurements.pinchMidpoint, gainState),
     palmMcpCentroid: cameraPointer(measurements.palmMcpCentroid, gainState),
   };
+}
+
+function drawingMeasurements(x: number, y: number) {
+  return {
+    indexTip: { x, y },
+    thumbTip: { x: x - 0.08, y: y + 0.08 },
+    middleTip: { x: x - 0.06, y: y + 0.08 },
+    pinchMidpoint: { x: x - 0.04, y: y + 0.04 },
+    palmMcpCentroid: { x: x - 0.02, y: y + 0.18 },
+    pinchDistance: 0.12,
+    palmScale: 0.2,
+    pinchRatio: 0.6,
+    drawingClutchRatio: 0.2,
+    confidence: 0.97,
+    indexTipConfidence: 0.97,
+    thumbTipConfidence: 0.97,
+    middleTipConfidence: 0.97,
+  };
+}
+
+function drawStroke(
+  hand: ReturnType<typeof fakeHandController>,
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  timestamp: number,
+) {
+  const midpoint = {
+    x: (start.x + end.x) / 2,
+    y: (start.y + end.y) / 2,
+  };
+  for (const [offset, point] of [
+    [0, start],
+    [8, midpoint],
+    [16, end],
+  ] as const)
+    hand.emit({
+      mode: "point",
+      pointer: point,
+      measurements: drawingMeasurements(point.x, point.y),
+      confidence: 0.97,
+      timestamp: timestamp + offset,
+    });
 }
 
 function pointAt(
@@ -354,6 +399,11 @@ describe("CommandCanvasRoom", () => {
     expect(
       screen.getByRole("region", { name: "Infinite canvas" }),
     ).toBeVisible();
+    expect(
+      screen.getByText(/Draw or choose an object below/i),
+    ).toBeVisible();
+    expect(screen.queryByText(/start Live Voice/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Ask through WebMCP agent tools/i)).not.toBeInTheDocument();
   });
 
   it("keeps a participant-video control clickable without a persistent preview layer", async () => {
@@ -505,7 +555,7 @@ describe("CommandCanvasRoom", () => {
       screen.getByRole("region", { name: "Infinite canvas" }),
     ).toBeVisible();
     const chatGptControls = screen.getByRole("group", {
-      name: "ChatGPT Site Tools and CommandCanvas Live Voice",
+      name: "WebMCP tools and CommandCanvas Live Voice",
     });
     expect(within(chatGptControls).getAllByRole("button")).toHaveLength(2);
     expect(
@@ -517,16 +567,16 @@ describe("CommandCanvasRoom", () => {
       screen.queryByRole("button", { name: "Open command drawer" }),
     ).toBeNull();
     expect(
-      screen.queryByRole("complementary", { name: "ChatGPT command drawer" }),
+      screen.queryByRole("complementary", { name: "WebMCP activity and CommandCanvas Live Voice drawer" }),
     ).toBeNull();
     expect(
       screen.queryByRole("region", { name: "Meeting packet workflow" }),
     ).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open WebMCP agent activity" }));
 
     expect(
-      screen.getByRole("complementary", { name: "ChatGPT command drawer" }),
+      screen.getByRole("complementary", { name: "WebMCP activity and CommandCanvas Live Voice drawer" }),
     ).toBeVisible();
     expect(screen.getByLabelText("Live voice command")).toBeVisible();
     expect(screen.getByLabelText("Meeting packet workflow")).toBeVisible();
@@ -547,13 +597,13 @@ describe("CommandCanvasRoom", () => {
         .closest(".typed-command-fallback"),
     ).toHaveClass("has-realtime-voice");
 
-    await user.click(screen.getByRole("button", { name: "Close ChatGPT command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Close WebMCP activity and CommandCanvas Live Voice drawer" }));
     expect(
-      screen.queryByRole("complementary", { name: "ChatGPT command drawer" }),
+      screen.queryByRole("complementary", { name: "WebMCP activity and CommandCanvas Live Voice drawer" }),
     ).toBeNull();
   });
 
-  it("keeps the explicit in-page voice control operable when Site Tools are registered", async () => {
+  it("keeps the explicit in-page voice control operable when WebMCP tools are registered", async () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     const idleState = { status: "idle" as const };
@@ -590,7 +640,7 @@ describe("CommandCanvasRoom", () => {
       ),
     ).toBeVisible();
     expect(
-      screen.getByRole("complementary", { name: "ChatGPT command drawer" }),
+      screen.getByRole("complementary", { name: "WebMCP activity and CommandCanvas Live Voice drawer" }),
     ).toBeVisible();
   });
 
@@ -626,7 +676,7 @@ describe("CommandCanvasRoom", () => {
 
     expect(controller.start).toHaveBeenCalledOnce();
     expect(
-      screen.queryByRole("complementary", { name: "ChatGPT command drawer" }),
+      screen.queryByRole("complementary", { name: "WebMCP activity and CommandCanvas Live Voice drawer" }),
     ).toBeNull();
   });
 
@@ -672,7 +722,7 @@ describe("CommandCanvasRoom", () => {
     });
 
     await user.click(
-      screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }),
+      screen.getByRole("button", { name: "Open WebMCP agent activity" }),
     );
     expect(screen.getByText("Revision 1 · 1 visible object")).toBeVisible();
 
@@ -696,8 +746,8 @@ describe("CommandCanvasRoom", () => {
     const store = createCanvasStore("room-local", dependencies());
     const { container } = render(<CommandCanvasRoom store={store} />);
 
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
-    const close = screen.getByRole("button", { name: "Close ChatGPT command drawer" });
+    await user.click(screen.getByRole("button", { name: "Open WebMCP agent activity" }));
+    const close = screen.getByRole("button", { name: "Close WebMCP activity and CommandCanvas Live Voice drawer" });
     const viewport = container.querySelector<HTMLElement>(".canvas-viewport");
     if (!viewport) throw new Error("Canvas viewport fixture was not rendered.");
     const before = store.getState().viewport;
@@ -748,7 +798,7 @@ describe("CommandCanvasRoom", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open WebMCP agent activity" }));
     expect(screen.getByRole("button", { name: "Start live voice" })).toBeVisible();
 
     let result:
@@ -1103,14 +1153,14 @@ describe("CommandCanvasRoom", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open WebMCP agent activity" }));
     await user.click(screen.getByRole("button", { name: "Start live voice" }));
-    await user.click(screen.getByRole("button", { name: "Close ChatGPT command drawer" }));
+    await user.click(screen.getByRole("button", { name: "Close WebMCP activity and CommandCanvas Live Voice drawer" }));
 
     expect(controller.start).toHaveBeenCalledOnce();
     expect(controller.stop).not.toHaveBeenCalled();
     expect(
-      screen.queryByRole("complementary", { name: "ChatGPT command drawer" }),
+      screen.queryByRole("complementary", { name: "WebMCP activity and CommandCanvas Live Voice drawer" }),
     ).toBeNull();
   });
 
@@ -1125,7 +1175,7 @@ describe("CommandCanvasRoom", () => {
       />,
     );
     expect(
-      screen.queryByRole("complementary", { name: "ChatGPT command drawer" }),
+      screen.queryByRole("complementary", { name: "WebMCP activity and CommandCanvas Live Voice drawer" }),
     ).toBeNull();
 
     rerender(
@@ -1139,7 +1189,7 @@ describe("CommandCanvasRoom", () => {
     );
 
     expect(
-      await screen.findByRole("complementary", { name: "ChatGPT command drawer" }),
+      await screen.findByRole("complementary", { name: "WebMCP activity and CommandCanvas Live Voice drawer" }),
     ).toBeVisible();
     expect(screen.getByText("Review exact recipients")).toBeVisible();
   });
@@ -1166,7 +1216,7 @@ describe("CommandCanvasRoom", () => {
     expect(
       await screen.findByText("Agent request queued until drawing finishes."),
     ).toBeVisible();
-    const hiddenDrawer = screen.getByLabelText("ChatGPT command drawer");
+    const hiddenDrawer = screen.getByLabelText("WebMCP activity and CommandCanvas Live Voice drawer");
     expect(hiddenDrawer).toHaveAttribute("aria-hidden", "true");
     expect(hiddenDrawer).toHaveAttribute("inert");
     expect(hiddenDrawer).not.toHaveClass("is-open");
@@ -1174,7 +1224,7 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Cancel sketch" }));
     expect(
       await screen.findByRole("complementary", {
-        name: "ChatGPT command drawer",
+        name: "WebMCP activity and CommandCanvas Live Voice drawer",
       }),
     ).toBeVisible();
   });
@@ -1208,7 +1258,7 @@ describe("CommandCanvasRoom", () => {
     expect(
       await screen.findByText("Agent request queued until drawing finishes."),
     ).toBeVisible();
-    const hiddenDrawer = screen.getByLabelText("ChatGPT command drawer");
+    const hiddenDrawer = screen.getByLabelText("WebMCP activity and CommandCanvas Live Voice drawer");
     expect(hiddenDrawer).toHaveAttribute("aria-hidden", "true");
     expect(hiddenDrawer).toHaveAttribute("inert");
     expect(hiddenDrawer).not.toHaveClass("is-open");
@@ -1216,7 +1266,7 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Cancel hand sketch" }));
     expect(
       await screen.findByRole("complementary", {
-        name: "ChatGPT command drawer",
+        name: "WebMCP activity and CommandCanvas Live Voice drawer",
       }),
     ).toBeVisible();
   });
@@ -1244,13 +1294,13 @@ describe("CommandCanvasRoom", () => {
       await screen.findByText("Agent request queued until drawing finishes."),
     ).toBeVisible();
     expect(
-      screen.getByLabelText("ChatGPT command drawer"),
+      screen.getByLabelText("WebMCP activity and CommandCanvas Live Voice drawer"),
     ).toHaveAttribute("inert");
 
     await user.click(screen.getByRole("button", { name: "Cancel sketch" }));
     expect(
       await screen.findByRole("complementary", {
-        name: "ChatGPT command drawer",
+        name: "WebMCP activity and CommandCanvas Live Voice drawer",
       }),
     ).toBeVisible();
   });
@@ -1285,13 +1335,13 @@ describe("CommandCanvasRoom", () => {
       await screen.findByText("Agent request queued until drawing finishes."),
     ).toBeVisible();
     expect(
-      screen.getByLabelText("ChatGPT command drawer"),
+      screen.getByLabelText("WebMCP activity and CommandCanvas Live Voice drawer"),
     ).toHaveAttribute("inert");
 
     await user.click(screen.getByRole("button", { name: "Cancel hand sketch" }));
     expect(
       await screen.findByRole("complementary", {
-        name: "ChatGPT command drawer",
+        name: "WebMCP activity and CommandCanvas Live Voice drawer",
       }),
     ).toBeVisible();
   });
@@ -1686,31 +1736,9 @@ describe("CommandCanvasRoom", () => {
     );
 
     act(() => {
-      hand.emit({
-        mode: "point",
-        pointer: { x: 0.2, y: 0.3 },
-        confidence: 0.96,
-        timestamp: 1_000,
-      });
-      hand.emit({
-        mode: "point",
-        pointer: { x: 0.26, y: 0.36 },
-        confidence: 0.96,
-        timestamp: 1_016,
-      });
+      drawStroke(hand, { x: 0.2, y: 0.3 }, { x: 0.26, y: 0.36 }, 1_000);
       hand.emit({ mode: "idle", timestamp: 1_032 });
-      hand.emit({
-        mode: "point",
-        pointer: { x: 0.26, y: 0.36 },
-        confidence: 0.96,
-        timestamp: 1_048,
-      });
-      hand.emit({
-        mode: "point",
-        pointer: { x: 0.3, y: 0.48 },
-        confidence: 0.96,
-        timestamp: 1_064,
-      });
+      drawStroke(hand, { x: 0.26, y: 0.36 }, { x: 0.3, y: 0.48 }, 1_048);
       hand.emit({ mode: "idle", timestamp: 1_080 });
     });
 
@@ -1841,19 +1869,8 @@ describe("CommandCanvasRoom", () => {
       await options?.onIntent({ type: "open_sketch" }, "voice");
     });
     act(() => {
-      hand.emit({
-        mode: "point",
-        pointer: { x: 0.2, y: 0.3 },
-        confidence: 0.96,
-        timestamp: 1_000,
-      });
-      hand.emit({
-        mode: "point",
-        pointer: { x: 0.34, y: 0.48 },
-        confidence: 0.96,
-        timestamp: 1_016,
-      });
-      hand.emit({ mode: "idle", timestamp: 1_032 });
+      drawStroke(hand, { x: 0.2, y: 0.3 }, { x: 0.34, y: 0.48 }, 1_000);
+      hand.emit({ mode: "idle", timestamp: 1_032, trackingState: "lost" });
     });
 
     let result: Awaited<ReturnType<RealtimeVoiceControllerOptions["onIntent"]>> | undefined;
@@ -1872,7 +1889,7 @@ describe("CommandCanvasRoom", () => {
     ).toHaveLength(1);
     expect(screen.getByText("HAND CONTROL · FULL CANVAS")).toBeVisible();
     expect(
-      screen.queryByRole("complementary", { name: "ChatGPT command drawer" }),
+      screen.queryByRole("complementary", { name: "WebMCP activity and CommandCanvas Live Voice drawer" }),
     ).toBeNull();
   });
 
@@ -2306,14 +2323,17 @@ describe("CommandCanvasRoom", () => {
     ) => ({
       indexTip,
       thumbTip: { x: indexTip.x - 0.03, y: indexTip.y + 0.02 },
+      middleTip: { x: indexTip.x - 0.01, y: indexTip.y + 0.02 },
       pinchMidpoint: { x: indexTip.x - 0.015, y: indexTip.y + 0.01 },
       palmMcpCentroid,
       pinchDistance: 0.08,
       palmScale: 0.18,
       pinchRatio: 0.44,
+      drawingClutchRatio: 0.2,
       confidence: 0.94,
       indexTipConfidence: 0.94,
       thumbTipConfidence: 0.94,
+      middleTipConfidence: 0.94,
     });
     act(() => {
       hand.emit({
@@ -2339,8 +2359,19 @@ describe("CommandCanvasRoom", () => {
         timestamp: 1_016,
       });
       hand.emit({
+        mode: "point",
+        pointer: { x: 0.35, y: 0.43 },
+        motionPointer: { x: 0.79, y: 0.75 },
+        measurements: measurements(
+          { x: 0.35, y: 0.43 },
+          { x: 0.79, y: 0.75 },
+        ),
+        confidence: 0.94,
+        timestamp: 1_024,
+      });
+      hand.emit({
         mode: "open_palm",
-        pointer: { x: 0.31, y: 0.39 },
+        pointer: { x: 0.35, y: 0.43 },
         confidence: 0.94,
         timestamp: 1_032,
       });
@@ -2354,6 +2385,202 @@ describe("CommandCanvasRoom", () => {
     );
     expect(sketch).toMatchObject({ type: "sketch", x: expect.any(Number) });
     expect(sketch?.x).toBeLessThan(400);
+    expect(store.getState().canvas.receipts).toHaveLength(1);
+  });
+
+  it("finishes an active stroke before switching between Draw and Erase", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+    await skipHandCalibration(user);
+    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+
+    act(() =>
+      drawStroke(hand, { x: 0.2, y: 0.3 }, { x: 0.3, y: 0.4 }, 1_000),
+    );
+    expect(screen.getByText("0 strokes ready")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Use hand eraser" }));
+    expect(screen.getByText("1 stroke ready")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Use hand draw" }));
+    act(() => {
+      drawStroke(hand, { x: 0.55, y: 0.3 }, { x: 0.65, y: 0.4 }, 1_100);
+      hand.emit({
+        mode: "open_palm",
+        pointer: { x: 0.65, y: 0.4 },
+        confidence: 0.97,
+        timestamp: 1_132,
+      });
+    });
+
+    expect(screen.getByText("2 strokes ready")).toBeVisible();
+  });
+
+  it("does not commit an invalid one-point stroke when switching tools", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+    await skipHandCalibration(user);
+    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+
+    act(() => {
+      const point = { x: 0.2, y: 0.3 };
+      hand.emit({
+        mode: "point",
+        pointer: point,
+        measurements: drawingMeasurements(point.x, point.y),
+        confidence: 0.97,
+        timestamp: 1_000,
+      });
+      hand.emit({
+        mode: "point",
+        pointer: point,
+        measurements: drawingMeasurements(point.x, point.y),
+        confidence: 0.97,
+        timestamp: 1_016,
+      });
+    });
+    await user.click(screen.getByRole("button", { name: "Use hand eraser" }));
+
+    expect(screen.getByText("0 strokes ready")).toBeVisible();
+    expect(Object.values(store.getState().canvas.objects)).toHaveLength(0);
+  });
+
+  it("uses the explicit Finish event time as pen-up time", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+    await skipHandCalibration(user);
+    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+    act(() =>
+      drawStroke(hand, { x: 0.2, y: 0.3 }, { x: 0.3, y: 0.4 }, 1_000),
+    );
+
+    const finishEvent = new MouseEvent("click", { bubbles: true });
+    Object.defineProperty(finishEvent, "timeStamp", { value: 1_500 });
+    fireEvent(
+      screen.getByRole("button", { name: "Finish hand sketch" }),
+      finishEvent,
+    );
+
+    const sketch = Object.values(store.getState().canvas.objects).find(
+      (object) => object.type === "sketch",
+    );
+    expect(sketch?.type).toBe("sketch");
+    if (sketch?.type === "sketch") {
+      expect(sketch.payload.strokeReceipts?.[0]?.penUpAt).toBe(1_500);
+      const stroke = sketch.payload.strokes[0];
+      const receipt = sketch.payload.strokeReceipts?.[0];
+      expect(receipt?.sampleProvenanceVersion).toBe(1);
+      expect(receipt?.samples).toHaveLength(stroke?.points.length);
+      expect(receipt?.samples?.map((sample) => sample.renderedPoint)).toEqual(
+        stroke?.points,
+      );
+      expect(
+        receipt?.samples?.every(
+          (sample) => sample.sampleKind === "measured",
+        ),
+      ).toBe(true);
+      // The clutch confirms on the midpoint frame, so that is the first
+      // durable point and its corresponding camera-space provenance sample.
+      const expectedCameraPoint = cameraPointer(
+        { x: 0.25, y: 0.35 },
+        "hover",
+      );
+      expect(receipt?.samples?.[0]?.rawIndexTip).toEqual(expectedCameraPoint);
+      expect(receipt?.samples?.[0]?.filteredIndexTip).toEqual(
+        expectedCameraPoint,
+      );
+    }
+  });
+
+  it("submits one sketch when repeated palm frames finish a pending remote command", async () => {
+    const user = userEvent.setup();
+    const hand = fakeHandController();
+    const store = createCanvasStore("room-local", dependencies());
+    let submitted: CanvasCommand | null = null;
+    let resolveCommand!: (result: CommandResult) => void;
+    const pending = new Promise<CommandResult>((resolve) => {
+      resolveCommand = resolve;
+    });
+    const onCommand = vi.fn((command: CanvasCommand) => {
+      submitted = command;
+      return pending;
+    });
+    const { container } = render(
+      <CommandCanvasRoom
+        store={store}
+        createHandTrackingController={() => hand.controller}
+        onCommand={onCommand}
+      />,
+    );
+    setCanvasBounds(container);
+    await user.click(screen.getByRole("button", { name: "Open system status" }));
+    await user.click(screen.getByRole("button", { name: "Enable hand input" }));
+    act(() => hand.setStatus({ state: "ready" }));
+    await skipHandCalibration(user);
+    await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
+    act(() => {
+      drawStroke(hand, { x: 0.2, y: 0.3 }, { x: 0.3, y: 0.4 }, 1_000);
+      hand.emit({
+        mode: "open_palm",
+        pointer: { x: 0.3, y: 0.4 },
+        confidence: 0.97,
+        timestamp: 1_032,
+      });
+    });
+
+    act(() => {
+      for (const timestamp of [1_332, 1_333])
+        hand.emit({
+          mode: "open_palm",
+          pointer: { x: 0.3, y: 0.4 },
+          confidence: 0.97,
+          timestamp,
+        });
+    });
+
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    if (!submitted) throw new Error("Expected one authoritative sketch command.");
+    act(() => resolveCommand(store.getState().dispatch(submitted!, "gesture")));
+    await waitFor(() =>
+      expect(
+        Object.values(store.getState().canvas.objects).filter(
+          (object) => object.type === "sketch" && !object.deletedAt,
+        ),
+      ).toHaveLength(1),
+    );
     expect(store.getState().canvas.receipts).toHaveLength(1);
   });
 
@@ -2379,18 +2606,12 @@ describe("CommandCanvasRoom", () => {
     act(() => {
       for (let index = 0; index < 10; index += 1) {
         const timestamp = 2_000 + index * 48;
-        hand.emit({
-          mode: "point",
-          pointer: { x: 0.12 + index * 0.025, y: 0.2 + index * 0.02 },
-          confidence: 0.96,
+        drawStroke(
+          hand,
+          { x: 0.12 + index * 0.025, y: 0.2 + index * 0.02 },
+          { x: 0.15 + index * 0.025, y: 0.24 + index * 0.02 },
           timestamp,
-        });
-        hand.emit({
-          mode: "point",
-          pointer: { x: 0.15 + index * 0.025, y: 0.24 + index * 0.02 },
-          confidence: 0.96,
-          timestamp: timestamp + 16,
-        });
+        );
         hand.emit({
           mode: "open_palm",
           pointer: { x: 0.15 + index * 0.025, y: 0.24 + index * 0.02 },
@@ -2436,8 +2657,7 @@ describe("CommandCanvasRoom", () => {
     await user.click(screen.getByRole("button", { name: "Draw with index finger" }));
 
     act(() => {
-      pointAt(hand, 0.2, 0.3, 1_000);
-      pointAt(hand, 0.3, 0.4, 1_016);
+      drawStroke(hand, { x: 0.2, y: 0.3 }, { x: 0.3, y: 0.4 }, 1_000);
       hand.emit({
         mode: "open_palm",
         pointer: { x: 0.3, y: 0.4 },
@@ -2495,18 +2715,12 @@ describe("CommandCanvasRoom", () => {
     act(() => {
       for (let index = 0; index < 3; index += 1) {
         const timestamp = 3_000 + index * 48;
-        hand.emit({
-          mode: "point",
-          pointer: { x: 0.2 + index * 0.1, y: 0.3 },
-          confidence: 0.96,
+        drawStroke(
+          hand,
+          { x: 0.2 + index * 0.1, y: 0.3 },
+          { x: 0.25 + index * 0.1, y: 0.35 },
           timestamp,
-        });
-        hand.emit({
-          mode: "point",
-          pointer: { x: 0.25 + index * 0.1, y: 0.35 },
-          confidence: 0.96,
-          timestamp: timestamp + 16,
-        });
+        );
         hand.emit({
           mode: "open_palm",
           pointer: { x: 0.25 + index * 0.1, y: 0.35 },
@@ -3652,7 +3866,7 @@ describe("CommandCanvasRoom", () => {
 
     expect(
       await screen.findByRole("complementary", {
-        name: "ChatGPT command drawer",
+        name: "WebMCP activity and CommandCanvas Live Voice drawer",
       }),
     ).toBeVisible();
     expect(screen.getByLabelText("Your OpenAI API key")).toBeVisible();
@@ -4079,7 +4293,7 @@ describe("CommandCanvasRoom", () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open WebMCP agent activity" }));
     const input = screen.getByRole("textbox", {
       name: "Direct canvas command",
     });
@@ -4106,7 +4320,7 @@ describe("CommandCanvasRoom", () => {
     const user = userEvent.setup();
     const store = createCanvasStore("room-local", dependencies());
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open WebMCP agent activity" }));
     const input = screen.getByRole("textbox", {
       name: "Direct canvas command",
     });
@@ -4133,7 +4347,7 @@ describe("CommandCanvasRoom", () => {
     seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
     seedNote(store, { id: "note-risk", title: "Risk note", x: 340 });
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open WebMCP agent activity" }));
 
     await user.click(screen.getByRole("button", { name: "Select Launch note" }));
     await user.type(
@@ -4160,7 +4374,7 @@ describe("CommandCanvasRoom", () => {
     const store = createCanvasStore("room-local", dependencies());
     seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open WebMCP agent activity" }));
 
     await user.click(screen.getByRole("button", { name: "Select Launch note" }));
     await user.type(
@@ -4197,7 +4411,7 @@ describe("CommandCanvasRoom", () => {
     const store = createCanvasStore("room-local", dependencies());
     seedNote(store, { id: "note-launch", title: "Launch note", x: 20 });
     render(<CommandCanvasRoom store={store} />);
-    await user.click(screen.getByRole("button", { name: "Open ChatGPT Site Tools and activity drawer" }));
+    await user.click(screen.getByRole("button", { name: "Open WebMCP agent activity" }));
 
     await user.click(screen.getByRole("button", { name: "Select Launch note" }));
     await user.type(

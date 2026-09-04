@@ -19,7 +19,7 @@ try {
     bundle: true,
     platform: "node",
     format: "esm",
-    target: "node20",
+    target: "node22",
     sourcemap: false,
   });
   await import(`${pathToFileURL(output).href}?run=${Date.now()}`);

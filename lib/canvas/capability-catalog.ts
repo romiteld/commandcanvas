@@ -36,6 +36,7 @@ const coordinateSchema = z.number().finite().min(-1_000_000).max(1_000_000);
 const rotationSchema = z.number().finite().min(-180).max(180);
 const titleSchema = z.string().trim().min(1).max(120);
 const zIndexSchema = z.number().int().min(0).max(100_000);
+const objectVersionSchema = z.number().int().min(1).max(1_000_000_000);
 const compactKeySchema = z
   .string()
   .min(2)
@@ -105,12 +106,22 @@ export const CANVAS_CAPABILITY_INPUT_SCHEMAS = {
     })
     .strict(),
   transform_object: z
-    .object({ objectId: objectIdSchema, transform: spatialTransformSchema })
+    .object({
+      objectId: objectIdSchema,
+      expectedVersion: objectVersionSchema,
+      transform: spatialTransformSchema,
+    })
     .strict(),
   set_object_state: z
-    .object({ objectId: objectIdSchema, state: objectStateSchema })
+    .object({
+      objectId: objectIdSchema,
+      expectedVersion: objectVersionSchema,
+      state: objectStateSchema,
+    })
     .strict(),
-  discard_object: z.object({ objectId: objectIdSchema }).strict(),
+  discard_object: z
+    .object({ objectId: objectIdSchema, expectedVersion: objectVersionSchema })
+    .strict(),
   organize_objects: z.discriminatedUnion("action", [
     z
       .object({
@@ -120,6 +131,22 @@ export const CANVAS_CAPABILITY_INPUT_SCHEMAS = {
           .min(1)
           .max(20)
           .refine((ids) => new Set(ids).size === ids.length),
+        expectedVersions: z
+          .array(
+            z
+              .object({
+                objectId: objectIdSchema,
+                expectedVersion: objectVersionSchema,
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(20)
+          .refine(
+            (versions) =>
+              new Set(versions.map((version) => version.objectId)).size ===
+              versions.length,
+          ),
         frame: z
           .object({
             id: objectIdSchema,
@@ -133,9 +160,27 @@ export const CANVAS_CAPABILITY_INPUT_SCHEMAS = {
           })
           .strict(),
       })
-      .strict(),
+      .strict()
+      .superRefine((value, context) => {
+        const expectedIds = new Set(
+          value.expectedVersions.map((version) => version.objectId),
+        );
+        if (
+          expectedIds.size !== value.objectIds.length ||
+          value.objectIds.some((objectId) => !expectedIds.has(objectId))
+        )
+          context.addIssue({
+            code: "custom",
+            path: ["expectedVersions"],
+            message: "Expected versions must cover exactly the grouped objects.",
+          });
+      }),
     z
-      .object({ action: z.literal("ungroup"), frameId: objectIdSchema })
+      .object({
+        action: z.literal("ungroup"),
+        frameId: objectIdSchema,
+        expectedVersion: objectVersionSchema,
+      })
       .strict(),
   ]),
   history_action: z.object({ action: z.enum(["undo", "redo"]) }).strict(),
@@ -231,9 +276,18 @@ export interface CanvasCapabilityDefinition {
 }
 
 const annotations = {
-  readUntrusted: Object.freeze({ readOnlyHint: true, untrustedContentHint: true }),
-  mutateUntrusted: Object.freeze({ readOnlyHint: false, untrustedContentHint: true }),
-  localControl: Object.freeze({ readOnlyHint: false, untrustedContentHint: false }),
+  readUntrusted: Object.freeze({
+    readOnlyHint: true,
+    untrustedContentHint: true,
+  }),
+  mutateUntrusted: Object.freeze({
+    readOnlyHint: false,
+    untrustedContentHint: true,
+  }),
+  localControl: Object.freeze({
+    readOnlyHint: false,
+    untrustedContentHint: false,
+  }),
 } as const;
 
 export const CANVAS_CAPABILITY_CATALOG = {
@@ -393,13 +447,15 @@ export function evaluateCanvasCapabilityGuard(
     return {
       ok: false,
       code: "unauthorized",
-      message: "authorization required: join the room before using canvas tools",
+      message:
+        "authorization required: join the room before using canvas tools",
     };
   if (definition.permission === "mutate" && !context.canMutateCanvas)
     return {
       ok: false,
       code: "forbidden",
-      message: "mutation not authorized: this participant can only view the room",
+      message:
+        "mutation not authorized: this participant can only view the room",
     };
   if (definition.permission === "host" && context.actor.role !== "host")
     return {
@@ -445,13 +501,19 @@ export function projectWebMcpCapabilityCatalog() {
 
 const emptySchema = z.object({}).strict();
 const compactCreateNoteSchema = z
-  .object({ text: z.string().trim().min(1).max(4_000).optional() })
+  .object({
+    title: titleSchema.optional(),
+    text: z.string().trim().min(1).max(4_000).optional(),
+  })
   .strict();
 const compactBoardTaskSchema = z
   .object({
     title: z.string().trim().min(1).max(180),
     owner: z.string().trim().min(1).max(80).optional(),
-    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    dueDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional(),
     priority: z.enum(["low", "medium", "high"]).optional(),
   })
   .strict();
@@ -543,7 +605,11 @@ const compactDiagramSchema = z
   .superRefine((value, context) => {
     const keys = new Set(value.nodes.map((node) => node.key));
     if (keys.size !== value.nodes.length)
-      context.addIssue({ code: "custom", path: ["nodes"], message: "Node keys must be unique." });
+      context.addIssue({
+        code: "custom",
+        path: ["nodes"],
+        message: "Node keys must be unique.",
+      });
     value.edges.forEach((edge, index) => {
       if (!keys.has(edge.from) || !keys.has(edge.to))
         context.addIssue({
@@ -624,32 +690,82 @@ const compactReferenceSchema = z
 const compactMeetingCardSchema = z
   .object({
     title: titleSchema,
-    kind: z.enum(["decision", "action_item", "summary", "risk", "open_question"]),
+    kind: z.enum([
+      "decision",
+      "action_item",
+      "summary",
+      "risk",
+      "open_question",
+    ]),
     body: z.string().trim().min(1).max(4_000),
     bullets: z.array(z.string().trim().min(1).max(300)).max(20).default([]),
     owner: z.string().trim().min(1).max(80).nullable().optional(),
-    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+    dueDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .nullable()
+      .optional(),
     status: z
       .enum(["proposed", "confirmed", "open", "in_progress", "done", "blocked"])
       .optional(),
   })
   .strict();
 const appendSelectedSchema = z
-  .object({ text: z.string().trim().min(1).max(NOTE_APPEND_TEXT_MAX_LENGTH) })
-  .strict();
-const rotateSchema = z
-  .object({ direction: z.enum(["clockwise", "counterclockwise"]) })
-  .strict();
-const moveSelectedSchema = z
-  .object({ x: coordinateSchema.optional(), y: coordinateSchema.optional() })
+  .object({
+    objectId: objectIdSchema.optional(),
+    target: titleSchema.optional(),
+    text: z.string().trim().min(1).max(NOTE_APPEND_TEXT_MAX_LENGTH),
+  })
   .strict()
+  .refine((value) => !(value.objectId && value.target), {
+    message: "Use either objectId or target, not both.",
+  });
+const transformSelectedSketchSchema = z
+  .object({
+    instruction: z.string().trim().min(1).max(500).optional(),
+    outputKind: sketchTransformOutputKindSchema.optional(),
+  })
+  .strict();
+const realtimeObjectTargetFields = {
+  objectId: objectIdSchema.optional(),
+  target: titleSchema.optional(),
+};
+const realtimeObjectTargetSchema = z
+  .object(realtimeObjectTargetFields)
+  .strict()
+  .refine((value) => !(value.objectId && value.target), {
+    message: "Use either objectId or target, not both.",
+  });
+const rotateSchema = z
+  .object({
+    ...realtimeObjectTargetFields,
+    direction: z.enum(["clockwise", "counterclockwise"]),
+  })
+  .strict()
+  .refine((value) => !(value.objectId && value.target), {
+    message: "Use either objectId or target, not both.",
+  });
+const moveSelectedSchema = z
+  .object({
+    ...realtimeObjectTargetFields,
+    x: coordinateSchema.optional(),
+    y: coordinateSchema.optional(),
+  })
+  .strict()
+  .refine((value) => !(value.objectId && value.target), {
+    message: "Use either objectId or target, not both.",
+  })
   .refine((value) => value.x !== undefined || value.y !== undefined);
 const resizeSelectedSchema = z
   .object({
+    ...realtimeObjectTargetFields,
     width: z.number().finite().min(160).max(2_000).optional(),
     height: z.number().finite().min(80).max(1_400).optional(),
   })
   .strict()
+  .refine((value) => !(value.objectId && value.target), {
+    message: "Use either objectId or target, not both.",
+  })
   .refine((value) => value.width !== undefined || value.height !== undefined);
 
 export interface RealtimeCapabilityAlias {
@@ -701,11 +817,15 @@ export const REALTIME_CAPABILITY_ALIASES = [
   alias(
     "create_note",
     "create_object",
-    "Create one note card. Use for a standalone note with optional initial text. Use start_thought instead when the user wants continuing speech-to-text inside the new card.",
+    "Create one note card with its requested title and initial text in the same mutation. Use for a standalone note or static thought, never as a substitute for a requested chart or diagram. Use start_thought instead when the user wants continuing speech-to-text inside the new card.",
     compactCreateNoteSchema,
     (input) => {
-      const note = input as { text?: string };
-      return { type: "note", ...(note.text ? { text: note.text } : {}) };
+      const note = input as { title?: string; text?: string };
+      return {
+        type: "note",
+        ...(note.title ? { title: note.title } : {}),
+        ...(note.text ? { text: note.text } : {}),
+      };
     },
   ),
   alias(
@@ -726,13 +846,54 @@ export const REALTIME_CAPABILITY_ALIASES = [
       };
     },
   ),
-  alias("create_schedule", "create_object", "Create a schedule or calendar in the current canvas viewport. Preserve the requested title, timezone, dates, commitments, times, and owners.", compactScheduleSchema, (input) => ({ type: "schedule", ...(input as object) })),
-  alias("create_diagram", "create_object", "Create a structured architecture diagram, flowchart, or general node diagram. Supply semantic nodes and edges; CommandCanvas assigns spatial geometry.", compactDiagramSchema, (input) => ({ type: "diagram", ...(input as object) })),
-  alias("create_chart", "create_object", "Create a pie, bar, or line chart from labeled numeric values. CommandCanvas assigns spatial geometry and internal IDs.", compactChartSchema, (input) => ({ type: "chart", ...(input as object) })),
-  alias("create_data_table", "create_object", "Create a structured data table from labeled columns and row values. CommandCanvas assigns spatial geometry and internal IDs.", compactTableSchema, (input) => ({ type: "data_table", ...(input as object) })),
-  alias("create_reference_card", "create_object", "Create an article, document, image, or link reference card from information already present in the conversation. This tool does not browse or retrieve a URL.", compactReferenceSchema, (input) => ({ type: "reference_card", ...(input as object) })),
-  alias("create_meeting_card", "create_object", "Create a decision, action item, summary, risk, or open-question card from the user's spoken content.", compactMeetingCardSchema, (input) => ({ type: "meeting_card", ...(input as object) })),
-  alias("append_selected_note", "update_object_content", "Append the user's dictated text to the currently selected note or thought card. Inspect the selected object first when the user says this or that.", appendSelectedSchema),
+  alias(
+    "create_schedule",
+    "create_object",
+    "Create a schedule or calendar in the current canvas viewport. Preserve the requested title, timezone, dates, commitments, times, and owners.",
+    compactScheduleSchema,
+    (input) => ({ type: "schedule", ...(input as object) }),
+  ),
+  alias(
+    "create_diagram",
+    "create_object",
+    "Create a structured architecture diagram, flowchart, or general node diagram only when the user asks for that family. Supply semantic nodes and edges; CommandCanvas assigns spatial geometry. Never use this as a generic fallback for another requested object family.",
+    compactDiagramSchema,
+    (input) => ({ type: "diagram", ...(input as object) }),
+  ),
+  alias(
+    "create_chart",
+    "create_object",
+    "Create a pie, bar, or line chart only when the user asks for a chart or numeric graph. CommandCanvas assigns spatial geometry and internal IDs. Never use this as a generic fallback for another requested object family.",
+    compactChartSchema,
+    (input) => ({ type: "chart", ...(input as object) }),
+  ),
+  alias(
+    "create_data_table",
+    "create_object",
+    "Create a structured data table from labeled columns and row values. CommandCanvas assigns spatial geometry and internal IDs.",
+    compactTableSchema,
+    (input) => ({ type: "data_table", ...(input as object) }),
+  ),
+  alias(
+    "create_reference_card",
+    "create_object",
+    "Create an article, document, image, or link reference card from information already present in the conversation. An image or document reference is metadata and supplied context, not generated media or a fetched document. This tool does not browse or retrieve a URL.",
+    compactReferenceSchema,
+    (input) => ({ type: "reference_card", ...(input as object) }),
+  ),
+  alias(
+    "create_meeting_card",
+    "create_object",
+    "Create a decision, action item, summary, risk, or open-question card from the user's spoken content.",
+    compactMeetingCardSchema,
+    (input) => ({ type: "meeting_card", ...(input as object) }),
+  ),
+  alias(
+    "append_selected_note",
+    "update_object_content",
+    "Append the user's dictated text to a note or thought card. For the note just created, use its objectId from the creation result or omit the target while it remains selected. For a named note, provide its exact title as target; CommandCanvas refuses ambiguous titles instead of guessing. Inspect the selected object first only when the user says this or that.",
+    appendSelectedSchema,
+  ),
   alias(
     "start_thought",
     "create_object",
@@ -749,24 +910,95 @@ export const REALTIME_CAPABILITY_ALIASES = [
     () => ({ scope: "selected" }),
     "finish_thought",
   ),
-  alias("open_sketch", "control_workspace", "Start a tracked-hand drawing when hand input is ready, otherwise open the pointer, touch, and stylus drawing surface.", emptySchema, () => ({ action: "start_drawing" })),
-  alias("finish_sketch", "control_workspace", "Finish the current tracked-hand sketch and preserve it as one selectable canvas object.", emptySchema, () => ({ action: "finish_drawing" })),
-  alias("cancel_sketch", "control_workspace", "Cancel the current unfinished drawing without creating a canvas object.", emptySchema, () => ({ action: "cancel_drawing" })),
+  alias(
+    "open_sketch",
+    "control_workspace",
+    "Start a tracked-hand drawing when hand input is ready, otherwise open the pointer, touch, and stylus drawing surface.",
+    emptySchema,
+    () => ({ action: "start_drawing" }),
+  ),
+  alias(
+    "finish_sketch",
+    "control_workspace",
+    "Finish the current tracked-hand sketch and preserve it as one selectable canvas object.",
+    emptySchema,
+    () => ({ action: "finish_drawing" }),
+  ),
+  alias(
+    "cancel_sketch",
+    "control_workspace",
+    "Cancel the current unfinished drawing without creating a canvas object.",
+    emptySchema,
+    () => ({ action: "cancel_drawing" }),
+  ),
   alias(
     "transform_selected_sketch",
     "transform_sketch",
-    "Turn the currently selected sketch into the appropriate clean structured visual while preserving the original.",
-    emptySchema,
-    () => ({ instruction: "Make that usable." }),
+    "Turn the currently selected sketch into a clean supported structured visual while preserving the original. Preserve an explicitly requested architecture, flowchart, diagram, pie-chart, bar-chart, or line-chart outputKind; omit it only when the user leaves the family open.",
+    transformSelectedSketchSchema,
+    (input) => {
+      const transform = input as z.infer<typeof transformSelectedSketchSchema>;
+      return {
+        instruction: transform.instruction ?? "Make that usable.",
+        ...(transform.outputKind ? { outputKind: transform.outputKind } : {}),
+      };
+    },
   ),
-  alias("pin_selected", "set_object_state", "Pin the currently selected canvas object.", emptySchema, () => ({ state: { pinned: true } })),
-  alias("unpin_selected", "set_object_state", "Unpin the currently selected canvas object.", emptySchema, () => ({ state: { pinned: false } })),
-  alias("minimize_selected", "set_object_state", "Minimize the currently selected canvas object into its compact chip.", emptySchema, () => ({ state: { minimized: true } })),
-  alias("restore_selected", "set_object_state", "Restore the currently selected minimized canvas object.", emptySchema, () => ({ state: { minimized: false } })),
-  alias("discard_selected", "discard_object", "Move the selected object to recoverable trash. The mutation is receipted and can be undone.", emptySchema),
-  alias("undo", "history_action", "Undo the latest reversible canvas mutation.", emptySchema, () => ({ action: "undo" })),
-  alias("redo", "history_action", "Redo the latest canvas mutation that was undone.", emptySchema, () => ({ action: "redo" })),
-  alias("focus_selected", "control_workspace", "Maximize the selected object in the local viewport without changing shared object state.", emptySchema, () => ({ action: "focus_selected" })),
+  alias(
+    "pin_selected",
+    "set_object_state",
+    "Pin an object by stable ID, exact title, or current selection.",
+    realtimeObjectTargetSchema,
+    (input) => ({ ...(input as object), state: { pinned: true } }),
+  ),
+  alias(
+    "unpin_selected",
+    "set_object_state",
+    "Unpin an object by stable ID, exact title, or current selection.",
+    realtimeObjectTargetSchema,
+    (input) => ({ ...(input as object), state: { pinned: false } }),
+  ),
+  alias(
+    "minimize_selected",
+    "set_object_state",
+    "Minimize an object by stable ID, exact title, or current selection into its compact chip.",
+    realtimeObjectTargetSchema,
+    (input) => ({ ...(input as object), state: { minimized: true } }),
+  ),
+  alias(
+    "restore_selected",
+    "set_object_state",
+    "Restore a minimized object by stable ID, exact title, or current selection.",
+    realtimeObjectTargetSchema,
+    (input) => ({ ...(input as object), state: { minimized: false } }),
+  ),
+  alias(
+    "discard_selected",
+    "discard_object",
+    "Move an object identified by stable ID, exact title, or current selection to recoverable trash. The mutation is receipted and can be undone.",
+    realtimeObjectTargetSchema,
+  ),
+  alias(
+    "undo",
+    "history_action",
+    "Undo the latest reversible canvas mutation.",
+    emptySchema,
+    () => ({ action: "undo" }),
+  ),
+  alias(
+    "redo",
+    "history_action",
+    "Redo the latest canvas mutation that was undone.",
+    emptySchema,
+    () => ({ action: "redo" }),
+  ),
+  alias(
+    "focus_selected",
+    "control_workspace",
+    "Maximize the selected object in the local viewport without changing shared object state.",
+    emptySchema,
+    () => ({ action: "focus_selected" }),
+  ),
   alias(
     "group_selected",
     "organize_objects",
@@ -784,15 +1016,63 @@ export const REALTIME_CAPABILITY_ALIASES = [
   alias(
     "rotate_selected",
     "transform_object",
-    "Rotate the selected object by 15 degrees clockwise or counterclockwise.",
+    "Rotate an object identified by stable ID, exact title, or current selection by 15 degrees clockwise or counterclockwise.",
     rotateSchema,
-    (input) => ({ rotateDirection: (input as { direction: string }).direction }),
+    (input) => {
+      const { direction, ...target } = input as z.infer<typeof rotateSchema>;
+      return { ...target, rotateDirection: direction };
+    },
   ),
-  alias("move_selected_object", "transform_object", "Move the selected object to bounded world coordinates.", moveSelectedSchema, (input) => ({ transform: input })),
-  alias("resize_selected_object", "transform_object", "Resize the selected object to bounded world dimensions.", resizeSelectedSchema, (input) => ({ transform: input })),
-  alias("prepare_meeting_packet", "prepare_meeting_packet", CANVAS_CAPABILITY_CATALOG.prepare_meeting_packet.description, CANVAS_CAPABILITY_INPUT_SCHEMAS.prepare_meeting_packet),
-  alias("request_packet_send", "request_packet_send", CANVAS_CAPABILITY_CATALOG.request_packet_send.description, CANVAS_CAPABILITY_INPUT_SCHEMAS.request_packet_send),
-  alias("control_workspace", "control_workspace", CANVAS_CAPABILITY_CATALOG.control_workspace.description, CANVAS_CAPABILITY_INPUT_SCHEMAS.control_workspace),
+  alias(
+    "move_selected_object",
+    "transform_object",
+    "Move an object identified by stable ID, exact title, or current selection to bounded world coordinates.",
+    moveSelectedSchema,
+    (input) => {
+      const { objectId, target, ...transform } = input as z.infer<
+        typeof moveSelectedSchema
+      >;
+      return {
+        ...(objectId ? { objectId } : {}),
+        ...(target ? { target } : {}),
+        transform,
+      };
+    },
+  ),
+  alias(
+    "resize_selected_object",
+    "transform_object",
+    "Resize an object identified by stable ID, exact title, or current selection to bounded world dimensions.",
+    resizeSelectedSchema,
+    (input) => {
+      const { objectId, target, ...transform } = input as z.infer<
+        typeof resizeSelectedSchema
+      >;
+      return {
+        ...(objectId ? { objectId } : {}),
+        ...(target ? { target } : {}),
+        transform,
+      };
+    },
+  ),
+  alias(
+    "prepare_meeting_packet",
+    "prepare_meeting_packet",
+    CANVAS_CAPABILITY_CATALOG.prepare_meeting_packet.description,
+    CANVAS_CAPABILITY_INPUT_SCHEMAS.prepare_meeting_packet,
+  ),
+  alias(
+    "request_packet_send",
+    "request_packet_send",
+    CANVAS_CAPABILITY_CATALOG.request_packet_send.description,
+    CANVAS_CAPABILITY_INPUT_SCHEMAS.request_packet_send,
+  ),
+  alias(
+    "control_workspace",
+    "control_workspace",
+    CANVAS_CAPABILITY_CATALOG.control_workspace.description,
+    CANVAS_CAPABILITY_INPUT_SCHEMAS.control_workspace,
+  ),
 ] as const satisfies readonly RealtimeCapabilityAlias[];
 
 export function projectRealtimeCapabilityTools() {

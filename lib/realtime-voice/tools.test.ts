@@ -1,13 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { DirectCanvasIntent } from "@/lib/canvas/direct-command";
 import {
   REALTIME_VOICE_INSTRUCTIONS,
   REALTIME_VOICE_TOOL_DEFINITIONS,
   createRealtimeVoiceSessionConfig,
   executeRealtimeVoiceTool,
-  type RealtimeVoiceIntentHandler,
+  type RealtimeVoiceCapabilityInvoker,
 } from "@/lib/realtime-voice/tools";
+
+function successfulCapabilityInvoker() {
+  return vi.fn<RealtimeVoiceCapabilityInvoker>(async () => ({
+    ok: true,
+    status: "completed",
+    message: "Applied.",
+  }));
+}
 
 describe("Realtime voice tools", () => {
   it("defaults to the full Realtime model and permits mini only as an explicit preference", () => {
@@ -30,6 +37,80 @@ describe("Realtime voice tools", () => {
     expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
       "For an unspecified project board, call create_board with {}",
     );
+  });
+
+  it("routes explicit object families without treating diagrams or charts as a generic fallback", () => {
+    expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
+      "A note or static thought uses create_note",
+    );
+    expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
+      "A chart or numeric graph uses create_chart only when the user asks for one",
+    );
+    expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
+      "Never substitute a diagram or chart for another requested family",
+    );
+    expect(REALTIME_VOICE_INSTRUCTIONS).toContain(
+      "An image or document reference is not generated media",
+    );
+  });
+
+  it("creates and populates a titled note in one canonical capability call", async () => {
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Created.",
+      data: { objectId: "note-research" },
+    }));
+
+    const result = await executeRealtimeVoiceTool(
+      {
+        name: "create_note",
+        arguments: JSON.stringify({
+          title: "Research questions",
+          text: "Compare local inference with the private GPU relay.",
+        }),
+      },
+      vi.fn(),
+      { invokeCapability },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      outcome: "submitted",
+      data: { objectId: "note-research" },
+    });
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "create_object",
+      {
+        type: "note",
+        title: "Research questions",
+        text: "Compare local inference with the private GPU relay.",
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("fails closed instead of using the retired direct-intent fallback", async () => {
+    const onIntent = vi.fn();
+
+    const result = await executeRealtimeVoiceTool(
+      {
+        name: "create_note",
+        arguments: JSON.stringify({
+          title: "Research questions",
+          text: "Compare both inference paths.",
+        }),
+      },
+      onIntent,
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      outcome: "refused",
+      action: "create_note",
+      message: "Canonical canvas capabilities are unavailable in this voice session.",
+    });
+    expect(onIntent).not.toHaveBeenCalled();
   });
 
   it("creates a safe empty project board when the spoken request omits structure", async () => {
@@ -122,9 +203,7 @@ describe("Realtime voice tools", () => {
   });
 
   it("exposes only the approved reversible canvas vocabulary", () => {
-    expect(
-      REALTIME_VOICE_TOOL_DEFINITIONS.map((tool) => tool.name),
-    ).toEqual([
+    expect(REALTIME_VOICE_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
       "inspect_canvas",
       "create_semantic_object",
       "create_note",
@@ -162,9 +241,9 @@ describe("Realtime voice tools", () => {
     expect(
       REALTIME_VOICE_TOOL_DEFINITIONS.map((tool) => tool.name),
     ).not.toEqual(expect.arrayContaining(["approve_packet", "send_email"]));
-    expect(
-      JSON.stringify(REALTIME_VOICE_TOOL_DEFINITIONS),
-    ).toMatch(/recoverable trash/i);
+    expect(JSON.stringify(REALTIME_VOICE_TOOL_DEFINITIONS)).toMatch(
+      /recoverable trash/i,
+    );
   });
 
   it("normalizes selected movement and workspace control through the canonical capability invoker", async () => {
@@ -174,12 +253,31 @@ describe("Realtime voice tools", () => {
       message: "Applied.",
     }));
     const inspectCanvas = vi.fn(async () => ({
+      scope: "all",
       roomId: "room-1",
       revision: 9,
       selectedObjectId: "note-1",
-      objects: [],
+      objects: [
+        {
+          id: "note-1",
+          type: "note",
+          title: "Move me",
+          version: 4,
+          spatial: {
+            x: 100,
+            y: 120,
+            width: 300,
+            height: 180,
+            zIndex: 4,
+            rotation: 0,
+          },
+          state: { minimized: false, pinned: false, parentId: null },
+        },
+      ],
       receipts: [],
-      truncation: {},
+      truncation: {
+        objects: { total: 1, returned: 1, omitted: 0 },
+      },
     }));
 
     await executeRealtimeVoiceTool(
@@ -202,7 +300,11 @@ describe("Realtime voice tools", () => {
     expect(invokeCapability).toHaveBeenNthCalledWith(
       1,
       "transform_object",
-      { objectId: "note-1", transform: { x: 420, y: 180 } },
+      {
+        objectId: "note-1",
+        expectedVersion: 4,
+        transform: { x: 420, y: 180 },
+      },
       expect.any(AbortSignal),
     );
     expect(invokeCapability).toHaveBeenNthCalledWith(
@@ -211,6 +313,287 @@ describe("Realtime voice tools", () => {
       { action: "fit_all" },
       expect.any(AbortSignal),
     );
+  });
+
+  it("resolves an unambiguous named note before appending through the canonical capability", async () => {
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Updated.",
+    }));
+    const inspectCanvas = vi.fn(async () => ({
+      scope: "all",
+      roomId: "room-1",
+      revision: 12,
+      selectedObjectId: "diagram-selected",
+      objects: [
+        {
+          id: "diagram-selected",
+          type: "diagram",
+          title: "Metrics",
+          version: 2,
+        },
+        {
+          id: "note-demo",
+          type: "note",
+          title: "Demo narration",
+          version: 5,
+        },
+      ],
+      receipts: [],
+      truncation: {
+        objects: { total: 2, returned: 2, omitted: 0 },
+      },
+    }));
+
+    const result = await executeRealtimeVoiceTool(
+      {
+        name: "append_selected_note",
+        arguments: JSON.stringify({
+          target: "Demo narration",
+          text: "Explain the live collaboration flow.",
+        }),
+      },
+      vi.fn(),
+      { invokeCapability, inspectCanvas },
+    );
+
+    expect(result).toMatchObject({ ok: true, outcome: "submitted" });
+    expect(inspectCanvas).toHaveBeenCalledWith(
+      { scope: "all", includeReceipts: false },
+      expect.any(AbortSignal),
+    );
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "update_object_content",
+      {
+        objectId: "note-demo",
+        text: "Explain the live collaboration flow.",
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("uses a creation result's stable object ID without depending on UI selection", async () => {
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Updated.",
+    }));
+    const inspectCanvas = vi.fn();
+
+    const result = await executeRealtimeVoiceTool(
+      {
+        name: "append_selected_note",
+        arguments: JSON.stringify({
+          objectId: "note-created-by-voice",
+          text: "This follows the object that voice just created.",
+        }),
+      },
+      vi.fn(),
+      { invokeCapability, inspectCanvas },
+    );
+
+    expect(result).toMatchObject({ ok: true, outcome: "submitted" });
+    expect(inspectCanvas).not.toHaveBeenCalled();
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "update_object_content",
+      {
+        objectId: "note-created-by-voice",
+        text: "This follows the object that voice just created.",
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("refuses conflicting stable-ID and title targets before canvas inspection or mutation", async () => {
+    const invokeCapability = vi.fn();
+    const inspectCanvas = vi.fn();
+
+    const result = await executeRealtimeVoiceTool(
+      {
+        name: "append_selected_note",
+        arguments: JSON.stringify({
+          objectId: "note-created-by-voice",
+          target: "A different note",
+          text: "Do not choose between conflicting targets.",
+        }),
+      },
+      vi.fn(),
+      { invokeCapability, inspectCanvas },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      outcome: "refused",
+      action: "append_selected_note",
+      message: "Voice action arguments were invalid.",
+    });
+    expect(inspectCanvas).not.toHaveBeenCalled();
+    expect(invokeCapability).not.toHaveBeenCalled();
+  });
+
+  it("refuses an ambiguous named note rather than choosing one arbitrarily", async () => {
+    const invokeCapability = vi.fn();
+    const result = await executeRealtimeVoiceTool(
+      {
+        name: "append_selected_note",
+        arguments: JSON.stringify({
+          target: "Demo narration",
+          text: "Do not guess which one.",
+        }),
+      },
+      vi.fn(),
+      {
+        invokeCapability,
+        inspectCanvas: async () => ({
+          scope: "all",
+          roomId: "room-1",
+          revision: 12,
+          selectedObjectId: null,
+          objects: [
+            {
+              id: "note-demo-a",
+              type: "note",
+              title: "Demo narration",
+              version: 1,
+            },
+            {
+              id: "note-demo-b",
+              type: "note",
+              title: "demo narration",
+              version: 1,
+            },
+          ],
+          receipts: [],
+          truncation: {
+            objects: { total: 2, returned: 2, omitted: 0 },
+          },
+        }),
+      },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      outcome: "refused",
+      action: "append_selected_note",
+      message:
+        'More than one active note or thought is named "Demo narration". Select one or use its stable object ID.',
+    });
+    expect(invokeCapability).not.toHaveBeenCalled();
+  });
+
+  it("refuses title resolution when the bounded object projection cannot prove uniqueness", async () => {
+    const invokeCapability = vi.fn();
+    const result = await executeRealtimeVoiceTool(
+      {
+        name: "append_selected_note",
+        arguments: JSON.stringify({
+          target: "Demo narration",
+          text: "Do not guess across omitted objects.",
+        }),
+      },
+      vi.fn(),
+      {
+        invokeCapability,
+        inspectCanvas: async () => ({
+          scope: "all",
+          roomId: "room-1",
+          revision: 12,
+          selectedObjectId: null,
+          objects: [
+            {
+              id: "note-demo-a",
+              type: "note",
+              title: "Demo narration",
+              version: 1,
+            },
+          ],
+          receipts: [],
+          truncation: {
+            objects: { total: 51, returned: 50, omitted: 1 },
+          },
+        }),
+      },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      outcome: "refused",
+      action: "append_selected_note",
+      message:
+        "Canvas projection metadata cannot prove the object list is complete.",
+    });
+    expect(invokeCapability).not.toHaveBeenCalled();
+  });
+
+  it("resolves a deictic note update to the inspected active selection", async () => {
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Updated.",
+    }));
+
+    await executeRealtimeVoiceTool(
+      {
+        name: "append_selected_note",
+        arguments: JSON.stringify({ text: "Add this to the selected note." }),
+      },
+      vi.fn(),
+      {
+        invokeCapability,
+        inspectCanvas: async () => ({
+          roomId: "room-1",
+          revision: 12,
+          selectedObjectId: "note-selected",
+          objects: [
+            { id: "note-selected", type: "note", title: "Selected thought" },
+          ],
+          receipts: [],
+          truncation: {},
+        }),
+      },
+    );
+
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "update_object_content",
+      {
+        objectId: "note-selected",
+        text: "Add this to the selected note.",
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("refuses a selected non-note before invoking the note mutation", async () => {
+    const invokeCapability = vi.fn();
+    const result = await executeRealtimeVoiceTool(
+      {
+        name: "append_selected_note",
+        arguments: JSON.stringify({ text: "This cannot go into a graph." }),
+      },
+      vi.fn(),
+      {
+        invokeCapability,
+        inspectCanvas: async () => ({
+          roomId: "room-1",
+          revision: 12,
+          selectedObjectId: "diagram-selected",
+          objects: [
+            { id: "diagram-selected", type: "diagram", title: "Metrics" },
+          ],
+          receipts: [],
+          truncation: {},
+        }),
+      },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      outcome: "refused",
+      action: "append_selected_note",
+      message: "Select an active note or thought first.",
+    });
+    expect(invokeCapability).not.toHaveBeenCalled();
   });
 
   it("runs thought session boundaries through the canonical capability invoker before local capture", async () => {
@@ -284,11 +667,9 @@ describe("Realtime voice tools", () => {
       }));
       const onIntent = vi.fn();
 
-      await executeRealtimeVoiceTool(
-        { name, arguments: "{}" },
-        onIntent,
-        { invokeCapability },
-      );
+      await executeRealtimeVoiceTool({ name, arguments: "{}" }, onIntent, {
+        invokeCapability,
+      });
 
       expect(invokeCapability).toHaveBeenCalledWith(
         capability,
@@ -308,7 +689,8 @@ describe("Realtime voice tools", () => {
         invokeCapability: async () => ({
           ok: false as const,
           code: "forbidden" as const,
-          message: "mutation not authorized: this participant can only view the room",
+          message:
+            "mutation not authorized: this participant can only view the room",
         }),
       },
     );
@@ -324,6 +706,7 @@ describe("Realtime voice tools", () => {
       message: "Transformed.",
     }));
     const inspectCanvas = vi.fn(async () => ({
+      scope: "all",
       roomId: "room-1",
       revision: 9,
       selectedObjectId: "sketch-1",
@@ -343,6 +726,45 @@ describe("Realtime voice tools", () => {
       {
         sketchId: "sketch-1",
         instruction: "Make that usable.",
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("preserves an explicitly requested sketch output family instead of defaulting to architecture", async () => {
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Transformed.",
+    }));
+    const inspectCanvas = vi.fn(async () => ({
+      roomId: "room-1",
+      revision: 9,
+      selectedObjectId: "sketch-1",
+      objects: [{ id: "sketch-1", type: "sketch" }],
+      receipts: [],
+      truncation: {},
+    }));
+
+    const result = await executeRealtimeVoiceTool(
+      {
+        name: "transform_selected_sketch",
+        arguments: JSON.stringify({
+          instruction: "Turn this drawing into a pie chart.",
+          outputKind: "pie_chart",
+        }),
+      },
+      vi.fn(),
+      { invokeCapability, inspectCanvas },
+    );
+
+    expect(result).toMatchObject({ ok: true, outcome: "submitted" });
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "transform_sketch",
+      {
+        sketchId: "sketch-1",
+        instruction: "Turn this drawing into a pie chart.",
+        outputKind: "pie_chart",
       },
       expect.any(AbortSignal),
     );
@@ -445,18 +867,36 @@ describe("Realtime voice tools", () => {
         {
           id: "note-1",
           type: "note",
-          spatial: { x: 100, y: 120, width: 300, height: 180, zIndex: 4, rotation: 0 },
+          version: 3,
+          spatial: {
+            x: 100,
+            y: 120,
+            width: 300,
+            height: 180,
+            zIndex: 4,
+            rotation: 0,
+          },
           state: { minimized: false, pinned: false, parentId: null },
         },
         {
           id: "note-2",
           type: "note",
-          spatial: { x: 460, y: 160, width: 280, height: 200, zIndex: 6, rotation: 175 },
+          version: 6,
+          spatial: {
+            x: 460,
+            y: 160,
+            width: 280,
+            height: 200,
+            zIndex: 6,
+            rotation: 175,
+          },
           state: { minimized: false, pinned: false, parentId: null },
         },
       ],
       receipts: [],
-      truncation: {},
+      truncation: {
+        objects: { total: 2, returned: 2, omitted: 0 },
+      },
     }));
 
     await executeRealtimeVoiceTool(
@@ -481,7 +921,11 @@ describe("Realtime voice tools", () => {
     expect(invokeCapability).toHaveBeenNthCalledWith(
       1,
       "transform_object",
-      { objectId: "note-2", transform: { rotation: -170 } },
+      {
+        objectId: "note-2",
+        expectedVersion: 6,
+        transform: { rotation: -170 },
+      },
       expect.any(AbortSignal),
     );
     expect(invokeCapability).toHaveBeenNthCalledWith(
@@ -490,6 +934,10 @@ describe("Realtime voice tools", () => {
       expect.objectContaining({
         action: "group",
         objectIds: ["note-1", "note-2"],
+        expectedVersions: [
+          { objectId: "note-1", expectedVersion: 3 },
+          { objectId: "note-2", expectedVersion: 6 },
+        ],
         frame: expect.objectContaining({
           id: expect.stringMatching(/^frame-/),
           x: 56,
@@ -504,7 +952,7 @@ describe("Realtime voice tools", () => {
     expect(invokeCapability).toHaveBeenNthCalledWith(
       3,
       "organize_objects",
-      { action: "ungroup", frameId: "note-2" },
+      { action: "ungroup", frameId: "note-2", expectedVersion: 6 },
       expect.any(AbortSignal),
     );
   });
@@ -595,17 +1043,15 @@ describe("Realtime voice tools", () => {
   });
 
   it("maps compact everyday creation tools without requiring model-generated spatial geometry", async () => {
-    const onIntent = vi.fn<RealtimeVoiceIntentHandler>(() => ({
-      ok: true as const,
-      message: "Submitted.",
-    }));
+    const invokeCapability = successfulCapabilityInvoker();
 
     await executeRealtimeVoiceTool(
       {
         name: "create_note",
         arguments: '{"text":"Confirm the launch date."}',
       },
-      onIntent,
+      vi.fn(),
+      { invokeCapability },
     );
     await executeRealtimeVoiceTool(
       {
@@ -626,7 +1072,8 @@ describe("Realtime voice tools", () => {
           ],
         }),
       },
-      onIntent,
+      vi.fn(),
+      { invokeCapability },
     );
     await executeRealtimeVoiceTool(
       {
@@ -649,71 +1096,64 @@ describe("Realtime voice tools", () => {
           ],
         }),
       },
-      onIntent,
+      vi.fn(),
+      { invokeCapability },
     );
 
-    expect(onIntent).toHaveBeenNthCalledWith(
+    expect(invokeCapability).toHaveBeenNthCalledWith(
       1,
-      { type: "create_note", text: "Confirm the launch date." },
-      "voice",
+      "create_object",
+      { type: "note", text: "Confirm the launch date." },
+      expect.any(AbortSignal),
     );
-    expect(onIntent).toHaveBeenNthCalledWith(
+    expect(invokeCapability).toHaveBeenNthCalledWith(
       2,
+      "create_object",
       {
-        type: "create_semantic_object",
-        placement: "current_viewport",
-        object: expect.objectContaining({
-          type: "task_board",
-          title: "Release readiness",
-          payload: {
-            columns: [
-              expect.objectContaining({
-                title: "Next",
-                tasks: [
-                  expect.objectContaining({
-                    title: "Verify mobile hand input",
-                    owner: "Danny",
-                    priority: "high",
-                  }),
-                ],
-              }),
+        type: "task_board",
+        title: "Release readiness",
+        columns: [
+          {
+            title: "Next",
+            tasks: [
+              {
+                title: "Verify mobile hand input",
+                owner: "Danny",
+                priority: "high",
+              },
             ],
           },
-        }),
+        ],
       },
-      "voice",
+      expect.any(AbortSignal),
     );
-    expect(onIntent).toHaveBeenNthCalledWith(
+    expect(invokeCapability).toHaveBeenNthCalledWith(
       3,
+      "create_object",
       {
-        type: "create_semantic_object",
-        placement: "current_viewport",
-        object: expect.objectContaining({
-          type: "schedule",
-          title: "Submission week",
-          payload: {
-            timezone: "America/New_York",
-            days: [
-              expect.objectContaining({
-                date: "2026-09-02",
-                entries: [
-                  expect.objectContaining({ title: "Record final demo" }),
-                ],
-              }),
+        type: "schedule",
+        title: "Submission week",
+        timezone: "America/New_York",
+        days: [
+          {
+            date: "2026-09-02",
+            label: "Wed, Sep 2",
+            entries: [
+              {
+                time: "14:00",
+                title: "Record final demo",
+                owner: "Danny",
+              },
             ],
           },
-        }),
+        ],
       },
-      "voice",
+      expect.any(AbortSignal),
     );
   });
 
   it("builds compact diagrams, charts, tables, references, and meeting cards into canonical semantic-object intents", async () => {
-    const intents: DirectCanvasIntent[] = [];
-    const onIntent: RealtimeVoiceIntentHandler = (intent) => {
-      intents.push(intent);
-      return { ok: true, message: "Submitted." };
-    };
+    const invokeCapability = successfulCapabilityInvoker();
 
     const calls = [
       {
@@ -780,101 +1220,85 @@ describe("Realtime voice tools", () => {
 
     for (const call of calls)
       await expect(
-        executeRealtimeVoiceTool(call, onIntent),
+        executeRealtimeVoiceTool(call, vi.fn(), { invokeCapability }),
       ).resolves.toMatchObject({ ok: true, outcome: "submitted" });
 
-    expect(intents).toHaveLength(5);
-    expect(intents[0]).toMatchObject({
-      type: "create_semantic_object",
-      placement: "current_viewport",
-      object: {
+    expect(invokeCapability).toHaveBeenCalledTimes(5);
+    expect(invokeCapability.mock.calls.map(([capability]) => capability)).toEqual(
+      Array(5).fill("create_object"),
+    );
+    const inputs = invokeCapability.mock.calls.map(([, input]) => input);
+    expect(inputs[0]).toMatchObject({
         type: "diagram",
         title: "Approval flow",
-        payload: {
-          kind: "flowchart",
-          nodes: [
-            expect.objectContaining({ id: "request", label: "Request" }),
-            expect.objectContaining({ id: "approve", label: "Approve?" }),
-          ],
-          edges: [{ id: expect.any(String), from: "request", to: "approve", label: "review" }],
-        },
-      },
+        kind: "flowchart",
+        summary: "A request moves through review before approval.",
+        nodes: [
+          { key: "request", label: "Request", kind: "process" },
+          { key: "approve", label: "Approve?", kind: "decision" },
+        ],
+        edges: [{ from: "request", to: "approve", label: "review" }],
     });
-    expect(intents[1]).toMatchObject({
-      type: "create_semantic_object",
-      placement: "current_viewport",
-      object: {
-        type: "diagram",
+    expect(inputs[1]).toMatchObject({
+        type: "chart",
         title: "Channel mix",
-        payload: {
-          kind: "pie_chart",
-          chart: {
-            title: "Channel mix",
-            series: [
-              {
-                id: expect.any(String),
-                label: "Share",
-                points: [
-                  { label: "Organic", value: 65 },
-                  { label: "Paid", value: 35 },
-                ],
-              },
+        kind: "pie_chart",
+        series: [
+          {
+            label: "Share",
+            points: [
+              { label: "Organic", value: 65 },
+              { label: "Paid", value: 35 },
             ],
           },
-        },
-      },
+        ],
     });
-    expect(intents[2]).toMatchObject({
-      type: "create_semantic_object",
-      placement: "current_viewport",
-      object: {
+    expect(inputs[2]).toMatchObject({
         type: "data_table",
         title: "Quarterly results",
-        payload: {
-          columns: [
-            { id: expect.any(String), label: "Quarter", kind: "text" },
-            { id: expect.any(String), label: "Revenue", kind: "currency" },
-          ],
-          rows: [{ id: expect.any(String), cells: ["Q1", 125000] }],
-        },
-      },
+        columns: [
+          { label: "Quarter", kind: "text" },
+          { label: "Revenue", kind: "currency" },
+        ],
+        rows: [["Q1", 125000]],
     });
-    expect(intents[3]).toMatchObject({
-      type: "create_semantic_object",
-      placement: "current_viewport",
-      object: {
+    expect(inputs[3]).toMatchObject({
         type: "reference_card",
         title: "Launch research",
-        payload: {
-          kind: "article",
-          sourceUrl: "https://example.com/research",
-          summary: "Evidence relevant to the launch decision.",
-          excerpt: null,
-        },
-      },
+        kind: "article",
+        sourceUrl: "https://example.com/research",
+        summary: "Evidence relevant to the launch decision.",
     });
-    expect(intents[4]).toMatchObject({
-      type: "create_semantic_object",
-      placement: "current_viewport",
-      object: {
+    expect(inputs[4]).toMatchObject({
         type: "meeting_card",
         title: "Launch risk",
-        payload: {
-          kind: "risk",
-          body: "Supplier lead time may move the launch date.",
-          bullets: ["Confirm inventory by Friday"],
-          owner: "Danny",
-          dueDate: null,
-          status: "open",
-        },
-      },
+        kind: "risk",
+        body: "Supplier lead time may move the launch date.",
+        bullets: ["Confirm inventory by Friday"],
+        owner: "Danny",
+        status: "open",
     });
   });
 
   it("maps selected-note fill requests to a bounded canonical intent", async () => {
-    const onIntent = vi.fn<RealtimeVoiceIntentHandler>(() => ({
-      ok: true as const,
-      message: "Submitted.",
+    const invokeCapability = successfulCapabilityInvoker();
+    const inspectCanvas = vi.fn(async () => ({
+      scope: "selected",
+      roomId: "room-1",
+      revision: 8,
+      selectedObjectId: "note-selected",
+      objects: [
+        {
+          id: "note-selected",
+          type: "note",
+          title: "Launch checklist",
+          version: 3,
+        },
+      ],
+      receipts: [],
+      truncation: {
+        objects: { total: 1, returned: 1, omitted: 0 },
+      },
     }));
 
     const result = await executeRealtimeVoiceTool(
@@ -882,7 +1306,8 @@ describe("Realtime voice tools", () => {
         name: "append_selected_note",
         arguments: '{"text":"Sarah owns the launch checklist."}',
       },
-      onIntent,
+      vi.fn(),
+      { invokeCapability, inspectCanvas },
     );
 
     expect(result).toMatchObject({
@@ -890,20 +1315,18 @@ describe("Realtime voice tools", () => {
       outcome: "submitted",
       action: "append_selected_note",
     });
-    expect(onIntent).toHaveBeenCalledWith(
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "update_object_content",
       {
-        type: "append_selected_note",
+        objectId: "note-selected",
         text: "Sarah owns the launch checklist.",
       },
-      "voice",
+      expect.any(AbortSignal),
     );
   });
 
   it("maps every supported standalone semantic object family through one canonical intent", async () => {
-    const onIntent = vi.fn<RealtimeVoiceIntentHandler>(() => ({
-      ok: true as const,
-      message: "Object command accepted.",
-    }));
+    const invokeCapability = successfulCapabilityInvoker();
     const objects = [
       {
         id: "note-voice",
@@ -1081,7 +1504,8 @@ describe("Realtime voice tools", () => {
             name: "create_semantic_object",
             arguments: JSON.stringify({ object }),
           },
-          onIntent,
+          vi.fn(),
+          { invokeCapability },
         ),
       ).resolves.toMatchObject({
         ok: true,
@@ -1090,8 +1514,14 @@ describe("Realtime voice tools", () => {
       });
     }
 
-    expect(onIntent.mock.calls.map(([intent]) => intent)).toEqual(
-      objects.map((object) => ({ type: "create_semantic_object", object })),
+    expect(invokeCapability.mock.calls.map(([capability, input]) => ({
+      capability,
+      input,
+    }))).toEqual(
+      objects.map((object) => ({
+        capability: "create_object",
+        input: { object },
+      })),
     );
   });
 
@@ -1126,10 +1556,7 @@ describe("Realtime voice tools", () => {
   });
 
   it("accepts a schema-bounded semantic table larger than the small action argument cap", async () => {
-    const onIntent = vi.fn<RealtimeVoiceIntentHandler>(() => ({
-      ok: true as const,
-      message: "Table command accepted.",
-    }));
+    const invokeCapability = successfulCapabilityInvoker();
     const object = {
       id: "table-detailed",
       type: "data_table",
@@ -1161,10 +1588,15 @@ describe("Realtime voice tools", () => {
     await expect(
       executeRealtimeVoiceTool(
         { name: "create_semantic_object", arguments: args },
-        onIntent,
+        vi.fn(),
+        { invokeCapability },
       ),
     ).resolves.toMatchObject({ ok: true, outcome: "submitted" });
-    expect(onIntent).toHaveBeenCalledOnce();
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "create_object",
+      { object },
+      expect.any(AbortSignal),
+    );
   });
 
   it("observes bounded semantic canvas context without submitting a mutation", async () => {
@@ -1173,7 +1605,7 @@ describe("Realtime voice tools", () => {
       message: "Must not run.",
     }));
     const signal = new AbortController().signal;
-    const inspectCanvas = vi.fn(() => ({
+    const data = {
       roomId: "room-live",
       revision: 17,
       selectedObjectId: "sketch-1",
@@ -1185,6 +1617,12 @@ describe("Realtime voice tools", () => {
         },
       ],
       receipts: [],
+    };
+    const invokeCapability = vi.fn(async () => ({
+      ok: true as const,
+      status: "completed" as const,
+      message: "Canvas state read.",
+      data,
     }));
 
     const result = await executeRealtimeVoiceTool(
@@ -1193,7 +1631,7 @@ describe("Realtime voice tools", () => {
         arguments: '{"scope":"selected","includeReceipts":true}',
       },
       onIntent,
-      { signal, inspectCanvas },
+      { signal, invokeCapability },
     );
 
     expect(result).toEqual({
@@ -1201,21 +1639,10 @@ describe("Realtime voice tools", () => {
       outcome: "observed",
       action: "inspect_canvas",
       message: "Current semantic canvas context observed.",
-      data: {
-        roomId: "room-live",
-        revision: 17,
-        selectedObjectId: "sketch-1",
-        objects: [
-          {
-            id: "sketch-1",
-            type: "sketch",
-            payload: { strokeCount: 3, coordinateDetail: "omitted" },
-          },
-        ],
-        receipts: [],
-      },
+      data,
     });
-    expect(inspectCanvas).toHaveBeenCalledWith(
+    expect(invokeCapability).toHaveBeenCalledWith(
+      "get_canvas_state",
       { scope: "selected", includeReceipts: true },
       signal,
     );
@@ -1225,16 +1652,15 @@ describe("Realtime voice tools", () => {
   it("returns a cancellation outcome when the canonical intent aborts before commit", async () => {
     const signal = new AbortController().signal;
     const reason = new DOMException("Voice stopped", "AbortError");
-    const onIntent = vi.fn(async () => {
+    const invokeCapability = vi.fn(async () => {
       throw reason;
     });
 
     await expect(
-      executeRealtimeVoiceTool(
-        { name: "undo", arguments: "{}" },
-        onIntent,
-        { signal },
-      ),
+      executeRealtimeVoiceTool({ name: "undo", arguments: "{}" }, vi.fn(), {
+        signal,
+        invokeCapability,
+      }),
     ).resolves.toEqual({
       ok: false,
       outcome: "cancelled",
@@ -1249,24 +1675,42 @@ describe("Realtime voice tools", () => {
       message: "Submitted.",
     }));
 
+    const invokeCapability = vi
+      .fn<RealtimeVoiceCapabilityInvoker>()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: "completed",
+        message: "Thought created.",
+        data: { affectedObjectIds: ["note-thought"] },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: "completed",
+        message: "Canvas observed.",
+      });
+
     await executeRealtimeVoiceTool(
       { name: "start_thought", arguments: "{}" },
       onIntent,
+      { invokeCapability },
     );
     await executeRealtimeVoiceTool(
       { name: "finish_thought", arguments: "{}" },
       onIntent,
+      { invokeCapability },
     );
 
     expect(onIntent).toHaveBeenNthCalledWith(
       1,
-      { type: "start_thought" },
+      { type: "start_thought", objectId: "note-thought" },
       "voice",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(onIntent).toHaveBeenNthCalledWith(
       2,
       { type: "finish_thought" },
       "voice",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(
       REALTIME_VOICE_TOOL_DEFINITIONS.map((tool) => tool.name),
@@ -1274,64 +1718,118 @@ describe("Realtime voice tools", () => {
   });
 
   it("maps restored spatial commands to bounded canonical intents", async () => {
-    const onIntent = vi.fn(() => ({
-      ok: true as const,
-      message: "Submitted.",
+    const invokeCapability = successfulCapabilityInvoker();
+    const inspectCanvas = vi.fn(async () => ({
+      scope: "all",
+      roomId: "room-1",
+      revision: 4,
+      selectedObjectId: "note-selected",
+      selectedObjectIds: ["note-selected", "note-second"],
+      objects: [
+        {
+          id: "note-selected",
+          type: "note",
+          version: 3,
+          spatial: {
+            x: 100,
+            y: 100,
+            width: 280,
+            height: 190,
+            zIndex: 2,
+            rotation: 0,
+          },
+          state: { minimized: false, pinned: false, parentId: null },
+        },
+        {
+          id: "note-second",
+          type: "note",
+          version: 2,
+          spatial: {
+            x: 420,
+            y: 100,
+            width: 280,
+            height: 190,
+            zIndex: 3,
+            rotation: 0,
+          },
+          state: { minimized: false, pinned: false, parentId: null },
+        },
+      ],
+      receipts: [],
+      truncation: { objects: { total: 2, returned: 2, omitted: 0 } },
     }));
+    const options = { invokeCapability, inspectCanvas };
 
     const focused = await executeRealtimeVoiceTool(
       { name: "focus_selected", arguments: "{}" },
-      onIntent,
+      vi.fn(),
+      options,
     );
     await executeRealtimeVoiceTool(
       { name: "group_selected", arguments: "{}" },
-      onIntent,
+      vi.fn(),
+      options,
     );
     await executeRealtimeVoiceTool(
       { name: "finish_sketch", arguments: "{}" },
-      onIntent,
+      vi.fn(),
+      options,
     );
     await executeRealtimeVoiceTool(
       { name: "discard_selected", arguments: "{}" },
-      onIntent,
+      vi.fn(),
+      options,
     );
     await executeRealtimeVoiceTool(
       {
         name: "rotate_selected",
         arguments: '{"direction":"counterclockwise"}',
       },
-      onIntent,
+      vi.fn(),
+      options,
     );
 
-    expect(onIntent).toHaveBeenNthCalledWith(
+    expect(invokeCapability).toHaveBeenNthCalledWith(
       1,
-      { type: "focus_selected" },
-      "voice",
+      "control_workspace",
+      { action: "focus_selected" },
+      expect.any(AbortSignal),
     );
     expect(focused).toMatchObject({
       ok: true,
       outcome: "submitted",
-      message: "Local canvas focus applied; shared state did not change.",
+      message: "Applied.",
     });
-    expect(onIntent).toHaveBeenNthCalledWith(
+    expect(invokeCapability).toHaveBeenNthCalledWith(
       2,
-      { type: "group_selected" },
-      "voice",
+      "organize_objects",
+      expect.objectContaining({
+        action: "group",
+        objectIds: ["note-selected", "note-second"],
+      }),
+      expect.any(AbortSignal),
     );
-    expect(onIntent).toHaveBeenNthCalledWith(
+    expect(invokeCapability).toHaveBeenNthCalledWith(
       3,
-      { type: "finish_sketch" },
-      "voice",
+      "control_workspace",
+      { action: "finish_drawing" },
+      expect.any(AbortSignal),
     );
-    expect(onIntent).toHaveBeenNthCalledWith(
+    expect(invokeCapability).toHaveBeenNthCalledWith(
       4,
-      { type: "discard_selected" },
-      "voice",
+      "discard_object",
+      { objectId: "note-selected", expectedVersion: 3 },
+      expect.any(AbortSignal),
     );
-    expect(onIntent).toHaveBeenNthCalledWith(
+    expect(invokeCapability).toHaveBeenNthCalledWith(
       5,
-      { type: "rotate_selected", direction: "counterclockwise" },
-      "voice",
+      "transform_object",
+      {
+        objectId: "note-selected",
+        expectedVersion: 3,
+        transform: { rotation: -15 },
+      },
+      expect.any(AbortSignal),
     );
   });
 
@@ -1341,24 +1839,45 @@ describe("Realtime voice tools", () => {
     ["undo", "not-json"],
     ["rotate_selected", '{"direction":"around"}'],
     ["send_meeting_packet", "{}"],
-  ])("refuses invalid or unsupported %s arguments without mutation", async (name, args) => {
-    const onIntent = vi.fn();
+  ])(
+    "refuses invalid or unsupported %s arguments without mutation",
+    async (name, args) => {
+      const onIntent = vi.fn();
 
-    const result = await executeRealtimeVoiceTool(
-      { name, arguments: args },
-      onIntent,
-    );
+      const result = await executeRealtimeVoiceTool(
+        { name, arguments: args },
+        onIntent,
+      );
 
-    expect(result.ok).toBe(false);
-    expect(result.outcome).toBe("refused");
-    expect(result.message).not.toContain(args);
-    expect(onIntent).not.toHaveBeenCalled();
-  });
+      expect(result.ok).toBe(false);
+      expect(result.outcome).toBe("refused");
+      expect(result.message).not.toContain(args);
+      expect(onIntent).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns the canonical refusal truthfully", async () => {
     const result = await executeRealtimeVoiceTool(
       { name: "transform_selected_sketch", arguments: "{}" },
-      () => ({ ok: false, message: "Select an active sketch first." }),
+      vi.fn(),
+      {
+        inspectCanvas: async () => ({
+          scope: "selected",
+          roomId: "room-1",
+          revision: 1,
+          selectedObjectId: "sketch-1",
+          objects: [{ id: "sketch-1", type: "sketch", version: 1 }],
+          receipts: [],
+          truncation: {
+            objects: { total: 1, returned: 1, omitted: 0 },
+          },
+        }),
+        invokeCapability: async () => ({
+          ok: false,
+          code: "invalid_input",
+          message: "Select an active sketch first.",
+        }),
+      },
     );
 
     expect(result).toEqual({

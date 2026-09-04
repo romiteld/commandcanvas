@@ -64,6 +64,7 @@ export function projectCanvasState(
         assembleProjection({
           state,
           selectedObjectId,
+          scope: input.scope === "selected" ? "selected" : "all",
           requestedReceipts,
           scopedObjectCount: scopedObjects.length,
           objects: candidateObjects,
@@ -85,6 +86,7 @@ export function projectCanvasState(
         assembleProjection({
           state,
           selectedObjectId,
+          scope: input.scope === "selected" ? "selected" : "all",
           requestedReceipts,
           scopedObjectCount: scopedObjects.length,
           objects,
@@ -101,6 +103,7 @@ export function projectCanvasState(
   return assembleProjection({
     state,
     selectedObjectId,
+    scope: input.scope === "selected" ? "selected" : "all",
     requestedReceipts,
     scopedObjectCount: scopedObjects.length,
     objects,
@@ -113,6 +116,7 @@ export function projectCanvasState(
 function assembleProjection(input: {
   state: CanvasState;
   selectedObjectId: string | null;
+  scope: "all" | "selected";
   requestedReceipts: boolean;
   scopedObjectCount: number;
   objects: ReturnType<typeof summarizeObject>[];
@@ -134,6 +138,7 @@ function assembleProjection(input: {
   if (input.receiptsOmittedForBytes > 0) receiptReasons.push("byte_budget");
 
   return {
+    scope: input.scope,
     roomId: input.state.roomId,
     revision: input.state.revision,
     selectedObjectId: input.selectedObjectId,
