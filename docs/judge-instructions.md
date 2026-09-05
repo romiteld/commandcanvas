@@ -1,5 +1,18 @@
 # Judge instructions
 
+## Current public preview
+
+Hosted collaboration is currently paused. For portfolio review, open
+[the interactive preview](https://commandcanvas.vercel.app/local) without an
+account or API key. Create and move a note, draw, undo, and inspect Activity.
+The starting sketch and linked diagram are prepared examples. Changes remain
+in the current tab; reload to restore the starting workspace.
+
+[Watch the recorded demonstration](https://youtu.be/s5h2cr2Qpfw) for the broader
+project. The instructions below document the earlier hosted judge flow; they
+are retained for future hosted-service restoration and are not current public
+access instructions. See [the access status](paused-access.md).
+
 ## Start here
 
 [Open the temporary no-signup judge preview](https://commandcanvas.vercel.app/demo), review the

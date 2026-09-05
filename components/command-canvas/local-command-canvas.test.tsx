@@ -17,6 +17,33 @@ afterEach(() => {
 });
 
 describe("LocalCommandCanvas WebMCP bridge", () => {
+  it("lets a visitor create and undo a note without a login or provider request", async () => {
+    delete (document as unknown as Record<string, unknown>).modelContext;
+    const user = userEvent.setup();
+    const fetch = vi.spyOn(globalThis, "fetch");
+    render(<LocalCommandCanvas />);
+
+    expect(screen.getByText("Changes stay in this tab. Reload to start again.")).toBeVisible();
+    expect(screen.getByRole("link", { name: /Watch the walkthrough/ })).toHaveAttribute("href", "https://youtu.be/s5h2cr2Qpfw");
+    expect(screen.getByRole("button", { name: "Select Rough sketch · sample" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select Structured diagram · sample" })).toBeInTheDocument();
+    expect(screen.getByText("Prepared example")).toBeVisible();
+    expect(screen.queryByText("Agent structured")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Make usable" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Start voice transcription/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Undo last change" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Open create menu" }));
+    await user.click(screen.getByRole("button", { name: "Create note" }));
+    expect(screen.getByRole("button", { name: "Select New thought" })).toBeInTheDocument();
+    expect(screen.getAllByText("You created “New thought”.").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("R1 · pointer").length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "Undo last change" }));
+    expect(screen.queryByRole("button", { name: "Select New thought" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select Rough sketch · sample" })).toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("reports the ordinary-browser fallback when document.modelContext is absent", async () => {
     delete (document as unknown as Record<string, unknown>).modelContext;
 

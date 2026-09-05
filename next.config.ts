@@ -7,6 +7,8 @@ const sourceRevision = /^[0-9a-f]{40}$/.test(
   : "main";
 
 const nextConfig: NextConfig = {
+  // Keep framework data URLs visible to the proxy's public-page allowlist.
+  skipProxyUrlNormalize: true,
   agentRules: false,
   devIndicators: false,
   experimental: {

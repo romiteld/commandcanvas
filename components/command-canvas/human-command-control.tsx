@@ -27,6 +27,7 @@ export interface HumanCommandObjectSnapshot {
 
 export interface HumanCommandControlProps {
   disabled?: boolean;
+  allowBrowserSpeech?: boolean;
   onIntent: (
     intent: DirectCanvasIntent,
     source: HumanCommandSource,
@@ -44,6 +45,7 @@ type CommandFeedback =
 
 export function HumanCommandControl({
   disabled = false,
+  allowBrowserSpeech = true,
   onIntent,
   selectedObject = null,
   createSpeechRecognizer = createBrowserSpeechRecognizer,
@@ -69,6 +71,7 @@ export function HumanCommandControl({
   const discardTitleId = useId();
 
   useEffect(() => {
+    if (!allowBrowserSpeech) return;
     const speechRecognizer = createSpeechRecognizer({
       onTranscript(transcript) {
         setCommand(transcript);
@@ -91,7 +94,7 @@ export function HumanCommandControl({
       speechRecognizer.dispose();
       speechRecognizerRef.current = null;
     };
-  }, [createSpeechRecognizer]);
+  }, [allowBrowserSpeech, createSpeechRecognizer]);
 
   useEffect(() => {
     if (disabled && speechState === "listening")
@@ -160,9 +163,16 @@ export function HumanCommandControl({
       <div className="human-command-heading">
         <div>
           <strong>Human command</strong>
-          <span>{listening ? "Listening…" : "Typed or browser-transcribed"}</span>
+          <span>
+            {listening
+              ? "Listening…"
+              : allowBrowserSpeech
+                ? "Typed or browser-transcribed"
+                : "Type a canvas command"}
+          </span>
         </div>
-        <button
+        {allowBrowserSpeech ? (
+          <button
           type="button"
           aria-label={
             speechSupported
@@ -191,7 +201,8 @@ export function HumanCommandControl({
           }}
         >
           {listening ? "Stop" : "Speak"}
-        </button>
+          </button>
+        ) : null}
       </div>
       <form
         className="human-command-form"

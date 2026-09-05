@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// The authentication project has been deleted. Keep every route closed until
-// working sign-in and server-side authorization have been restored and verified.
-// This deliberately does not trust old cookies, bearer tokens, or room invites.
+// Hosted rooms remain closed while authentication is unavailable. The public
+// local preview authorizes no API, old session, room invite, or server action.
 const pausedPage = `<!doctype html>
 <html lang="en">
 <head>
@@ -24,14 +23,38 @@ const pausedPage = `<!doctype html>
 <body>
   <main>
     <div class="name">CommandCanvas</div>
-    <h1>This workspace is paused.</h1>
-    <p>Access requires sign-in. Sign-in is currently unavailable, so the application is closed.</p>
-    <p class="status">The project will return when work resumes.</p>
+    <h1>Shared rooms are paused.</h1>
+    <p>Sign-in and hosted collaboration are currently unavailable.</p>
+    <p class="status"><a href="/local" style="color: #a8c9bd">Try the interactive preview</a>. Create, draw, and arrange objects in your browser without an account.</p>
   </main>
 </body>
 </html>`;
 
 export function proxy(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+  const isRead = request.method === "GET" || request.method === "HEAD";
+  const isFrameworkData = Boolean(request.nextUrl.buildId) ||
+    new URL(request.url).pathname.startsWith("/_next/data/");
+  if (isRead && !isFrameworkData && (path === "/" || path === "/demo")) {
+    // Drop stale room capabilities and sign-in parameters at this public entry.
+    const destination = request.nextUrl.clone();
+    destination.pathname = "/local";
+    destination.search = "";
+    return NextResponse.redirect(destination);
+  }
+  if (
+    isRead && !isFrameworkData &&
+    (path === "/local" ||
+      path.startsWith("/_next/static/") ||
+      /^\/mediapipe\/wasm\/vision_wasm_(?:nosimd_|module_)?internal\.(?:js|wasm)$/.test(path) ||
+      path === "/workers/hand-landmarker.js" ||
+      path === "/favicon.ico" || path === "/icon.svg")
+  ) {
+    const response = NextResponse.next();
+    response.headers.set("X-CommandCanvas-Mode", "local-preview");
+    return response;
+  }
+
   const headers = {
     "Cache-Control": "private, no-store, max-age=0",
     "X-Robots-Tag": "noindex, nofollow, noarchive",

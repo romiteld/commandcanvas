@@ -168,6 +168,8 @@ export interface CommandCanvasRoomProps {
   ) => HandTrackingController;
   privateGpuRelayAvailable?: boolean;
   realtimeVoice?: Omit<RealtimeVoiceControlProps, "onIntent">;
+  /** Disable browser-vendor transcription on the local-only public preview. */
+  allowBrowserSpeech?: boolean;
   openAiApiKey?: string;
   onOpenAiApiKeyChange?: (value: string) => void;
   webMcpSurfaceState?: WebMcpSurfaceState;
@@ -258,6 +260,7 @@ export function CommandCanvasRoom({
   createHandTrackingController,
   privateGpuRelayAvailable = false,
   realtimeVoice,
+  allowBrowserSpeech = true,
   openAiApiKey,
   onOpenAiApiKeyChange,
   webMcpSurfaceState = { status: "unavailable" },
@@ -3480,6 +3483,7 @@ export function CommandCanvasRoom({
                 <summary>Type a command instead</summary>
                 {typedFallbackOpen ? (
                   <HumanCommandControl
+                    allowBrowserSpeech={allowBrowserSpeech}
                     disabled={interactionPending}
                     onIntent={handleDirectIntent}
                     selectedObject={
@@ -3496,6 +3500,7 @@ export function CommandCanvasRoom({
               </details>
             ) : (
               <HumanCommandControl
+                allowBrowserSpeech={allowBrowserSpeech}
                 disabled={interactionPending}
                 onIntent={handleDirectIntent}
                 selectedObject={
@@ -3875,7 +3880,10 @@ function CanvasObjectCard({
             "Prepared demo fallback",
           ) ? (
             <span className="object-provenance object-provenance-agent">
-              <span aria-hidden="true">✦</span> Agent structured
+              <span aria-hidden="true">✦</span>{" "}
+              {object.metadata.preparedSample === true
+                ? "Prepared example"
+                : "Agent structured"}
             </span>
           ) : null}
         </span>

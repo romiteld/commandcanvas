@@ -2,12 +2,24 @@
 
 CommandCanvas is a shared spatial workspace where people, hands, voice, collaborators, and supported agent hosts operate on the same semantic objects. Rough sketches, notes, boards, schedules, diagrams, charts, and meeting packets remain visible, attributable, and reversible on one infinite canvas.
 
-- Production: <https://commandcanvas.vercel.app>
-- Email-OTP workspace: <https://commandcanvas.vercel.app/meet>
-- No-signup judge preview: <https://commandcanvas.vercel.app/demo>
+- Interactive preview: <https://commandcanvas.vercel.app/local>
+- Recorded demonstration: <https://youtu.be/s5h2cr2Qpfw>
 - Source: <https://github.com/romiteld/commandcanvas>
 
-## Choose the right entry
+## Current public access
+
+The public preview runs in the visitor's tab without an account or API key.
+It starts with a prepared sketch and linked diagram. Create and arrange objects,
+draw, undo a change, and inspect local Activity. Reload to restore the sample.
+The production root and `/demo` redirect to this preview.
+
+Hosted collaboration is paused after the authentication backend was removed.
+Shared rooms, in-page voice, live AI interpretation, and email are unavailable
+in the public preview. The following sections describe the implemented hosted
+architecture and its recorded checks, not currently available hosted services.
+See [the access status](docs/paused-access.md).
+
+## Hosted entry design (currently paused)
 
 **Email-OTP workspace:** `/meet` is the durable room path. A person verifies a six-digit email code, chooses a display name, creates or joins a room, and can send an exact-email invitation. There are no passwords.
 
@@ -32,7 +44,7 @@ The host does not receive camera frames, database credentials, or permission to 
 
 The embedded Live voice surface is separate. It offers a narrower command catalog for hands-free canvas control through a user-owned API key. It does not prove Site Tools discovery and cannot manage rooms, approve packets, or send email.
 
-## What ships
+## Implemented capabilities
 
 - A custom full-viewport DOM and SVG infinite canvas.
 - Typed semantic objects with shared spatial fields and discriminated payloads.
@@ -51,7 +63,7 @@ The embedded Live voice surface is separate. It offers a narrower command catalo
 
 ## Current evidence boundary
 
-The production release has exercised these paths independently:
+Earlier hosted releases exercised these paths independently:
 
 - Native Chrome 153 Site Tools discovery, registration lifecycle, and client cancellation against the deployed application.
 - A real OpenAI Realtime session under controlled browser audio: the model transcribed a spoken request, called `create_board`, and the canvas committed one board and one voice receipt.

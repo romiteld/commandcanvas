@@ -34,6 +34,21 @@ function recognizerHarness(supported = true) {
 }
 
 describe("HumanCommandControl", () => {
+  it("keeps typed commands available without constructing browser speech when disabled", async () => {
+    const user = userEvent.setup();
+    const harness = recognizerHarness();
+    const createSpeechRecognizer = vi.fn(harness.createRecognizer);
+    const onIntent = vi.fn(() => ({ ok: true as const, message: "Board created." }));
+    render(<HumanCommandControl allowBrowserSpeech={false} createSpeechRecognizer={createSpeechRecognizer} onIntent={onIntent} />);
+    expect(createSpeechRecognizer).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /voice transcription/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Type a canvas command")).toBeVisible();
+    await user.type(screen.getByRole("textbox", { name: "Direct canvas command" }), "Bring in our project board");
+    await user.click(screen.getByRole("button", { name: "Run direct command" }));
+    expect(onIntent).toHaveBeenCalledWith({ type: "create_board" }, "typed");
+    expect(createSpeechRecognizer).not.toHaveBeenCalled();
+  });
+
   it("submits one typed human intent and keeps agent authority separate", async () => {
     const user = userEvent.setup();
     const onIntent = vi.fn(() => ({ ok: true as const, message: "Board created." }));

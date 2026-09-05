@@ -5,15 +5,45 @@ import { describe, expect, it } from "vitest";
 
 import { config, proxy } from "./proxy";
 
-describe("paused application access", () => {
+const origin = "https://commandcanvas.vercel.app";
+
+describe("public local preview and paused hosted access", () => {
+  it.each(["/", "/demo?room=old-room&join=old-capability&signin=1"])(
+    "opens the local preview from %s without carrying room credentials",
+    (path) => {
+      const response = proxy(new NextRequest(`${origin}${path}`));
+      expect(response.status).toBe(307);
+      expect(response.headers.get("location")).toBe(`${origin}/local`);
+    },
+  );
+
   it.each([
-    "/", "/demo", "/local", "/meet", "/vision-lab", "/auth/callback",
-    "/api/rooms", "/api/realtime/session", "/api/webhooks/resend",
-    "/_next/static/chunks/app/local/page.js", "/_next/data/build/local.json",
-    "/models/hand_landmarker.task", "/workers/hand-landmarker.js",
-  ])("closes %s before application code or assets can load", async (path) => {
+    "/local", "/local?_rsc=preview",
+    "/_next/static/chunks/app/local/page.js",
+    "/mediapipe/wasm/vision_wasm_internal.wasm",
+    "/mediapipe/wasm/vision_wasm_internal.js",
+    "/workers/hand-landmarker.js", "/favicon.ico",
+  ])("serves the browser-only workspace asset %s", (path) => {
     expect(unstable_doesMiddlewareMatch({ config, url: path })).toBe(true);
-    const response = proxy(new NextRequest(`https://commandcanvas.vercel.app${path}`));
+    const response = proxy(new NextRequest(`${origin}${path}`));
+    expect(response.headers.get("x-middleware-next")).toBe("1");
+    expect(response.headers.get("x-commandcanvas-mode")).toBe("local-preview");
+  });
+
+  it.each([
+    "/meet", "/vision-lab", "/auth/callback", "/local/private",
+    "/api", "/api/rooms", "/api/realtime/session", "/api/webhooks/resend",
+    "/_next/data/build/meet.json", "/_next/data/build/local.json",
+    "/_next/image?url=/api/rooms", "/mediapipe/wasm/private.json",
+    "/models/private.onnx", "/workers/private-worker.js",
+  ])("keeps hosted and unlisted routes closed at %s", async (path) => {
+    const response = proxy(new NextRequest(`${origin}${path}`, {
+      headers: {
+        authorization: "Bearer stale-token",
+        cookie: "sb-access-token=old; commandcanvas_access=old",
+        "x-middleware-subrequest": "proxy:proxy:proxy:proxy:proxy",
+      },
+    }));
     expect(response.status).toBe(503);
     expect(response.headers.get("cache-control")).toContain("no-store");
     expect(response.headers.get("x-middleware-next")).toBeNull();
@@ -21,31 +51,31 @@ describe("paused application access", () => {
   });
 
   it.each(["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])(
-    "refuses %s, including old credentials and room capabilities",
+    "refuses %s even on a public page or asset",
     async (method) => {
-      const response = proxy(new NextRequest("https://commandcanvas.vercel.app/api/rooms?invite=old", {
-        method,
-        headers: {
-          authorization: "Bearer stale-token",
-          cookie: "sb-access-token=old; commandcanvas_access=old",
-          "x-middleware-subrequest": "proxy:proxy:proxy:proxy:proxy",
-        },
-      }));
-      expect(response.status).toBe(503);
-      expect(await response.json()).toMatchObject({ error: "application_paused" });
+      for (const path of ["/", "/demo", "/local", "/workers/hand-landmarker.js", "/api/rooms"]) {
+        const response = proxy(new NextRequest(`${origin}${path}`, {
+          method,
+          headers: { "next-action": "old-server-action" },
+        }));
+        expect(response.status).toBe(503);
+        expect(await response.json()).toMatchObject({ error: "application_paused" });
+      }
     },
   );
 
-  it("serves a self-contained paused page without executable scripts or forms", async () => {
-    const response = proxy(new NextRequest("https://commandcanvas.vercel.app/local"));
+  it("keeps the hosted pause page self-contained and links the public preview", async () => {
+    const response = proxy(new NextRequest(`${origin}/meet`));
     const html = await response.text();
-    expect(html).toContain("This workspace is paused.");
+    expect(html).toContain("Shared rooms are paused.");
+    expect(html).toContain('href="/local"');
     expect(html).not.toMatch(/<script|<form|<iframe|<canvas/);
     expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
   });
 
-  it("returns no body for HEAD", async () => {
-    const response = proxy(new NextRequest("https://commandcanvas.vercel.app/", { method: "HEAD" }));
+  it("supports HEAD on the preview while keeping private HEAD responses closed", async () => {
+    expect(proxy(new NextRequest(`${origin}/local`, { method: "HEAD" })).headers.get("x-middleware-next")).toBe("1");
+    const response = proxy(new NextRequest(`${origin}/meet`, { method: "HEAD" }));
     expect(response.status).toBe(503);
     expect(await response.text()).toBe("");
   });
